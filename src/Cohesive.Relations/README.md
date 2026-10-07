@@ -126,3 +126,15 @@ missing-field versus null semantics. Neither contract silently discards partiali
 These convenience contracts do not replace `IRelationQueryEvaluator`: the existing composed execution path
 supports cross-source joins and retains phase artifacts, requirement gaps and source-read traces. Native
 PostgreSQL selection remains explicit; no automatic native-versus-federated dispatcher is introduced.
+
+### Preparation exception migration (unreleased PR405)
+
+`RelationQueryPreparationException` now derives from `PreparationException`, which derives from
+`InvalidOperationException`; it no longer derives from `ArgumentException`. Callers previously using
+`catch (ArgumentException)` for preparation must catch `RelationQueryPreparationException` or the shared
+`PreparationException` instead. Argument validation errors remain separate. The previous default
+`relationQuery.preparation.invalid` code is replaced by `relationQuery.preparation.semantic` or
+`relationQuery.preparation.physical`, based on the failed preparation phase. Update code-based handlers
+accordingly. Explicit `relationQuery.subplan.*` codes retain their meanings, including `resultUnsupported`
+for a successfully compiled query whose result contract is not supported by subplans. Original semantic
+and physical compiler evidence stays available. No compatibility catch or code alias is introduced.

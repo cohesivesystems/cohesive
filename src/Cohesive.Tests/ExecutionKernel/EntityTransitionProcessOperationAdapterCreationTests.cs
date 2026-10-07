@@ -119,6 +119,7 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
     sealed class NonAtomicRepository(IEntityRepository inner) : IEntityRepository
     {
         public Cohesive.Transitions.Model.EntityDefinition EntityDefinition => inner.EntityDefinition;
+        public string? IdentityField => inner.IdentityField;
         public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) =>
             throw new InvalidOperationException("Attestation must not read.");
         public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) =>

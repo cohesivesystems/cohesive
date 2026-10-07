@@ -155,7 +155,8 @@ compiler results; cut/physical errors retain `RelationQueryPreparationException`
 continue to delegate unchanged. At registration, the default typed-write identity selector is compiled from
 `mapping.IdentityField` using the same `FieldPath.Capture` member naming rules as mapping authoring (including
 `JsonPropertyName`). An absent or ambiguous readable property fails before request execution;
-there is no Id/Key fallback or per-write reflection. Explicit `selectEntityId` remains an escape for custom
+there is no Id/Key fallback for a declared field, and warm identity extraction performs no reflection
+(see the scoped allocation test in the Storage README). Explicit `selectEntityId` remains an escape for custom
 CLR mappings. Semantic versions retain existing Version/zero conventions, or an explicit `selectVersion`.
 The registration remains PostgreSQL-specific; application consumers depend on typed repository/read interfaces.
 
@@ -170,3 +171,10 @@ The example retains fan-out 100 while allowing 1,000 buffered rows.
 This shared CLR identity conversion does not broaden native key encodings: the PostgreSQL repository
 still requires required, non-null TEXT identity and partition mappings. Inferred UUID/native non-text
 keys remain rejected by mapping validation, as before this change.
+
+Review follow-up: identity preparation uses finite cached mapped/conventional delegates on both typed and
+untyped writes; batch identity metadata is selected once. The Storage README documents the warm allocation
+test and its boundaries. `IdentityField` is now required, so decorators must explicitly forward it rather
+than silently inheriting the Id/Key fallback. `QueryComposed` rejects disagreement between source
+`MaximumBatchKeys` and physical `MaximumBatchSize` during setup; it does not silently choose their minimum.
+Fluent Join retains both focused bindings for `.Join(...).Project((left, right) => ...)`.

@@ -433,15 +433,20 @@ public abstract class OperationBuilder<TParent>
     /// Normal declaration validation from Build also applies.</remarks>
     public ApiEndpoint<TResponse> Build<TResponse>(ApiResultKind? kind = null)
     {
+        var primary = PrepareResponse<TResponse>(kind);
+        return new((endpoint ?? BuildPrepared(FinalizeHttpBinding(body, query, requestType), requestType, primary)).Operation);
+    }
+
+    ApiResultDefinition PrepareResponse<TResponse>(ApiResultKind? kind)
+    {
         var existing = endpoint?.Operation.PrimaryResult ?? primaryResult;
         var responseKind = kind ?? existing?.Kind ?? ApiResultKind.Success;
         if (responseKind is not (ApiResultKind.Success or ApiResultKind.Created or ApiResultKind.Accepted))
             throw new ArgumentOutOfRangeException(nameof(kind), "A body-bearing primary response must be Success, Created or Accepted.");
         if (existing is not null && (existing.BodyType != typeof(TResponse) || existing.Kind != responseKind))
             throw new ArgumentException("The existing primary response differs from the requested type or kind.");
-        if (existing is null)
-            Returns<TResponse>(responseKind);
-        return new(Build().Operation);
+        return existing ?? CreateResult(responseKind, typeof(TResponse), true,
+            ApiHttpResultConventions.DefaultStatusCode(responseKind, typeof(TResponse)), responseKind.ToString().ToLowerInvariant(), null);
     }
 
     /// <summary>Completes an explicitly declared request with both request and response type tags.</summary>
@@ -473,17 +478,10 @@ public abstract class OperationBuilder<TParent>
         ValidateRequestType<TRequest>();
         if (query is not null || endpoint is not null && endpoint.Operation.Http?.Body?.BodyType != typeof(TRequest))
             throw new ArgumentException("The existing endpoint does not have a compatible JSON body binding.");
-        var previous = (body, query, requestType, primaryResult);
-        try
-        {
-            if (endpoint is null) Body<TRequest>();
-            return Build<TRequest, TResponse>(kind);
-        }
-        catch
-        {
-            (body, query, requestType, primaryResult) = previous;
-            throw;
-        }
+        var primary = PrepareResponse<TResponse>(kind);
+        if (endpoint is not null) return new(endpoint.Operation);
+        var http = FinalizeHttpBinding(new HttpBodyBinding(typeof(TRequest)), null, typeof(TRequest));
+        return new(BuildPrepared(http, typeof(TRequest), primary).Operation);
     }
 
     /// <summary>Declares a query DTO and primary response once, then completes their typed endpoint.</summary>
@@ -499,17 +497,10 @@ public abstract class OperationBuilder<TParent>
         ValidateRequestType<TRequest>();
         if (body is not null || endpoint is not null && endpoint.Operation.Http?.Query?.QueryType != typeof(TRequest))
             throw new ArgumentException("The existing endpoint does not have a compatible query DTO binding.");
-        var previous = (body, query, requestType, primaryResult);
-        try
-        {
-            if (endpoint is null) Query<TRequest>();
-            return Build<TRequest, TResponse>(kind);
-        }
-        catch
-        {
-            (body, query, requestType, primaryResult) = previous;
-            throw;
-        }
+        var primary = PrepareResponse<TResponse>(kind);
+        if (endpoint is not null) return new(endpoint.Operation);
+        var http = FinalizeHttpBinding(null, new HttpQueryBinding(typeof(TRequest)), typeof(TRequest));
+        return new(BuildPrepared(http, typeof(TRequest), primary).Operation);
     }
 
     /// <summary>Rejects competing request authorities before changing transport configuration.</summary>
@@ -525,14 +516,12 @@ public abstract class OperationBuilder<TParent>
     /// <summary>
     /// Completes the operation, adds it to the root definition builder, and returns an endpoint handle.
     /// </summary>
-    public ApiEndpoint Build()
-    {
-        if (endpoint is not null)
-            return endpoint;
+    public ApiEndpoint Build() => endpoint ?? BuildPrepared(FinalizeHttpBinding(body, query, requestType), requestType, primaryResult);
 
-        var http = FinalizeHttpBinding();
+    ApiEndpoint BuildPrepared(HttpBinding? http, Type? requestType, ApiResultDefinition? primaryResult)
+    {
         var finalizedRequestType = http?.Body?.BodyType ?? http?.Query?.QueryType ?? requestType ?? typeof(void);
-        var finalizedResults = FinalizeResults(hasHttpProjection: http is not null);
+        var finalizedResults = FinalizeResults(hasHttpProjection: http is not null, primaryResult);
         var finalizedResponseType = finalizedResults[0].BodyType;
         var finalizedTags = FinalizeTags(kind, entity, tags);
 
@@ -567,7 +556,7 @@ public abstract class OperationBuilder<TParent>
         return parent;
     }
 
-    HttpBinding? FinalizeHttpBinding()
+    HttpBinding? FinalizeHttpBinding(HttpBodyBinding? body, HttpQueryBinding? query, Type? requestType)
     {
         if (method is null && route is null)
         {
@@ -592,11 +581,11 @@ public abstract class OperationBuilder<TParent>
             method: finalizedMethod,
             route: finalizedRoute,
             parameters: FinalizeParameters(finalizedRoute, parameters),
-            body: FinalizeBody(finalizedMethod),
-            query: FinalizeQuery());
+            body: FinalizeBody(finalizedMethod, body, query, requestType),
+            query: query);
     }
 
-    HttpBodyBinding? FinalizeBody(string finalizedMethod)
+    HttpBodyBinding? FinalizeBody(string finalizedMethod, HttpBodyBinding? body, HttpQueryBinding? query, Type? requestType)
     {
         if (query is not null)
         {
@@ -618,9 +607,7 @@ public abstract class OperationBuilder<TParent>
         return null;
     }
 
-    HttpQueryBinding? FinalizeQuery() => query;
-
-    IReadOnlyList<ApiResultDefinition> FinalizeResults(bool hasHttpProjection)
+    IReadOnlyList<ApiResultDefinition> FinalizeResults(bool hasHttpProjection, ApiResultDefinition? primaryResult)
     {
         var primary = primaryResult ?? CreateResult(
             kind: ApiResultKind.NoContent,

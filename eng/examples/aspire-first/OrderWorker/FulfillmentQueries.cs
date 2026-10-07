@@ -52,9 +52,8 @@ public static class FulfillmentQueries
             orders.Binding, reservations.Binding);
         var inventory = query.Source(FulfillmentDomain.Inventory).Where(item => item.Partition == FulfillmentDemo.LocalPartition);
         var joined = demand.Join(inventory, (row, item) => row.Sku == item.Sku, JoinKind.Left);
-        var result = query.Project(joined,
-            (ReservationDemand row, InventoryItem item) => new ReservationAvailability(row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available),
-            demand.Binding, inventory.Binding);
+        var result = joined.Project((row, item) =>
+            new ReservationAvailability(row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available));
         var definition = query.BuildQuery(new("fulfillment/reservation-availability"), new("ReservationAvailability"),
             result, orderId, rows => rows.ToArray());
         return (definition, demand.Node.Id);

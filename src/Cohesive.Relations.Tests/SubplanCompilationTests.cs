@@ -83,6 +83,19 @@ public sealed class SubplanCompilationTests
             q.BuildQuery(new("count"), new("Count"), terminal, id, rows => rows.ToArray()));
         Assert.Contains("relationQuery.query.rowsResultNodeInvalid", error.Message);
     }
+    [Fact]
+    public void Aggregate_terminal_reaches_result_kind_rejection_after_successful_compilation()
+    {
+        var query = RelationQuery.Expression();
+        var source = query.Source<SubplanStock>();
+        var aggregate = query.Aggregate<SourceQueryNode, CountRow>(source.Node, result => result.Count(row => row.Count));
+        var definition = query.BuildQuery(new("count-result"), new("CountResult"), query.Aggregation(aggregate));
+        var request = new RelationQueryCompilationRequest(definition.CreateDocument(), query.ShapeDocuments);
+        var error = Assert.Throws<RelationQueryPreparationException>(() => RelationQuerySubplan.Compile(request, aggregate.Node.Id));
+        Assert.True(error.Compilation.IsSuccessful);
+        Assert.Equal("relationQuery.subplan.resultUnsupported", error.Code);
+    }
+
     public sealed record CountRow(long Count);
     [Fact]
     public void Hidden_binding_cannot_escape_projected_interface()

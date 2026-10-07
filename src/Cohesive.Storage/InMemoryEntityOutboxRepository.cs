@@ -83,6 +83,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         : this(entityDefinition, partitionKeyFieldName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(idFieldName);
+        IdentityField = idFieldName;
 
         if (seedData is null)
             return;
@@ -93,6 +94,9 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
 
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => entityDefinition;
+
+    /// <inheritdoc />
+    public string? IdentityField { get; }
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => entityDefinition.Shape.Id.Value;

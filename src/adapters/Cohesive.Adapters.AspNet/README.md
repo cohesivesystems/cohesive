@@ -383,4 +383,5 @@ The `OkOrNotFound` convenience requires a reference response type: absence is re
 not the default value of a struct. Request-typed `ApiEndpoint<TInput, TResult>` handles built with
 `BuildQuery<TInput, TResult>()` can be passed directly to `MapApiQuery`; their query DTO is bound by
 the existing HTTP query binder. Body requests remain outside this query convenience.
-`BuildBody` and `BuildQuery` restore declaration state if validation fails.
+`BuildBody` and `BuildQuery` validate a prospective request/response/HTTP declaration before publishing it;
+failed preparation leaves the builder unchanged without rollback.

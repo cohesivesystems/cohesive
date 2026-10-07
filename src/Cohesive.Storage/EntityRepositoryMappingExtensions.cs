@@ -1,5 +1,4 @@
 using System.Globalization;
-using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using Cohesive.Model;
 using System.Reflection;
@@ -84,7 +83,8 @@ public static class EntityRepositoryMappingExtensions
             Func<TEntity, string>? selectEntityId = null,
             Func<TEntity, long>? selectVersion = null) where TEntity : notnull
             => MapBatch(repository, context, entities, atomicity,
-                entity => CreateWriteRequest(repository, entity, expectedConcurrencyToken: null, selectEntityId, selectVersion));
+                entity => CreateWriteRequest(repository, entity, expectedConcurrencyToken: null,
+                    selectEntityId ??= PrepareIdentitySelector<TEntity>(repository.IdentityField), selectVersion));
 
         /// <summary>Maps typed candidates and their per-write concurrency fences into one canonical batch.</summary>
         /// <typeparam name="TEntity">CLR candidate type.</typeparam>
@@ -109,7 +109,8 @@ public static class EntityRepositoryMappingExtensions
             return MapBatch(repository, context, request.Writes, request.Atomicity, write =>
             {
                 ArgumentNullException.ThrowIfNull(write);
-                return CreateWriteRequest(repository, write.Entity, write.ExpectedConcurrencyToken, selectEntityId, selectVersion);
+                return CreateWriteRequest(repository, write.Entity, write.ExpectedConcurrencyToken,
+                    selectEntityId ??= PrepareIdentitySelector<TEntity>(repository.IdentityField), selectVersion);
             });
         }
     }
@@ -174,30 +175,17 @@ public static class EntityRepositoryMappingExtensions
     /// <exception cref="InvalidOperationException">No unique readable property matches the declaration or convention.</exception>
     public static Func<TEntity, string> PrepareIdentitySelector<TEntity>(string? identityField = null) where TEntity : notnull
     {
-        var parameter = Expression.Parameter(typeof(TEntity), "entity");
-        var properties = IdentityReaders<TEntity>.Properties;
-        var matches = identityField is null
-            ? properties.Where(property => property.Name == "Id").ToArray()
-            : IdentityReaders<TEntity>.Fields.GetValueOrDefault(identityField) ?? [];
-        if (identityField is null && matches.Length == 0)
-            matches = properties.Where(property => property.Name == "Key").ToArray();
-        if (identityField is null && matches.Length == 0)
-            matches = properties.Where(property => property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name is "id" or "key").ToArray();
-        if (matches.Length != 1)
-            throw new InvalidOperationException($"Identity '{identityField ?? "Id/Key"}' must resolve to one readable property on '{typeof(TEntity).Name}'. Supply an explicit entity-id selector.");
-        return IdentityReaders<TEntity>.Readers.GetOrAdd(matches[0], property =>
-            new Lazy<Func<TEntity, string>>(() =>
-            {
-                var read = Expression.Lambda<Func<TEntity, object?>>(
-                    Expression.Convert(Expression.Property(parameter, property), typeof(object)), parameter).Compile();
-                return entity => FormatIdentity(read(entity));
-            })).Value;
+        if (identityField is null) return IdentityReaders<TEntity>.Convention.Value;
+        var matches = IdentityReaders<TEntity>.Fields.GetValueOrDefault(identityField);
+        if (matches is not { Length: 1 })
+            throw new InvalidOperationException($"Identity '{identityField}' must resolve to one readable property on '{typeof(TEntity).Name}'. Supply an explicit entity-id selector.");
+        return IdentityReaders<TEntity>.Readers[matches[0]].Value;
     }
 
-    // Bounded by the finite readable properties of each closed CLR type; never caches entities or requests.
+    // Finite per-CLR-type metadata, initialized once. No request values or unknown field names are retained.
     static class IdentityReaders<TEntity> where TEntity : notnull
     {
-        internal static readonly PropertyInfo[] Properties = typeof(TEntity).GetProperties(BindingFlags.Instance | BindingFlags.Public)
+        static readonly PropertyInfo[] Properties = typeof(TEntity).GetProperties(BindingFlags.Instance | BindingFlags.Public)
             .Where(property => property.GetMethod is { IsPublic: true } && property.GetIndexParameters().Length == 0).ToArray();
         internal static readonly IReadOnlyDictionary<string, PropertyInfo[]> Fields = Properties.GroupBy(property =>
         {
@@ -207,7 +195,24 @@ public static class EntityRepositoryMappingExtensions
             if (!path.TryGetDirectFieldName(out var name)) throw new InvalidOperationException("Expected a direct property path.");
             return name;
         }, StringComparer.Ordinal).ToDictionary(group => group.Key, group => group.ToArray(), StringComparer.Ordinal);
-        internal static readonly ConcurrentDictionary<PropertyInfo, Lazy<Func<TEntity, string>>> Readers = new();
+        internal static readonly IReadOnlyDictionary<PropertyInfo, Lazy<Func<TEntity, string>>> Readers = Properties.ToDictionary(
+            property => property, property => new Lazy<Func<TEntity, string>>(() =>
+            {
+                var parameter = Expression.Parameter(typeof(TEntity), "entity");
+                var read = Expression.Lambda<Func<TEntity, object?>>(
+                    Expression.Convert(Expression.Property(parameter, property), typeof(object)), parameter).Compile();
+                return entity => FormatIdentity(read(entity));
+            }));
+        internal static readonly Lazy<Func<TEntity, string>> Convention = new(() =>
+        {
+            var matches = Properties.Where(property => property.Name == "Id").ToArray();
+            if (matches.Length == 0) matches = Properties.Where(property => property.Name == "Key").ToArray();
+            if (matches.Length == 0) matches = Properties.Where(property =>
+                property.GetCustomAttribute<JsonPropertyNameAttribute>()?.Name is "id" or "key").ToArray();
+            if (matches.Length != 1)
+                throw new InvalidOperationException($"Identity 'Id/Key' must resolve to one readable property on '{typeof(TEntity).Name}'. Supply an explicit entity-id selector.");
+            return Readers[matches[0]].Value;
+        });
     }
 
     static string FormatIdentity(object? value) => Guard.RequireNotNullOrWhiteSpace(value switch

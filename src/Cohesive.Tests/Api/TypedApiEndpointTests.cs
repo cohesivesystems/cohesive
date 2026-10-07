@@ -23,6 +23,23 @@ public sealed class TypedApiEndpointTests
         Assert.Null(recovered.Operation.Http.Query);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Failed_typed_build_does_not_publish_prospective_HTTP_bindings(bool body)
+    {
+        var declaration = Cohesive.Api.Api.Define().Entity<Detail>().Query("Recovery");
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            if (body) declaration.BuildBody<CreateDetail, Detail>();
+            else declaration.BuildQuery<FindDetail, Detail>();
+        });
+        var recovered = declaration.Build();
+        Assert.Equal(typeof(void), recovered.Operation.RequestType);
+        Assert.Null(recovered.Operation.Http);
+        Assert.Equal(ApiResultKind.NoContent, recovered.Operation.PrimaryResult.Kind);
+    }
+
     [Fact]
     public void Typed_handle_retains_exact_operation_and_alternative_results()
     {

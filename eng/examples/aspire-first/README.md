@@ -447,3 +447,10 @@ native and composed acquisition can enforce scope uniformly, including outer-joi
 This shared CLR identity conversion does not broaden native key encodings: the PostgreSQL repository
 still requires required, non-null TEXT identity and partition mappings. Inferred UUID/native non-text
 keys remain rejected by mapping validation, as before this change.
+
+Review follow-up: identity preparation uses finite cached mapped/conventional delegates on both typed and
+untyped writes; batch identity metadata is selected once. The Storage README documents the warm allocation
+test and its boundaries. `IdentityField` is now required, so decorators must explicitly forward it rather
+than silently inheriting the Id/Key fallback. `QueryComposed` rejects disagreement between source
+`MaximumBatchKeys` and physical `MaximumBatchSize` during setup; it does not silently choose their minimum.
+Fluent Join retains both focused bindings for `.Join(...).Project((left, right) => ...)`.

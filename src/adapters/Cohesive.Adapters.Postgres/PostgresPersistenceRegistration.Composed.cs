@@ -35,12 +35,14 @@ public sealed partial class PostgresPersistenceRegistration
         ArgumentNullException.ThrowIfNull(remote);
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(physicalPolicy);
+        if (policy.MaximumBatchKeys != physicalPolicy.MaximumBatchSize)
+            throw new ArgumentException("Source MaximumBatchKeys must equal physical MaximumBatchSize; declare one consistent batch limit.", nameof(physicalPolicy));
         var scope = policy.PartitionScope ?? throw new ArgumentException("Composed registration requires an explicit partition scope.", nameof(policy));
         var cut = RelationQuerySubplan.Compile(query.CompilationRequest, projection);
         var prefix = Prepare(cut.Prefix.Request, policy.MaximumRowsPerRead, policy.MaximumPageBytes);
         var builder = RelationQueryPlacement.For(cut.Remainder.Plan!);
         var limits = new RelationQuerySourcePlacementLimits(
-            Math.Min(policy.MaximumBatchKeys, physicalPolicy.MaximumBatchSize), physicalPolicy.MaximumBufferedRows,
+            physicalPolicy.MaximumBatchSize, physicalPolicy.MaximumBufferedRows,
             physicalPolicy.MaximumFanOut, physicalPolicy.MaximumConcurrency);
         var projected = builder.Source("postgres/composed/prefix", RelationQueryProjectedRowset.Profile,
             new(runtime.Database.Value), limits: limits);

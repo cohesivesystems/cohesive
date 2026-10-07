@@ -258,11 +258,16 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <param name="right">Other branch from the same session.</param>
     /// <param name="predicate">Join predicate over the two focused rows.</param>
     /// <param name="kind">Join semantics.</param>
-    /// <returns>The structural join; both original bindings remain available for projection.</returns>
-    public RelationQueryNodeHandle<JoinQueryNode> Join<TRightNode, TRight>(RelationQueryExpressionBoundNode<TRightNode, TRight> right,
+    /// <returns>A joined branch retaining both typed bindings for fluent projection.</returns>
+    /// <exception cref="ArgumentNullException">Right branch or predicate is null.</exception>
+    public RelationQueryExpressionJoinedNode<TValue, TRight> Join<TRightNode, TRight>(RelationQueryExpressionBoundNode<TRightNode, TRight> right,
         Expression<Func<TValue, TRight, bool>> predicate, JoinKind kind = JoinKind.Inner)
-        where TRightNode : LogicalQueryNode where TRight : notnull =>
-        Binding.Owner.Join(Node, right.Node, kind, predicate, Binding, right.Binding);
+        where TRightNode : LogicalQueryNode where TRight : notnull
+    {
+        ArgumentNullException.ThrowIfNull(right);
+        ArgumentNullException.ThrowIfNull(predicate);
+        return new(Binding.Owner.Join(Node, right.Node, kind, predicate, Binding, right.Binding), Binding, right.Binding);
+    }
 
     /// <summary>Structural handle for the canonical logical node.</summary>
     public RelationQueryNodeHandle<TNode> Node { get; }
@@ -422,4 +427,27 @@ public sealed class RelationQueryExpressionAggregationResult<T> : RelationQueryE
         : base(owner, structural, shape)
     {
     }
+}
+
+/// <summary>Authoring handle retaining the two focused bindings of a join; no additional canonical model.</summary>
+/// <typeparam name="TLeft">Left focused row.</typeparam>
+/// <typeparam name="TRight">Right focused row.</typeparam>
+public sealed class RelationQueryExpressionJoinedNode<TLeft, TRight> where TLeft : notnull where TRight : notnull
+{
+    readonly RelationQueryExpressionValueBinding<TLeft> left;
+    readonly RelationQueryExpressionValueBinding<TRight> right;
+    internal RelationQueryExpressionJoinedNode(RelationQueryNodeHandle<JoinQueryNode> node,
+        RelationQueryExpressionValueBinding<TLeft> left, RelationQueryExpressionValueBinding<TRight> right)
+    { Node = node; this.left = left; this.right = right; }
+
+    /// <summary>Canonical structural join for explicit graph authoring.</summary>
+    public RelationQueryNodeHandle<JoinQueryNode> Node { get; }
+
+    /// <summary>Projects both joined rows through their existing authoring session.</summary>
+    /// <typeparam name="TResult">Projected row type.</typeparam>
+    /// <param name="projection">Canonical expression over left and right bindings.</param>
+    /// <returns>The focused projected branch.</returns>
+    /// <exception cref="ArgumentNullException">Projection is null.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TResult>(Expression<Func<TLeft, TRight, TResult>> projection)
+        where TResult : notnull => left.Owner.Project(Node, projection, left, right);
 }

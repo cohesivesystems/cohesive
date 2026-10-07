@@ -215,6 +215,7 @@ public sealed partial class OrderStorageIntegrationTests
         public int ReadCount => reads;
         public int WriteCount => writes;
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
+        public string? IdentityField => inner.IdentityField;
         public async Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null)
         {
             var result = await inner.TryGet(context, id, options);

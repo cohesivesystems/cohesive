@@ -3,6 +3,9 @@ using Cohesive.Relations.Physical;
 namespace Cohesive.Relations.Compilation;
 
 /// <summary>Preparation failure retaining the original structured compiler evidence.</summary>
+/// <remarks>Unreleased API migration: derives from PreparationException/InvalidOperationException, not
+/// ArgumentException. Catch this type or PreparationException. Default codes now distinguish semantic and
+/// physical failures; explicit relationQuery.subplan.* codes are unchanged. See the Relations README.</remarks>
 public sealed class RelationQueryPreparationException : PreparationException
 {
     /// <summary>Creates a semantic or physical preparation failure.</summary>
