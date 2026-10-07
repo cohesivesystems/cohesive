@@ -196,6 +196,31 @@ public sealed class ApiEndpoint<TResponse> : ApiEndpoint
     public new ApiEndpoint<TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
 }
 
+/// <summary>A request-and-response-typed view of one canonical API operation.</summary>
+/// <typeparam name="TRequest">API body or query DTO, not an internal transition input or route scalar.</typeparam>
+/// <typeparam name="TResponse">Primary response body; alternative results retain their own contracts.</typeparam>
+public sealed class ApiEndpoint<TRequest, TResponse> : ApiEndpoint
+{
+    /// <summary>Retains an operation whose request and primary response match both tags.</summary>
+    /// <param name="operation">Canonical operation authority.</param>
+    /// <exception cref="ArgumentNullException">The operation is null.</exception>
+    /// <exception cref="ArgumentException">The request or primary response type differs.</exception>
+    internal ApiEndpoint(ApiOperation operation) : base(operation)
+    {
+        if (operation.RequestType != typeof(TRequest) || operation.ResponseType != typeof(TResponse)
+            || operation.Http?.Body is { } body && body.BodyType != typeof(TRequest)
+            || operation.Http?.Query is { } query && query.QueryType != typeof(TRequest))
+            throw new ArgumentException("The endpoint's request or primary response differs from its type tags.", nameof(operation));
+    }
+
+    /// <summary>Attaches HTTP configuration while retaining both type tags.</summary>
+    /// <param name="http">HTTP projection of the same semantic operation.</param>
+    /// <returns>A typed handle with the same identity and contracts.</returns>
+    /// <exception cref="ArgumentNullException">The HTTP binding is null.</exception>
+    /// <exception cref="ArgumentException">The projection conflicts with the request contract.</exception>
+    public new ApiEndpoint<TRequest, TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
+}
+
 /// <summary>
 /// Logical API operation category.
 /// </summary>

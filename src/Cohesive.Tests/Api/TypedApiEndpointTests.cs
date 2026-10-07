@@ -60,4 +60,57 @@ public sealed class TypedApiEndpointTests
         Assert.Equal(ApiResultKind.Created, declaration.Build<Detail>().Operation.PrimaryResult.Kind);
     }
 
+    public sealed record CreateDetail(string Name);
+    public sealed record FindDetail(string Prefix);
+
+    [Fact]
+    public void Request_and_response_are_declared_once_with_explicit_transport()
+    {
+        var root = Cohesive.Api.Api.Define();
+        var create = root.Command("Create").Route("POST", "/details");
+        ApiEndpoint<CreateDetail, Detail> body = create.BuildBody<CreateDetail, Detail>(ApiResultKind.Created);
+        Assert.Equal(typeof(CreateDetail), body.Operation.RequestType);
+        Assert.Equal(typeof(CreateDetail), body.Operation.Http!.Body!.BodyType);
+        Assert.Null(body.Operation.Http.Query);
+        Assert.Equal(ApiResultKind.Created, body.Operation.PrimaryResult.Kind);
+        Assert.Same(body.Operation, create.Build<CreateDetail, Detail>().Operation);
+        Assert.Same(body.Operation, create.BuildBody<CreateDetail, Detail>().Operation);
+        ApiEndpoint<CreateDetail, Detail> projected = body.WithHttp(body.Operation.Http);
+        Assert.Equal(body.Id, projected.Id);
+        Assert.Equal(body.Operation.RequestType, projected.Operation.RequestType);
+        Assert.Throws<ArgumentException>(() => body.WithHttp(new HttpBinding("POST", "/details", parameters: [],
+            body: new HttpBodyBinding(typeof(FindDetail)))));
+
+        ApiEndpoint<FindDetail, Detail> query = root.Query("Find").Route("GET", "/details")
+            .BuildQuery<FindDetail, Detail>();
+        Assert.Equal(typeof(FindDetail), query.Operation.Http!.Query!.QueryType);
+        Assert.Null(query.Operation.Http.Body);
+        Assert.Equal(2, root.Build().Operations.Count);
+    }
+
+    [Fact]
+    public void Conflicting_input_or_transport_fails_before_registration()
+    {
+        var root = Cohesive.Api.Api.Define();
+        var declaration = root.Command("Create").Route("POST", "/details").Body<CreateDetail>();
+        Assert.Throws<ArgumentException>(() => declaration.Build<FindDetail, Detail>());
+        Assert.Throws<ArgumentException>(() => declaration.BuildBody<FindDetail, Detail>());
+        Assert.Throws<ArgumentException>(() => declaration.BuildQuery<CreateDetail, Detail>());
+        Assert.Empty(root.Build().Operations);
+        var body = declaration.Build<CreateDetail, Detail>();
+        Assert.Equal(typeof(CreateDetail), body.Operation.RequestType);
+        Assert.Throws<ArgumentException>(() => declaration.BuildQuery<CreateDetail, Detail>());
+        Assert.Single(root.Build().Operations);
+    }
+
+    [Fact]
+    public void Route_parameter_is_not_a_request_dto()
+    {
+        var root = Cohesive.Api.Api.Define();
+        var declaration = root.Query("Get").Route("GET", "/details/{id}").RouteParameter<string>("id");
+        Assert.Throws<ArgumentException>(() => declaration.Build<string, Detail>());
+        Assert.Empty(root.Build().Operations);
+        Assert.Equal(typeof(void), declaration.Build<Detail>().Operation.RequestType);
+    }
+
 }

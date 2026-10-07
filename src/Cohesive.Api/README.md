@@ -88,3 +88,25 @@ cannot be paired by type inference. Untyped handles remain available for heterog
 `Build<OrderCreated>(ApiResultKind.Created)` declares a typed 201 response in one call. Omitting the kind
 defaults to Success, or retains an existing declaration. Explicit Returns declarations remain supported;
 typed Build validates them instead of silently replacing their type or result kind.
+
+### Request-and-response handles
+
+Use an explicit transport completion to declare both types once:
+
+```csharp
+ApiEndpoint<CreateOrder, OrderCreated> create = api.Command("Create")
+    .Route("POST", "/orders")
+    .BuildBody<CreateOrder, OrderCreated>(ApiResultKind.Created);
+
+ApiEndpoint<FindOrders, OrderList> find = api.Query("Find")
+    .Route("GET", "/orders")
+    .BuildQuery<FindOrders, OrderList>();
+```
+
+The request tag describes the API body/query DTO, not an internal transition input or route scalar.
+Route-only operations retain `ApiEndpoint<TResponse>`. For an already declared `Body<TRequest>()`,
+`Query<TRequest>()` or `Accepts<TRequest>()`, `Build<TRequest,TResponse>()` validates and retains that
+request contract. Conflicting types/transports fail before operation registration; repeated completion
+retains the same canonical operation. `WithHttp` retains both tags and rejects incompatible DTO bindings.
+Untyped endpoint catalogs and native delegate mapping remain available; the tags alone do not validate
+an arbitrary ASP.NET `Delegate` handler's signature or select request parsing implicitly.

@@ -444,6 +444,66 @@ public abstract class OperationBuilder<TParent>
         return new(Build().Operation);
     }
 
+    /// <summary>Completes an explicitly declared request with both request and response type tags.</summary>
+    /// <typeparam name="TRequest">Previously declared API request type.</typeparam>
+    /// <typeparam name="TResponse">Primary response body type.</typeparam>
+    /// <param name="kind">Primary success kind; null retains the existing kind or defaults to Success.</param>
+    /// <returns>A handle sharing the exact registered operation.</returns>
+    /// <exception cref="ArgumentException">Request or response contracts differ, or no request is declared.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The result kind cannot carry a primary success body.</exception>
+    public ApiEndpoint<TRequest, TResponse> Build<TRequest, TResponse>(ApiResultKind? kind = null)
+    {
+        ValidateRequestType<TRequest>();
+        var declared = endpoint?.Operation.RequestType ?? body?.BodyType ?? query?.QueryType ?? requestType;
+        if (declared != typeof(TRequest))
+            throw new ArgumentException("Declare a matching request binding before building a request-typed endpoint.");
+        return new(Build<TResponse>(kind).Operation);
+    }
+
+    /// <summary>Declares a JSON body and primary response once, then completes their typed endpoint.</summary>
+    /// <typeparam name="TRequest">JSON request body type.</typeparam>
+    /// <typeparam name="TResponse">Primary response body type.</typeparam>
+    /// <param name="kind">Primary success kind; null retains the existing kind or defaults to Success.</param>
+    /// <returns>A typed endpoint with an explicit JSON body binding.</returns>
+    /// <exception cref="ArgumentException">An existing request, response or query binding conflicts.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The result kind cannot carry a primary success body.</exception>
+    /// <exception cref="InvalidOperationException">No HTTP route is declared.</exception>
+    public ApiEndpoint<TRequest, TResponse> BuildBody<TRequest, TResponse>(ApiResultKind? kind = null)
+    {
+        ValidateRequestType<TRequest>();
+        if (query is not null || endpoint is not null && endpoint.Operation.Http?.Body?.BodyType != typeof(TRequest))
+            throw new ArgumentException("The existing endpoint does not have a compatible JSON body binding.");
+        if (endpoint is null) Body<TRequest>();
+        return Build<TRequest, TResponse>(kind);
+    }
+
+    /// <summary>Declares a query DTO and primary response once, then completes their typed endpoint.</summary>
+    /// <typeparam name="TRequest">DTO bound from query-string properties.</typeparam>
+    /// <typeparam name="TResponse">Primary response body type.</typeparam>
+    /// <param name="kind">Primary success kind; null retains the existing kind or defaults to Success.</param>
+    /// <returns>A typed endpoint with an explicit query DTO binding.</returns>
+    /// <exception cref="ArgumentException">An existing request, response or body binding conflicts.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The result kind cannot carry a primary success body.</exception>
+    /// <exception cref="InvalidOperationException">No HTTP route is declared.</exception>
+    public ApiEndpoint<TRequest, TResponse> BuildQuery<TRequest, TResponse>(ApiResultKind? kind = null)
+    {
+        ValidateRequestType<TRequest>();
+        if (body is not null || endpoint is not null && endpoint.Operation.Http?.Query?.QueryType != typeof(TRequest))
+            throw new ArgumentException("The existing endpoint does not have a compatible query DTO binding.");
+        if (endpoint is null) Query<TRequest>();
+        return Build<TRequest, TResponse>(kind);
+    }
+
+    /// <summary>Rejects competing request authorities before changing transport configuration.</summary>
+    /// <typeparam name="TRequest">Requested API input type.</typeparam>
+    /// <exception cref="ArgumentException">An existing request declaration has another type.</exception>
+    void ValidateRequestType<TRequest>()
+    {
+        if (new[] { endpoint?.Operation.RequestType, requestType, body?.BodyType, query?.QueryType }
+            .Any(type => type is not null && type != typeof(TRequest)))
+            throw new ArgumentException("The existing request type differs from the requested type tag.");
+    }
+
     /// <summary>
     /// Completes the operation, adds it to the root definition builder, and returns an endpoint handle.
     /// </summary>
