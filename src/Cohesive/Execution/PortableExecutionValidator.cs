@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Text;
 using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
@@ -68,7 +69,7 @@ public static class PortableExecutionValidator
     {
         ArgumentNullException.ThrowIfNull(value);
         var context = new ValidationContext(graph);
-        context.ValidatePortableValue(value, location: string.Empty);
+        context.ValidatePortableValue(value, location: context.Root);
         return context.ToResult();
     }
 
@@ -81,7 +82,7 @@ public static class PortableExecutionValidator
     {
         ArgumentNullException.ThrowIfNull(contract);
         var context = new ValidationContext(graph);
-        context.ValidateContract(contract, location: string.Empty);
+        context.ValidateContract(contract, location: context.Root);
         return context.ToResult();
     }
 
@@ -94,7 +95,7 @@ public static class PortableExecutionValidator
     {
         ArgumentNullException.ThrowIfNull(type);
         var context = new ValidationContext(graph);
-        context.ValidateType(type, location: string.Empty);
+        context.ValidateType(type, location: context.Root);
         return context.ToResult();
     }
 
@@ -107,7 +108,7 @@ public static class PortableExecutionValidator
     {
         ArgumentNullException.ThrowIfNull(expression);
         var context = new ValidationContext(graph);
-        context.ValidateExpression(expression, location: string.Empty);
+        context.ValidateExpression(expression, location: context.Root);
         return context.ToResult();
     }
 
@@ -121,6 +122,7 @@ public static class PortableExecutionValidator
     sealed class ValidationContext(ShapeGraph? graph)
     {
         const int MaximumValueCompatibilityDepth = 64;
+        public Location Root { get; } = new([], 0);
 
         readonly List<DocumentValidationDiagnostic> diagnostics = [];
         readonly HashSet<TypeId> activeTypeDefinitions = [];
@@ -128,7 +130,7 @@ public static class PortableExecutionValidator
         public DocumentValidationResult ToResult() =>
             DocumentValidationResult.FromDiagnostics(diagnostics);
 
-        public void ValidatePortableValue(PortableValue value, string location)
+        public void ValidatePortableValue(PortableValue value, Location location)
         {
             ValidateContract(value.Contract, Child(location, "contract"));
             if (!Enum.IsDefined(value.State))
@@ -180,7 +182,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        public void ValidateContract(ValueContract contract, string location)
+        public void ValidateContract(ValueContract contract, Location location)
         {
             if (!Enum.IsDefined(contract.Cardinality))
             {
@@ -231,7 +233,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        public void ValidateType(TypeRef? type, string location)
+        public void ValidateType(TypeRef? type, Location location)
         {
             if (type is null)
             {
@@ -307,7 +309,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        public void ValidateExpression(Expr? expression, string location)
+        public void ValidateExpression(Expr? expression, Location location)
         {
             if (expression is null)
             {
@@ -450,7 +452,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateConcreteContract(ValueContract contract, ObservationValue value, string location)
+        void ValidateConcreteContract(ValueContract contract, ObservationValue value, Location location)
         {
             if (contract.GetEffectiveType() is { } effectiveType
                 && MatchType(effectiveType, value, MaximumValueCompatibilityDepth)
@@ -493,7 +495,7 @@ public static class PortableExecutionValidator
             return result;
         }
 
-        void ValidateInlineEnum(EnumTypeRef enumType, string location)
+        void ValidateInlineEnum(EnumTypeRef enumType, Location location)
         {
             if (string.IsNullOrWhiteSpace(enumType.Name) || enumType.Members.IsDefaultOrEmpty)
             {
@@ -518,7 +520,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateInlineObject(ObjectTypeRef objectType, string location)
+        void ValidateInlineObject(ObjectTypeRef objectType, Location location)
         {
             HashSet<string> fieldNames = new(StringComparer.Ordinal);
             for (var index = 0; index < objectType.Fields.Length; index++)
@@ -549,7 +551,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateNamedType(NamedTypeRef named, string location)
+        void ValidateNamedType(NamedTypeRef named, Location location)
         {
             if (string.IsNullOrWhiteSpace(named.TypeId.Value))
             {
@@ -572,7 +574,7 @@ public static class PortableExecutionValidator
             ValidateTypeDefinition(definition, location);
         }
 
-        void ValidateTypeDefinition(TypeDefinition definition, string location)
+        void ValidateTypeDefinition(TypeDefinition definition, Location location)
         {
             if (!activeTypeDefinitions.Add(definition.Id))
                 return;
@@ -612,7 +614,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateStructuralType(TypeDefinition.Structural structural, string location)
+        void ValidateStructuralType(TypeDefinition.Structural structural, Location location)
         {
             if (structural.Fields.IsDefault)
             {
@@ -651,7 +653,7 @@ public static class PortableExecutionValidator
             ValidateConstraints(structural.Constraints, Child(location, "constraints"));
         }
 
-        void ValidateNamedEnum(TypeDefinition.Enum enumType, string location)
+        void ValidateNamedEnum(TypeDefinition.Enum enumType, Location location)
         {
             if (!Enum.IsDefined(enumType.Underlying) || enumType.Values.IsDefaultOrEmpty)
             {
@@ -676,7 +678,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateUnion(TypeDefinition.Union union, string location)
+        void ValidateUnion(TypeDefinition.Union union, Location location)
         {
             if (union.Discriminator is null
                 || string.IsNullOrWhiteSpace(union.Discriminator.FieldName)
@@ -729,7 +731,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateShape(Shape shape, string location)
+        void ValidateShape(Shape shape, Location location)
         {
             if (shape.Fields.IsDefault)
             {
@@ -770,7 +772,7 @@ public static class PortableExecutionValidator
             ValidateConstraints(shape.Constraints, Child(location, "constraints"));
         }
 
-        void ValidateConstraints(ImmutableArray<ShapeConstraint> constraints, string location)
+        void ValidateConstraints(ImmutableArray<ShapeConstraint> constraints, Location location)
         {
             if (constraints.IsDefault)
             {
@@ -785,7 +787,7 @@ public static class PortableExecutionValidator
                 ValidateConstraint(constraints[index], Index(location, index));
         }
 
-        void ValidateConstraint(ShapeConstraint? constraint, string location)
+        void ValidateConstraint(ShapeConstraint? constraint, Location location)
         {
             if (constraint is null)
             {
@@ -865,14 +867,14 @@ public static class PortableExecutionValidator
             }
         }
 
-        void InvalidConstraint(string message, string location) =>
+        void InvalidConstraint(string message, Location location) =>
             Error(PortableExecutionDiagnosticCodes.InvalidNode, message, location);
 
         void ValidateFieldMetadata(
             FieldCardinality cardinality,
             FieldPresence presence,
             FieldNullability nullability,
-            string location)
+            Location location)
         {
             if (!Enum.IsDefined(cardinality) || !Enum.IsDefined(presence) || !Enum.IsDefined(nullability))
             {
@@ -883,7 +885,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidatePath(FieldPath path, string location)
+        void ValidatePath(FieldPath path, Location location)
         {
             if (path.Segments.IsDefaultOrEmpty)
             {
@@ -909,7 +911,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateObservation(ObservationValue value, string location)
+        void ValidateObservation(ObservationValue value, Location location)
         {
             switch (value.Kind)
             {
@@ -990,7 +992,7 @@ public static class PortableExecutionValidator
             }
         }
 
-        void MalformedObservation(ObservationValueKind kind, string location) =>
+        void MalformedObservation(ObservationValueKind kind, Location location) =>
             Error(
                 PortableExecutionDiagnosticCodes.MalformedObservation,
                 $"Observation kind '{kind}' does not contain a valid payload.",
@@ -1224,20 +1226,48 @@ public static class PortableExecutionValidator
             _ => Compatibility.Unresolved
         };
 
-        void Error(string code, string message, string location) =>
-            diagnostics.Add(new(
-                code,
-                DiagnosticSeverity.Error,
-                message,
-                string.IsNullOrEmpty(location) ? "/" : location));
+        void Error(string code, string message, Location location) =>
+            diagnostics.Add(new(code, DiagnosticSeverity.Error, message, location.ToString()));
 
-        static string Child(string location, string segment) =>
-            $"{location}/{Escape(segment)}";
+        static Location Child(Location location, string segment) => location.Append(new(segment, 0));
+        static Location Index(Location location, int index) => location.Append(new(null, index));
 
-        static string Index(string location, int index) =>
-            $"{location}/{index.ToString(CultureInfo.InvariantCulture)}";
+        public readonly record struct Segment(string? Name, int Index);
 
-        static string Escape(string segment) =>
-            segment.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
+        // Locations are traversal-scoped cursors, never retained. A child overwrites only its depth;
+        // ancestors remain intact. Error eagerly snapshots a pointer before traversal continues.
+        public readonly struct Location(List<Segment> segments, int depth)
+        {
+            public Location Append(Segment segment)
+            {
+                if (segments.Count == depth)
+                    segments.Add(segment);
+                else
+                    segments[depth] = segment;
+                return new(segments, depth + 1);
+            }
+
+            public override string ToString()
+            {
+                if (depth == 0)
+                    return "/";
+                var builder = new StringBuilder();
+                for (var index = 0; index < depth; index++)
+                {
+                    builder.Append('/');
+                    var segment = segments[index];
+                    if (segment.Name is null)
+                        builder.Append(segment.Index.ToString(CultureInfo.InvariantCulture));
+                    else
+                        foreach (var character in segment.Name)
+                        {
+                            if (character == '~') builder.Append("~0");
+                            else if (character == '/') builder.Append("~1");
+                            else builder.Append(character);
+                        }
+                }
+                return builder.ToString();
+            }
+        }
     }
 }

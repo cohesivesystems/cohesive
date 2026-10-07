@@ -92,3 +92,7 @@ definition bodies through the old and new codecs produced exactly equal canonica
 Focused regressions cover a known scalar wire oracle, shared decoded identity, insertion-order
 independence, malformed/unused entries, reserved-property and nested-member rejection, concurrent
 codec isolation, compact growth, and bounded successful projection allocation.
+
+The subsequent [immutable execution preparation](immutable-execution-preparation.md) addresses repeated
+typed decoding, payload strings during hashing, and eager successful-validation paths before publishing
+the combined optimization. The earlier direct-codec-only numbers above remain a separate qualification.

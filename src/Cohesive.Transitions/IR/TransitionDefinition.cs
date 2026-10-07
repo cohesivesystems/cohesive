@@ -41,7 +41,7 @@ public sealed record TransitionSubjectCreation
 /// <see cref="ExecutionDefinitionDocument"/>. This payload contains only fingerprint-bearing Transition semantics.
 /// It is a finite tree and contains no runtime callbacks, services, storage handles, or adapter state.
 /// </remarks>
-public sealed record TransitionDefinition
+public sealed record TransitionDefinition : IImmutableExecutionDefinition
 {
     /// <summary>Creates a canonical Transition IR definition.</summary>
     /// <param name="input">Typed invocation input contract.</param>

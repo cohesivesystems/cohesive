@@ -11,7 +11,7 @@ namespace Cohesive.Processes.IR;
 /// <see cref="ExecutionDefinitionDocument"/>. This payload contains only fingerprint-bearing Process semantics.
 /// It contains no callbacks, suspended host-language frames, runtime services, storage state, or compiled plans.
 /// </remarks>
-public sealed record ProcessDefinition
+public sealed record ProcessDefinition : IImmutableExecutionDefinition
 {
     /// <summary>Creates a normalized canonical Process definition.</summary>
     /// <param name="input">Typed Process invocation input contract.</param>
