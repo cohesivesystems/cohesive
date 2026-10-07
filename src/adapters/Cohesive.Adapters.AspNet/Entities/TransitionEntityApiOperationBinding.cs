@@ -125,12 +125,18 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
             var envelopes = LowerEmissions(commitContext, decision);
 
             var expectedToken = getExpectedConcurrencyToken?.Invoke(requestContext, request) ?? snapshot.ConcurrencyToken;
-            var updated = await EntityApiRequestSupport.CommitAsync(
-                    commitContext,
-                    options,
-                    expectedToken,
-                    envelopes)
-                .ConfigureAwait(false);
+            EntitySnapshot updated;
+            try
+            {
+                updated = await EntityApiRequestSupport.CommitAsync(
+                        commitContext, options, expectedToken, envelopes)
+                    .ConfigureAwait(false);
+            }
+            catch (ObservationConcurrencyConflictException)
+            {
+                // A lost conditional commit is an operation result, independent of global middleware.
+                return TypedResults.Problem(CohesiveHttpProblems.ConcurrencyConflict(httpContext));
+            }
             return createResult(commitContext, updated);
         };
     }

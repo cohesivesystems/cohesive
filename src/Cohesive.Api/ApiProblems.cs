@@ -49,3 +49,10 @@ public sealed record ApiConflictProblem(
     string Message,
     string? ConflictToken = null,
     string? Target = null);
+
+/// <summary>Stable problem codes shared by semantic execution and transport adapters.</summary>
+public static class ApiProblemCodes
+{
+    /// <summary>A conditional commit lost to a concurrent writer; no automatic retry is implied.</summary>
+    public const string ConcurrencyConflict = "services.concurrency.conflict";
+}

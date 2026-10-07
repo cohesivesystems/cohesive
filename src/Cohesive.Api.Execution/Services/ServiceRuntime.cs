@@ -342,7 +342,7 @@ public sealed partial class ServiceRuntime
             }
             catch (ObservationConcurrencyConflictException)
             {
-                return Reject(ApiResultKind.Conflict, "services.concurrency.conflict", "/commit", "The subject changed before the conditional commit.");
+                return Reject(ApiResultKind.Conflict, ApiProblemCodes.ConcurrencyConflict, "/commit", "The subject changed before the conditional commit.");
             }
         }
         catch (Exception exception)

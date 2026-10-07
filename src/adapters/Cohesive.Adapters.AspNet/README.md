@@ -275,3 +275,89 @@ response; failed evaluation uses the typed `queryEvaluationFailed` alternative. 
 use the separate standard `admissionValidationFailed` problem. Both validation alternatives are
 represented in generated API contracts. Provider exceptions and cancellation propagate normally;
 there is no hidden retry or result cache. The mapper adds no query execution algorithm.
+
+### Authored entity transitions
+
+`EntityApiOperationBinding.Transition(operationName, authoredTransition, createTransitionInput, createResult)`
+accepts a `Transition<TEntity, TInput, TOutcome>` directly. It compiles once at binding construction,
+fails registration with `TransitionApiPreparationException.Compilation` retaining canonical diagnostics on invalid declarations, and reuses the prepared plan
+for request execution. Declare the API operation with `authoredTransition.Reference` to retain exact
+identity/revision/fingerprint checks. Preparation lifetime is the binding, not a global cache.
+The compiled-plan overload remains available for explicit preparation or external shape graphs.
+
+### Typed entity endpoint bindings
+
+`TypedEntityApiBindings<T>` offers combined or separate declaration/binding over the same existing
+Create/Get/Transition handlers. The registration session prepares one entity materializer, and each
+completed transition binding prepares one plan. It does not implement another persistence or execution path.
+
+Separate declarations retain ordinary portable `ApiEndpoint` handles:
+
+```csharp
+var get = Api.Define().Entity<Order>().Query("Get")
+    .Route("GET", "/orders/{id}").RouteParameter<string>("id")
+    .Returns<OrderSummary>().Result(ApiResultKind.NotFound).Build();
+
+app.MapEntityApi<Order>(entity, repository, "local", endpoints => endpoints
+    .Get(get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status))));
+```
+
+The equivalent combined form creates that same endpoint representation:
+
+```csharp
+app.MapEntityApi<Order>(entity, repository, "local", endpoints => endpoints
+    .Get("Get", "/orders/{id}", order => TypedResults.Ok(new OrderSummary(order.Id, order.Status))));
+```
+
+Creation accepts a typed initializer, identity selector and `Created<T>` response. Its declaration uses
+`.Returns<T>(ApiResultKind.Created)` (201); combined authoring supplies this automatically. Combined
+lookup and transition declarations include NotFound (404); separately declared handles should include it. Transition bindings use
+`.Transition(endpoint, authored).Input(request => command).OnApplied((state, outcome) => TypedResults.Ok(response))`
+followed by `.OnRejected(outcome => TypedResults.Conflict(response))` or an explicit 409
+`TypedResults.Problem(...)`; the latter declares `ProblemDetails` and aligns the body shape with concurrency
+conflicts. The input callback receives the existing `EntityApiRequestContext`, including `RequiredEntityId`,
+operation and HTTP context. Combined authoring accepts name/route
+instead of an endpoint. Response generic types are inferred from native TypedResults. Existing endpoint
+handles are checked at registration for entity, operation kind, request and primary response types; transition
+handles must reference the exact authored revision/fingerprint and declare the typed Conflict result.
+Combined transition authoring adds that result declaration automatically. Only admission/domain rejection
+reaches OnRejected; unexpected execution failures are not converted into domain rejection.
+
+The current convenience surface covers bodyless create/get commands and route-derived transition inputs,
+with an explicit fixed point-read partition and conventional `id` route key. It does not infer authentication
+or tenant policy. Use existing lower-level bindings for request bodies, custom route/partition policies,
+asynchronous result projections or emitting transitions. Native endpoint handles carry no ASP.NET delegates;
+CLR callback types are checked at compile time, while agreement with a supplied declaration is validated at
+registration, including the primary success kind. This is not compile-time certification of arbitrary serialized definitions.
+
+Sessions are registration-scoped and non-thread-safe, reject duplicates and unfinished transitions, and freeze
+after Map. Entity observations use a compiled materializer; structured transition outcomes use the existing
+ObservationValue conversion contract. Keep custom serialization conventions aligned with canonical authoring.
+
+### Exception-to-HTTP integration
+
+```csharp
+builder.Services.AddCohesiveExceptionHandling();
+// After Build, before request middleware and endpoints:
+app.UseExceptionHandler();
+```
+
+The transition binding already turns a lost conditional commit into a sanitized 409 result without any
+global handler. It and `ServiceRuntime` share `ApiProblemCodes.ConcurrencyConflict`; the HTTP projection
+uses Problem Details, while the service result retains its semantic diagnostics contract. The optional
+fallback above covers storage exceptions from other endpoints.
+
+This registers a native `IExceptionHandler` and Problem Details services. An
+`ObservationConcurrencyConflictException` becomes HTTP 409 with `application/problem+json`, a stable
+`code` of `services.concurrency.conflict`, and a `traceId`. The response contains a safe reload
+instruction, never the exception message or backend identity/token. No request or decision is retried.
+A sanitized JSON fallback is used if no configured Problem Details writer accepts the response.
+
+Unknown exceptions and responses that have already started are not handled. Other application handlers
+and ASP.NET's normal fallback retain responsibility for them; registration order follows native ASP.NET
+conventions. Domain rejection is an ordinary `.OnRejected(...)` result and does not enter this mapping.
+The mapping does not change native server-side logging or application-supplied Problem Details customizers.
+
+Applications choosing `Conflict<TDomain>` for domain rejection will have two 409 body shapes: their
+explicit domain body and Problem Details for concurrency. Use the Problem Details `OnRejected` overload
+(as the order example does) for one HTTP error shape; distinguish conditions by their stable `code`.

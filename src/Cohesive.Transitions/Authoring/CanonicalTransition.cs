@@ -147,6 +147,18 @@ public static class TransitionAuthoring
     /// <summary>Stable producer identity for the canonical C# Transition frontend.</summary>
     public const string Producer = "cohesive.transitions.csharp/v1";
 
+    /// <summary>Authors a transition with conventional body identity and generated producer provenance.</summary>
+    /// <remarks>The caller owns stable definition and revision identities. Node defaults depend on authoring
+    /// order, never source paths or line numbers. Use the metadata overload for explicit provenance/body IDs.</remarks>
+    public static Transition<TEntity, TInput, TOutcome> Create<TEntity, TInput, TOutcome>(
+        Shape entityShape, ExecutionDefinitionId id, ExecutionRevisionId revision,
+        Action<TransitionBuilder<TEntity, TInput, TOutcome>> configure,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "") where TEntity : notnull =>
+        Create(entityShape, new TransitionAuthoringMetadata(id, revision, new($"{id.Value}/body"),
+                new(new(Producer), new(id.Value), DocumentOrigin.Generated)),
+            configure, sourceFile, sourceLine, sourceMember);
+
     /// <summary>Authors one canonical Transition from an existing entity observation shape.</summary>
     /// <typeparam name="TEntity">Entity type used by typed observation-field selectors.</typeparam>
     /// <typeparam name="TInput">Typed invocation input.</typeparam>

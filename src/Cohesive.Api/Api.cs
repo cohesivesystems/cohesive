@@ -239,17 +239,24 @@ public abstract class OperationBuilder<TParent>
         return this;
     }
 
+    /// <summary>Declares a primary Success (200) response body.</summary>
+    public OperationBuilder<TParent> Returns<TResponse>() => Returns<TResponse>(ApiResultKind.Success);
+
     /// <summary>
-    /// Declares the primary success response payload type.
+    /// Declares the primary success response payload type and semantic success kind.
     /// </summary>
-    public OperationBuilder<TParent> Returns<TResponse>()
+    /// <param name="kind">Success (200), Created (201), or Accepted (202).</param>
+    /// <exception cref="ArgumentOutOfRangeException">The kind cannot carry a primary success body.</exception>
+    public OperationBuilder<TParent> Returns<TResponse>(ApiResultKind kind)
     {
+        if (kind is not (ApiResultKind.Success or ApiResultKind.Created or ApiResultKind.Accepted))
+            throw new ArgumentOutOfRangeException(nameof(kind), "A body-bearing primary response must be Success, Created or Accepted.");
         primaryResult = CreateResult(
-            kind: ApiResultKind.Success,
+            kind: kind,
             bodyType: typeof(TResponse),
             isPrimary: true,
-            httpStatusCode: 200,
-            id: "success",
+            httpStatusCode: ApiHttpResultConventions.DefaultStatusCode(kind, typeof(TResponse)),
+            id: kind.ToString().ToLowerInvariant(),
             description: null);
         return this;
     }

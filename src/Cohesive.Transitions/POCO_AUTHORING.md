@@ -107,3 +107,18 @@ The implementation changes cold shape/authoring/materializer compilation. Compil
 materialization continue through the existing runtime mechanisms. No new per-invocation mapper or reflection pass is
 introduced. Regression fixtures compare exact semantic bytes across POCO, explicit-entity, and direct-IR authoring,
 then check the existing reference interpreter and materializer with valid and failing lifecycle invocations.
+
+## Concise authoring conventions
+
+`TransitionAuthoring.Create<TEntity, TInput, TOutcome>(shape, id, revision, configure)`
+derives the body identity and generated producer provenance from the explicit definition identity.
+`Requires(predicate, rejection)`, `Set(property, constant)` and `Return(outcome)` omit node IDs.
+Return uses the Applied disposition; use the explicit overload for other dispositions.
+
+Implicit IDs use a per-authoring-session ordinal beneath `<definition-id>/body/auto/<kind>/<ordinal>`.
+The same ordered declaration produces the same identities; file paths and line numbers are source
+attribution only. Inserting or reordering implicit operations changes their IDs and requires a new
+semantic revision. Keep explicit IDs when external references or editing stability require them.
+Explicit IDs colliding with conventional ones still fail canonical validation. The metadata overload
+remains available for custom provenance, body identity and type/member mappings. These conveniences
+lower into the existing IR and do not change validation or execution.
