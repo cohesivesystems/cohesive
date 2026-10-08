@@ -75,7 +75,7 @@ public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITe
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         output.WriteLine($"128-field parent preparation: {allocated} B.");
         Assert.Equal(2, document.Definition.GetProperty("$types").GetArrayLength());
-        Assert.InRange(allocated, 1, 425_000);
+        Assert.InRange(allocated, 1, 340_000);
     }
 
     [Fact]
@@ -97,6 +97,41 @@ public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITe
         Assert.Equal(ScalarTypeKind.String, Assert.IsType<ScalarTypeRef>(field.Type).Kind);
         Assert.Equal("{\"a\":[0,2],\"z\":1}", field.Annotations[new("evidence")].Value.GetRawText());
         Assert.Equal(document.Definition.GetRawText(), Create(decoded).Definition.GetRawText());
+    }
+
+    [Theory]
+    [InlineData(12)]
+    [InlineData(128)]
+    public void ParentReferenceReplayPreservesDigitWidthChangesAndAnnotationNumbers(int count)
+    {
+        var annotation = JsonSerializer.Deserialize<AnnotationValue>(
+            """{"elementType":0,"type":128,"text":"é \"quoted\"","values":[0,9,10,99,100]}""")!;
+        var annotations = ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty.Add(new("evidence"), annotation);
+        var fields = Enumerable.Range(0, count).Select(index => new ObjectFieldTypeDef(
+            $"field{index:D3}", new ArrayTypeRef(new EnumTypeRef($"enum{count - index:D3}", ["one", "two"])),
+            annotations: annotations)).ToImmutableArray();
+        var parent = new ObjectTypeRef(fields);
+        var marker = new ScalarTypeRef(ScalarTypeKind.Bool);
+        var first = Create(new TypeMap(new() { ["parent"] = parent, ["marker"] = marker,
+            ["duplicate"] = new ObjectTypeRef(fields) }));
+        var second = Create(new TypeMap(new() { ["marker"] = marker, ["duplicate"] = new ObjectTypeRef(fields),
+            ["parent"] = parent }));
+        Assert.Equal(first.Definition.GetRawText(), second.Definition.GetRawText());
+        var decoded = first.GetDefinition<TypeMap>();
+        Assert.Same(decoded.Values["parent"], decoded.Values["duplicate"]);
+        var decodedFields = Assert.IsType<ObjectTypeRef>(decoded.Values["parent"]).Fields;
+        for (var index = 0; index < count; index++)
+        {
+            var array = Assert.IsType<ArrayTypeRef>(decodedFields[index].Type);
+            Assert.Equal($"enum{count - index:D3}", Assert.IsType<EnumTypeRef>(array.ElementType).Name);
+            Assert.Equal(annotation.Value.GetProperty("text").GetString(),
+                decodedFields[index].Annotations[new("evidence")].Value.GetProperty("text").GetString());
+            Assert.Equal(128, decodedFields[index].Annotations[new("evidence")].Value.GetProperty("type").GetInt32());
+            Assert.Equal(new[] { 0, 9, 10, 99, 100 }, decodedFields[index].Annotations[new("evidence")]
+                .Value.GetProperty("values").EnumerateArray().Select(value => value.GetInt32()));
+        }
+        Assert.Equal(first.Definition.GetRawText(), Create(decoded).Definition.GetRawText());
+        Assert.Equal(first.Metadata.Fingerprint, Create(decoded).Metadata.Fingerprint);
     }
 
     [Theory]

@@ -1,3 +1,5 @@
+using System.Buffers;
+using System.Buffers.Text;
 using System.Collections.Concurrent;
 using System.Text.Json.Serialization.Metadata;
 using System.Text.Json.Serialization;
@@ -30,7 +32,7 @@ internal static class ExecutionDefinitionTypes
         using (var writer = new Utf8JsonWriter(Stream.Null))
             JsonSerializer.Serialize(writer, definition, options);
         if (pool.Entries.Count != 0)
-            pool.Order(options);
+            pool.Order();
         return JsonSerializer.SerializeToElement(definition, codec.RootInfo(typeof(T), definition!.GetType()));
     }
 
@@ -215,8 +217,12 @@ internal static class ExecutionDefinitionTypes
             return Pool!.Resolve(index, options);
         }
 
-        public override void Write(Utf8JsonWriter writer, TypeRef value, JsonSerializerOptions options) =>
-            writer.WriteNumberValue(Pool!.Reference(value, options));
+        public override void Write(Utf8JsonWriter writer, TypeRef value, JsonSerializerOptions options)
+        {
+            var index = Pool!.Reference(value, options);
+            writer.WriteNumberValue(index);
+            Pool.RecordReference(writer, index);
+        }
     }
 
     sealed class TypePool
@@ -225,7 +231,10 @@ internal static class ExecutionDefinitionTypes
         readonly Dictionary<string, int> byContent = new(StringComparer.Ordinal);
         readonly Dictionary<ScalarTypeRef, int> scalars = new();
         readonly List<string> keys = [];
-        readonly List<TypeRef> values = [];
+        readonly List<byte[]?> payloads = [];
+        readonly List<List<ReferenceToken>?> references = [];
+        readonly Stack<List<ReferenceToken>?> capturing = new();
+        readonly record struct ReferenceToken(int Offset, int Length, int Index);
         readonly List<int> depths = [];
         readonly Stack<int> childDepths = new();
         int[]? orderedIndices;
@@ -253,7 +262,7 @@ internal static class ExecutionDefinitionTypes
             return orderedIndices is null ? index : orderedIndices[index];
         }
 
-        internal void Order(JsonSerializerOptions options)
+        internal void Order()
         {
             orderedIndices = new int[Entries.Count];
             var ordered = new List<JsonElement>(Entries.Count);
@@ -261,10 +270,9 @@ internal static class ExecutionDefinitionTypes
             {
                 var entries = level.Select(index =>
                 {
-                    // Leaf entries contain no indices to remap; their canonical bytes and sort
-                    // keys are already final. Only parents require child-number projection.
-                    var entry = depths[index] == 0 ? Entries[index] : ExecutionDefinitionFingerprinter.NormalizeDefinition(
-                        JsonSerializer.SerializeToElement(values[index], values[index].GetType(), options));
+                    // Leaf bytes are final. Replay the original serializer payload for parents,
+                    // changing only number tokens emitted by the TypeRef converter.
+                    var entry = depths[index] == 0 ? Entries[index] : Remap(index);
                     return (Index: index, Entry: entry, Key: depths[index] == 0 ? keys[index] : entry.GetRawText());
                 }).OrderBy(item => item.Key, StringComparer.Ordinal).ToArray();
                 foreach (var entry in entries)
@@ -294,10 +302,14 @@ internal static class ExecutionDefinitionTypes
             // Child references are interned first. The canonical entry contains only local child indices,
             // so structural deduplication never repeatedly serializes a complete nested type tree.
             childDepths.Push(0);
-            var fields = JsonSerializer.SerializeToElement(value, value.GetType(), options);
+            capturing.Push(null);
+            var payload = JsonSerializer.SerializeToUtf8Bytes(value, value.GetType(), options);
+            var tokens = capturing.Pop();
             var depth = childDepths.Pop();
-            // Parents will be projected with final child numbers during Order. Their provisional
-            // canonical text is needed only for deduplication, not as another owned JSON document.
+            using var parsed = JsonDocument.Parse(payload);
+            var fields = parsed.RootElement;
+            // Retain original parent bytes only when unique. Canonical text deduplicates content;
+            // converter-recorded token locations permit final numbering without another CLR walk.
             var entry = depth == 0 ? ExecutionDefinitionFingerprinter.NormalizeDefinition(fields) : default;
             var key = depth == 0 ? entry.GetRawText() : ExecutionDefinitionFingerprinter.GetCanonicalDefinitionKey(fields);
             if (!byContent.TryGetValue(key, out index))
@@ -305,7 +317,8 @@ internal static class ExecutionDefinitionTypes
                 index = Entries.Count;
                 Entries.Add(entry);
                 keys.Add(key);
-                values.Add(value);
+                payloads.Add(depth == 0 ? null : payload);
+                references.Add(tokens);
                 depths.Add(depth);
                 byContent.Add(key, index);
             }
@@ -313,6 +326,42 @@ internal static class ExecutionDefinitionTypes
             if (value is ScalarTypeRef scalarValue)
                 scalars.TryAdd(scalarValue, index);
             return index;
+        }
+
+        internal void RecordReference(Utf8JsonWriter writer, int index)
+        {
+            if (capturing.Count == 0)
+                return;
+            // The converter has just written a nonnegative Int32. Its last bytes are the digits;
+            // committed + pending remains valid across writer buffer flushes and excludes delimiters.
+            var length = 1;
+            for (var remaining = index; remaining >= 10; remaining /= 10) length++;
+            var tokens = capturing.Pop() ?? [];
+            tokens.Add(new(checked((int)(writer.BytesCommitted + writer.BytesPending)) - length, length, index));
+            capturing.Push(tokens);
+        }
+
+        JsonElement Remap(int index)
+        {
+            var payload = payloads[index]!;
+            using PooledByteBufferWriter buffer = new();
+            var previous = 0;
+            // Nonnegative Int32 references need at most ten ASCII digits. Annotation values never
+            // enter this list, even when their property names resemble the type wire contract.
+            Span<byte> number = stackalloc byte[10];
+            foreach (var token in references[index]!)
+            {
+                buffer.Write(payload.AsSpan(previous, token.Offset - previous));
+                Utf8Formatter.TryFormat(orderedIndices![token.Index], number, out var length);
+                buffer.Write(number[..length]);
+                previous = token.Offset + token.Length;
+            }
+            buffer.Write(payload.AsSpan(previous));
+            using var parsed = JsonDocument.Parse(buffer.WrittenMemory);
+            var entry = ExecutionDefinitionFingerprinter.NormalizeDefinition(parsed.RootElement);
+            payloads[index] = null;
+            references[index] = null;
+            return entry;
         }
 
         internal TypeRef Resolve(int index, JsonSerializerOptions options)

@@ -25,7 +25,9 @@ unused-entry admission and independent fingerprint validation remain intact.
 Two broader reuse prototypes were measured and discarded: storing per-parent dependency lists
 increased Ari allocations, while recording a single shared child produced no meaningful application
 reduction. The retained change removes unnecessary representation ownership without new traversal
-or dependency metadata. Final parent serialization remains necessary in this implementation.
+or dependency metadata. Final parent serialization remained necessary at this stage. Subsequent
+[parent reference replay](parent-reference-replay.md) replaces that serializer pass with precise
+converter-recorded number token replacement while retaining the canonical writer.
 
 ## Representative allocation evidence
 
