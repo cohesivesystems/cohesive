@@ -62,10 +62,10 @@ public sealed class ServiceProcessBindingAuthoringTests
         Assert.Equal(Assert.Single(direct.Validation.Diagnostics), diagnostic);
     }
 
-    public static TheoryData<string, string> BindingCodeMappings => new()
+    public static TheoryData<string, string, Func<IEntityRepository>> BindingCodeMappings => new()
     {
-        { ProcessTransitionBindingDiagnosticCodes.ObservationMismatch, ServiceBindingDiagnosticCodes.ObservationMismatch },
-        { ProcessTransitionBindingDiagnosticCodes.ReceiptCapabilityMissing, ServiceBindingDiagnosticCodes.ReceiptCapabilityMissing }
+        { ProcessTransitionBindingDiagnosticCodes.ObservationMismatch, ServiceBindingDiagnosticCodes.ObservationMismatch, () => new InMemoryEntityOutboxRepository(ObjectEntityDefinition.For<Other>(new("other")), EntityPartitionKeyPolicy.FromField(nameof(Other.Tenant))) },
+        { ProcessTransitionBindingDiagnosticCodes.ReceiptCapabilityMissing, ServiceBindingDiagnosticCodes.ReceiptCapabilityMissing, () => new NonAtomicRepository() }
     };
 
     [Fact]
@@ -79,12 +79,10 @@ public sealed class ServiceProcessBindingAuthoringTests
 
     [Theory]
     [MemberData(nameof(BindingCodeMappings))]
-    public void Native_admission_failures_project_the_declared_service_code(string nativeCode, string serviceCode)
+    public void Native_admission_failures_project_the_declared_service_code(string nativeCode, string serviceCode, Func<IEntityRepository> createRepository)
     {
         var process = ProcessAuthoring.Project<StartRun, string>(RunControlFixture.ProcessDocument);
-        IEntityRepository repository = nativeCode == ProcessTransitionBindingDiagnosticCodes.ReceiptCapabilityMissing
-            ? new NonAtomicRepository()
-            : new InMemoryEntityOutboxRepository(ObjectEntityDefinition.For<Other>(new("other")), EntityPartitionKeyPolicy.FromField(nameof(Other.Tenant)));
+        var repository = createRepository();
         var binding = new ProcessTransitionOperationBinding(RunControlFixture.Start.Compile().Plan!, repository, RunControlFixture.Contracts());
         var native = Assert.Throws<ProcessTransitionBindingException>(() => binding.CreateProcessDefinitionLink());
         Assert.Equal(nativeCode, Assert.Single(native.Validation.Diagnostics).Code);

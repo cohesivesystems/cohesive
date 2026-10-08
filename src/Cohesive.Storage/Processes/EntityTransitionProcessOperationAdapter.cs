@@ -216,14 +216,13 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
     {
         ArgumentNullException.ThrowIfNull(observer);
         var subscription = new FailureSubscription(this, observer);
-        lock (subscriptionGate) failureSubscriptions = [.. failureSubscriptions, subscription];
+        lock (subscriptionGate) Volatile.Write(ref failureSubscriptions, [.. failureSubscriptions, subscription]);
         return subscription;
     }
 
     void RecordFailure(OperationContext context, EntityTransitionOperationResult result)
     {
-        FailureSubscription[] subscriptions;
-        lock (subscriptionGate) subscriptions = failureSubscriptions;
+        var subscriptions = Volatile.Read(ref failureSubscriptions);
         if (subscriptions.Length == 0) return;
         var diagnostic = new EntityTransitionFailureDiagnostic(context.TraceContext, result);
         foreach (var subscription in subscriptions) subscription.Deliver(diagnostic);
@@ -240,7 +239,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             var current = Interlocked.Exchange(ref source, null);
             if (current is null) return;
             lock (current.subscriptionGate)
-                current.failureSubscriptions = [.. current.failureSubscriptions.Where(item => !ReferenceEquals(item, this))];
+                Volatile.Write(ref current.failureSubscriptions, [.. current.failureSubscriptions.Where(item => !ReferenceEquals(item, this))]);
         }
         internal void Deliver(EntityTransitionFailureDiagnostic diagnostic)
         {
@@ -249,7 +248,8 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             try { target(diagnostic); }
             catch (Exception exception) when (exception is not (OutOfMemoryException or AccessViolationException))
             {
-                // A failing operator sink must not change the operation or prevent other sinks from receiving it.
+                // Report only the count, never the private diagnostic or observer exception.
+                ExecutionTelemetry.RecordDiagnosticSubscriberFailure();
             }
         }
     }

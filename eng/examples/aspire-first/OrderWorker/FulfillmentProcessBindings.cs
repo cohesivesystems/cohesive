@@ -13,6 +13,8 @@ namespace AspireFirst.Orders;
 public sealed class FulfillmentProcessBindings
 {
     readonly HostedServiceProcess hosted;
+    readonly object mappingGate = new();
+    WebApplication? mappedApplication;
     /// <summary>Prepares exact transition links and the finite process interpreter once.</summary>
     /// <param name="orders">Local order authority with atomic receipt support.</param>
     /// <param name="inventory">Local inventory authority with atomic receipt support.</param>
@@ -43,19 +45,29 @@ public sealed class FulfillmentProcessBindings
     public ServiceRuntime Runtime { get; }
 
     /// <summary>Maps the local demonstration route through the canonical service binding.</summary>
-    /// <param name="app">Native endpoint builder.</param>
+    /// <param name="app">Native endpoint builder. Repeated mapping to the same application is a no-op.</param>
+    /// <exception cref="InvalidOperationException">This instance is already mapped to another application.</exception>
     public void Map(WebApplication app)
     {
-        // Debug logging is an explicit operator choice: these messages contain private native details.
-        var subscription = hosted.SubscribeTransitionFailures(failure =>
+        ArgumentNullException.ThrowIfNull(app);
+        lock (mappingGate)
         {
-            foreach (var diagnostic in failure.Result.Diagnostics)
-                app.Logger.LogDebug("Fulfillment storage failure {Code} at {Location}: {Detail}; trace {TraceId}",
-                    diagnostic.Code, diagnostic.Location, diagnostic.Message, failure.TraceContext?.TraceId);
-        });
-        app.Lifetime.ApplicationStopped.Register(subscription.Dispose);
-        app.MapServiceEphemeralProcess(Declaration, _ => Runtime, "fulfill",
-            FulfillmentProcess.Definition, new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
+            if (ReferenceEquals(mappedApplication, app)) return;
+            if (mappedApplication is not null)
+                throw new InvalidOperationException("These process bindings already belong to another application.");
+            app.MapServiceEphemeralProcess(Declaration, _ => Runtime, "fulfill",
+                FulfillmentProcess.Definition, new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
+            // Debug logging is an explicit operator choice: these messages contain private native details.
+            var subscription = hosted.SubscribeTransitionFailures(failure =>
+            {
+                if (!app.Logger.IsEnabled(LogLevel.Debug)) return;
+                foreach (var diagnostic in failure.Result.Diagnostics)
+                    app.Logger.LogDebug("Fulfillment storage failure {Code} at {Location}: {Detail}; trace {TraceId}",
+                        diagnostic.Code, diagnostic.Location, diagnostic.Message, failure.TraceContext?.TraceId);
+            });
+            app.Lifetime.ApplicationStopped.Register(subscription.Dispose);
+            mappedApplication = app;
+        }
     }
 
 }

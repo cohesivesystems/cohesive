@@ -198,9 +198,13 @@ to that exact adapter/host instance: sharing a trace, repository or process does
 There is no global `DiagnosticListener`, automatic exporter, persistence, or replay. Callbacks run synchronously,
 may run concurrently for separate operations, and must route private identities/tokens/provider details only
 to protected sinks. Disposal prevents future delivery but a delivery already in flight may still invoke its callback. One failing
-observer cannot affect the operation or other observers. Tests cover isolation, disposal, complete detail
+observer cannot affect the operation or other observers. Each recoverable callback failure increments
+`cohesive.execution.diagnostic.subscriber.failures` on the existing `Cohesive.Execution` meter, with no tags,
+exception or private payload. Subscriber snapshots are read without acquiring the registration lock.
+Tests cover the counter, isolation, disposal, complete detail
 and exclusion from serialized portable failures. The fulfillment example consumes this typed API in its
-host-scoped debug logger and disposes the subscription when the application stops.
+host-scoped debug logger and disposes the subscription when the application stops. Mapping the same
+application twice is a no-op; disabled debug logging skips argument construction.
 PostgreSQL and SQLite rely on their native unique receipt fences, with no receipt SELECT inside a successful
 commit. A unique violation rolls back the entity write before shared conflict resolution reads and validates
 retained evidence. Provider locks, transactions and encoding

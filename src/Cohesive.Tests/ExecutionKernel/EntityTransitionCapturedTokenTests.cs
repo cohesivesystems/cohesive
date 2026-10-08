@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Collections.Concurrent;
 using Cohesive.Execution;
 using Cohesive.Model.Authoring;
@@ -132,6 +133,21 @@ public sealed class EntityTransitionCapturedTokenTests
         await otherAdapter.ExecuteAsync(context, invocation);
         Assert.Single(otherDiagnostics);
         Assert.Single(diagnostics); // Same trace and repository, but a different host cannot deliver here.
+        long subscriberFailures = 0;
+        var tagCounts = new ConcurrentQueue<int>();
+        using var listener = new MeterListener();
+        listener.InstrumentPublished = (instrument, observer) =>
+        {
+            if (instrument.Meter.Name == ExecutionTelemetry.MeterName
+                && instrument.Name == ExecutionTelemetry.DiagnosticSubscriberFailuresInstrumentName)
+                observer.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, count, tags, _) =>
+        {
+            Interlocked.Add(ref subscriberFailures, count);
+            tagCounts.Enqueue(tags.Length);
+        });
+        listener.Start();
         using var brokenSink = adapter.SubscribeTransitionFailures(_ => throw new InvalidOperationException("operator sink unavailable"));
         var deliveredAfterFailure = 0;
         using var healthySink = adapter.SubscribeTransitionFailures(_ => deliveredAfterFailure++);
@@ -144,6 +160,8 @@ public sealed class EntityTransitionCapturedTokenTests
         await adapter.ExecuteAsync(context, invocation);
         Assert.Equal(2, diagnostics.Count);
         Assert.Equal(2, deliveredAfterFailure);
+        Assert.Equal(2, subscriberFailures);
+        Assert.All(tagCounts, count => Assert.Equal(0, count));
         Assert.Throws<ArgumentNullException>(() => adapter.SubscribeTransitionFailures(null!));
     }
 
