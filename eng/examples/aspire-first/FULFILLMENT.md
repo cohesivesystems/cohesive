@@ -81,8 +81,9 @@ reconstitution, state checkpoints and read projections. Those are not inferred f
 
 ### Operator failure details
 
-`Program` opts into `AddCohesiveTransitionFailureLogging(fulfillment.Hosted)`; route mapping has no
-subscription or lifetime wiring. The ASP.NET adapter subscribes at native host startup and releases the
+`FulfillmentProcessBindings.Bind` returns the prepared `HostedServiceProcess` directly; `Program` maps
+its single route through the native ASP.NET extension and opts into `AddCohesiveTransitionFailureLogging(fulfillment)`; route mapping has no
+subscription or lifetime wiring. The generic-host integration in `Cohesive.Host` subscribes at native host startup and releases the
 subscription on stop or disposal, including disposal without stopping. An unstarted host never subscribes.
 Repeated registration subscribes once per native host. It logs full native diagnostics at Debug level; enable
 that level only for a protected operator sink because IDs and concurrency tokens may be present. Public

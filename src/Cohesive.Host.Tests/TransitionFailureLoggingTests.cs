@@ -1,19 +1,20 @@
-using Cohesive.Adapters.AspNet.Services;
+using Cohesive.Host.Services;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Execution;
 using Cohesive.ExecutionKernel.TestFixtures.Storage;
 using Cohesive.Identity;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Authoring;
 using Cohesive.Processes.IR;
 using Cohesive.Storage;
 using Cohesive.Transitions.Authoring;
-using Cohesive.Tests.ExecutionKernel;
+using Cohesive.Transitions.Model;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
-namespace Cohesive.Tests.Api;
+namespace Cohesive.Host.Tests;
 
 public sealed class TransitionFailureLoggingTests
 {
@@ -72,6 +73,28 @@ public sealed class TransitionFailureLoggingTests
         Assert.True(logs.EnabledChecks > 0);
     }
 
+    [Fact]
+    public async Task Stopped_logging_service_can_restart_without_duplicate_delivery()
+    {
+        var (process, fail) = await CreateProcess();
+        var logs = new FailureLogger();
+        using var host = BuildHost(process, logs);
+        var service = Assert.Single(host.Services.GetServices<IHostedService>());
+        await service.StartAsync(CancellationToken.None);
+        await fail();
+        Assert.Single(logs.Messages);
+        await service.StopAsync(CancellationToken.None);
+        await fail();
+        Assert.Single(logs.Messages);
+        await service.StartAsync(CancellationToken.None);
+        await service.StartAsync(CancellationToken.None);
+        await fail();
+        Assert.Equal(2, logs.Messages.Count);
+        await service.StopAsync(CancellationToken.None);
+        await fail();
+        Assert.Equal(2, logs.Messages.Count);
+    }
+
     static IHost BuildHost(HostedServiceProcess process, FailureLogger logs)
     {
         var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
@@ -90,7 +113,7 @@ public sealed class TransitionFailureLoggingTests
         var entity = RunControlFixture.Entity;
         var native = new InMemoryEntityOutboxRepository(entity, EntityPartitionKeyPolicy.FromField(nameof(RunControl.Tenant)));
         var repository = new TypedEntityRepository<RunControl>(
-            new EntityTransitionCapturedTokenTests.ReadBoundaryRepository(native, false) { FailCommit = true });
+            new ConflictingRepository(native));
         var actor = new PrincipalRef("tester", PrincipalKind.User);
         var scope = new ScopeRef("tenant/a", "tenant", PartitionKey: "tenant/a");
         var context = OperationContext.Create().WithIdentityContext(new IdentityContext(actor,
@@ -115,12 +138,25 @@ public sealed class TransitionFailureLoggingTests
         });
     }
 
+    sealed class ConflictingRepository(InMemoryEntityOutboxRepository inner) : IEntityTransitionOperationRepository
+    {
+        public EntityDefinition EntityDefinition => inner.EntityDefinition;
+        public string? IdentityField => inner.IdentityField;
+        public EntityTransitionOperationCapabilities TransitionOperationCapabilities => inner.TransitionOperationCapabilities;
+        public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) => inner.TryGet(context, id, options);
+        public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) => inner.Upsert(context, write);
+        public Task<EntityTransitionOperationResult> TryGetTransitionOperation(OperationContext context, EntityTransitionOperationRequest request) => inner.TryGetTransitionOperation(context, request);
+        public Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(OperationContext context, EntityTransitionOperationRequest request) => inner.TryGetCreationTransitionOperation(context, request);
+        public Task<EntityTransitionOperationResult> CommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit) =>
+            Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit, "private-provider-detail"));
+    }
+
     sealed class FailureLogger : ILoggerProvider, ILogger
     {
         public bool Enabled { get; init; } = true;
         public int EnabledChecks { get; private set; }
         public List<string> Messages { get; } = [];
-        public ILogger CreateLogger(string categoryName) => categoryName == "Cohesive.Storage.Processes.TransitionFailures"
+        public ILogger CreateLogger(string categoryName) => categoryName == TransitionFailureLoggingExtensions.LoggerCategory
             ? this : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
         public bool IsEnabled(LogLevel logLevel) { EnabledChecks++; return Enabled; }
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;

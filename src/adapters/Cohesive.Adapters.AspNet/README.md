@@ -388,21 +388,6 @@ failed preparation leaves the builder unchanged without rollback.
 
 ## Private process failure logging
 
-For a prepared `HostedServiceProcess`, explicitly opt into protected operator logging before building the host:
-
-```csharp
-using Cohesive.Adapters.AspNet.Services;
-
-builder.Services.AddCohesiveTransitionFailureLogging(process);
-```
-
-The native host owns the subscription: it starts on host startup and is released on stop or container
-disposal, even when `StopAsync` was never called. An unstarted host never subscribes. Repeated registration
-of the same process creates one subscription per host; sharing a process across hosts does not share
-subscription ownership. Route mapping remains independent of diagnostics.
-
-The `Cohesive.Storage.Processes.TransitionFailures` category logs at Debug and skips message argument
-construction when disabled. These messages contain private native identities, concurrency tokens and
-provider detail: use protected sinks. Portable process failures remain sanitized. Recoverable observer
-failures increment the tag-free `cohesive.execution.diagnostic.subscriber.failures` counter; listening
-only to that counter does not enable execution telemetry on other paths.
+Host-owned logging lives in [Cohesive.Host](../../Cohesive.Host/README.md#private-process-failure-logging).
+Use `AddCohesiveTransitionFailureLogging(process)` from `Cohesive.Host.Services` before building the
+native host. It is independent of ASP.NET routing and works in background workers too.

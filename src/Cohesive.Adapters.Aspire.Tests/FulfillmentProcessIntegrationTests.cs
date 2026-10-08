@@ -38,7 +38,7 @@ public sealed class FulfillmentProcessIntegrationTests
             // Same ID in another partition must not confuse the trusted process read binding.
             var foreign = await orders.Upsert(context, new Order(orderId, "other", "Draft"));
             await inventory.Upsert(context, new InventoryItem(sku, FulfillmentDemo.LocalPartition, stock));
-            var binding = new FulfillmentProcessBindings(orders, inventory);
+            var binding = FulfillmentProcessBindings.Bind(orders, inventory);
             var identity = new ProcessContinuationIdentity(new("test/" + orderId), new("attempt/1"));
             var input = ObservationValue.FromObject(new FulfillOrder(orderId, sku, quantity));
             var result = await binding.Runtime.ExecuteProcessAsync(context, "fulfill", identity, input);
@@ -50,7 +50,7 @@ public sealed class FulfillmentProcessIntegrationTests
             Assert.Equal(foreign, await orders.TryGet(context, orderId, new(partitionKey: "other")));
             var beforeReplay = await inventory.TryGet(context, sku, new(partitionKey: FulfillmentDemo.LocalPartition));
             // Recreate all preparation to prove receipts are native durable evidence, not an in-memory cache.
-            var replay = await new FulfillmentProcessBindings(orders, inventory).Runtime.ExecuteProcessAsync(context, "fulfill", identity, input);
+            var replay = await FulfillmentProcessBindings.Bind(orders, inventory).Runtime.ExecuteProcessAsync(context, "fulfill", identity, input);
             Assert.Equal(ApiResultKind.Success, replay.Kind);
             Assert.Equal(output, replay.Outcome!.Decision.State.Terminal.Detail!.Value!.Value);
             Assert.Equal(beforeReplay, await inventory.TryGet(context, sku, new(partitionKey: FulfillmentDemo.LocalPartition)));

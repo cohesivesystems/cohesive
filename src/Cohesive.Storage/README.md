@@ -203,7 +203,7 @@ observer cannot affect the operation or other observers. Each recoverable callba
 exception or private payload. Listening only to this counter does not enable general execution telemetry. Subscriber snapshots are read without acquiring the registration lock.
 Tests cover the counter, isolation, disposal, complete detail
 and exclusion from serialized portable failures. The fulfillment example consumes this typed API in its
-host-owned debug logger through `AddCohesiveTransitionFailureLogging(hostedProcess)` in the ASP.NET adapter.
+host-owned debug logger through `AddCohesiveTransitionFailureLogging(hostedProcess)` in `Cohesive.Host.Services`.
 The native host starts subscriptions and releases them on stop or disposal; an unstarted host never subscribes.
 Repeated registration of a process subscribes once per host, and disabled Debug logging skips argument construction.
 PostgreSQL and SQLite rely on their native unique receipt fences, with no receipt SELECT inside a successful

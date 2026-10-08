@@ -186,7 +186,7 @@ public sealed class EntityTransitionCapturedTokenTests
     sealed record Document(string Id, string Text);
     sealed record Update(string Token, string Text);
 
-    internal sealed class ReadBoundaryRepository(InMemoryEntityOutboxRepository inner, bool ignoreReadPrecondition) : IEntityTransitionOperationRepository
+    sealed class ReadBoundaryRepository(InMemoryEntityOutboxRepository inner, bool ignoreReadPrecondition) : IEntityTransitionOperationRepository
     {
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
         public string? IdentityField => inner.IdentityField;

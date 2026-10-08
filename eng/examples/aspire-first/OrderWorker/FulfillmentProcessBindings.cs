@@ -1,28 +1,25 @@
-using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Identity;
 using Cohesive.Execution;
-using Cohesive.Model;
 using Cohesive.Storage;
 
 namespace AspireFirst.Orders;
 
 /// <summary>Host-lifetime preparation of the declared process against receipt-capable local repositories.</summary>
 /// <remarks>This is single-partition demo composition, not a production authorization policy or recovery worker.</remarks>
-public sealed class FulfillmentProcessBindings
+public static class FulfillmentProcessBindings
 {
-    /// <summary>Prepared process and its native runtime, also used for host-owned operator logging.</summary>
-    public HostedServiceProcess Hosted { get; }
     /// <summary>Prepares exact transition links and the finite process interpreter once.</summary>
     /// <param name="orders">Local order authority with atomic receipt support.</param>
     /// <param name="inventory">Local inventory authority with atomic receipt support.</param>
     /// <exception cref="InvalidOperationException">Compilation or required persistence capability is invalid.</exception>
-    public FulfillmentProcessBindings(IEntityRepository<Order> orders, IEntityRepository<InventoryItem> inventory)
+    /// <returns>The single prepared service declaration and runtime.</returns>
+    public static HostedServiceProcess Bind(IEntityRepository<Order> orders, IEntityRepository<InventoryItem> inventory)
     {
         var readOptions = new EntityReadOptions(partitionKey: inventory.TransitionOperationCapabilities.PartitionKey
             ?? throw new InvalidOperationException("The demo requires a fixed receipt partition."));
-        Hosted = Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance)
+        return Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance)
             .Operation("fulfill").Run(FulfillmentProcess.Definition, bindings => bindings
             .Transition(InventoryTransitions.Reserve, inventory)
             .Transition(InventoryTransitions.Release, inventory)
@@ -35,15 +32,4 @@ public sealed class FulfillmentProcessBindings
             .Build(authority: "aspire-first", timeout: TimeSpan.FromSeconds(15),
                 authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
     }
-
-    /// <summary>Service policy declares finite, invocation-local execution.</summary>
-    public ExecutionDefinitionDocument Declaration => Hosted.Declaration;
-    /// <summary>Prepared runtime; invocation identities and state are supplied per call.</summary>
-    public ServiceRuntime Runtime => Hosted.Runtime;
-
-    /// <summary>Maps the local demonstration route through the canonical service binding.</summary>
-    /// <param name="app">Native endpoint builder.</param>
-    public void Map(WebApplication app) =>
-        app.MapServiceEphemeralProcess(Declaration, _ => Runtime, "fulfill",
-            FulfillmentProcess.Definition, new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
 }
