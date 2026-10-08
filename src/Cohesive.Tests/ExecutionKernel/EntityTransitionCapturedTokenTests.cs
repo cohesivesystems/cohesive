@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Collections.Concurrent;
 using Cohesive.Execution;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
@@ -95,7 +97,8 @@ public sealed class EntityTransitionCapturedTokenTests
                 .Set(new("text"), state => state.Text, (_, input) => input.Text)
                 .Return(new("applied"), TransitionOutcomeDisposition.Applied, true)).Compile().Plan!;
         Assert.True(InteractionContractCatalog.TryCreate([], out var contracts).IsValid);
-        var context = OperationContext.Create();
+        var context = OperationContext.Create(traceContext: new ActivityContext(ActivityTraceId.CreateRandom(), ActivitySpanId.CreateRandom(), ActivityTraceFlags.Recorded));
+        using var diagnostics = new PrivateDiagnosticsProbe(context.TraceContext);
         var native = new InMemoryEntityOutboxRepository(entity, _ => "shared");
         var initial = await native.Upsert(context, new(entity.CreateState("private-id", new Document("private-id", "before")).Snapshot));
         var repository = new ReadBoundaryRepository(native, false) { FailCommit = true };
@@ -115,6 +118,49 @@ public sealed class EntityTransitionCapturedTokenTests
         Assert.DoesNotContain("private-provider-detail", json);
         Assert.DoesNotContain("private-id", json);
         Assert.DoesNotContain(initial.ConcurrencyToken.Value, json);
+        var recorded = Assert.Single(diagnostics.Events);
+        var detail = Assert.Single(recorded.Result.Diagnostics);
+        Assert.Equal(context.TraceContext, recorded.TraceContext);
+        Assert.Contains("private-provider-detail", detail.Message);
+        Assert.Contains("private-id", detail.Message);
+        Assert.Contains(initial.ConcurrencyToken.Value, detail.Message);
+        diagnostics.ThrowOnEvent = true;
+        var unaffected = await adapter.ExecuteAsync(context, invocation);
+        Assert.Equal(result.Failure, unaffected.Failure);
+    }
+
+    sealed class PrivateDiagnosticsProbe : IDisposable
+    {
+        readonly ConcurrentBag<IDisposable> subscriptions = [];
+        readonly IDisposable registration;
+        public ConcurrentQueue<EntityTransitionFailureDiagnostic> Events { get; } = [];
+        public bool ThrowOnEvent { get; set; }
+        public PrivateDiagnosticsProbe(ActivityContext? trace)
+        {
+            registration = DiagnosticListener.AllListeners.Subscribe(new Observer<DiagnosticListener>(listener =>
+            {
+                if (listener.Name != StorageExecutionTelemetry.PrivateDiagnosticListenerName) return;
+                subscriptions.Add(listener.Subscribe(new Observer<KeyValuePair<string, object?>>(item =>
+                {
+                    if (item.Key != StorageExecutionTelemetry.TransitionFailureEventName
+                        || item.Value is not EntityTransitionFailureDiagnostic diagnostic || diagnostic.TraceContext != trace) return;
+                    if (ThrowOnEvent) throw new InvalidOperationException("operator sink unavailable");
+                    Events.Enqueue(diagnostic);
+                }), name => name == StorageExecutionTelemetry.TransitionFailureEventName));
+            }));
+        }
+        public void Dispose()
+        {
+            registration.Dispose();
+            foreach (var subscription in subscriptions) subscription.Dispose();
+        }
+    }
+
+    sealed class Observer<T>(Action<T> next) : IObserver<T>
+    {
+        public void OnNext(T value) => next(value);
+        public void OnError(Exception error) { }
+        public void OnCompleted() { }
     }
 
     sealed record Document(string Id, string Text);

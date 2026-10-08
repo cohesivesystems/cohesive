@@ -191,6 +191,15 @@ exceptions and ambiguous acknowledgements propagate without retry. Conditional c
 `/write/subjectCondition` or `/write/expectedConcurrencyToken` locations and preserve subject, fence and native
 provider status details for repository/operator callers; do not expose these native diagnostics directly to clients.
 The process adapter preserves code and location but projects a safe message without provider evidence.
+Before sanitizing it, the adapter emits `StorageExecutionTelemetry.TransitionFailureEventName` on the opt-in
+`Cohesive.Storage.PrivateDiagnostics` diagnostic listener. Its `EntityTransitionFailureDiagnostic` payload
+contains the original repository result and invocation trace context. Operators can subscribe through
+`DiagnosticListener.AllListeners`, select `StorageExecutionTelemetry.PrivateDiagnosticListenerName`, then
+subscribe to that listener's failure event and route the typed payload to a protected log or trace sink.
+There is **no automatic exporter or persistence**: without a subscriber, nothing is logged. This channel is
+separate from ordinary payload-free execution telemetry because it contains identities, concurrency tokens
+and native provider details. Sink failures are best effort and cannot change the operation result. Tests
+verify both full private diagnostic delivery and exclusion from the serialized portable process failure.
 PostgreSQL and SQLite rely on their native unique receipt fences, with no receipt SELECT inside a successful
 commit. A unique violation rolls back the entity write before shared conflict resolution reads and validates
 retained evidence. Provider locks, transactions and encoding

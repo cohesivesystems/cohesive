@@ -12,6 +12,12 @@ namespace Cohesive.Storage.Processes;
 /// <summary>Stable diagnostics produced by the Process-to-entity Transition operation adapter.</summary>
 public static class ProcessTransitionOperationAdapterDiagnosticCodes
 {
+    /// <summary>The repository cannot commit entity state and receipt atomically.</summary>
+    public const string ReceiptCapabilityMissing = "storage.processes.binding.receiptCapabilityMissing";
+
+    /// <summary>The transition observation differs from repository entity authority.</summary>
+    public const string ObservationMismatch = "storage.processes.binding.observationMismatch";
+
     /// <summary>No exact Transition plan and entity repository binding was available.</summary>
     public const string BindingUnavailable = "storage.processes.transitionAdapter.binding.unavailable";
 
@@ -154,10 +160,10 @@ public sealed class ProcessTransitionOperationBinding
     {
         var diagnostics = new List<DocumentValidationDiagnostic>();
         if (!Repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt)
-            diagnostics.Add(new("storage.processes.binding.receiptCapabilityMissing", DiagnosticSeverity.Error,
+            diagnostics.Add(new(ProcessTransitionOperationAdapterDiagnosticCodes.ReceiptCapabilityMissing, DiagnosticSeverity.Error,
                 "The repository must support atomic state and receipt commits.", "/binding/repository"));
         if (Plan.Definition.Observation != ValueContract.FromShape(Repository.EntityDefinition.Shape))
-            diagnostics.Add(new("storage.processes.binding.observationMismatch", DiagnosticSeverity.Error,
+            diagnostics.Add(new(ProcessTransitionOperationAdapterDiagnosticCodes.ObservationMismatch, DiagnosticSeverity.Error,
                 "The plan observation contract must match the bound entity state contract.", "/binding/entity"));
         return new([.. diagnostics]);
     }
@@ -284,7 +290,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         var lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
         if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
         {
-            return Result(lookup);
+            return Result(context, lookup);
         }
 
         EntitySnapshot? snapshot;
@@ -306,7 +312,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             ProcessTransitionOperationBinding binding, OperationContext context, EntityTransitionOperationRequest request)
         {
             var raced = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
-            return raced.Disposition != EntityTransitionOperationDisposition.NotFound ? Result(raced)
+            return raced.Disposition != EntityTransitionOperationDisposition.NotFound ? Result(context, raced)
                 : Failure(ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged,
                     "The authoritative subject changed after its concurrency token was captured.", "/invocation/input");
         }
@@ -318,7 +324,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
             if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
             {
-                return Result(lookup);
+                return Result(context, lookup);
             }
             return Failure(
                 ProcessTransitionOperationAdapterDiagnosticCodes.SubjectMissing,
@@ -331,7 +337,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
             if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
             {
-                return Result(lookup);
+                return Result(context, lookup);
             }
 
             // A replacement Process attempt has a fresh exact occurrence, but unique-subject creation is naturally
@@ -340,7 +346,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             lookup = await binding.Repository.TryGetCreationTransitionOperation(context, request).ConfigureAwait(false);
             if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
             {
-                return Result(lookup);
+                return Result(context, lookup);
             }
             return Failure(
                 ProcessTransitionOperationAdapterDiagnosticCodes.SubjectPresent,
@@ -417,12 +423,15 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
                 ? EntityTransitionSubjectCondition.MustBeAbsent
                 : EntityTransitionSubjectCondition.MustExist);
         var committed = await binding.Repository.CommitTransitionOperation(context, commit).ConfigureAwait(false);
-        return Result(committed);
+        return Result(context, committed);
     }
 
-    static ProcessOperationResult Result(EntityTransitionOperationResult operation) => operation.Receipt is { } receipt
-        ? receipt.Result.WithReceiptReference(EntityTransitionReceiptReferences.Project(receipt.Request.Reference))
-        : ProcessOperationResult.Failed(operation.Diagnostics.FirstOrDefault() is { } diagnostic
+    static ProcessOperationResult Result(OperationContext context, EntityTransitionOperationResult operation)
+    {
+        if (operation.Receipt is { } receipt)
+            return receipt.Result.WithReceiptReference(EntityTransitionReceiptReferences.Project(receipt.Request.Reference));
+        StorageExecutionTelemetry.RecordTransitionFailure(context, operation);
+        return ProcessOperationResult.Failed(operation.Diagnostics.FirstOrDefault() is { } diagnostic
             ? new(diagnostic.Code, diagnostic.Severity,
                 "The entity operation could not be committed.", diagnostic.Location)
             : new(
@@ -430,6 +439,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
                 DiagnosticSeverity.Error,
                 $"Entity Transition operation ended with '{operation.Disposition}' without receipt or diagnostic evidence.",
                 "/entityOperation"));
+    }
 
     static ProcessOperationResult Failure(string code, string message, string location) =>
         ProcessOperationResult.Failed(new(code, DiagnosticSeverity.Error, message, location));

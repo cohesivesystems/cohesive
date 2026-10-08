@@ -221,9 +221,10 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
             if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent)
                 InsertIndex(connection, transaction, sql.InsertCreation, commit.Request.Subject.EntityId.Value, id);
         }
-        catch (SqliteException exception) when (exception.SqliteExtendedErrorCode is 1555 or 2067)
+        catch (SqliteException exception) when (exception.SqliteExtendedErrorCode is SQLitePCL.raw.SQLITE_CONSTRAINT_PRIMARYKEY or SQLitePCL.raw.SQLITE_CONSTRAINT_UNIQUE)
         {
-            // Only auxiliary primary/unique fences are resolved; other database failures propagate.
+            // Keep this catch scoped to these two auxiliary inserts: expanding it to entity writes
+            // would misclassify unrelated uniqueness failures as receipt conflicts.
             return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
         }
         context.ThrowIfCancellationRequested();

@@ -76,7 +76,13 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
         {
             throw new ServiceBindingValidationException(new([.. exception.Validation.Diagnostics.Select(diagnostic => diagnostic with
             {
-                Code = diagnostic.Code.Replace("storage.processes.binding.", "services.binding.", StringComparison.Ordinal)
+                Code = diagnostic.Code switch
+                {
+                    ProcessTransitionOperationAdapterDiagnosticCodes.ObservationMismatch => ServiceBindingDiagnosticCodes.ObservationMismatch,
+                    ProcessTransitionOperationAdapterDiagnosticCodes.ReceiptCapabilityMissing => ServiceBindingDiagnosticCodes.ReceiptCapabilityMissing,
+                    // New native diagnostics keep their identity until deliberately projected here.
+                    _ => diagnostic.Code
+                }
             })]));
         }
         transitions.Add(binding.Plan.DefinitionReference, binding);
@@ -112,7 +118,7 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
         ArgumentNullException.ThrowIfNull(authorization);
         var compilation = process.Compile(new ProcessDefinitionValidationContext(links));
         var plan = compilation.Plan ?? throw new ServiceBindingValidationException(compilation.Validation);
-        var declaration = operation.SelectPreparedProcess(plan).ExecuteEphemerally(timeout).Build();
+        var declaration = operation.Run(plan).ExecuteEphemerally(timeout).Build();
         var deployed = new Dictionary<ExecutionDefinitionReference, ProcessTransitionOperationBinding>(transitions);
         var adapter = new EntityTransitionProcessOperationAdapter(invocation => deployed.GetValueOrDefault(invocation.Definition));
         var host = new RegisteredAsyncProcessReferenceHost(new ProcessRelationHandlerCatalog(queries), adapter.ExecuteAsync);

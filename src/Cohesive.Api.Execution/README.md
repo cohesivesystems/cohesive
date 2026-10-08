@@ -325,7 +325,11 @@ The ordinary declaration-only `Run(process)` remains unchanged. Its binding over
 service and operation authoring flow; there is no separate `Service.Host` entry point. Transition association
 uses `CreateProcessDefinitionLink` as its single capability/authority check. Its structured storage binding
 failure is projected to `ServiceBindingValidationException`, preserving separate capability and observation
-codes/locations (including `services.binding.observationMismatch`). Selecting the hosting overload reserves
-that operation immediately; another `Run` on the same operation builder fails before `Build`. Pass `expectedConcurrencyTokenField: nameof(Input.Token)` for a captured storage fence, or
+codes/locations (including `services.binding.observationMismatch`) through an explicit mapping of shared
+constants. Unknown native codes retain their exact identity instead of being rewritten by a naming convention.
+The hosting overload returns `ServiceProcessHostBuilder<TInput, TResult>`, which has association methods and
+`Build` but no `Run`; chaining another selection is a compile error. The original immutable operation builder
+can still produce independent branches, just like declaration-only authoring. No selection flag is retained.
+Pass `expectedConcurrencyTokenField: nameof(Input.Token)` for a captured storage fence, or
 attach a complete `ProcessTransitionOperationBinding` to retain custom subject, placement and emission policies.
 Core runtime tests exercise matching/stale tokens through both forms independently of the example.

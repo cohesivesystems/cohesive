@@ -18,13 +18,29 @@ public sealed class ServiceProcessBindingAuthoringTests
     public sealed record Input(string Token);
 
     [Fact]
-    public void Repeated_host_selection_fails_at_Run_before_Build()
+    public void Hosting_returns_independent_binding_phases_without_mutating_the_operation()
     {
         var process = ProcessAuthoring.Project<StartRun, string>(RunControlFixture.ProcessDocument);
         var operation = Service.Define(new("service"), new("1"), RunControlFixture.Provenance).Operation("run");
-        operation.Run(process, _ => { });
-        Assert.Throws<InvalidOperationException>(() => operation.Run(process, _ => { }));
-        Assert.Throws<InvalidOperationException>(() => operation.Run(process));
+        ServiceProcessHostBuilder<StartRun, string> first = operation.Run(process, _ => { });
+        ServiceProcessHostBuilder<StartRun, string> second = operation.Run(process, _ => { });
+        Assert.NotSame(first, second);
+        // Each returned phase exposes association and Build, not Run. Reusing the immutable source
+        // for an ordinary declaration must remain legal as it is for all other authoring branches.
+        Assert.NotNull(operation.Run(process));
+    }
+
+    [Fact]
+    public void Binding_exception_requires_error_evidence_and_selects_the_first_error_code()
+    {
+        Assert.Throws<ArgumentNullException>(() => new ProcessTransitionBindingException(null!));
+        Assert.Throws<ArgumentException>(() => new ProcessTransitionBindingException(DocumentValidationResult.Valid));
+        var warning = new DocumentValidationDiagnostic("warning", DiagnosticSeverity.Warning, "warning");
+        Assert.Throws<ArgumentException>(() => new ProcessTransitionBindingException(new([warning])));
+        var validation = new DocumentValidationResult([warning, new("error", DiagnosticSeverity.Error, "failed", "/binding")]);
+        var exception = new ProcessTransitionBindingException(validation);
+        Assert.Equal("error", exception.Code);
+        Assert.Same(validation, exception.Validation);
     }
 
     [Fact]
@@ -41,6 +57,9 @@ public sealed class ServiceProcessBindingAuthoringTests
         var diagnostic = Assert.Single(failure.Validation.Diagnostics);
         Assert.Equal("services.binding.observationMismatch", diagnostic.Code);
         Assert.Equal("/binding/entity", diagnostic.Location);
+        var direct = Assert.Throws<ServiceBindingValidationException>(() => new ServiceTransitionBinding("run",
+            binding.Plan, wrong.EntityDefinition, _ => wrong));
+        Assert.Equal(Assert.Single(direct.Validation.Diagnostics), diagnostic);
     }
 
     public sealed record Other(string Id, string Tenant);
