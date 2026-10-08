@@ -335,18 +335,24 @@ public static class CanonicalJsonWriter
         Indented = false
     });
 
-    internal static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element) =>
-        WriteCanonicalElement(writer, element, null, string.Empty, CanonicalJsonNumberSemantics.ExactDecimalRational);
+    internal static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element)
+    {
+        using PropertyNames names = new();
+        WriteCanonicalElement(writer, element, null, string.Empty, CanonicalJsonNumberSemantics.ExactDecimalRational, names);
+    }
 
     // Semantic blocks can stream the same canonical profile into their existing digest writer.
     internal static void WriteCanonical(Utf8JsonWriter writer, JsonElement element,
         Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering> getArrayOrdering,
-        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation) =>
-        WriteCanonicalElement(writer, element, getArrayOrdering, string.Empty, numberSemantics);
+        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation)
+    {
+        using PropertyNames names = new();
+        WriteCanonicalElement(writer, element, getArrayOrdering, string.Empty, numberSemantics, names);
+    }
 
     static void WriteCanonicalElement(Utf8JsonWriter writer, JsonElement element,
         Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? getArrayOrdering,
-        string path, CanonicalJsonNumberSemantics numberSemantics)
+        string path, CanonicalJsonNumberSemantics numberSemantics, PropertyNames names)
     {
         switch (element.ValueKind)
         {
@@ -360,7 +366,11 @@ public static class CanonicalJsonWriter
                     {
                         var index = 0;
                         foreach (var property in element.EnumerateObject())
-                            properties[index++] = new(property.Name, property.Value);
+                        {
+                            var name = count > PropertyNames.Capacity ? property.Name : names.Get(property, count, index);
+                            properties[index] = new(name, property.Value);
+                            index++;
+                        }
                         properties.AsSpan(0, count).Sort(
                             static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
                         for (index = 0; index < count; index++)
@@ -370,7 +380,7 @@ public static class CanonicalJsonWriter
                                 throw new ArgumentException($"Duplicate JSON property '{property.Key}'.");
                             writer.WritePropertyName(property.Key);
                             WriteCanonicalElement(writer, property.Value, getArrayOrdering,
-                                getArrayOrdering is null ? string.Empty : AppendPropertyPath(path, property.Key), numberSemantics);
+                                getArrayOrdering is null ? string.Empty : AppendPropertyPath(path, property.Key), numberSemantics, names);
                         }
                     }
                     finally
@@ -382,7 +392,7 @@ public static class CanonicalJsonWriter
                 writer.WriteEndObject();
                 break;
             case JsonValueKind.Array:
-                WriteCanonicalElementArray(writer, element, getArrayOrdering, path, numberSemantics);
+                WriteCanonicalElementArray(writer, element, getArrayOrdering, path, numberSemantics, names);
                 break;
             case JsonValueKind.Number:
                 if (numberSemantics == CanonicalJsonNumberSemantics.ExactDecimalRational)
@@ -400,7 +410,7 @@ public static class CanonicalJsonWriter
 
     static void WriteCanonicalElementArray(Utf8JsonWriter writer, JsonElement array,
         Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? getArrayOrdering,
-        string path, CanonicalJsonNumberSemantics numberSemantics)
+        string path, CanonicalJsonNumberSemantics numberSemantics, PropertyNames names)
     {
         var ordering = getArrayOrdering is null ? CanonicalJsonArrayOrdering.Sequence : getArrayOrdering(new(path));
         var itemPath = getArrayOrdering is null ? string.Empty : AppendArrayItemPath(path);
@@ -408,7 +418,7 @@ public static class CanonicalJsonWriter
         if (ordering.Kind == CanonicalJsonArrayOrderingKind.Sequence)
         {
             foreach (var item in array.EnumerateArray())
-                WriteCanonicalElement(writer, item, getArrayOrdering, itemPath, numberSemantics);
+                WriteCanonicalElement(writer, item, getArrayOrdering, itemPath, numberSemantics, names);
         }
         else
         {
@@ -434,7 +444,7 @@ public static class CanonicalJsonWriter
                 }
                 ordered.AsSpan(0, count).Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
                 for (index = 0; index < count; index++)
-                    WriteCanonicalElement(writer, ordered[index].Value, getArrayOrdering, itemPath, numberSemantics);
+                    WriteCanonicalElement(writer, ordered[index].Value, getArrayOrdering, itemPath, numberSemantics, names);
             }
             finally
             {
@@ -443,6 +453,26 @@ public static class CanonicalJsonWriter
             }
         }
         writer.WriteEndArray();
+    }
+
+    // Advisory reuse for repeated small-object layouts. One exact comparison protects every hit;
+    // collisions only replace a candidate. Wide objects avoid probing and evicting reusable names.
+    // Storage belongs to this write and is cleared on both success and failure before pool return.
+    readonly struct PropertyNames : IDisposable
+    {
+        internal const int Capacity = 32;
+        readonly string?[] names;
+        public PropertyNames() => names = ArrayPool<string?>.Shared.Rent(Capacity);
+        public void Dispose() => ArrayPool<string?>.Shared.Return(names, clearArray: true);
+
+        internal string Get(JsonProperty property, int count, int index)
+        {
+            var slot = (count * 3 + index) & (Capacity - 1);
+            var candidate = names[slot];
+            if (candidate is not null && property.NameEquals(candidate))
+                return candidate;
+            return names[slot] = property.Name;
+        }
     }
 
     static string GetCanonicalObjectSortValue(JsonElement item, string path, string propertyName)

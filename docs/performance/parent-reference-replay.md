@@ -82,3 +82,6 @@ Qualification passed 4,299 Core tests (33 existing skips), 1,082 Relations tests
 tests (18 existing skips). The revised digit-width fixtures and tightened allocation check pass; the
 preceding assembly passes the semantic fixtures but fails the allocation ceiling. Both Ari dependency
 assemblies were verified restored byte-for-byte. No tests were excluded or timeouts increased.
+
+Subsequent [canonical property-name reuse](canonical-property-names.md) removes repeated name decoding
+inside the existing immutable writer while preserving this replay and its numbering contract.

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Cohesive.Model.Serialization;
@@ -78,6 +79,48 @@ public sealed class CanonicalJsonElementWriterTests
         Assert.Throws<InvalidOperationException>(() => CanonicalJsonWriter.GetCanonicalBytes(default(JsonElement), Ordering));
         Assert.Throws<ArgumentOutOfRangeException>(() => CanonicalJsonWriter.GetCanonicalBytes(parsed.RootElement, Ordering,
             (CanonicalJsonNumberSemantics)99));
+    }
+
+    [Fact]
+    public void PropertyNameReusePreservesEscapingCollisionsAndFailureRecovery()
+    {
+        using var duplicate = JsonDocument.Parse("""{"x":1,"\u0078":2}""");
+        Assert.Equal("Duplicate JSON property 'x'.", Assert.Throws<ArgumentException>(() =>
+            CanonicalJsonWriter.GetCanonicalBytes(duplicate.RootElement, Ordering)).Message);
+        var rows = Enumerable.Range(0, 128).Select(index => new Dictionary<string, int>
+        {
+            [index % 2 == 0 ? "é" : "different"] = index,
+            [index % 3 == 0 ? "a/b*~" : "quote\""] = index + 1,
+            ["𝄞"] = index + 2
+        }).ToArray();
+        var json = JsonSerializer.Serialize(new { rows });
+        using var parsed = JsonDocument.Parse(json);
+        var expected = CanonicalJsonWriter.GetCanonicalBytes(JsonNode.Parse(json)!, Options, Ordering,
+            CanonicalJsonNumberSemantics.ExactDecimalRational);
+        Parallel.For(0, 16, _ => Assert.Equal(expected,
+            CanonicalJsonWriter.GetCanonicalBytes(parsed.RootElement, Ordering, CanonicalJsonNumberSemantics.ExactDecimalRational)));
+    }
+
+    [Fact]
+    public void RepeatedPropertyNamesDoNotAllocatePerRowDuringCanonicalWriting()
+    {
+        using var parsed = JsonDocument.Parse("{\"rows\":[" + string.Join(",", Enumerable.Repeat(
+            "{\"alpha\":1,\"beta\":true,\"gamma\":\"x\"}", 4096)) + "]}");
+        var write = typeof(CanonicalJsonWriter).GetMethod("WriteCanonicalSequence",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic)!
+            .CreateDelegate<Action<Utf8JsonWriter, JsonElement>>();
+        ArrayBufferWriter<byte> buffer = new(1_000_000);
+        for (var index = 0; index < 16; index++) Write();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        Write();
+        Assert.InRange(GC.GetAllocatedBytesForCurrentThread() - before, 0, 16_384);
+
+        void Write()
+        {
+            buffer.Clear();
+            using var writer = new Utf8JsonWriter(buffer);
+            write(writer, parsed.RootElement);
+        }
     }
 
     [Theory]
