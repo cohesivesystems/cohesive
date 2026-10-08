@@ -78,8 +78,8 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
             {
                 Code = diagnostic.Code switch
                 {
-                    ProcessTransitionOperationAdapterDiagnosticCodes.ObservationMismatch => ServiceBindingDiagnosticCodes.ObservationMismatch,
-                    ProcessTransitionOperationAdapterDiagnosticCodes.ReceiptCapabilityMissing => ServiceBindingDiagnosticCodes.ReceiptCapabilityMissing,
+                    ProcessTransitionBindingDiagnosticCodes.ObservationMismatch => ServiceBindingDiagnosticCodes.ObservationMismatch,
+                    ProcessTransitionBindingDiagnosticCodes.ReceiptCapabilityMissing => ServiceBindingDiagnosticCodes.ReceiptCapabilityMissing,
                     // New native diagnostics keep their identity until deliberately projected here.
                     _ => diagnostic.Code
                 }
@@ -123,11 +123,30 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
         var adapter = new EntityTransitionProcessOperationAdapter(invocation => deployed.GetValueOrDefault(invocation.Definition));
         var host = new RegisteredAsyncProcessReferenceHost(new ProcessRelationHandlerCatalog(queries), adapter.ExecuteAsync);
         return new(declaration, new ServiceRuntime(declaration,
-            [new ServiceEphemeralProcessBinding(operationId, plan, authority, (_, _) => host)], authorization));
+            [new ServiceEphemeralProcessBinding(operationId, plan, authority, (_, _) => host)], authorization), adapter);
     }
 }
 
 /// <summary>Canonical service declaration and its host-lifetime native realization.</summary>
-/// <param name="Declaration">Portable semantic authority.</param>
-/// <param name="Runtime">Prepared runtime; no invocation state is cached.</param>
-public sealed record HostedServiceProcess(ExecutionDefinitionDocument Declaration, ServiceRuntime Runtime);
+public sealed class HostedServiceProcess
+{
+    readonly EntityTransitionProcessOperationAdapter adapter;
+    internal HostedServiceProcess(ExecutionDefinitionDocument declaration, ServiceRuntime runtime,
+        EntityTransitionProcessOperationAdapter adapter)
+    {
+        Declaration = declaration;
+        Runtime = runtime;
+        this.adapter = adapter;
+    }
+    /// <summary>Portable semantic authority.</summary>
+    public ExecutionDefinitionDocument Declaration { get; }
+    /// <summary>Prepared runtime; no invocation state is cached.</summary>
+    public ServiceRuntime Runtime { get; }
+    /// <summary>Subscribes to full private failure diagnostics from this hosted service only.</summary>
+    /// <param name="observer">Synchronous, thread-safe callback writing only to protected operator sinks.</param>
+    /// <returns>Idempotent subscription handle; disposal releases the callback. A delivery already in flight may still invoke its callback.</returns>
+    /// <exception cref="ArgumentNullException">Observer is null.</exception>
+    /// <remarks>No replay/history, global listener or automatic export. Observer failures do not affect operations or other observers.</remarks>
+    public IDisposable SubscribeTransitionFailures(Action<EntityTransitionFailureDiagnostic> observer) =>
+        adapter.SubscribeTransitionFailures(observer);
+}

@@ -333,3 +333,16 @@ can still produce independent branches, just like declaration-only authoring. No
 Pass `expectedConcurrencyTokenField: nameof(Input.Token)` for a captured storage fence, or
 attach a complete `ProcessTransitionOperationBinding` to retain custom subject, placement and emission policies.
 Core runtime tests exercise matching/stale tokens through both forms independently of the example.
+
+A built host exposes a typed, instance-scoped operator subscription:
+
+```csharp
+using var subscription = hosted.SubscribeTransitionFailures(failure =>
+    protectedLog.Write(failure.TraceContext, failure.Result.Diagnostics));
+```
+
+`protectedLog` is the application's chosen private operator sink. No process-wide discovery channel is
+registered. Hold the disposable for the host lifetime, then dispose it; callbacks must be thread-safe and
+may contain native identities and tokens. The fulfillment example uses its own debug logger and stops the
+subscription with the application. `ProcessTransitionBindingDiagnosticCodes` is the complete native admission
+catalog; tests require an explicit service mapping (or deliberate passthrough case) for every catalog constant.

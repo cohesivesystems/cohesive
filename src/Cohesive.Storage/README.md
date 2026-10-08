@@ -191,15 +191,16 @@ exceptions and ambiguous acknowledgements propagate without retry. Conditional c
 `/write/subjectCondition` or `/write/expectedConcurrencyToken` locations and preserve subject, fence and native
 provider status details for repository/operator callers; do not expose these native diagnostics directly to clients.
 The process adapter preserves code and location but projects a safe message without provider evidence.
-Before sanitizing it, the adapter emits `StorageExecutionTelemetry.TransitionFailureEventName` on the opt-in
-`Cohesive.Storage.PrivateDiagnostics` diagnostic listener. Its `EntityTransitionFailureDiagnostic` payload
-contains the original repository result and invocation trace context. Operators can subscribe through
-`DiagnosticListener.AllListeners`, select `StorageExecutionTelemetry.PrivateDiagnosticListenerName`, then
-subscribe to that listener's failure event and route the typed payload to a protected log or trace sink.
-There is **no automatic exporter or persistence**: without a subscriber, nothing is logged. This channel is
-separate from ordinary payload-free execution telemetry because it contains identities, concurrency tokens
-and native provider details. Sink failures are best effort and cannot change the operation result. Tests
-verify both full private diagnostic delivery and exclusion from the serialized portable process failure.
+Before sanitizing it, the adapter delivers the original result and trace context to subscribers attached
+through `adapter.SubscribeTransitionFailures(Action<EntityTransitionFailureDiagnostic>)` or the same method
+on the built `HostedServiceProcess`. The returned `IDisposable` releases that observer. Subscriptions belong
+to that exact adapter/host instance: sharing a trace, repository or process does not share private failures.
+There is no global `DiagnosticListener`, automatic exporter, persistence, or replay. Callbacks run synchronously,
+may run concurrently for separate operations, and must route private identities/tokens/provider details only
+to protected sinks. Disposal prevents future delivery but a delivery already in flight may still invoke its callback. One failing
+observer cannot affect the operation or other observers. Tests cover isolation, disposal, complete detail
+and exclusion from serialized portable failures. The fulfillment example consumes this typed API in its
+host-scoped debug logger and disposes the subscription when the application stops.
 PostgreSQL and SQLite rely on their native unique receipt fences, with no receipt SELECT inside a successful
 commit. A unique violation rolls back the entity write before shared conflict resolution reads and validates
 retained evidence. Provider locks, transactions and encoding

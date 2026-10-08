@@ -12,6 +12,7 @@ namespace AspireFirst.Orders;
 /// <remarks>This is single-partition demo composition, not a production authorization policy or recovery worker.</remarks>
 public sealed class FulfillmentProcessBindings
 {
+    readonly HostedServiceProcess hosted;
     /// <summary>Prepares exact transition links and the finite process interpreter once.</summary>
     /// <param name="orders">Local order authority with atomic receipt support.</param>
     /// <param name="inventory">Local inventory authority with atomic receipt support.</param>
@@ -20,7 +21,7 @@ public sealed class FulfillmentProcessBindings
     {
         var readOptions = new EntityReadOptions(partitionKey: inventory.TransitionOperationCapabilities.PartitionKey
             ?? throw new InvalidOperationException("The demo requires a fixed receipt partition."));
-        var hosted = Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance)
+        hosted = Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance)
             .Operation("fulfill").Run(FulfillmentProcess.Definition, bindings => bindings
             .Transition(InventoryTransitions.Reserve, inventory)
             .Transition(InventoryTransitions.Release, inventory)
@@ -43,7 +44,18 @@ public sealed class FulfillmentProcessBindings
 
     /// <summary>Maps the local demonstration route through the canonical service binding.</summary>
     /// <param name="app">Native endpoint builder.</param>
-    public void Map(WebApplication app) => app.MapServiceEphemeralProcess(Declaration, _ => Runtime, "fulfill",
-        FulfillmentProcess.Definition, new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
+    public void Map(WebApplication app)
+    {
+        // Debug logging is an explicit operator choice: these messages contain private native details.
+        var subscription = hosted.SubscribeTransitionFailures(failure =>
+        {
+            foreach (var diagnostic in failure.Result.Diagnostics)
+                app.Logger.LogDebug("Fulfillment storage failure {Code} at {Location}: {Detail}; trace {TraceId}",
+                    diagnostic.Code, diagnostic.Location, diagnostic.Message, failure.TraceContext?.TraceId);
+        });
+        app.Lifetime.ApplicationStopped.Register(subscription.Dispose);
+        app.MapServiceEphemeralProcess(Declaration, _ => Runtime, "fulfill",
+            FulfillmentProcess.Definition, new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
+    }
 
 }

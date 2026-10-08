@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Collections.Immutable;
 using Cohesive.Control;
 using Cohesive.Execution;
@@ -10,39 +9,6 @@ namespace Cohesive.Storage;
 /// <summary>Projects and records Storage runtime evidence through the common execution observability contract.</summary>
 public static class StorageExecutionTelemetry
 {
-    /// <summary>Opt-in local diagnostic channel containing private native failure details, excluded from ordinary execution telemetry.</summary>
-    public const string PrivateDiagnosticListenerName = "Cohesive.Storage.PrivateDiagnostics";
-
-    /// <summary>Event whose payload is an EntityTransitionFailureDiagnostic.</summary>
-    public const string TransitionFailureEventName = "EntityTransitionFailure";
-
-    // Only the private failure path initializes this channel. Ordinary telemetry remains payload-free.
-    static class PrivateFailureChannel
-    {
-        internal static readonly DiagnosticListener? Listener = Create();
-        static DiagnosticListener? Create()
-        {
-            try { return new(PrivateDiagnosticListenerName); }
-            catch (Exception exception) when (IsRecoverable(exception)) { return null; }
-        }
-    }
-
-    internal static void RecordTransitionFailure(OperationContext context, EntityTransitionOperationResult result)
-    {
-        try
-        {
-            var listener = PrivateFailureChannel.Listener;
-            if (listener?.IsEnabled(TransitionFailureEventName) == true)
-                listener.Write(TransitionFailureEventName, new EntityTransitionFailureDiagnostic(context.TraceContext, result));
-        }
-        catch (Exception exception) when (IsRecoverable(exception))
-        {
-            // Operator diagnostics are best effort and must never change the observed operation.
-        }
-    }
-
-    static bool IsRecoverable(Exception exception) => exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException);
-
     /// <summary>Records bounded checkpoint metrics from one complete durable Process checkpoint.</summary>
     /// <param name="checkpoint">Canonical durable checkpoint to observe.</param>
     /// <exception cref="ArgumentNullException"><paramref name="checkpoint"/> is <see langword="null"/>.</exception>
@@ -369,10 +335,3 @@ public static class StorageExecutionTelemetry
         ? long.MaxValue
         : left + right;
 }
-
-/// <summary>Private, ephemeral operator evidence emitted before a storage failure is sanitized for a process.</summary>
-/// <param name="TraceContext">Invocation trace for correlating a protected log or trace.</param>
-/// <param name="Result">Original repository failure, including identities, concurrency evidence and provider diagnostics.</param>
-/// <remarks>Hosts must explicitly subscribe to StorageExecutionTelemetry.PrivateDiagnosticListenerName and
-/// route this data only to protected operator sinks. No event is persisted or exported automatically.</remarks>
-public sealed record EntityTransitionFailureDiagnostic(ActivityContext? TraceContext, EntityTransitionOperationResult Result);

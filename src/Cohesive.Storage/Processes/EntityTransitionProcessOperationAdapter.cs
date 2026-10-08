@@ -12,12 +12,6 @@ namespace Cohesive.Storage.Processes;
 /// <summary>Stable diagnostics produced by the Process-to-entity Transition operation adapter.</summary>
 public static class ProcessTransitionOperationAdapterDiagnosticCodes
 {
-    /// <summary>The repository cannot commit entity state and receipt atomically.</summary>
-    public const string ReceiptCapabilityMissing = "storage.processes.binding.receiptCapabilityMissing";
-
-    /// <summary>The transition observation differs from repository entity authority.</summary>
-    public const string ObservationMismatch = "storage.processes.binding.observationMismatch";
-
     /// <summary>No exact Transition plan and entity repository binding was available.</summary>
     public const string BindingUnavailable = "storage.processes.transitionAdapter.binding.unavailable";
 
@@ -160,10 +154,10 @@ public sealed class ProcessTransitionOperationBinding
     {
         var diagnostics = new List<DocumentValidationDiagnostic>();
         if (!Repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt)
-            diagnostics.Add(new(ProcessTransitionOperationAdapterDiagnosticCodes.ReceiptCapabilityMissing, DiagnosticSeverity.Error,
+            diagnostics.Add(new(ProcessTransitionBindingDiagnosticCodes.ReceiptCapabilityMissing, DiagnosticSeverity.Error,
                 "The repository must support atomic state and receipt commits.", "/binding/repository"));
         if (Plan.Definition.Observation != ValueContract.FromShape(Repository.EntityDefinition.Shape))
-            diagnostics.Add(new(ProcessTransitionOperationAdapterDiagnosticCodes.ObservationMismatch, DiagnosticSeverity.Error,
+            diagnostics.Add(new(ProcessTransitionBindingDiagnosticCodes.ObservationMismatch, DiagnosticSeverity.Error,
                 "The plan observation contract must match the bound entity state contract.", "/binding/entity"));
         return new([.. diagnostics]);
     }
@@ -209,6 +203,56 @@ public sealed class ProcessTransitionOperationBinding
 public sealed class EntityTransitionProcessOperationAdapter : IProcessTransitionOperationAdapter
 {
     readonly Func<ProcessTransitionInvocation, ProcessTransitionOperationBinding?> resolveBinding;
+    readonly object subscriptionGate = new();
+    FailureSubscription[] failureSubscriptions = [];
+
+    /// <summary>Subscribes to private failures produced only by this adapter instance.</summary>
+    /// <param name="observer">Synchronous, thread-safe operator sink; receives private native details, never public response data.</param>
+    /// <returns>Idempotent subscription handle. Dispose to release the observer; a delivery already in flight may still invoke its callback.</returns>
+    /// <exception cref="ArgumentNullException">Observer is null.</exception>
+    /// <remarks>No history is retained. Concurrent operations may invoke observers concurrently. Each observer's
+    /// recoverable failure is isolated from the operation and other observers. Route payloads only to protected sinks.</remarks>
+    public IDisposable SubscribeTransitionFailures(Action<EntityTransitionFailureDiagnostic> observer)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+        var subscription = new FailureSubscription(this, observer);
+        lock (subscriptionGate) failureSubscriptions = [.. failureSubscriptions, subscription];
+        return subscription;
+    }
+
+    void RecordFailure(OperationContext context, EntityTransitionOperationResult result)
+    {
+        FailureSubscription[] subscriptions;
+        lock (subscriptionGate) subscriptions = failureSubscriptions;
+        if (subscriptions.Length == 0) return;
+        var diagnostic = new EntityTransitionFailureDiagnostic(context.TraceContext, result);
+        foreach (var subscription in subscriptions) subscription.Deliver(diagnostic);
+    }
+
+    sealed class FailureSubscription(EntityTransitionProcessOperationAdapter owner,
+        Action<EntityTransitionFailureDiagnostic> observer) : IDisposable
+    {
+        Action<EntityTransitionFailureDiagnostic>? callback = observer;
+        EntityTransitionProcessOperationAdapter? source = owner;
+        public void Dispose()
+        {
+            Interlocked.Exchange(ref callback, null);
+            var current = Interlocked.Exchange(ref source, null);
+            if (current is null) return;
+            lock (current.subscriptionGate)
+                current.failureSubscriptions = [.. current.failureSubscriptions.Where(item => !ReferenceEquals(item, this))];
+        }
+        internal void Deliver(EntityTransitionFailureDiagnostic diagnostic)
+        {
+            var target = Volatile.Read(ref callback);
+            if (target is null) return;
+            try { target(diagnostic); }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or AccessViolationException))
+            {
+                // A failing operator sink must not change the operation or prevent other sinks from receiving it.
+            }
+        }
+    }
 
     /// <summary>Creates an adapter over an exact, caller-owned binding resolver.</summary>
     /// <param name="resolveBinding">
@@ -308,7 +352,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         if (snapshot is not null && expectedConcurrencyToken is { } expected && snapshot.ConcurrencyToken != expected)
             return await ChangedSubjectAsync(binding, context, request).ConfigureAwait(false);
 
-        static async ValueTask<ProcessOperationResult> ChangedSubjectAsync(
+        async ValueTask<ProcessOperationResult> ChangedSubjectAsync(
             ProcessTransitionOperationBinding binding, OperationContext context, EntityTransitionOperationRequest request)
         {
             var raced = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
@@ -426,11 +470,11 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         return Result(context, committed);
     }
 
-    static ProcessOperationResult Result(OperationContext context, EntityTransitionOperationResult operation)
+    ProcessOperationResult Result(OperationContext context, EntityTransitionOperationResult operation)
     {
         if (operation.Receipt is { } receipt)
             return receipt.Result.WithReceiptReference(EntityTransitionReceiptReferences.Project(receipt.Request.Reference));
-        StorageExecutionTelemetry.RecordTransitionFailure(context, operation);
+        RecordFailure(context, operation);
         return ProcessOperationResult.Failed(operation.Diagnostics.FirstOrDefault() is { } diagnostic
             ? new(diagnostic.Code, diagnostic.Severity,
                 "The entity operation could not be committed.", diagnostic.Location)

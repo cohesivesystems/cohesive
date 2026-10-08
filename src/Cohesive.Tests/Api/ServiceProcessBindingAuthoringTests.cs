@@ -62,6 +62,46 @@ public sealed class ServiceProcessBindingAuthoringTests
         Assert.Equal(Assert.Single(direct.Validation.Diagnostics), diagnostic);
     }
 
+    public static TheoryData<string, string> BindingCodeMappings => new()
+    {
+        { ProcessTransitionBindingDiagnosticCodes.ObservationMismatch, ServiceBindingDiagnosticCodes.ObservationMismatch },
+        { ProcessTransitionBindingDiagnosticCodes.ReceiptCapabilityMissing, ServiceBindingDiagnosticCodes.ReceiptCapabilityMissing }
+    };
+
+    [Fact]
+    public void Every_native_binding_code_has_an_explicit_mapping_test()
+    {
+        var catalog = typeof(ProcessTransitionBindingDiagnosticCodes).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(field => field.IsLiteral && field.FieldType == typeof(string))
+            .Select(field => (string)field.GetRawConstantValue()!).OrderBy(code => code).ToArray();
+        Assert.Equal(catalog, BindingCodeMappings.Select(row => (string)row[0]).OrderBy(code => code).ToArray());
+    }
+
+    [Theory]
+    [MemberData(nameof(BindingCodeMappings))]
+    public void Native_admission_failures_project_the_declared_service_code(string nativeCode, string serviceCode)
+    {
+        var process = ProcessAuthoring.Project<StartRun, string>(RunControlFixture.ProcessDocument);
+        IEntityRepository repository = nativeCode == ProcessTransitionBindingDiagnosticCodes.ReceiptCapabilityMissing
+            ? new NonAtomicRepository()
+            : new InMemoryEntityOutboxRepository(ObjectEntityDefinition.For<Other>(new("other")), EntityPartitionKeyPolicy.FromField(nameof(Other.Tenant)));
+        var binding = new ProcessTransitionOperationBinding(RunControlFixture.Start.Compile().Plan!, repository, RunControlFixture.Contracts());
+        var native = Assert.Throws<ProcessTransitionBindingException>(() => binding.CreateProcessDefinitionLink());
+        Assert.Equal(nativeCode, Assert.Single(native.Validation.Diagnostics).Code);
+        var projected = Assert.Throws<ServiceBindingValidationException>(() => Service.Define(new("service"), new("1"), RunControlFixture.Provenance)
+            .Operation("run").Run(process, bindings => bindings.Transition(binding)));
+        Assert.Equal(serviceCode, Assert.Single(projected.Validation.Diagnostics).Code);
+        Assert.Equal(native.Validation.Diagnostics[0].Location, projected.Validation.Diagnostics[0].Location);
+    }
+
+    sealed class NonAtomicRepository : IEntityRepository
+    {
+        public Cohesive.Transitions.Model.EntityDefinition EntityDefinition => RunControlFixture.Entity;
+        public string? IdentityField => nameof(RunControl.Id);
+        public Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null) => throw new InvalidOperationException("No setup IO");
+        public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) => throw new InvalidOperationException("No setup IO");
+    }
+
     public sealed record Other(string Id, string Tenant);
 
     [Theory]

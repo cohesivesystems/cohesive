@@ -78,3 +78,11 @@ client identity policies before claiming recovery guarantees. No global transact
 
 Next composition: a durable execution binding and then independently selectable authoritative event history,
 reconstitution, state checkpoints and read projections. Those are not inferred from these receipts.
+
+### Operator failure details
+
+`FulfillmentProcessBindings.Map` subscribes to its built host's typed `SubscribeTransitionFailures` channel
+and releases the subscription at application stop. It logs full native diagnostics at Debug level; enable
+that level only for a protected operator sink because IDs and concurrency tokens may be present. Public
+process responses remain sanitized. Other hosts and process-wide diagnostic listeners cannot subscribe to
+these failures without a reference to this host or adapter instance.
