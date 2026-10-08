@@ -1,4 +1,5 @@
 using Cohesive.Api;
+using Cohesive.Model.Authoring;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Execution;
 using Cohesive.ExecutionKernel.TestFixtures.Storage;
@@ -15,6 +16,34 @@ namespace Cohesive.Tests.Api;
 public sealed class ServiceProcessBindingAuthoringTests
 {
     public sealed record Input(string Token);
+
+    [Fact]
+    public void Repeated_host_selection_fails_at_Run_before_Build()
+    {
+        var process = ProcessAuthoring.Project<StartRun, string>(RunControlFixture.ProcessDocument);
+        var operation = Service.Define(new("service"), new("1"), RunControlFixture.Provenance).Operation("run");
+        operation.Run(process, _ => { });
+        Assert.Throws<InvalidOperationException>(() => operation.Run(process, _ => { }));
+        Assert.Throws<InvalidOperationException>(() => operation.Run(process));
+    }
+
+    [Fact]
+    public void Observation_mismatch_retains_service_code_and_location()
+    {
+        var process = ProcessAuthoring.Project<StartRun, string>(RunControlFixture.ProcessDocument);
+        var wrong = new InMemoryEntityOutboxRepository(ObjectEntityDefinition.For<Other>(new("other")),
+            EntityPartitionKeyPolicy.FromField(nameof(Other.Tenant)));
+        var binding = new ProcessTransitionOperationBinding(RunControlFixture.Start.Compile().Plan!, wrong, RunControlFixture.Contracts());
+        var native = Assert.Throws<ProcessTransitionBindingException>(() => binding.CreateProcessDefinitionLink());
+        Assert.Equal("storage.processes.binding.observationMismatch", Assert.Single(native.Validation.Diagnostics).Code);
+        var failure = Assert.Throws<ServiceBindingValidationException>(() => Service.Define(new("service"), new("1"), RunControlFixture.Provenance)
+            .Operation("run").Run(process, bindings => bindings.Transition(binding)));
+        var diagnostic = Assert.Single(failure.Validation.Diagnostics);
+        Assert.Equal("services.binding.observationMismatch", diagnostic.Code);
+        Assert.Equal("/binding/entity", diagnostic.Location);
+    }
+
+    public sealed record Other(string Id, string Tenant);
 
     [Theory]
     [InlineData(false, false)]

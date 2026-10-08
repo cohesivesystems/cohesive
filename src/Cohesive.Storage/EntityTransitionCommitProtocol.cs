@@ -40,6 +40,8 @@ public static class EntityTransitionCommitProtocol
     /// <param name="commit">Attempt whose subject and concurrency evidence identify the failed fence.</param>
     /// <param name="providerDetail">Optional native status detail, retained for operator diagnostics.</param>
     /// <returns>A consistently coded and located conflict with subject and provider context.</returns>
+    /// <remarks>Native operator diagnostics may contain private identities and concurrency evidence.
+    /// The process adapter projects a safe failure message; direct repository callers must not publish raw diagnostics.</remarks>
     public static EntityTransitionOperationResult Conflict(EntityTransitionOperationCommit commit, string? providerDetail = null)
     {
         ArgumentNullException.ThrowIfNull(commit);

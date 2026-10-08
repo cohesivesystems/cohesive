@@ -1,3 +1,4 @@
+using Cohesive.Model.Serialization;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
@@ -135,17 +136,30 @@ public sealed class ProcessTransitionOperationBinding
 
     /// <summary>Attests the native receipt contract after checking this repository's declared capability.</summary>
     /// <returns>Exact domain input/output linking evidence plus the separate host receipt contract.</returns>
-    /// <exception cref="InvalidOperationException">The repository cannot atomically commit state and receipt,
+    /// <exception cref="ProcessTransitionBindingException">The repository cannot atomically commit state and receipt,
     /// or its entity shape does not match the Transition observation.</exception>
     /// <remarks>No repository read or write occurs. This checks provider-declared capability; provider
     /// conformance must independently qualify that claim.</remarks>
     public ProcessDefinitionLink CreateProcessDefinitionLink()
     {
-        if (!Repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt
-            || Plan.Definition.Observation != ValueContract.FromShape(Repository.EntityDefinition.Shape))
-            throw new InvalidOperationException("Receipt binding requires matching entity authority and atomic state/receipt support.");
+        var validation = ValidateDefinitionLink();
+        if (!validation.IsValid) throw new ProcessTransitionBindingException(validation);
         return new(Plan.DefinitionReference, ProcessDefinitionLinkKind.Transition, Plan.Definition.Input,
             Plan.Definition.Outcome, receiptContract: EntityTransitionReceiptReferences.ValueContract);
+    }
+
+    /// <summary>Checks native receipt capability and observation authority without performing IO.</summary>
+    /// <returns>Independent, coded diagnostics for each unsatisfied binding requirement.</returns>
+    DocumentValidationResult ValidateDefinitionLink()
+    {
+        var diagnostics = new List<DocumentValidationDiagnostic>();
+        if (!Repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt)
+            diagnostics.Add(new("storage.processes.binding.receiptCapabilityMissing", DiagnosticSeverity.Error,
+                "The repository must support atomic state and receipt commits.", "/binding/repository"));
+        if (Plan.Definition.Observation != ValueContract.FromShape(Repository.EntityDefinition.Shape))
+            diagnostics.Add(new("storage.processes.binding.observationMismatch", DiagnosticSeverity.Error,
+                "The plan observation contract must match the bound entity state contract.", "/binding/entity"));
+        return new([.. diagnostics]);
     }
 
     internal EntityConcurrencyToken? ResolveExpectedConcurrencyToken(ProcessTransitionInvocation invocation)
@@ -408,8 +422,10 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
 
     static ProcessOperationResult Result(EntityTransitionOperationResult operation) => operation.Receipt is { } receipt
         ? receipt.Result.WithReceiptReference(EntityTransitionReceiptReferences.Project(receipt.Request.Reference))
-        : ProcessOperationResult.Failed(operation.Diagnostics.FirstOrDefault()
-            ?? new(
+        : ProcessOperationResult.Failed(operation.Diagnostics.FirstOrDefault() is { } diagnostic
+            ? new(diagnostic.Code, diagnostic.Severity,
+                "The entity operation could not be committed.", diagnostic.Location)
+            : new(
                 ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
                 DiagnosticSeverity.Error,
                 $"Entity Transition operation ended with '{operation.Disposition}' without receipt or diagnostic evidence.",

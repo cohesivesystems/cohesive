@@ -25,6 +25,15 @@ public static class EntityTransitionReceiptConformance
         Assert.All(results, result => Assert.Equal(commit.Fingerprint, result.Receipt!.Commit.Fingerprint));
         var stored = await repository.TryGet(context, "run/1", new(partitionKey: "tenant/a"));
         Assert.Equal(1, stored!.Entity.Version);
+        // A matching current entity fence lets the native write run; the retained occurrence must
+        // still reject the new commit and roll back the write, including its new storage token.
+        var changedFence = new EntityTransitionOperationCommit(commit.Request,
+            new(commit.Write.Entity, stored.ConcurrencyToken), commit.DecisionKind, commit.Result,
+            commit.GuaranteeDemands, commit.Evidence, commit.SubjectCondition);
+        var rejected = await repository.CommitTransitionOperation(context, changedFence);
+        Assert.Equal(EntityTransitionOperationDisposition.IdentityConflict, rejected.Disposition);
+        Assert.Equal(stored, await repository.TryGet(context, "run/1", new(partitionKey: "tenant/a")));
+
     }
     public static async Task StaleFence(IEntityRepository repository)
     {

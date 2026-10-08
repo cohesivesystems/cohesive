@@ -205,11 +205,8 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
         using var connection = database.OpenConnection(context.CancellationToken);
         using var transaction = connection.BeginTransaction(deferred: false);
         var id = OperationId(commit.Request);
-        var retained = ReadIndex(connection, transaction, sql.ReceiptExists, id);
-        if (retained is not null) return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
         if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
-            && (ReadIndex(connection, transaction, sql.ReadCreation, commit.Request.Subject.EntityId.Value) is not null
-                || entities.Exists(connection, transaction, commit.Request.Subject.EntityId.Value)))
+            && entities.Exists(connection, transaction, commit.Request.Subject.EntityId.Value))
             return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
         EntitySnapshot snapshot;
         try { snapshot = entities.UpsertCore(context, connection, transaction, commit.Write, partition); }
@@ -218,9 +215,17 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
             return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
         }
         var receipt = new EntityTransitionOperationReceipt(commit, snapshot, context.UtcNow);
-        InsertReceipt(connection, transaction, id, Process, receipt);
-        if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent)
-            InsertIndex(connection, transaction, sql.InsertCreation, commit.Request.Subject.EntityId.Value, id);
+        try
+        {
+            InsertReceipt(connection, transaction, id, Process, receipt);
+            if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent)
+                InsertIndex(connection, transaction, sql.InsertCreation, commit.Request.Subject.EntityId.Value, id);
+        }
+        catch (SqliteException exception) when (exception.SqliteExtendedErrorCode is 1555 or 2067)
+        {
+            // Only auxiliary primary/unique fences are resolved; other database failures propagate.
+            return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
+        }
         context.ThrowIfCancellationRequested();
         transaction.Commit();
         return Task.FromResult(EntityTransitionOperationResult.Committed(receipt));

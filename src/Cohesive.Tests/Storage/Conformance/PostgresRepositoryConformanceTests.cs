@@ -181,10 +181,10 @@ public sealed class PostgresRepositoryConformanceTests(ITestOutputHelper output)
                 var duration = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
                 Assert.Equal(EntityTransitionOperationDisposition.Committed, result.Disposition);
                 var reads = counter.Commands.Count(command => (command.Contains("SELECT content, content_hash", StringComparison.Ordinal) || command.Contains("SELECT 1 FROM", StringComparison.Ordinal)));
-                Assert.Equal(mode == 0 ? 2 : 1, reads);
+                Assert.Equal(mode == 0 ? 1 : 0, reads);
                 if (sample >= 2) elapsed[mode] += duration;
             }
-            output.WriteLine($"Warm native commit, {samples} alternating samples: former preflight {elapsed[0]/samples:F3} ms; write-first {elapsed[1]/samples:F3} ms. Receipt SELECTs: 2 -> 1. No timing assertion.");
+            output.WriteLine($"Warm native commit, {samples} alternating samples: former preflight {elapsed[0]/samples:F3} ms; write-first {elapsed[1]/samples:F3} ms. Receipt SELECTs: 1 -> 0. No timing assertion.");
         }, loggerFactory: logging);
     }
 

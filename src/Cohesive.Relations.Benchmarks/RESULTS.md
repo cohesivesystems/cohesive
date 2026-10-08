@@ -1406,13 +1406,16 @@ alternating pairs of fresh existing-entity commits. State seeding, decision prep
 are outside the timer. The former preflight is reconstructed by an explicit receipt lookup before the same
 native commit, isolating its extra work. Npgsql completion logging counts actual receipt SELECT commands.
 
-On local PostgreSQL 17 (Docker, loopback), M5 Max/.NET 10.0.5, the final sample measured **2.934 ms** per
+On local PostgreSQL 17 (Docker, loopback), M5 Max/.NET 10.0.5, the intermediate implementation measured **2.934 ms** per
 former-preflight commit versus **2.648 ms** write-first. Receipt SELECTs deterministically changed **2 → 1**
-(the remaining query is the in-transaction existence fence); timing has no pass/fail threshold and is not a
-production latency claim. Shared protocol unit tests independently require zero external receipt reads on
+(the remaining query was the in-transaction existence fence). The subsequent implementation removes that
+fence read as well and resolves native unique violations after rollback. The same native command-count test
+now asserts **1 → 0** receipt SELECTs (optional external lookup versus no lookup); the timings above describe
+the intermediate implementation, not a measurement of the final change. Timing has no pass/fail threshold
+and is not a production latency claim. Shared protocol unit tests independently require zero external receipt reads on
 success and no retry/read after an ambiguous failure. Creation uses the same success path; native conformance
 checks its presence fence and replacement replay. Cosmos is not live-qualified by these measurements.
 
-Receipt decoding remains costly as characterized above. The SQL commit path now uses existence-only reads
-inside its transaction, so a retained receipt is decoded once during conflict resolution, not twice.
+Receipt decoding remains costly as characterized above. The SQL commit path performs no receipt read inside
+its transaction; a retained receipt is decoded once during conflict resolution after rollback.
 Integrity validation and canonical fingerprint semantics are unchanged.

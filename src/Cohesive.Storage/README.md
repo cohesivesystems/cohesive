@@ -189,8 +189,11 @@ requires **zero external receipt lookups**. Only a conditional conflict triggers
 followed by creation-intent lookup when needed. There is at most one native attempt and one lookup pass;
 exceptions and ambiguous acknowledgements propagate without retry. Conditional conflicts use consistent
 `/write/subjectCondition` or `/write/expectedConcurrencyToken` locations and preserve subject, fence and native
-provider status details. PostgreSQL and SQLite test only existence inside the atomic boundary; canonical
-receipt decoding/validation happens once in conflict resolution. Provider locks, transactions and encoding
+provider status details for repository/operator callers; do not expose these native diagnostics directly to clients.
+The process adapter preserves code and location but projects a safe message without provider evidence.
+PostgreSQL and SQLite rely on their native unique receipt fences, with no receipt SELECT inside a successful
+commit. A unique violation rolls back the entity write before shared conflict resolution reads and validates
+retained evidence. Provider locks, transactions and encoding
 remain native. Creation replay retains the original attempt's evidence and compares candidate and result.
 
 `EntityTransitionOperationCapabilities.PartitionKey` optionally declares fixed trusted receipt placement.

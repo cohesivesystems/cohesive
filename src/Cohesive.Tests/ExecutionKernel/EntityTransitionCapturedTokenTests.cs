@@ -85,6 +85,38 @@ public sealed class EntityTransitionCapturedTokenTests
         Assert.Equal(ProcessTransitionOperationAdapterDiagnosticCodes.CapturedConcurrencyTokenInvalid, malformed.Failure?.Code);
     }
 
+    [Fact]
+    public async Task Native_commit_details_do_not_enter_portable_process_failure()
+    {
+        var entity = ObjectEntityDefinition.For<Document>(new("document"));
+        var provenance = new ExecutionProvenance(new("tests", "1"), new("safe-conflict"), DocumentOrigin.Generated);
+        var plan = TransitionAuthoring.Create<Document, Update, bool>(entity.Shape,
+            new(new("document/update"), new("1"), new("body"), provenance), body => body
+                .Set(new("text"), state => state.Text, (_, input) => input.Text)
+                .Return(new("applied"), TransitionOutcomeDisposition.Applied, true)).Compile().Plan!;
+        Assert.True(InteractionContractCatalog.TryCreate([], out var contracts).IsValid);
+        var context = OperationContext.Create();
+        var native = new InMemoryEntityOutboxRepository(entity, _ => "shared");
+        var initial = await native.Upsert(context, new(entity.CreateState("private-id", new Document("private-id", "before")).Snapshot));
+        var repository = new ReadBoundaryRepository(native, false) { FailCommit = true };
+        var adapter = new EntityTransitionProcessOperationAdapter(_ => new(plan, repository, contracts!));
+        var invocation = new ProcessTransitionInvocation(
+            ProcessDurabilityTestFixture.DefinitionReference("process/update", '1'), plan.DefinitionReference,
+            ProcessDurabilityTestFixture.StringValue("private-id"),
+            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new Update(initial.ConcurrencyToken.Value, "prepared"))),
+            new(new("instance"), new("attempt")), new("activation"), new("token"), new("node"), 0,
+            DateTimeOffset.UnixEpoch, new(new("authority", "tenant"), new("correlation"),
+                new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), provenance));
+        var result = await adapter.ExecuteAsync(context, invocation);
+        Assert.Equal(EntityTransitionOperationDiagnosticCodes.ConcurrencyConflict, result.Failure?.Code);
+        Assert.Equal("/write/expectedConcurrencyToken", result.Failure?.Location);
+        Assert.Equal("The entity operation could not be committed.", result.Failure?.Message);
+        var json = System.Text.Json.JsonSerializer.Serialize(result, ProcessDurableCheckpointJsonSerializer.CreateOptions());
+        Assert.DoesNotContain("private-provider-detail", json);
+        Assert.DoesNotContain("private-id", json);
+        Assert.DoesNotContain(initial.ConcurrencyToken.Value, json);
+    }
+
     sealed record Document(string Id, string Text);
     sealed record Update(string Token, string Text);
 
@@ -93,6 +125,7 @@ public sealed class EntityTransitionCapturedTokenTests
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
         public string? IdentityField => inner.IdentityField;
         public EntityTransitionOperationCapabilities TransitionOperationCapabilities => inner.TransitionOperationCapabilities;
+        public bool FailCommit { get; set; }
         public Func<Task>? BeforeRead { get; set; }
         public async Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null)
         {
@@ -106,6 +139,8 @@ public sealed class EntityTransitionCapturedTokenTests
         public Task<EntitySnapshot> Upsert(OperationContext context, EntityWriteRequest write) => inner.Upsert(context, write);
         public Task<EntityTransitionOperationResult> TryGetTransitionOperation(OperationContext context, EntityTransitionOperationRequest request) => inner.TryGetTransitionOperation(context, request);
         public Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(OperationContext context, EntityTransitionOperationRequest request) => inner.TryGetCreationTransitionOperation(context, request);
-        public Task<EntityTransitionOperationResult> CommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit) => inner.CommitTransitionOperation(context, commit);
+        public Task<EntityTransitionOperationResult> CommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit) => FailCommit
+            ? Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit, "private-provider-detail"))
+            : inner.CommitTransitionOperation(context, commit);
     }
 }

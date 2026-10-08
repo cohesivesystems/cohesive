@@ -47,8 +47,8 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
     /// <param name="repository">Native atomic state/receipt authority; fixed partition is inherited.</param>
     /// <param name="expectedConcurrencyTokenField">Optional required string input field carrying the previously observed storage token.</param>
     /// <returns>This setup session.</returns>
-    /// <exception cref="ServiceBindingValidationException">Compilation is invalid.</exception>
-    /// <exception cref="InvalidOperationException">Native binding cannot attest its receipt contract.</exception>
+    /// <exception cref="ServiceBindingValidationException">Compilation is invalid, receipt capability is missing,
+    /// or observation authority does not match.</exception>
     /// <exception cref="ArgumentException">The exact definition was already registered.</exception>
     public ServiceProcessHostBuilder<TInput, TResult> Transition<TEntity, TTransitionInput, TOutcome>(
         Transition<TEntity, TTransitionInput, TOutcome> transition, IEntityRepository<TEntity> repository,
@@ -65,12 +65,20 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
     /// <summary>Attaches an existing transition binding, preserving its complete subject, token and emission policies.</summary>
     /// <param name="binding">Prepared native binding; CreateProcessDefinitionLink owns capability and authority validation.</param>
     /// <returns>This binding phase.</returns>
-    /// <exception cref="InvalidOperationException">The native binding cannot attest the required receipt contract.</exception>
+    /// <exception cref="ServiceBindingValidationException">The native binding cannot attest the required receipt contract.</exception>
     /// <exception cref="ArgumentException">The definition is already registered.</exception>
     public ServiceProcessHostBuilder<TInput, TResult> Transition(ProcessTransitionOperationBinding binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
-        var link = binding.CreateProcessDefinitionLink();
+        ProcessDefinitionLink link;
+        try { link = binding.CreateProcessDefinitionLink(); }
+        catch (ProcessTransitionBindingException exception)
+        {
+            throw new ServiceBindingValidationException(new([.. exception.Validation.Diagnostics.Select(diagnostic => diagnostic with
+            {
+                Code = diagnostic.Code.Replace("storage.processes.binding.", "services.binding.", StringComparison.Ordinal)
+            })]));
+        }
         transitions.Add(binding.Plan.DefinitionReference, binding);
         links.Add(link);
         return this;
@@ -104,7 +112,7 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
         ArgumentNullException.ThrowIfNull(authorization);
         var compilation = process.Compile(new ProcessDefinitionValidationContext(links));
         var plan = compilation.Plan ?? throw new ServiceBindingValidationException(compilation.Validation);
-        var declaration = operation.Run(plan).ExecuteEphemerally(timeout).Build();
+        var declaration = operation.SelectPreparedProcess(plan).ExecuteEphemerally(timeout).Build();
         var deployed = new Dictionary<ExecutionDefinitionReference, ProcessTransitionOperationBinding>(transitions);
         var adapter = new EntityTransitionProcessOperationAdapter(invocation => deployed.GetValueOrDefault(invocation.Definition));
         var host = new RegisteredAsyncProcessReferenceHost(new ProcessRelationHandlerCatalog(queries), adapter.ExecuteAsync);

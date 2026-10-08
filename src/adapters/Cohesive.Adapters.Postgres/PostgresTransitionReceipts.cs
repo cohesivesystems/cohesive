@@ -84,7 +84,7 @@ public sealed class PostgresTransitionReceiptOptions
                 throw new InvalidOperationException("Receipt columns require an explicit schema migration.");
         }
         await using var keys = dataSource.CreateCommand("""
-            SELECT c.contype::text, array_agg(a.attname::text ORDER BY k.ordinality)
+            SELECT c.contype::text, array_agg(a.attname::text ORDER BY k.ordinality), c.conname
             FROM pg_constraint c CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality)
             JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
             WHERE c.conrelid=to_regclass($1) AND c.contype IN ('p','u') AND NOT c.condeferrable
@@ -94,14 +94,18 @@ public sealed class PostgresTransitionReceiptOptions
         keys.Parameters.AddWithValue(Table);
         await using var keyReader = await keys.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         bool primary = false, creation = false;
+        var fenceNames = new HashSet<string>(StringComparer.Ordinal);
         while (await keyReader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             var names = keyReader.GetFieldValue<string[]>(1);
+            if (names.Length == 3 && (names.ToHashSet(StringComparer.Ordinal).SetEquals(["entity_type", "partition_key", "operation_id"])
+                || names.ToHashSet(StringComparer.Ordinal).SetEquals(["entity_type", "partition_key", "creation_subject"])))
+                fenceNames.Add(keyReader.GetString(2));
             primary |= keyReader.GetString(0) == "p" && names.Length == 3 && names.ToHashSet(StringComparer.Ordinal).SetEquals(["entity_type", "partition_key", "operation_id"]);
             creation |= keyReader.GetString(0) == "u" && names.Length == 3 && names.ToHashSet(StringComparer.Ordinal).SetEquals(["entity_type", "partition_key", "creation_subject"]);
         }
         if (!primary || !creation) throw new InvalidOperationException("Receipt uniqueness fences require an explicit schema migration.");
-        return new(this, dataSource);
+        return new(this, dataSource, fenceNames);
     }
 
 }
@@ -111,11 +115,13 @@ public sealed class PostgresTransitionReceiptOptions
 /// Rebind after schema changes. Validation is setup evidence, not a lock against later external DDL.</remarks>
 public sealed class PostgresTransitionReceiptStorage
 {
-    internal PostgresTransitionReceiptStorage(PostgresTransitionReceiptOptions options, NpgsqlDataSource dataSource)
+    internal PostgresTransitionReceiptStorage(PostgresTransitionReceiptOptions options, NpgsqlDataSource dataSource, HashSet<string> fenceNames)
     {
+        FenceNames = fenceNames;
         Options = options;
         DataSource = dataSource;
     }
+    internal IReadOnlySet<string> FenceNames { get; }
     internal PostgresTransitionReceiptOptions Options { get; }
     internal NpgsqlDataSource DataSource { get; }
 }
@@ -123,6 +129,7 @@ public sealed class PostgresTransitionReceiptStorage
 public sealed partial class PostgresEntityRepository
 {
     readonly PostgresTransitionReceiptOptions? receipts;
+    readonly IReadOnlySet<string>? receiptFenceNames;
     static readonly JsonSerializerOptions ReceiptJson = CreateReceiptJson();
     static JsonSerializerOptions CreateReceiptJson()
     {
@@ -188,11 +195,7 @@ public sealed partial class PostgresEntityRepository
         // Serialize identical occurrences and subject creation; collisions only reduce concurrency.
         await Lock("operation/" + operation).ConfigureAwait(false);
         await Lock("subject/" + commit.Request.Subject.EntityId.Value).ConfigureAwait(false);
-        if (await ReceiptExists(context, connection, transaction, operation, false).ConfigureAwait(false))
-            return EntityTransitionCommitProtocol.Conflict(commit);
         var creation = commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent;
-        if (creation && await ReceiptExists(context, connection, transaction, commit.Request.Subject.EntityId.Value, true).ConfigureAwait(false))
-            return EntityTransitionCommitProtocol.Conflict(commit);
         EntitySnapshot snapshot;
         try { snapshot = await UpsertCore(context, connection, transaction, commit.Write, createOnly: creation).ConfigureAwait(false); }
         catch (ObservationConcurrencyConflictException)
@@ -205,7 +208,13 @@ public sealed partial class PostgresEntityRepository
         await using var insert = new NpgsqlCommand(receipts!.InsertSql, connection, transaction);
         Add(insert, EntityType, receipts.PartitionKey, operation, commit.Request.Subject.EntityId.Value,
             creation ? commit.Request.Subject.EntityId.Value : DBNull.Value, bytes, Hash(bytes), EntityStorageJson.FormatVersion);
-        await insert.ExecuteNonQueryAsync(context.CancellationToken).ConfigureAwait(false);
+        try { await insert.ExecuteNonQueryAsync(context.CancellationToken).ConfigureAwait(false); }
+        catch (PostgresException exception) when (exception.SqlState == PostgresErrorCodes.UniqueViolation
+            && exception.ConstraintName is { } name && receiptFenceNames!.Contains(name))
+        {
+            // Disposal rolls back both state and receipt before the shared resolver reads retained evidence.
+            return EntityTransitionCommitProtocol.Conflict(commit);
+        }
         await transaction.CommitAsync(context.CancellationToken).ConfigureAwait(false);
         return EntityTransitionOperationResult.Committed(receipt);
 
@@ -215,15 +224,6 @@ public sealed partial class PostgresEntityRepository
             Add(command, receipts!.Table + "/" + EntityType + "/" + receipts.PartitionKey + "/" + key);
             await command.ExecuteNonQueryAsync(context.CancellationToken).ConfigureAwait(false);
         }
-    }
-
-    async Task<bool> ReceiptExists(OperationContext context, NpgsqlConnection connection,
-        NpgsqlTransaction transaction, string key, bool creation)
-    {
-        // The shared conflict resolver validates retained bytes once, after releasing this transaction.
-        await using var command = new NpgsqlCommand(ReceiptSelect("1", creation), connection, transaction);
-        Add(command, EntityType, receipts!.PartitionKey, key);
-        return await command.ExecuteScalarAsync(context.CancellationToken).ConfigureAwait(false) is not null;
     }
 
     string ReceiptSelect(string projection, bool creation) =>

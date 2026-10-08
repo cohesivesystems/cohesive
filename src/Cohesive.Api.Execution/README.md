@@ -323,7 +323,9 @@ existing HTTP binding, independently of endpoint authoring. See the Aspire fulfi
 
 The ordinary declaration-only `Run(process)` remains unchanged. Its binding overload stays under the same
 service and operation authoring flow; there is no separate `Service.Host` entry point. Transition association
-uses `CreateProcessDefinitionLink` as its single capability/authority check, with the same failure behavior as
-manual binding. Pass `expectedConcurrencyTokenField: nameof(Input.Token)` for a captured storage fence, or
+uses `CreateProcessDefinitionLink` as its single capability/authority check. Its structured storage binding
+failure is projected to `ServiceBindingValidationException`, preserving separate capability and observation
+codes/locations (including `services.binding.observationMismatch`). Selecting the hosting overload reserves
+that operation immediately; another `Run` on the same operation builder fails before `Build`. Pass `expectedConcurrencyTokenField: nameof(Input.Token)` for a captured storage fence, or
 attach a complete `ProcessTransitionOperationBinding` to retain custom subject, placement and emission policies.
 Core runtime tests exercise matching/stale tokens through both forms independently of the example.

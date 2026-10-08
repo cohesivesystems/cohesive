@@ -15,9 +15,9 @@ public sealed class FulfillmentHostSetupTests
     {
         using var database = NpgsqlDataSource.Create("Host=localhost;Port=1;Database=unused;Username=unused");
         var inventory = FulfillmentStorage.Bind(database).Repository(FulfillmentDomain.Inventory);
-        var failure = Assert.Throws<InvalidOperationException>(() => Service.Define(new("test"), new("1"), FulfillmentProcess.Provenance)
+        var failure = Assert.Throws<ServiceBindingValidationException>(() => Service.Define(new("test"), new("1"), FulfillmentProcess.Provenance)
             .Operation("fulfill").Run(FulfillmentProcess.Definition, bindings => bindings.Transition(InventoryTransitions.Reserve, inventory)));
-        Assert.Contains("atomic state/receipt", failure.Message);
+        Assert.Equal("services.binding.receiptCapabilityMissing", Assert.Single(failure.Validation.Diagnostics).Code);
     }
 
     [Fact]

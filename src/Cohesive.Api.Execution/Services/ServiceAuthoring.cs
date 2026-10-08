@@ -62,6 +62,7 @@ public sealed class ServiceBuilder
 /// <summary>Selects exact operation behavior and local authorization without copying canonical contracts.</summary>
 public sealed class ServiceOperationBuilder
 {
+    bool hostingSelected;
     readonly ServiceBuilder service;
     readonly string id;
     readonly ExecutionDefinitionReference? process;
@@ -86,13 +87,18 @@ public sealed class ServiceOperationBuilder
     /// <param name="configureBindings">Native transition and query associations prepared once at setup.</param>
     /// <param name="contracts">Optional explicit interaction catalog; omission selects an empty catalog.</param>
     /// <returns>The process binding phase of this service operation.</returns>
+    /// <remarks>Reserves this operation builder during host configuration; failed configuration releases it.
+    /// Configure on one thread. Immutable service declarations may still be branched independently.</remarks>
+    /// <exception cref="InvalidOperationException">This operation already selected process execution.</exception>
     public ServiceProcessHostBuilder<TInput, TResult> Run<TInput, TResult>(Process<TInput, TResult> definition,
         Action<ServiceProcessHostBuilder<TInput, TResult>> configureBindings, InteractionContractCatalog? contracts = null)
     {
         RequireUnselected();
         ArgumentNullException.ThrowIfNull(configureBindings);
         var binding = new ServiceProcessHostBuilder<TInput, TResult>(this, id, definition, contracts);
-        configureBindings(binding);
+        hostingSelected = true;
+        try { configureBindings(binding); }
+        catch { hostingSelected = false; throw; }
         return binding;
     }
 
@@ -153,7 +159,7 @@ public sealed class ServiceOperationBuilder
 
     void RequireUnselected()
     {
-        if (process is not null)
+        if (process is not null || hostingSelected)
             throw new InvalidOperationException("This operation already selects Process execution; complete its execution policy first.");
     }
 
@@ -161,6 +167,7 @@ public sealed class ServiceOperationBuilder
     /// <exception cref="ArgumentException">The authored Process is invalid.</exception>
     public ServiceOperationBuilder Run<TInput, TResult>(Process<TInput, TResult> definition)
     {
+        RequireUnselected();
         ArgumentNullException.ThrowIfNull(definition);
         if (!definition.IsValid) throw new ServiceBindingValidationException(definition.Validation);
         return new(service, id, definition.Reference, requirements, definition.Definition.Result);
@@ -168,11 +175,20 @@ public sealed class ServiceOperationBuilder
 
     /// <summary>References a canonical data-authored Process without introducing a CLR input authority.</summary>
     /// <remarks>Performs document validation only; linked compilation and infrastructure resolution stay at runtime binding.</remarks>
-    public ServiceOperationBuilder Run(ExecutionDefinitionDocument document) =>
-        new(service, id, RequireDocument(document), requirements, document.GetDefinition<ProcessDefinition>().Result);
+    public ServiceOperationBuilder Run(ExecutionDefinitionDocument document)
+    {
+        RequireUnselected();
+        return new(service, id, RequireDocument(document), requirements, document.GetDefinition<ProcessDefinition>().Result);
+    }
 
     /// <summary>References already compiled behavior without revalidating its dependency closure.</summary>
     public ServiceOperationBuilder Run(CompiledProcessPlan plan)
+    {
+        RequireUnselected();
+        return SelectPreparedProcess(plan);
+    }
+
+    internal ServiceOperationBuilder SelectPreparedProcess(CompiledProcessPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
         return new(service, id, plan.DefinitionReference, requirements, plan.Definition.Result);
