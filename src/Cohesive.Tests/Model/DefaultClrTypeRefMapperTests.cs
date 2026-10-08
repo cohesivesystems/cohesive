@@ -107,6 +107,101 @@ public sealed class DefaultClrTypeRefMapperTests
     }
 
     [Fact]
+    public void Map_FreshMappersReuseImmutableEnumMembersWithoutRepeatedDiscovery()
+    {
+        var first = Assert.IsType<EnumTypeRef>(new DefaultClrTypeRefMapper().Map(typeof(WireDisposition), null));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var second = Assert.IsType<EnumTypeRef>(new DefaultClrTypeRefMapper().Map(typeof(WireDisposition), null));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.InRange(allocated, 1, 256);
+        Assert.True(first.Members == second.Members); // Same immutable backing array.
+    }
+
+    [Fact]
+    public void Map_GenericStringEnumConverterKeepsDeclaredWireNames()
+    {
+        var result = Assert.IsType<EnumTypeRef>(mapper.Map(typeof(GenericWireDisposition), null));
+        Assert.Equal(["accepted", "rejected"], result.Members.ToArray());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void EnumCatalogFallbackDoesNotChangeStrictCustomConverterFailure(bool fallbackFirst)
+    {
+        var type = fallbackFirst ? typeof(FallbackFirstDisposition) : typeof(StrictFirstDisposition);
+        var first = DiscoverCatalog(type, fallbackFirst);
+        var second = DiscoverCatalog(type, !fallbackFirst);
+        var strict = fallbackFirst ? second : first;
+        var fallback = fallbackFirst ? first : second;
+        Assert.False(strict.Success);
+        Assert.Null(strict.Catalog);
+        Assert.Equal("UnsupportedConverter", strict.Failure);
+        Assert.Equal(typeof(CustomEnumFactory), strict.Converter);
+        Assert.True(fallback.Success);
+        Assert.Same(fallback.Catalog, DiscoverCatalog(type, true).Catalog);
+        Assert.False(DiscoverCatalog(type, false).Success);
+    }
+
+    [Fact]
+    public void EnumCatalogCoordinatesConcurrentFirstUseAndRejectsAmbiguousNamesInBothPolicies()
+    {
+        System.Collections.Concurrent.ConcurrentBag<object?> catalogs = [];
+        Parallel.For(0, 64, _ => catalogs.Add(DiscoverCatalog(typeof(ColdWireDisposition), false).Catalog));
+        var first = catalogs.First();
+        Assert.NotNull(first);
+        Assert.All(catalogs, value => Assert.Same(first, value));
+        Assert.Same(first, DiscoverCatalog(typeof(ColdWireDisposition), true).Catalog);
+        foreach (var fallback in new[] { false, true })
+        {
+            var ambiguous = DiscoverCatalog(typeof(AmbiguousWireDisposition), fallback);
+            Assert.False(ambiguous.Success);
+            Assert.Null(ambiguous.Catalog);
+            Assert.Equal("AmbiguousWireMember", ambiguous.Failure);
+        }
+        var inferred = Assert.IsType<OpaqueRuntimeTypeRef>(mapper.Map(typeof(AmbiguousWireDisposition), null));
+        Assert.Equal(TypeInferenceDiagnosticReasons.AmbiguousSerializedEnumMember, inferred.InferenceDiagnostic?.Reason);
+    }
+
+    static (bool Success, object? Catalog, string Failure, Type? Converter) DiscoverCatalog(Type type, bool fallback)
+    {
+        var catalogType = typeof(DefaultClrTypeRefMapper).Assembly.GetType("Cohesive.Model.Serialization.SerializedEnumMemberCatalog")!;
+        object?[] arguments = [type, null, null, null, fallback];
+        var success = (bool)catalogType.GetMethod("TryCreate")!.Invoke(null, arguments)!;
+        return (success, arguments[1], arguments[2]!.ToString()!, (Type?)arguments[3]);
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter<GenericWireDisposition>))]
+    enum GenericWireDisposition
+    {
+        [JsonStringEnumMemberName("accepted")] Accepted,
+        [JsonStringEnumMemberName("rejected")] Rejected
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    enum ColdWireDisposition { First, Second }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    enum AmbiguousWireDisposition
+    {
+        [JsonStringEnumMemberName("same")] First,
+        [JsonStringEnumMemberName("same")] Second
+    }
+
+    [JsonConverter(typeof(CustomEnumFactory))]
+    enum FallbackFirstDisposition { First }
+
+    [JsonConverter(typeof(CustomEnumFactory))]
+    enum StrictFirstDisposition { First }
+
+    sealed class CustomEnumFactory : JsonConverterFactory
+    {
+        public override bool CanConvert(Type typeToConvert) => typeToConvert.IsEnum;
+        public override JsonConverter CreateConverter(Type typeToConvert, JsonSerializerOptions options) =>
+            new JsonStringEnumConverter().CreateConverter(typeToConvert, options);
+    }
+
+    [Fact]
     public void Map_RepeatedPropertiesPreserveOccurrenceNullabilityAndRecursivePaths()
     {
         var root = Assert.IsType<ObjectTypeRef>(mapper.Map(typeof(RepeatedEnvelope), null));

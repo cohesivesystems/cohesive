@@ -247,7 +247,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
             };
         }
 
-        return new EnumTypeRef(name: enumType.Name, members: [.. catalog!.WireMembers]);
+        return new EnumTypeRef(name: enumType.Name, members: catalog!.WireMembers);
     }
 
     /// <summary>Returns the deterministic JSON field identity of a reflected member.</summary>

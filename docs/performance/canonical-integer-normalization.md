@@ -66,7 +66,8 @@ A paired fresh-process Ari source harness measured independent allocation bounda
 These are cumulative local allocated bytes, not retained heap or published-package measurements.
 All 164 canonical catalog bodies remained byte-identical. No Ari package pin or permanent source
 bridge changed. Temporary test-output dependency overlays are restored after qualification.
-Repeated enum catalog and other property/attribute discovery remain subsequent targets.
+Enum discovery is addressed in [shared enum catalog preparation](shared-enum-catalog.md).
+Other property/attribute discovery remains a subsequent target.
 
 Qualification passed 4,291 Core tests (33 existing skips), 1,082 Relations tests and 855 Ari engine
 tests (18 existing skips), including 35 focused canonical-writer cases. The allocation regression

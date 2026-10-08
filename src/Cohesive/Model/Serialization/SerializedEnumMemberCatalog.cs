@@ -1,4 +1,6 @@
+using System.Collections.Immutable;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Model.Serialization;
@@ -12,6 +14,7 @@ internal enum SerializedEnumMemberCatalogFailure
 
 internal sealed class SerializedEnumMemberCatalog
 {
+    static readonly ConditionalWeakTable<Type, CachedDiscovery> Discoveries = new();
     readonly IReadOnlyDictionary<string, string> clrToWire;
     readonly IReadOnlyDictionary<string, string> wireToClr;
 
@@ -21,9 +24,10 @@ internal sealed class SerializedEnumMemberCatalog
     {
         this.clrToWire = clrToWire;
         this.wireToClr = wireToClr;
+        WireMembers = [.. clrToWire.Values];
     }
 
-    public IReadOnlyList<string> WireMembers => [.. clrToWire.Values];
+    public ImmutableArray<string> WireMembers { get; }
 
     public bool TryGetClrName(string wireName, out string clrName) =>
         TryTranslate(wireToClr, wireName, out clrName);
@@ -44,21 +48,50 @@ internal sealed class SerializedEnumMemberCatalog
             throw new ArgumentException($"Type '{enumType}' is not an enum.", nameof(enumType));
         }
 
+        var prepared = Discoveries.GetValue(enumType, static type => new(type)).Get(useClrNamesForUnsupportedConverter);
+        catalog = prepared.Catalog;
+        failure = prepared.Failure;
+        unsupportedConverter = prepared.Converter;
+        return catalog is not null;
+    }
+
+    // Enum declarations are stable metadata. Weak keys do not add permanent CLR type retention;
+    // selected lazy entries coordinate first preparation without sharing mutable discovery state.
+    sealed class CachedDiscovery
+    {
+        readonly Lazy<Discovery> strict;
+        readonly Lazy<Discovery> fallback;
+
+        internal CachedDiscovery(Type type)
+        {
+            strict = new(() => Discover(type));
+            fallback = new(() => strict.Value.Failure == SerializedEnumMemberCatalogFailure.UnsupportedConverter
+                ? DiscoverMembers(type, false) : strict.Value);
+        }
+
+        internal Discovery Get(bool useClrNames) => (useClrNames ? fallback : strict).Value;
+    }
+
+    readonly record struct Discovery(SerializedEnumMemberCatalog? Catalog,
+        SerializedEnumMemberCatalogFailure Failure, Type? Converter);
+
+    static Discovery Discover(Type enumType)
+    {
         var converterAttribute = enumType.GetCustomAttribute<JsonConverterAttribute>(inherit: true);
         var converter = converterAttribute?.ConverterType;
         var useJsonMemberNames = converterAttribute is not null
                                  && converter is not null
                                  && IsStandardStringEnumConverter(converter);
-        if (converterAttribute is not null
-            && !useJsonMemberNames
-            && !useClrNamesForUnsupportedConverter)
+        if (converterAttribute is not null && !useJsonMemberNames)
         {
-            catalog = null;
-            failure = SerializedEnumMemberCatalogFailure.UnsupportedConverter;
-            unsupportedConverter = converter;
-            return false;
+            return new(null, SerializedEnumMemberCatalogFailure.UnsupportedConverter, converter);
         }
 
+        return DiscoverMembers(enumType, useJsonMemberNames);
+    }
+
+    static Discovery DiscoverMembers(Type enumType, bool useJsonMemberNames)
+    {
         Dictionary<string, string> clrToWire = new(StringComparer.Ordinal);
         Dictionary<string, string> wireToClr = new(StringComparer.Ordinal);
         foreach (var clrName in Enum.GetNames(enumType))
@@ -69,18 +102,12 @@ internal sealed class SerializedEnumMemberCatalog
                 : clrName;
             if (!wireToClr.TryAdd(wireName, clrName))
             {
-                catalog = null;
-                failure = SerializedEnumMemberCatalogFailure.AmbiguousWireMember;
-                unsupportedConverter = null;
-                return false;
+                return new(null, SerializedEnumMemberCatalogFailure.AmbiguousWireMember, null);
             }
             clrToWire.Add(clrName, wireName);
         }
 
-        catalog = new(clrToWire, wireToClr);
-        failure = SerializedEnumMemberCatalogFailure.None;
-        unsupportedConverter = null;
-        return true;
+        return new(new(clrToWire, wireToClr), SerializedEnumMemberCatalogFailure.None, null);
     }
 
     static bool TryTranslate(
