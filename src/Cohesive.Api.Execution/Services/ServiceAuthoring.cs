@@ -14,15 +14,6 @@ namespace Cohesive.Api.Execution.Services;
 /// <summary>Human-readable authoring of the canonical service document; no runtime objects survive lowering.</summary>
 public static class Service
 {
-    /// <summary>Begins native hosting of a canonical finite process with exact transition and query associations.</summary>
-    /// <typeparam name="TInput">Process input projection.</typeparam>
-    /// <typeparam name="TResult">Process result projection.</typeparam>
-    /// <param name="process">Canonical process to compile at setup.</param>
-    /// <param name="contracts">Explicit interaction catalog; omission selects an empty catalog.</param>
-    /// <returns>A host-lifetime association builder.</returns>
-    public static ServiceProcessHostBuilder<TInput, TResult> Host<TInput, TResult>(Process<TInput, TResult> process,
-        InteractionContractCatalog? contracts = null) => new(process, contracts);
-
     /// <summary>Begins an immutable service declaration with attributable identity and revision.</summary>
     public static ServiceBuilder Define(ExecutionDefinitionId id, ExecutionRevisionId revision, ExecutionProvenance provenance) =>
         new(id, revision, provenance);
@@ -86,6 +77,23 @@ public sealed class ServiceOperationBuilder
         this.process = process;
         this.processResult = processResult;
         this.requirements = requirements;
+    }
+
+    /// <summary>Attaches native bindings while compiling a canonical process at host setup.</summary>
+    /// <typeparam name="TInput">Process input projection.</typeparam>
+    /// <typeparam name="TResult">Process result projection.</typeparam>
+    /// <param name="definition">Canonical process whose exact dependencies will be bound.</param>
+    /// <param name="configureBindings">Native transition and query associations prepared once at setup.</param>
+    /// <param name="contracts">Optional explicit interaction catalog; omission selects an empty catalog.</param>
+    /// <returns>The process binding phase of this service operation.</returns>
+    public ServiceProcessHostBuilder<TInput, TResult> Run<TInput, TResult>(Process<TInput, TResult> definition,
+        Action<ServiceProcessHostBuilder<TInput, TResult>> configureBindings, InteractionContractCatalog? contracts = null)
+    {
+        RequireUnselected();
+        ArgumentNullException.ThrowIfNull(configureBindings);
+        var binding = new ServiceProcessHostBuilder<TInput, TResult>(this, id, definition, contracts);
+        configureBindings(binding);
+        return binding;
     }
 
     /// <summary>Adds an authorization requirement only to this operation; sibling operations are unchanged.</summary>

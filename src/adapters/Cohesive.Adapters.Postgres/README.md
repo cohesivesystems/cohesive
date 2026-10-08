@@ -177,10 +177,13 @@ boundaries are documented once in the [Storage README](../../Cohesive.Storage/RE
 ## Atomic entity process receipts
 
 Opt in with `PostgresTransitionReceiptOptions(schema, table, partitionKey)` on the repository or
-`persistence.Repository(entity, transitionReceipts: options)`. Execute `options.SchemaSql` explicitly in your
-schema lifecycle, then await `options.ValidateSchemaAsync(dataSource)` before admitting operations.
+`persistence.Repository(entity, transitionReceipts: storage)`. Execute `options.SchemaSql` explicitly in your
+schema lifecycle, then obtain `storage = await options.BindAsync(dataSource)`. The repository requires this
+validated handle and rejects a handle from another data-source instance; unchecked options cannot be passed.
 The check rejects incompatible columns or missing immediate primary/creation uniqueness fences without
-migrating the table. Column order is immaterial: the shared SQL builder emits an explicit insert column list. Without options the repository advertises no atomic transition-receipt support.
+migrating the table. PostgreSQL 14 and 17 are exercised, including invalid-schema rejection; the optional
+PostgreSQL 15+ null-equality metadata is read through a version-tolerant catalog projection. Rebind after
+external schema changes: startup validation does not lock out later DDL. Column order is immaterial: the shared SQL builder emits an explicit insert column list. Without options the repository advertises no atomic transition-receipt support.
 
 State and canonical receipt commit in one native transaction. Advisory transaction locks serialize the same
 occurrence/subject; the conditional SQL write still fences external writers. Exact replay returns original
@@ -193,7 +196,7 @@ retention and recovery remain explicit. Receipts do not imply an outbox or event
 of receipt configuration. `Upsert` retains its existing replacement behavior. Typed wrappers forward both the
 capability and the operation.
 
-The shared Storage receipt protocol owns replay and conflict policy; PostgreSQL supplies the locked native
+The shared Storage receipt protocol resolves replay only after a conditional native conflict; PostgreSQL supplies the locked native
 transaction and conditional SQL writes. Fixed receipt partition evidence is inherited by process bindings.
 Receipt validation intentionally retains canonical reserialization and hashing: the warm cost is measured in
 `src/Cohesive.Relations.Benchmarks/RESULTS.md`, separately from SQL and network latency.

@@ -199,23 +199,23 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
         return EntityTransitionCommitProtocol.CommitAsync(this, context, commit, TryCommitTransitionOperation);
     }
 
-    Task<EntityTransitionOperationReceipt?> TryCommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
+    Task<EntityTransitionOperationResult> TryCommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
     {
         var partition = commit.Write.Entity.Observation.GetField(Mapping.PartitionField).GetRequiredString();
         using var connection = database.OpenConnection(context.CancellationToken);
         using var transaction = connection.BeginTransaction(deferred: false);
         var id = OperationId(commit.Request);
-        var retained = ReadOperation(connection, transaction, id);
-        if (retained is not null) return Task.FromResult<EntityTransitionOperationReceipt?>(null);
+        var retained = ReadIndex(connection, transaction, sql.ReceiptExists, id);
+        if (retained is not null) return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
         if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
-            && (ReadCreation(connection, transaction, commit.Request) is not null
+            && (ReadIndex(connection, transaction, sql.ReadCreation, commit.Request.Subject.EntityId.Value) is not null
                 || entities.Exists(connection, transaction, commit.Request.Subject.EntityId.Value)))
-            return Task.FromResult<EntityTransitionOperationReceipt?>(null);
+            return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
         EntitySnapshot snapshot;
         try { snapshot = entities.UpsertCore(context, connection, transaction, commit.Write, partition); }
         catch (ObservationConcurrencyConflictException)
         {
-            return Task.FromResult<EntityTransitionOperationReceipt?>(null);
+            return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
         }
         var receipt = new EntityTransitionOperationReceipt(commit, snapshot, context.UtcNow);
         InsertReceipt(connection, transaction, id, Process, receipt);
@@ -223,7 +223,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
             InsertIndex(connection, transaction, sql.InsertCreation, commit.Request.Subject.EntityId.Value, id);
         context.ThrowIfCancellationRequested();
         transaction.Commit();
-        return Task.FromResult<EntityTransitionOperationReceipt?>(receipt);
+        return Task.FromResult(EntityTransitionOperationResult.Committed(receipt));
     }
 
     /// <summary>Reads retained direct-Transition commits in cursor order with bounded count and canonical byte budget.</summary>

@@ -18,14 +18,18 @@ namespace Cohesive.Api.Execution.Services;
 /// invocation identity, authorization and repository reads remain invocation-scoped. No durable worker is created.</remarks>
 public sealed class ServiceProcessHostBuilder<TInput, TResult>
 {
+    readonly ServiceOperationBuilder operation;
+    readonly string operationId;
     readonly Process<TInput, TResult> process;
     readonly InteractionContractCatalog contracts;
     readonly Dictionary<ExecutionDefinitionReference, ProcessTransitionOperationBinding> transitions = [];
     readonly List<ProcessDefinitionLink> links = [];
     readonly List<ProcessRelationHandlerRegistration> queries = [];
 
-    internal ServiceProcessHostBuilder(Process<TInput, TResult> process, InteractionContractCatalog? contracts)
+    internal ServiceProcessHostBuilder(ServiceOperationBuilder operation, string operationId, Process<TInput, TResult> process, InteractionContractCatalog? contracts)
     {
+        this.operation = operation;
+        this.operationId = operationId;
         this.process = process ?? throw new ArgumentNullException(nameof(process));
         if (contracts is null)
         {
@@ -41,25 +45,34 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
     /// <typeparam name="TOutcome">Transition outcome projection.</typeparam>
     /// <param name="transition">Canonical authored transition.</param>
     /// <param name="repository">Native atomic state/receipt authority; fixed partition is inherited.</param>
+    /// <param name="expectedConcurrencyTokenField">Optional required string input field carrying the previously observed storage token.</param>
     /// <returns>This setup session.</returns>
-    /// <exception cref="ServiceBindingValidationException">Compilation or native capability is invalid.</exception>
+    /// <exception cref="ServiceBindingValidationException">Compilation is invalid.</exception>
+    /// <exception cref="InvalidOperationException">Native binding cannot attest its receipt contract.</exception>
     /// <exception cref="ArgumentException">The exact definition was already registered.</exception>
     public ServiceProcessHostBuilder<TInput, TResult> Transition<TEntity, TTransitionInput, TOutcome>(
-        Transition<TEntity, TTransitionInput, TOutcome> transition, IEntityRepository<TEntity> repository) where TEntity : notnull
+        Transition<TEntity, TTransitionInput, TOutcome> transition, IEntityRepository<TEntity> repository,
+        string? expectedConcurrencyTokenField = null) where TEntity : notnull
     {
         ArgumentNullException.ThrowIfNull(transition);
         ArgumentNullException.ThrowIfNull(repository);
-        if (!repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt)
-            throw ServiceBindingValidationException.Error(EntityTransitionOperationDiagnosticCodes.CapabilityInsufficient,
-                "Process transitions require atomic state and receipt support.", "/bindings/repository");
         var compilation = transition.Compile();
         var plan = compilation.Plan ?? throw new ServiceBindingValidationException(compilation.Validation);
-        if (plan.Definition.Observation != ValueContract.FromShape(repository.EntityDefinition.Shape))
-            throw ServiceBindingValidationException.Error("services.binding.observationMismatch",
-                "The transition observation must match the repository entity authority.", "/bindings/repository");
-        var binding = new ProcessTransitionOperationBinding(plan, repository, contracts);
-        transitions.Add(plan.DefinitionReference, binding);
-        links.Add(binding.CreateProcessDefinitionLink());
+        return Transition(new ProcessTransitionOperationBinding(plan, repository, contracts,
+            expectedConcurrencyTokenField: expectedConcurrencyTokenField));
+    }
+
+    /// <summary>Attaches an existing transition binding, preserving its complete subject, token and emission policies.</summary>
+    /// <param name="binding">Prepared native binding; CreateProcessDefinitionLink owns capability and authority validation.</param>
+    /// <returns>This binding phase.</returns>
+    /// <exception cref="InvalidOperationException">The native binding cannot attest the required receipt contract.</exception>
+    /// <exception cref="ArgumentException">The definition is already registered.</exception>
+    public ServiceProcessHostBuilder<TInput, TResult> Transition(ProcessTransitionOperationBinding binding)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        var link = binding.CreateProcessDefinitionLink();
+        transitions.Add(binding.Plan.DefinitionReference, binding);
+        links.Add(link);
         return this;
     }
 
@@ -80,21 +93,18 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
     }
 
     /// <summary>Compiles exact links and builds one finite service operation and its runtime.</summary>
-    /// <param name="service">Canonical service authoring state, including authorization requirements.</param>
-    /// <param name="operationId">Operation identity within that service.</param>
     /// <param name="authority">Logical execution authority.</param>
     /// <param name="timeout">Explicit finite execution bound.</param>
     /// <param name="authorization">Invocation-time admission and resource authorization.</param>
     /// <returns>The service document and its prepared native runtime.</returns>
     /// <exception cref="ServiceBindingValidationException">The exact process or realization is invalid.</exception>
-    public HostedServiceProcess Build(ServiceBuilder service, string operationId, string authority,
+    public HostedServiceProcess Build(string authority,
         TimeSpan timeout, IServiceInvocationAuthorization authorization)
     {
-        ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(authorization);
         var compilation = process.Compile(new ProcessDefinitionValidationContext(links));
         var plan = compilation.Plan ?? throw new ServiceBindingValidationException(compilation.Validation);
-        var declaration = service.Operation(operationId).Run(plan).ExecuteEphemerally(timeout).Build();
+        var declaration = operation.Run(plan).ExecuteEphemerally(timeout).Build();
         var deployed = new Dictionary<ExecutionDefinitionReference, ProcessTransitionOperationBinding>(transitions);
         var adapter = new EntityTransitionProcessOperationAdapter(invocation => deployed.GetValueOrDefault(invocation.Definition));
         var host = new RegisteredAsyncProcessReferenceHost(new ProcessRelationHandlerCatalog(queries), adapter.ExecuteAsync);

@@ -13,8 +13,6 @@ var connectionString = builder.Configuration.GetConnectionString(FulfillmentStor
 await using var database = NpgsqlDataSource.Create(connectionString);
 var persistence = FulfillmentStorage.Bind(database);
 var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentDemo.LocalPartition);
-IEntityRepository<Order> orders = persistence.Repository(FulfillmentDomain.Orders, transitionReceipts: receipts);
-IEntityRepository<InventoryItem> inventory = persistence.Repository(FulfillmentDomain.Inventory, transitionReceipts: receipts);
 
 // The shared repository owns DML and validation, not schema lifecycle.
 using (var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")
@@ -24,7 +22,10 @@ await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync
 
 await using (var initializeReceipts = database.CreateCommand(receipts.SchemaSql))
     await initializeReceipts.ExecuteNonQueryAsync();
-await receipts.ValidateSchemaAsync(database);
+var receiptStorage = await receipts.BindAsync(database);
+IEntityRepository<Order> orders = persistence.Repository(FulfillmentDomain.Orders, transitionReceipts: receiptStorage);
+IEntityRepository<InventoryItem> inventory = persistence.Repository(FulfillmentDomain.Inventory, transitionReceipts: receiptStorage);
+
 
 // Prepare once and pass the contracts directly to their sole consumer.
 var details = persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);

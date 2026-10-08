@@ -24,6 +24,7 @@ internal sealed class SqliteEntityOutboxSql
             $"CREATE INDEX {Quote(ReceiptsTable + "__outbox_cursor")} ON {Quote(ReceiptsTable)} ({Quote(Kind)}, {Quote(Sequence)})"
         ]);
         EncodingMigration = new(version: 2, [$"ALTER TABLE {Quote(ReceiptsTable)} ADD COLUMN {Quote(Format)} INTEGER NOT NULL DEFAULT 1"]);
+        ReceiptExists = Read(ReceiptsTable, Id, Id);
         ReadReceipt = Read(ReceiptsTable, Id, Kind, Content, Hash, Format);
         ReadEmission = Read(EmissionsTable, Id, Receipt);
         ReadCreation = Read(CreationsTable, Id, Receipt);
@@ -44,6 +45,7 @@ internal sealed class SqliteEntityOutboxSql
     internal string CreationsTable { get; }
     internal SqliteMigration InitialMigration { get; }
     internal SqliteMigration EncodingMigration { get; }
+    internal SqlCommandTemplate ReceiptExists { get; }
     internal SqlCommandTemplate ReadReceipt { get; }
     internal SqlCommandTemplate ReadEmission { get; }
     internal SqlCommandTemplate ReadCreation { get; }

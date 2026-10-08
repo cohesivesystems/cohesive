@@ -345,7 +345,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         return EntityTransitionCommitProtocol.CommitAsync(this, context, commit, TryCommitTransitionOperation);
     }
 
-    Task<EntityTransitionOperationReceipt?> TryCommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
+    Task<EntityTransitionOperationResult> TryCommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
     {
         ObserveTransitionOperationCommitBoundary(EntityTransitionOperationCommitPhase.BeforeAtomicCommit);
         EntityTransitionOperationReceipt receipt;
@@ -354,13 +354,13 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             if (transitionOperationReceipts.ContainsKey(commit.Request.Operation)
                 || (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
                     && creationTransitionOperationReceiptsBySubject.ContainsKey(commit.Request.Subject.EntityId.Value)))
-                return Task.FromResult<EntityTransitionOperationReceipt?>(null);
+                return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
             var partitionKey = GetPartitionKey(context, commit.Write.Entity);
             var key = CreateKey(commit.Write.Entity.EntityId.Value, partitionKey);
             if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
                 ? partitionKeysByObservationId.ContainsKey(commit.Write.Entity.EntityId.Value)
                 : !snapshotsByKey.TryGetValue(key, out var current) || current.ConcurrencyToken != commit.Write.ExpectedConcurrencyToken)
-                return Task.FromResult<EntityTransitionOperationReceipt?>(null);
+                return Task.FromResult(EntityTransitionCommitProtocol.Conflict(commit));
             var snapshot = new EntitySnapshot(commit.Write.Entity, partitionKey, new(CreateConcurrencyToken()));
             receipt = new(commit, snapshot, context.UtcNow);
             snapshotsByKey[key] = snapshot;
@@ -370,7 +370,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
             TrackObservation(snapshot.Entity.EntityId.Value, partitionKey);
         }
         ObserveTransitionOperationCommitBoundary(EntityTransitionOperationCommitPhase.AfterAtomicCommitBeforeReturn);
-        return Task.FromResult<EntityTransitionOperationReceipt?>(receipt);
+        return Task.FromResult(EntityTransitionOperationResult.Committed(receipt));
     }
 
     EntitySnapshot UpsertUnderLock(OperationContext context, EntityWriteRequest write)

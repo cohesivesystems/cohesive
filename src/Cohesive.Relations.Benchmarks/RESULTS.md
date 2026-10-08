@@ -1394,3 +1394,25 @@ Three measurement iterations yield wide timing confidence intervals; do not infe
 The allocation increase is material and scales with payload. Integrity checks remain in place; a future
 optimization must prove canonical/fingerprint equivalence and corruption rejection. No unbounded receipt
 cache or trust bypass was introduced. Benchmark source remains runnable for longer measurements.
+
+
+## Native receipt commit read amplification (2026-10-07)
+
+`PostgresRepositoryConformanceTests.Fresh_native_commits_remove_the_external_receipt_round_trip` is a
+reproducible native measurement and deterministic command-count regression. Set
+`COHESIVE_POSTGRES_TEST_CONNECTION_STRING` to a disposable PostgreSQL database and run that filtered Release
+test with `--logger 'console;verbosity=detailed'`. It uses an isolated schema, two warm-up pairs, then 30
+alternating pairs of fresh existing-entity commits. State seeding, decision preparation and schema admission
+are outside the timer. The former preflight is reconstructed by an explicit receipt lookup before the same
+native commit, isolating its extra work. Npgsql completion logging counts actual receipt SELECT commands.
+
+On local PostgreSQL 17 (Docker, loopback), M5 Max/.NET 10.0.5, the final sample measured **2.934 ms** per
+former-preflight commit versus **2.648 ms** write-first. Receipt SELECTs deterministically changed **2 → 1**
+(the remaining query is the in-transaction existence fence); timing has no pass/fail threshold and is not a
+production latency claim. Shared protocol unit tests independently require zero external receipt reads on
+success and no retry/read after an ambiguous failure. Creation uses the same success path; native conformance
+checks its presence fence and replacement replay. Cosmos is not live-qualified by these measurements.
+
+Receipt decoding remains costly as characterized above. The SQL commit path now uses existence-only reads
+inside its transaction, so a retained receipt is decoded once during conflict resolution, not twice.
+Integrity validation and canonical fingerprint semantics are unchanged.

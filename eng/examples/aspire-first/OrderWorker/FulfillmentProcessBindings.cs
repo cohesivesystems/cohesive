@@ -20,7 +20,8 @@ public sealed class FulfillmentProcessBindings
     {
         var readOptions = new EntityReadOptions(partitionKey: inventory.TransitionOperationCapabilities.PartitionKey
             ?? throw new InvalidOperationException("The demo requires a fixed receipt partition."));
-        var hosted = Service.Host(FulfillmentProcess.Definition)
+        var hosted = Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance)
+            .Operation("fulfill").Run(FulfillmentProcess.Definition, bindings => bindings
             .Transition(InventoryTransitions.Reserve, inventory)
             .Transition(InventoryTransitions.Release, inventory)
             .Transition(OrderTransitions.Submit, orders)
@@ -28,9 +29,8 @@ public sealed class FulfillmentProcessBindings
             {
                 var item = await inventory.TryGetEntity(context, input.Sku, readOptions);
                 return new InventoryAvailability(item is not null, item?.Available ?? 0);
-            })
-            .Build(Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance),
-                operationId: "fulfill", authority: "aspire-first", timeout: TimeSpan.FromSeconds(15),
+            }))
+            .Build(authority: "aspire-first", timeout: TimeSpan.FromSeconds(15),
                 authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
         Declaration = hosted.Declaration;
         Runtime = hosted.Runtime;

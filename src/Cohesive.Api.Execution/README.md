@@ -310,12 +310,20 @@ This classification does not assert rollback of earlier mutations or authorize a
 
 ### Host a finite process with entity transitions and native queries
 
-`Service.Host(process).Transition(transition, repository).Query(query, handler).Build(...)` prepares the exact
+`Service.Define(...).Operation("fulfill").Run(process, bindings => bindings
+.Transition(transition, repository).Query(query, handler)).Build(...)` prepares the exact
 linked process, transition adapter, hosted-query catalog and ephemeral service runtime at host setup. Supply
-an explicit service declaration, operation identity, authority, finite timeout and authorization. A supplied
+an explicit service declaration, operation identity, authority, finite timeout and authorization. The optional `Run`
 interaction catalog is shared by transition associations; omission selects the empty catalog. This convenience
 owns composition only: canonical Process/Transition/Query documents remain the semantic authorities.
 Repositories must advertise atomic state/receipt support. Fixed receipt partitions flow into transition reads;
 conflicting explicit placement is rejected during binding construction. No durable worker, retry loop, tenant
 inference or provider options are introduced. The prepared result exposes the declaration and runtime for the
 existing HTTP binding, independently of endpoint authoring. See the Aspire fulfillment example.
+
+The ordinary declaration-only `Run(process)` remains unchanged. Its binding overload stays under the same
+service and operation authoring flow; there is no separate `Service.Host` entry point. Transition association
+uses `CreateProcessDefinitionLink` as its single capability/authority check, with the same failure behavior as
+manual binding. Pass `expectedConcurrencyTokenField: nameof(Input.Token)` for a captured storage fence, or
+attach a complete `ProcessTransitionOperationBinding` to retain custom subject, placement and emission policies.
+Core runtime tests exercise matching/stale tokens through both forms independently of the example.

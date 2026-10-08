@@ -45,13 +45,13 @@ public sealed partial class PostgresPersistenceRegistration
     /// <param name="entity">Exact entity handle registered on this persistence binding.</param>
     /// <param name="selectEntityId">Optional explicit typed-write identity selector; otherwise compiled from the registered canonical identity field at setup.</param>
     /// <param name="selectVersion">Optional typed-write semantic version selector; otherwise existing Version/zero conventions apply.</param>
-    /// <param name="transitionReceipts">Optional atomic transition receipt realization in one trusted partition.</param>
+    /// <param name="transitionReceipts">Optional schema-validated receipt storage bound to this same native data source.</param>
     /// <returns>A repository using the registered mapping and caller-owned native data source.</returns>
     /// <exception cref="ArgumentNullException">Entity is null.</exception>
     /// <exception cref="InvalidOperationException">The exact entity definition has not been registered, or its identity cannot be mapped to one readable property.</exception>
     public IEntityRepository<T> Repository<T>(DomainEntity<T> entity,
         Func<T, string>? selectEntityId = null, Func<T, long>? selectVersion = null,
-        PostgresTransitionReceiptOptions? transitionReceipts = null) where T : notnull
+        PostgresTransitionReceiptStorage? transitionReceipts = null) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(entity);
         if (!tables.TryGetValue(entity.Definition.StateShape.QualifiedId, out var attachment)

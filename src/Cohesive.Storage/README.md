@@ -184,14 +184,14 @@ This is an authoring change: migrate former `CreateIfAbsent` and implicit `Creat
 ## Shared receipt commit protocol
 
 `EntityTransitionCommitProtocol` owns exact replay, creation-intent replay and conditional-conflict diagnostics.
-Each store supplies one native atomic state/receipt attempt. A null native result means a conditional fence
-failed without changes; the protocol resolves a raced receipt once, then returns the same structured
-`/write/subjectCondition` or `/write/expectedConcurrencyToken` diagnostic across providers. Exceptions and
-ambiguous acknowledgements propagate without retry. Each call performs at most two lookup passes (before
-one native attempt and after a conditional conflict); each pass reads the exact receipt and, only for creation,
-the creation index. This trades additional fresh-operation Cosmos point reads for a shared replay-first policy
-that avoids writing on a known replay. It is not a claim of fewer provider calls. Provider locks, transactions, encoding and integrity
-checks stay native. Creation replay retains the original attempt's evidence, checking candidate and result.
+Each store supplies one native atomic state/receipt attempt. The protocol tries that attempt first: success
+requires **zero external receipt lookups**. Only a conditional conflict triggers exact receipt resolution,
+followed by creation-intent lookup when needed. There is at most one native attempt and one lookup pass;
+exceptions and ambiguous acknowledgements propagate without retry. Conditional conflicts use consistent
+`/write/subjectCondition` or `/write/expectedConcurrencyToken` locations and preserve subject, fence and native
+provider status details. PostgreSQL and SQLite test only existence inside the atomic boundary; canonical
+receipt decoding/validation happens once in conflict resolution. Provider locks, transactions and encoding
+remain native. Creation replay retains the original attempt's evidence and compares candidate and result.
 
 `EntityTransitionOperationCapabilities.PartitionKey` optionally declares fixed trusted receipt placement.
 Process transition bindings inherit it and reject an explicit mismatch at construction. Dynamic repositories

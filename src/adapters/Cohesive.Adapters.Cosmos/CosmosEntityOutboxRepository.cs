@@ -327,7 +327,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         return EntityTransitionCommitProtocol.CommitAsync(this, context, commit, TryCommitTransitionOperation);
     }
 
-    async Task<EntityTransitionOperationReceipt?> TryCommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
+    async Task<EntityTransitionOperationResult> TryCommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
     {
         var partitionKey = GetPartitionKey(context, commit.Write.Entity);
         var entityDocument = CreateEntityDocument(context, commit.Write.Entity, partitionKey);
@@ -349,7 +349,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
                     commit.Write.ExpectedConcurrencyToken!.Value,
                     out var currentEtag))
             {
-                return null;
+                return EntityTransitionCommitProtocol.Conflict(commit, current is null ? "Cosmos preflight subject missing." : "Cosmos preflight concurrency token changed.");
             }
             batch.ReplaceItem(
                 id: entityDocument.Id,
@@ -370,7 +370,8 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed
                 or HttpStatusCode.NotFound)
             {
-                return null;
+                return EntityTransitionCommitProtocol.Conflict(commit, "Cosmos batch status: " + response.StatusCode
+                    + "; operations: " + string.Join(",", Enumerable.Range(0, response.Count).Select(index => response[index].StatusCode)) + ".");
             }
             throw new InvalidOperationException(
                 $"Transactional Cosmos Transition operation commit for "
@@ -380,7 +381,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         var receipt = await TryReadTransitionReceipt(context, receiptDocument.Id, partitionKey).ConfigureAwait(false)
             ?? throw new InvalidOperationException(
                 $"Transactional Cosmos Transition operation commit '{receiptDocument.Id}' succeeded, but its receipt could not be reloaded.");
-        return receipt;
+        return EntityTransitionOperationResult.Committed(receipt);
     }
 
     /// <summary>

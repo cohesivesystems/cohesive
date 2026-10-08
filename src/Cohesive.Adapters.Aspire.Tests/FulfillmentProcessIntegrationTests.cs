@@ -25,9 +25,10 @@ public sealed class FulfillmentProcessIntegrationTests
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
         var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentDemo.LocalPartition);
         await using (var command = database.CreateCommand(receipts.SchemaSql)) await command.ExecuteNonQueryAsync();
+        var receiptStorage = await receipts.BindAsync(database);
         var persistence = FulfillmentStorage.Bind(database);
-        var orders = persistence.Repository(FulfillmentDomain.Orders, transitionReceipts: receipts);
-        var inventory = persistence.Repository(FulfillmentDomain.Inventory, transitionReceipts: receipts);
+        var orders = persistence.Repository(FulfillmentDomain.Orders, transitionReceipts: receiptStorage);
+        var inventory = persistence.Repository(FulfillmentDomain.Inventory, transitionReceipts: receiptStorage);
         var orderId = Guid.NewGuid().ToString("D");
         var sku = "sku-" + Guid.NewGuid().ToString("N");
         var context = FulfillmentDemoIdentity.Attach(OperationContext.Create());

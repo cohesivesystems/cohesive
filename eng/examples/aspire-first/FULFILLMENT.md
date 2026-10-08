@@ -3,8 +3,9 @@
 `FulfillmentDomain` remains the state authority. Native Aspire owns resources; native PostgreSQL mappings
 attach to the same domain definitions. `FulfillmentProcess.Run` is authoring syntax compiled into canonical
 Process IR, not an async application coordinator. Its generated definition can be inspected and fingerprinted.
-`FulfillmentProcessBindings` uses `Service.Host(process).Transition(...).Query(...).Build(...)` to prepare exact
-links, catalogs and the shared runtime at startup. The host builder retains canonical compiler diagnostics;
+`FulfillmentProcessBindings` uses `Service.Define(...).Operation(...).Run(process, bindings => ...).Build(...)` to prepare exact
+links, catalogs and the shared runtime at startup. Receipt schema must be bound and validated before constructing receipt-capable repositories.
+The binding phase retains canonical compiler diagnostics;
 applications bind domain operations to repositories without recreating adapters and dispatch catalogs.
 
 ## What this slice guarantees

@@ -170,12 +170,14 @@ public sealed partial class PostgresEntityRepository : IEntityTransitionOperatio
         EntityDefinition entityDefinition,
         PostgresNpgsqlRuntimeBinding runtime,
         PostgresEntityRepositoryMapping mapping,
-        PostgresTransitionReceiptOptions? transitionReceipts = null)
+        PostgresTransitionReceiptStorage? transitionReceipts = null)
     {
         EntityDefinition = Guard.RequireNotNull(entityDefinition);
         this.runtime = Guard.RequireNotNull(runtime);
         this.mapping = Guard.RequireNotNull(mapping);
-        receipts = transitionReceipts;
+        if (transitionReceipts is not null && !ReferenceEquals(transitionReceipts.DataSource, runtime.DataSource))
+            throw new ArgumentException("Receipt storage was validated against a different native data source.", nameof(transitionReceipts));
+        receipts = transitionReceipts?.Options;
         layout = ObservationLayout.Create(entityDefinition.StateShape, mapping.Fields.Select(static field => field.FieldName));
         identityOrdinal = layout.GetOrdinal(mapping.IdentityField);
         partitionOrdinal = layout.GetOrdinal(mapping.PartitionField);
