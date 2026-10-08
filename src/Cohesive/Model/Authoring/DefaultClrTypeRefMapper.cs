@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -13,6 +14,11 @@ namespace Cohesive.Model.Authoring;
 public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 {
     readonly ImmutableDictionary<Type, TypeRef> typeMappings;
+    // Only context-independent reflection facts are shared. Each traversal still owns its IR,
+    // recursion path, explicit mappings and occurrence nullability. Weak keys avoid new type roots.
+    static readonly ConditionalWeakTable<Type, Lazy<bool>> polymorphicTypes = new();
+    static readonly ConditionalWeakTable<Type, Lazy<Type?>> quantityRepresentations = new();
+    static readonly ConditionalWeakTable<Type, Lazy<(PropertyInfo Property, string Name)[]>> structuralProperties = new();
 
     /// <summary>Creates the default portable CLR type projection.</summary>
     public DefaultClrTypeRefMapper() => typeMappings = ImmutableDictionary<Type, TypeRef>.Empty;
@@ -171,12 +177,11 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
         try
         {
-            var properties = ShapeTypeInspector.GetReadableProperties(unwrapped)
-                .Select(static property => (
-                    Property: property,
-                    Name: GetSerializedMemberName(property)))
-                .OrderBy(static property => property.Name, StringComparer.Ordinal)
-                .ToArray();
+            var properties = structuralProperties.GetValue(unwrapped, static type => new(() =>
+                ShapeTypeInspector.GetReadableProperties(type)
+                    .Select(static property => (Property: property, Name: GetSerializedMemberName(property)))
+                    .OrderBy(static property => property.Name, StringComparer.Ordinal)
+                    .ToArray())).Value;
 
             if (properties.Length == 0)
             {
@@ -186,13 +191,14 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                     "The CLR type has no readable public instance properties to infer from.");
             }
 
-            if (properties.Select(static property => property.Name).Distinct(StringComparer.Ordinal).Count()
-                != properties.Length)
+            // Ordinal sorting makes duplicates adjacent; no per-traversal set is needed.
+            for (var index = 1; index < properties.Length; index++)
             {
-                return Opaque(
-                    unwrapped,
-                    TypeInferenceDiagnosticReasons.AmbiguousSerializedProperty,
-                    "The CLR type maps more than one readable property to the same serialized field name.");
+                if (StringComparer.Ordinal.Equals(properties[index - 1].Name, properties[index].Name))
+                    return Opaque(
+                        unwrapped,
+                        TypeInferenceDiagnosticReasons.AmbiguousSerializedProperty,
+                        "The CLR type maps more than one readable property to the same serialized field name.");
             }
 
             return new ObjectTypeRef(
@@ -355,8 +361,9 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     }
 
     static bool IsJsonPolymorphicType(Type type) =>
-        type.GetCustomAttribute<JsonPolymorphicAttribute>(inherit: true) is not null
-        || type.GetCustomAttributes<JsonDerivedTypeAttribute>(inherit: true).Any();
+        polymorphicTypes.GetValue(type, static key => new(() =>
+            key.GetCustomAttribute<JsonPolymorphicAttribute>(inherit: true) is not null
+            || key.GetCustomAttributes<JsonDerivedTypeAttribute>(inherit: true).Any())).Value;
 
     static bool TryGetEnumerableElementType(
         Type type,
@@ -403,20 +410,16 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
     static bool TryGetStructuredQuantityRepresentationType(Type type, out Type representationType)
     {
-        var structuredQuantityInterface = type.GetInterfaces()
-            .FirstOrDefault(x =>
+        var representation = quantityRepresentations.GetValue(type, static key => new(() =>
+        {
+            var quantityInterface = key.GetInterfaces().FirstOrDefault(x =>
                 x.IsGenericType
                 && x.GetGenericTypeDefinition() == typeof(IStructuredQuantity<,,>)
-                && x.GetGenericArguments()[0] == type);
-
-        if (structuredQuantityInterface is null)
-        {
-            representationType = typeof(void);
-            return false;
-        }
-
-        representationType = structuredQuantityInterface.GetGenericArguments()[2];
-        return true;
+                && x.GetGenericArguments()[0] == key);
+            return quantityInterface?.GetGenericArguments()[2];
+        })).Value;
+        representationType = representation ?? typeof(void);
+        return representation is not null;
     }
 
     static bool TryGetKeyValuePairTypes(

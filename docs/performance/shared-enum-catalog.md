@@ -69,4 +69,5 @@ package pin or permanent source bridge changed; temporary test dependencies are 
 
 Qualification passed 4,296 Core tests (33 existing skips), 1,082 Relations tests and 855 Ari engine
 tests (18 existing skips). No tests were excluded, timeouts increased or packages published.
-Other repeated property/attribute discovery and final parent serializer projection remain targets.
+Subsequent [shared CLR inspection](shared-clr-inspection.md) removes repeated property/name ordering,
+polymorphism and quantity metadata discovery. Final parent serializer projection remains a target.

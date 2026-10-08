@@ -258,7 +258,7 @@ public sealed class DefaultClrTypeRefMapperTests
         var result = new DefaultClrTypeRefMapper().Map(typeof(Leaf), null);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         GC.KeepAlive(result);
-        Assert.InRange(allocated, 1, 4_096);
+        Assert.InRange(allocated, 1, 1_400);
     }
 
     [Fact]
@@ -293,8 +293,34 @@ public sealed class DefaultClrTypeRefMapperTests
         var result = mapper.Map(typeof(LargeEnvelope), null);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         GC.KeepAlive(result);
-        Assert.InRange(allocated, 1, 95_000);
+        Assert.InRange(allocated, 1, 35_000);
     }
+
+    [Fact]
+    public async Task Map_ConcurrentColdMetadataKeepsGraphsAndExplicitMappingsIndependent()
+    {
+        var mappings = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(() =>
+            Assert.IsType<ObjectTypeRef>(new DefaultClrTypeRefMapper().Map(typeof(ColdMetadataEnvelope), null)))));
+        foreach (var mapping in mappings)
+        {
+            Assert.Equal(new[] { "alpha", "zeta" }, mapping.Fields.Select(field => field.Name));
+            Assert.Equal(ScalarTypeKind.String, Assert.IsType<ScalarTypeRef>(mapping.Fields[0].Type).Kind);
+            Assert.Equal(FieldNullability.Nullable, mapping.Fields[0].Nullability);
+        }
+        for (var index = 1; index < mappings.Length; index++)
+            Assert.NotSame(mappings[0], mappings[index]);
+        var overridden = new DefaultClrTypeRefMapper(new Dictionary<Type, TypeRef>
+        {
+            [typeof(string)] = new ScalarTypeRef(ScalarTypeKind.Instant)
+        });
+        var explicitGraph = Assert.IsType<ObjectTypeRef>(overridden.Map(typeof(ColdMetadataEnvelope), null));
+        Assert.Equal(ScalarTypeKind.Instant, Assert.IsType<ScalarTypeRef>(explicitGraph.Fields[0].Type).Kind);
+        Assert.Equal(ScalarTypeKind.String, Assert.IsType<ScalarTypeRef>(mappings[0].Fields[0].Type).Kind);
+    }
+
+    sealed record ColdMetadataEnvelope(
+        [property: JsonPropertyName("zeta")] long Number,
+        [property: JsonPropertyName("alpha")] string? Text);
 
     sealed record Pairs(IReadOnlyList<KeyValuePair<string, string?>> Items);
     sealed record Leaf(string Name, string? Description, long Sequence, DateTimeOffset Time);
