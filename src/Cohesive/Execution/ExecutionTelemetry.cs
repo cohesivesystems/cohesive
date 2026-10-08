@@ -225,9 +225,9 @@ public static class ExecutionTelemetry
         if (InvocationDuration?.Enabled == true) Record(InvocationDuration, duration.TotalSeconds, tags);
     }
 
-    /// <summary>Whether any execution activity or metric listener is currently enabled.</summary>
+    /// <summary>Whether general execution activity or metric instrumentation is enabled.</summary>
+    /// <remarks>The failure-only diagnostic subscriber counter does not enable general execution instrumentation.</remarks>
     public static bool IsEnabled => (Activities?.HasListeners() ?? false)
-        || DiagnosticSubscriberFailures?.Enabled == true
         || Invocations?.Enabled == true
         || InvocationDuration?.Enabled == true
         || StatusObservations?.Enabled == true

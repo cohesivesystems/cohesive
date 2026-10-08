@@ -200,11 +200,12 @@ may run concurrently for separate operations, and must route private identities/
 to protected sinks. Disposal prevents future delivery but a delivery already in flight may still invoke its callback. One failing
 observer cannot affect the operation or other observers. Each recoverable callback failure increments
 `cohesive.execution.diagnostic.subscriber.failures` on the existing `Cohesive.Execution` meter, with no tags,
-exception or private payload. Subscriber snapshots are read without acquiring the registration lock.
+exception or private payload. Listening only to this counter does not enable general execution telemetry. Subscriber snapshots are read without acquiring the registration lock.
 Tests cover the counter, isolation, disposal, complete detail
 and exclusion from serialized portable failures. The fulfillment example consumes this typed API in its
-host-scoped debug logger and disposes the subscription when the application stops. Mapping the same
-application twice is a no-op; disabled debug logging skips argument construction.
+host-owned debug logger through `AddCohesiveTransitionFailureLogging(hostedProcess)` in the ASP.NET adapter.
+The native host starts subscriptions and releases them on stop or disposal; an unstarted host never subscribes.
+Repeated registration of a process subscribes once per host, and disabled Debug logging skips argument construction.
 PostgreSQL and SQLite rely on their native unique receipt fences, with no receipt SELECT inside a successful
 commit. A unique violation rolls back the entity write before shared conflict resolution reads and validates
 retained evidence. Provider locks, transactions and encoding

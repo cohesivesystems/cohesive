@@ -81,8 +81,10 @@ reconstitution, state checkpoints and read projections. Those are not inferred f
 
 ### Operator failure details
 
-`FulfillmentProcessBindings.Map` subscribes to its built host's typed `SubscribeTransitionFailures` channel
-and releases the subscription at application stop. It logs full native diagnostics at Debug level; enable
+`Program` opts into `AddCohesiveTransitionFailureLogging(fulfillment.Hosted)`; route mapping has no
+subscription or lifetime wiring. The ASP.NET adapter subscribes at native host startup and releases the
+subscription on stop or disposal, including disposal without stopping. An unstarted host never subscribes.
+Repeated registration subscribes once per native host. It logs full native diagnostics at Debug level; enable
 that level only for a protected operator sink because IDs and concurrency tokens may be present. Public
 process responses remain sanitized. Other hosts and process-wide diagnostic listeners cannot subscribe to
 these failures without a reference to this host or adapter instance.

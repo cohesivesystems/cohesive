@@ -12,9 +12,8 @@ namespace AspireFirst.Orders;
 /// <remarks>This is single-partition demo composition, not a production authorization policy or recovery worker.</remarks>
 public sealed class FulfillmentProcessBindings
 {
-    readonly HostedServiceProcess hosted;
-    readonly object mappingGate = new();
-    WebApplication? mappedApplication;
+    /// <summary>Prepared process and its native runtime, also used for host-owned operator logging.</summary>
+    public HostedServiceProcess Hosted { get; }
     /// <summary>Prepares exact transition links and the finite process interpreter once.</summary>
     /// <param name="orders">Local order authority with atomic receipt support.</param>
     /// <param name="inventory">Local inventory authority with atomic receipt support.</param>
@@ -23,7 +22,7 @@ public sealed class FulfillmentProcessBindings
     {
         var readOptions = new EntityReadOptions(partitionKey: inventory.TransitionOperationCapabilities.PartitionKey
             ?? throw new InvalidOperationException("The demo requires a fixed receipt partition."));
-        hosted = Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance)
+        Hosted = Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance)
             .Operation("fulfill").Run(FulfillmentProcess.Definition, bindings => bindings
             .Transition(InventoryTransitions.Reserve, inventory)
             .Transition(InventoryTransitions.Release, inventory)
@@ -35,39 +34,16 @@ public sealed class FulfillmentProcessBindings
             }))
             .Build(authority: "aspire-first", timeout: TimeSpan.FromSeconds(15),
                 authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
-        Declaration = hosted.Declaration;
-        Runtime = hosted.Runtime;
     }
 
     /// <summary>Service policy declares finite, invocation-local execution.</summary>
-    public ExecutionDefinitionDocument Declaration { get; }
+    public ExecutionDefinitionDocument Declaration => Hosted.Declaration;
     /// <summary>Prepared runtime; invocation identities and state are supplied per call.</summary>
-    public ServiceRuntime Runtime { get; }
+    public ServiceRuntime Runtime => Hosted.Runtime;
 
     /// <summary>Maps the local demonstration route through the canonical service binding.</summary>
-    /// <param name="app">Native endpoint builder. Repeated mapping to the same application is a no-op.</param>
-    /// <exception cref="InvalidOperationException">This instance is already mapped to another application.</exception>
-    public void Map(WebApplication app)
-    {
-        ArgumentNullException.ThrowIfNull(app);
-        lock (mappingGate)
-        {
-            if (ReferenceEquals(mappedApplication, app)) return;
-            if (mappedApplication is not null)
-                throw new InvalidOperationException("These process bindings already belong to another application.");
-            app.MapServiceEphemeralProcess(Declaration, _ => Runtime, "fulfill",
-                FulfillmentProcess.Definition, new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
-            // Debug logging is an explicit operator choice: these messages contain private native details.
-            var subscription = hosted.SubscribeTransitionFailures(failure =>
-            {
-                if (!app.Logger.IsEnabled(LogLevel.Debug)) return;
-                foreach (var diagnostic in failure.Result.Diagnostics)
-                    app.Logger.LogDebug("Fulfillment storage failure {Code} at {Location}: {Detail}; trace {TraceId}",
-                        diagnostic.Code, diagnostic.Location, diagnostic.Message, failure.TraceContext?.TraceId);
-            });
-            app.Lifetime.ApplicationStopped.Register(subscription.Dispose);
-            mappedApplication = app;
-        }
-    }
-
+    /// <param name="app">Native endpoint builder.</param>
+    public void Map(WebApplication app) =>
+        app.MapServiceEphemeralProcess(Declaration, _ => Runtime, "fulfill",
+            FulfillmentProcess.Definition, new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
 }

@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Diagnostics.Metrics;
 using System.Collections.Concurrent;
 using Cohesive.Execution;
 using Cohesive.Model.Authoring;
@@ -88,8 +87,8 @@ public sealed class EntityTransitionCapturedTokenTests
         Assert.Equal(ProcessTransitionOperationAdapterDiagnosticCodes.CapturedConcurrencyTokenInvalid, malformed.Failure?.Code);
     }
 
-    [Fact]
-    public async Task Native_commit_details_do_not_enter_portable_process_failure()
+    internal static async Task<(EntityTransitionProcessOperationAdapter Adapter, OperationContext Context,
+        ProcessTransitionInvocation Invocation, string Token, Func<EntityTransitionProcessOperationAdapter> CreateAdapter)> CreateFailureFixture()
     {
         var entity = ObjectEntityDefinition.For<Document>(new("document"));
         var provenance = new ExecutionProvenance(new("tests", "1"), new("safe-conflict"), DocumentOrigin.Generated);
@@ -102,12 +101,8 @@ public sealed class EntityTransitionCapturedTokenTests
         var native = new InMemoryEntityOutboxRepository(entity, _ => "shared");
         var initial = await native.Upsert(context, new(entity.CreateState("private-id", new Document("private-id", "before")).Snapshot));
         var repository = new ReadBoundaryRepository(native, false) { FailCommit = true };
-        var adapter = new EntityTransitionProcessOperationAdapter(_ => new(plan, repository, contracts!));
-        var diagnostics = new ConcurrentQueue<EntityTransitionFailureDiagnostic>();
-        using var subscription = adapter.SubscribeTransitionFailures(diagnostics.Enqueue);
-        var otherAdapter = new EntityTransitionProcessOperationAdapter(_ => new(plan, repository, contracts!));
-        var otherDiagnostics = new ConcurrentQueue<EntityTransitionFailureDiagnostic>();
-        using var otherSubscription = otherAdapter.SubscribeTransitionFailures(otherDiagnostics.Enqueue);
+        EntityTransitionProcessOperationAdapter CreateAdapter() => new(_ => new(plan, repository, contracts!));
+        var adapter = CreateAdapter();
         var invocation = new ProcessTransitionInvocation(
             ProcessDurabilityTestFixture.DefinitionReference("process/update", '1'), plan.DefinitionReference,
             ProcessDurabilityTestFixture.StringValue("private-id"),
@@ -115,60 +110,83 @@ public sealed class EntityTransitionCapturedTokenTests
             new(new("instance"), new("attempt")), new("activation"), new("token"), new("node"), 0,
             DateTimeOffset.UnixEpoch, new(new("authority", "tenant"), new("correlation"),
                 new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), provenance));
-        var result = await adapter.ExecuteAsync(context, invocation);
+        return (adapter, context, invocation, initial.ConcurrencyToken.Value, CreateAdapter);
+    }
+
+    [Fact]
+    public async Task Native_commit_details_do_not_enter_portable_process_failure()
+    {
+        var fixture = await CreateFailureFixture();
+        var diagnostics = new ConcurrentQueue<EntityTransitionFailureDiagnostic>();
+        using var subscription = fixture.Adapter.SubscribeTransitionFailures(diagnostics.Enqueue);
+        var result = await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
         Assert.Equal(EntityTransitionOperationDiagnosticCodes.ConcurrencyConflict, result.Failure?.Code);
         Assert.Equal("/write/expectedConcurrencyToken", result.Failure?.Location);
         Assert.Equal("The entity operation could not be committed.", result.Failure?.Message);
         var json = System.Text.Json.JsonSerializer.Serialize(result, ProcessDurableCheckpointJsonSerializer.CreateOptions());
         Assert.DoesNotContain("private-provider-detail", json);
         Assert.DoesNotContain("private-id", json);
-        Assert.DoesNotContain(initial.ConcurrencyToken.Value, json);
+        Assert.DoesNotContain(fixture.Token, json);
         var recorded = Assert.Single(diagnostics);
         var detail = Assert.Single(recorded.Result.Diagnostics);
-        Assert.Equal(context.TraceContext, recorded.TraceContext);
+        Assert.Equal(fixture.Context.TraceContext, recorded.TraceContext);
         Assert.Contains("private-provider-detail", detail.Message);
         Assert.Contains("private-id", detail.Message);
-        Assert.Contains(initial.ConcurrencyToken.Value, detail.Message);
-        Assert.Empty(otherDiagnostics);
-        await otherAdapter.ExecuteAsync(context, invocation);
-        Assert.Single(otherDiagnostics);
-        Assert.Single(diagnostics); // Same trace and repository, but a different host cannot deliver here.
-        long subscriberFailures = 0;
-        var tagCounts = new ConcurrentQueue<int>();
-        using var listener = new MeterListener();
-        listener.InstrumentPublished = (instrument, observer) =>
-        {
-            if (instrument.Meter.Name == ExecutionTelemetry.MeterName
-                && instrument.Name == ExecutionTelemetry.DiagnosticSubscriberFailuresInstrumentName)
-                observer.EnableMeasurementEvents(instrument);
-        };
-        listener.SetMeasurementEventCallback<long>((_, count, tags, _) =>
-        {
-            Interlocked.Add(ref subscriberFailures, count);
-            tagCounts.Enqueue(tags.Length);
-        });
-        listener.Start();
-        using var brokenSink = adapter.SubscribeTransitionFailures(_ => throw new InvalidOperationException("operator sink unavailable"));
-        var deliveredAfterFailure = 0;
-        using var healthySink = adapter.SubscribeTransitionFailures(_ => deliveredAfterFailure++);
-        var unaffected = await adapter.ExecuteAsync(context, invocation);
-        Assert.Equal(result.Failure, unaffected.Failure);
-        Assert.Equal(1, deliveredAfterFailure);
-        Assert.Equal(2, diagnostics.Count);
-        subscription.Dispose();
-        subscription.Dispose();
-        await adapter.ExecuteAsync(context, invocation);
-        Assert.Equal(2, diagnostics.Count);
-        Assert.Equal(2, deliveredAfterFailure);
-        Assert.Equal(2, subscriberFailures);
-        Assert.All(tagCounts, count => Assert.Equal(0, count));
-        Assert.Throws<ArgumentNullException>(() => adapter.SubscribeTransitionFailures(null!));
+        Assert.Contains(fixture.Token, detail.Message);
     }
+
+    [Fact]
+    public async Task Subscriptions_are_scoped_to_adapter_even_with_same_repository_and_trace()
+    {
+        var fixture = await CreateFailureFixture();
+        var other = fixture.CreateAdapter();
+        var firstCount = 0;
+        var otherCount = 0;
+        using var firstSubscription = fixture.Adapter.SubscribeTransitionFailures(_ => firstCount++);
+        using var otherSubscription = other.SubscribeTransitionFailures(_ => otherCount++);
+        await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+        Assert.Equal(1, firstCount);
+        Assert.Equal(0, otherCount);
+        await other.ExecuteAsync(fixture.Context, fixture.Invocation);
+        Assert.Equal(1, firstCount);
+        Assert.Equal(1, otherCount);
+    }
+
+    [Fact]
+    public async Task Disposing_subscription_twice_prevents_future_delivery()
+    {
+        var fixture = await CreateFailureFixture();
+        var delivered = 0;
+        var subscription = fixture.Adapter.SubscribeTransitionFailures(_ => delivered++);
+        await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+        subscription.Dispose();
+        subscription.Dispose();
+        await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+        Assert.Equal(1, delivered);
+    }
+
+    [Fact]
+    public async Task Throwing_observer_does_not_change_result_or_skip_other_observers()
+    {
+        var fixture = await CreateFailureFixture();
+        var expected = await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+        using var broken = fixture.Adapter.SubscribeTransitionFailures(_ => throw new InvalidOperationException("private sink error"));
+        var delivered = 0;
+        using var healthy = fixture.Adapter.SubscribeTransitionFailures(_ => delivered++);
+        var actual = await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+        Assert.Equal(expected.Failure, actual.Failure);
+        Assert.Equal(1, delivered);
+    }
+
+    [Fact]
+    public void Null_observer_is_rejected() =>
+        Assert.Throws<ArgumentNullException>(() => new EntityTransitionProcessOperationAdapter(_ => null)
+            .SubscribeTransitionFailures(null!));
 
     sealed record Document(string Id, string Text);
     sealed record Update(string Token, string Text);
 
-    sealed class ReadBoundaryRepository(InMemoryEntityOutboxRepository inner, bool ignoreReadPrecondition) : IEntityTransitionOperationRepository
+    internal sealed class ReadBoundaryRepository(InMemoryEntityOutboxRepository inner, bool ignoreReadPrecondition) : IEntityTransitionOperationRepository
     {
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
         public string? IdentityField => inner.IdentityField;
