@@ -251,14 +251,14 @@ public sealed class DefaultClrTypeRefMapperTests
     }
 
     [Fact]
-    public void Map_FreshMappersReusePropertyMetadataWithoutRetainingOccurrenceContracts()
+    public void Map_FreshMappersReuseDefaultContractsWithBoundedAllocation()
     {
         _ = new DefaultClrTypeRefMapper().Map(typeof(Leaf), null);
         var before = GC.GetAllocatedBytesForCurrentThread();
         var result = new DefaultClrTypeRefMapper().Map(typeof(Leaf), null);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         GC.KeepAlive(result);
-        Assert.InRange(allocated, 1, 1_400);
+        Assert.InRange(allocated, 0, 128);
     }
 
     [Fact]
@@ -287,17 +287,17 @@ public sealed class DefaultClrTypeRefMapperTests
     [Fact]
     public void Map_RepeatedShapeBoundsTemporaryAllocations()
     {
-        // Warm shared property discovery and nullability; include retained IR and traversal-owned work.
+        // Warm the immutable default root contract; subsequent reads must not rebuild its graph.
         mapper.Map(typeof(LargeEnvelope), null);
         var before = GC.GetAllocatedBytesForCurrentThread();
         var result = mapper.Map(typeof(LargeEnvelope), null);
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         GC.KeepAlive(result);
-        Assert.InRange(allocated, 1, 35_000);
+        Assert.InRange(allocated, 0, 128);
     }
 
     [Fact]
-    public async Task Map_ConcurrentColdMetadataKeepsGraphsAndExplicitMappingsIndependent()
+    public async Task Map_ConcurrentColdMetadataSharesDefaultGraphsAndIsolatesExplicitMappings()
     {
         var mappings = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(() =>
             Assert.IsType<ObjectTypeRef>(new DefaultClrTypeRefMapper().Map(typeof(ColdMetadataEnvelope), null)))));
@@ -308,7 +308,7 @@ public sealed class DefaultClrTypeRefMapperTests
             Assert.Equal(FieldNullability.Nullable, mapping.Fields[0].Nullability);
         }
         for (var index = 1; index < mappings.Length; index++)
-            Assert.NotSame(mappings[0], mappings[index]);
+            Assert.Same(mappings[0], mappings[index]);
         var overridden = new DefaultClrTypeRefMapper(new Dictionary<Type, TypeRef>
         {
             [typeof(string)] = new ScalarTypeRef(ScalarTypeKind.Instant)

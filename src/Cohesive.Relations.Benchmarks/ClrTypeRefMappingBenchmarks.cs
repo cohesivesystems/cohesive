@@ -4,7 +4,7 @@ using Cohesive.Model.Authoring;
 
 namespace Cohesive.Relations.Benchmarks;
 
-/// <summary>Measures CLR contract mapping after shared property metadata preparation.</summary>
+/// <summary>Measures warmed default CLR contract reuse for representative structural shapes.</summary>
 [MemoryDiagnoser]
 public class ClrTypeRefMappingBenchmarks
 {

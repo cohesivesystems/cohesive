@@ -14,8 +14,9 @@ namespace Cohesive.Model.Authoring;
 public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 {
     readonly ImmutableDictionary<Type, TypeRef> typeMappings;
-    // Only context-independent reflection facts are shared. Each traversal still owns its IR,
-    // recursion path, explicit mappings and occurrence nullability. Weak keys avoid new type roots.
+    // Weak keys bound default contract retention to CLR type lifetime. Nested traversal never
+    // consults the root cache: recursive diagnostics depend on the current ancestor path.
+    static readonly ConditionalWeakTable<Type, Lazy<TypeRef>> defaultRootTypes = new();
     static readonly ConditionalWeakTable<Type, Lazy<bool>> polymorphicTypes = new();
     static readonly ConditionalWeakTable<Type, Lazy<Type?>> quantityRepresentations = new();
     static readonly ConditionalWeakTable<Type, Lazy<(PropertyInfo Property, string Name)[]>> structuralProperties = new();
@@ -54,7 +55,8 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     /// CLR shapes produce an <see cref="OpaqueRuntimeTypeRef"/> carrying a type-inference diagnostic.
     /// Property-declared nullability metadata is lazily shared through weak reflection-property keys.
     /// Concurrent first use is coordinated; mutable reflection contexts are confined to preparation.
-    /// Inferred contracts, explicit mappings, occurrence nullability and recursion paths remain invocation-scoped.
+    /// Default root contracts without occurrence metadata are immutable and shared by CLR type.
+    /// Explicit mappings and occurrence metadata bypass that cache; nested recursion remains traversal-scoped.
     /// </remarks>
     /// <param name="clrType">CLR type to project into a portable semantic type reference.</param>
     /// <param name="nullability">Optional reflection nullability metadata for the mapped occurrence.</param>
@@ -63,6 +65,21 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     public TypeRef Map(Type clrType, NullabilityInfo? nullability)
     {
         ArgumentNullException.ThrowIfNull(clrType);
+        if (typeMappings.IsEmpty && nullability is null)
+        {
+            var prepared = defaultRootTypes.GetValue(clrType, static type => new(() =>
+                new DefaultClrTypeRefMapper().MapInternal(type, null, new MappingContext())));
+            try
+            {
+                return prepared.Value;
+            }
+            catch
+            {
+                // Failed preparation must remain retryable rather than becoming a permanent type entry.
+                defaultRootTypes.Remove(clrType);
+                throw;
+            }
+        }
         return MapInternal(clrType, nullability, new MappingContext());
     }
 

@@ -159,6 +159,12 @@ Execution-document normalization and fingerprinting traverse immutable JSON dire
 exact-byte regression coverage, allocation measurements and remaining costs.
 
 
+Default CLR root contracts with no explicit mapping or occurrence nullability metadata are
+shared immutable projections, retained through weak CLR type keys. Recursive inference remains
+root-local; explicit mappings and occurrence metadata bypass reuse. See
+[default type contract reuse](../../docs/performance/default-type-contract-reuse.md) for ownership,
+canonical equivalence and representative allocation evidence.
+
 ### Concurrent JSON profile metadata preparation
 
 `SystemTextJsonClrShapeMetadataProvider` may be shared by independent CLR graph builders, as in the
