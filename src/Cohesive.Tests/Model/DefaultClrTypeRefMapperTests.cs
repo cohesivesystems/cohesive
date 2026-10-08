@@ -318,6 +318,46 @@ public sealed class DefaultClrTypeRefMapperTests
         Assert.Equal(ScalarTypeKind.String, Assert.IsType<ScalarTypeRef>(mappings[0].Fields[0].Type).Kind);
     }
 
+    [Fact]
+    public void Map_FirstTraversalSharesRepeatedAcyclicStructuralChildren()
+    {
+        // A nonempty override keeps this test on fresh traversal rather than the default root cache.
+        var fresh = new DefaultClrTypeRefMapper(new Dictionary<Type, TypeRef>
+        {
+            [typeof(decimal)] = new ScalarTypeRef(ScalarTypeKind.Decimal)
+        });
+        var root = Assert.IsType<ObjectTypeRef>(fresh.Map(typeof(LargeEnvelope), null));
+        var branch = Assert.IsType<ObjectTypeRef>(root.Fields[0].Type);
+        foreach (var field in root.Fields) Assert.Same(branch, field.Type);
+        var leaf = branch.Fields[0].Type;
+        foreach (var field in branch.Fields) Assert.Same(leaf, field.Type);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var second = Assert.IsType<ObjectTypeRef>(fresh.Map(typeof(LargeEnvelope), null));
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.InRange(allocated, 1, 5_000);
+        Assert.NotSame(root, second);
+        Assert.NotSame(branch, second.Fields[0].Type);
+    }
+
+    [Fact]
+    public void Map_RecursiveSiblingsKeepTheirOwnAncestorBoundary()
+    {
+        var root = Assert.IsType<ObjectTypeRef>(mapper.Map(typeof(RecursiveSiblings), null));
+        var first = Assert.IsType<ObjectTypeRef>(root.Fields[0].Type);
+        var firstChild = Assert.IsType<ObjectTypeRef>(first.Fields[0].Type);
+        Assert.Equal(TypeInferenceDiagnosticReasons.RecursiveType,
+            Assert.IsType<OpaqueRuntimeTypeRef>(firstChild.Fields[0].Type).InferenceDiagnostic?.Reason);
+        var second = Assert.IsType<ObjectTypeRef>(root.Fields[1].Type);
+        var secondChild = Assert.IsType<ObjectTypeRef>(second.Fields[0].Type);
+        Assert.Equal(TypeInferenceDiagnosticReasons.RecursiveType,
+            Assert.IsType<OpaqueRuntimeTypeRef>(secondChild.Fields[0].Type).InferenceDiagnostic?.Reason);
+        Assert.NotSame(firstChild, second);
+    }
+
+    sealed record RecursiveSiblings(RecursiveA First, RecursiveB Second);
+    sealed record RecursiveA(RecursiveB Child);
+    sealed record RecursiveB(RecursiveA Parent);
+
     sealed record ColdMetadataEnvelope(
         [property: JsonPropertyName("zeta")] long Number,
         [property: JsonPropertyName("alpha")] string? Text);

@@ -56,7 +56,8 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     /// Property-declared nullability metadata is lazily shared through weak reflection-property keys.
     /// Concurrent first use is coordinated; mutable reflection contexts are confined to preparation.
     /// Default root contracts without occurrence metadata are immutable and shared by CLR type.
-    /// Explicit mappings and occurrence metadata bypass that cache; nested recursion remains traversal-scoped.
+    /// Explicit mappings and occurrence metadata bypass that cache. Completed cycle-free structural children
+    /// are reused within traversal; recursive projections retain their ancestor-specific diagnostics.
     /// </remarks>
     /// <param name="clrType">CLR type to project into a portable semantic type reference.</param>
     /// <param name="nullability">Optional reflection nullability metadata for the mapped occurrence.</param>
@@ -184,14 +185,19 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                 "Abstract/interface CLR types cannot be represented structurally without a concrete type set.");
         }
 
+        if (context.StructuralTypes.TryGetValue(unwrapped, out var prepared))
+            return prepared;
+
         if (!context.Path.Add(unwrapped))
         {
+            context.RecursiveEncounters++;
             return Opaque(
                 unwrapped,
                 TypeInferenceDiagnosticReasons.RecursiveType,
                 "Recursive CLR types require named type definitions and references before they can be represented structurally.");
         }
 
+        var recursiveEncounters = context.RecursiveEncounters;
         try
         {
             var properties = structuralProperties.GetValue(unwrapped, static type => new(() =>
@@ -218,7 +224,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                         "The CLR type maps more than one readable property to the same serialized field name.");
             }
 
-            return new ObjectTypeRef(
+            var result = new ObjectTypeRef(
                 [.. properties.Select(x =>
                 {
                     var propertyNullability = context.PropertyNullability(x.Property);
@@ -237,6 +243,11 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                             : FieldNullability.NonNullable
                             );
                 })]);
+            // Only cycle-free structural projections are path-independent. Structural field
+            // nullability comes from declarations, never from this object's occurrence metadata.
+            if (recursiveEncounters == context.RecursiveEncounters)
+                context.StructuralTypes.Add(unwrapped, result);
+            return result;
         }
         finally
         {
@@ -541,11 +552,13 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         return false;
     }
 
-    // Only the recursion path belongs to this traversal. Shared property metadata does not
-    // contain inferred contracts or caller-supplied occurrence nullability.
+    // Reuse cycle-free structural projections within this traversal's explicit-mapping scope.
+    // Recursive projections must be rebuilt under each ancestor path.
     sealed class MappingContext
     {
         public HashSet<Type> Path { get; } = [];
+        public Dictionary<Type, ObjectTypeRef> StructuralTypes { get; } = [];
+        public int RecursiveEncounters { get; set; }
 
         public NullabilityInfo? PropertyNullability(PropertyInfo property)
         {

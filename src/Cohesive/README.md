@@ -163,7 +163,9 @@ Default CLR root contracts with no explicit mapping or occurrence nullability me
 shared immutable projections, retained through weak CLR type keys. Recursive inference remains
 root-local; explicit mappings and occurrence metadata bypass reuse. See
 [default type contract reuse](../../docs/performance/default-type-contract-reuse.md) for ownership,
-canonical equivalence and representative allocation evidence.
+canonical equivalence and representative allocation evidence. First traversal also reuses completed
+cycle-free structural children within the mapper invocation; see
+[nested type contract reuse](../../docs/performance/nested-type-contract-reuse.md).
 
 ### Concurrent JSON profile metadata preparation
 
