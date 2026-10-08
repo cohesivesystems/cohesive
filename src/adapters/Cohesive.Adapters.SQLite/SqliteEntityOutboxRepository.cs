@@ -195,35 +195,27 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
         ArgumentNullException.ThrowIfNull(commit);
         ValidateRequest(commit.Request);
         context.ThrowIfCancellationRequested();
-        var partition = entities.ValidateWrite(commit.Write);
+        _ = entities.ValidateWrite(commit.Write);
+        return EntityTransitionCommitProtocol.CommitAsync(this, context, commit, TryCommitTransitionOperation);
+    }
+
+    Task<EntityTransitionOperationReceipt?> TryCommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
+    {
+        var partition = commit.Write.Entity.Observation.GetField(Mapping.PartitionField).GetRequiredString();
         using var connection = database.OpenConnection(context.CancellationToken);
         using var transaction = connection.BeginTransaction(deferred: false);
         var id = OperationId(commit.Request);
         var retained = ReadOperation(connection, transaction, id);
-        if (retained is not null) return Complete(retained.Replay(commit));
-        if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent)
-        {
-            retained = ReadCreation(connection, transaction, commit.Request);
-            if (retained is not null)
-            {
-                var replay = retained.ReplayCreation(commit.Request);
-                // Match the reference in-memory creation policy: replacement attempts keep original handoff evidence.
-                if (replay.Receipt is not null && (retained.Entity.Entity != commit.Write.Entity
-                    || retained.Commit.DecisionKind != commit.DecisionKind || retained.Result.Value != commit.Result.Value))
-                    replay = Rejected(EntityTransitionOperationDisposition.IdentityConflict,
-                        EntityTransitionOperationDiagnosticCodes.IdentityConflict, "Creation intent has a different candidate state or typed result.", "/commit");
-                return Complete(replay);
-            }
-            if (entities.Exists(connection, transaction, commit.Request.Subject.EntityId.Value))
-                return Complete(Rejected(EntityTransitionOperationDisposition.SubjectStateConflict,
-                    EntityTransitionOperationDiagnosticCodes.SubjectStateConflict, "The creation subject already exists.", "/write/subjectCondition"));
-        }
+        if (retained is not null) return Task.FromResult<EntityTransitionOperationReceipt?>(null);
+        if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
+            && (ReadCreation(connection, transaction, commit.Request) is not null
+                || entities.Exists(connection, transaction, commit.Request.Subject.EntityId.Value)))
+            return Task.FromResult<EntityTransitionOperationReceipt?>(null);
         EntitySnapshot snapshot;
         try { snapshot = entities.UpsertCore(context, connection, transaction, commit.Write, partition); }
         catch (ObservationConcurrencyConflictException)
         {
-            return Complete(Rejected(EntityTransitionOperationDisposition.ConcurrencyConflict,
-                EntityTransitionOperationDiagnosticCodes.ConcurrencyConflict, "The subject no longer matches its storage concurrency fence.", "/write/expectedConcurrencyToken"));
+            return Task.FromResult<EntityTransitionOperationReceipt?>(null);
         }
         var receipt = new EntityTransitionOperationReceipt(commit, snapshot, context.UtcNow);
         InsertReceipt(connection, transaction, id, Process, receipt);
@@ -231,13 +223,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
             InsertIndex(connection, transaction, sql.InsertCreation, commit.Request.Subject.EntityId.Value, id);
         context.ThrowIfCancellationRequested();
         transaction.Commit();
-        return Task.FromResult(EntityTransitionOperationResult.Committed(receipt));
-
-        Task<EntityTransitionOperationResult> Complete(EntityTransitionOperationResult result)
-        {
-            context.ThrowIfCancellationRequested();
-            return Task.FromResult(result);
-        }
+        return Task.FromResult<EntityTransitionOperationReceipt?>(receipt);
     }
 
     /// <summary>Reads retained direct-Transition commits in cursor order with bounded count and canonical byte budget.</summary>
@@ -425,6 +411,4 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     }
     static InvalidOperationException InvalidReceipt() => new("The retained SQLite receipt is invalid, incomplete, or exceeds the configured byte limit.");
     static InvalidOperationException OutboxConflict() => new("Entity outbox emission identities are retained with different state, ordered envelopes, or commit membership.");
-    static EntityTransitionOperationResult Rejected(EntityTransitionOperationDisposition disposition, string code, string message, string location) =>
-        EntityTransitionOperationResult.Rejected(disposition, new(code, DiagnosticSeverity.Error, message, location));
 }

@@ -31,8 +31,6 @@ sealed class CreateIfAbsentEntityApiOperationBinding(ApiEndpoint endpoint,
         return async (OperationContext context, HttpContext http) =>
         {
             var repository = EntityApiRequestSupport.ResolveRepository(http, options);
-            if (!repository.SupportsCreateIfAbsent)
-                throw new NotSupportedException("Creation requires an atomic absence-fenced repository.");
             var request = await EntityApiRequestSupport.ReadBodyRequestAsync(http, operation, context.CancellationToken).ConfigureAwait(false);
             var acquired = initialize(new(context, http, operation, options.Entity, repository, EntityId: null), request);
             var decision = TransitionReferenceInterpreter.DecideCreation(plan, options.CreateActivationId(http, operation),
@@ -40,7 +38,7 @@ sealed class CreateIfAbsentEntityApiOperationBinding(ApiEndpoint endpoint,
             try
             {
                 var candidate = TransitionStateProjector.ApplyToEntity(options.Entity, acquired.EntityId.Value, decision);
-                var committed = await repository.CreateIfAbsent(context, candidate.Snapshot).ConfigureAwait(false);
+                var committed = await repository.Create(context, candidate.Snapshot, EntityCreationPolicy.IfAbsent).ConfigureAwait(false);
                 return respond(new(context, http, operation, options.Entity, repository, acquired.EntityId.Value, request,
                     OldSnapshot: null, NewState: candidate, Decision: decision), committed);
             }

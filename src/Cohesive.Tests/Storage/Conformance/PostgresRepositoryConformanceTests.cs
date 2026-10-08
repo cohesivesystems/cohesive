@@ -50,6 +50,7 @@ public sealed class PostgresRepositoryConformanceTests
                 """, connection)) await create.ExecuteNonQueryAsync();
             var receipts = new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a", maximumReceiptBytes);
             await using (var create = new NpgsqlCommand(receipts.SchemaSql, connection)) await create.ExecuteNonQueryAsync();
+            await receipts.ValidateSchemaAsync(dataSource);
             var repository = new PostgresEntityRepository(RunControlFixture.Entity,
                 new(new("adoption/postgres"), dataSource, "cohesive.conformance"), mapping, receipts);
             await verify(repository, dataSource, schema);
@@ -62,21 +63,7 @@ public sealed class PostgresRepositoryConformanceTests
         }
     }
 
-    [PostgresFact]
-    public Task Concurrent_occurrences_commit_once_and_replay_exact_evidence() => WithRepository(async (repository, _, _) =>
-    {
-        var context = OperationContext.Create();
-        var before = await repository.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial()));
-        var evidence = RunControlFixture.Prepare(before);
-        var commit = RunControlFixture.Commit(evidence, evidence.Decision,
-            RunControlFixture.Lower(evidence, evidence.Decision, RunControlFixture.Contracts()));
-        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => repository.CommitTransitionOperation(context, commit)));
-        Assert.Single(results, result => result.Disposition == EntityTransitionOperationDisposition.Committed);
-        Assert.Equal(7, results.Count(result => result.Disposition == EntityTransitionOperationDisposition.Replayed));
-        Assert.All(results, result => Assert.Equal(commit.Fingerprint, result.Receipt!.Commit.Fingerprint));
-        var stored = await repository.TryGet(context, "run/1", new(partitionKey: "tenant/a"));
-        Assert.Equal(1, stored!.Entity.Version);
-    });
+
 
     [PostgresFact]
     public Task Oversized_receipt_rolls_back_state_and_leaves_no_replay_evidence() => WithRepository(async (repository, _, _) =>
@@ -99,33 +86,19 @@ public sealed class PostgresRepositoryConformanceTests
         var state = RunControlFixture.Write(RunControlFixture.Initial()).Entity;
         async Task<bool> Attempt()
         {
-            try { await repository.CreateIfAbsent(context, state); return true; }
+            try { await repository.Create(context, state, EntityCreationPolicy.IfAbsent); return true; }
             catch (ObservationConcurrencyConflictException) { return false; }
         }
         var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Attempt()));
         Assert.Single(results, result => result);
         var winner = await repository.TryGet(context, "run/1", new(partitionKey: "tenant/a"));
         Assert.Equal(state, winner!.Entity);
-        await Assert.ThrowsAsync<ObservationConcurrencyConflictException>(() => repository.CreateIfAbsent(context,
-            RunControlFixture.Write(RunControlFixture.Initial() with { Status = "must-not-overwrite" }).Entity));
+        await Assert.ThrowsAsync<ObservationConcurrencyConflictException>(() => repository.Create(context,
+            RunControlFixture.Write(RunControlFixture.Initial() with { Status = "must-not-overwrite" }).Entity, EntityCreationPolicy.IfAbsent));
         Assert.Equal(winner, await repository.TryGet(context, "run/1", new(partitionKey: "tenant/a")));
     });
 
-    [PostgresFact]
-    public Task Stale_fence_does_not_commit_a_receipt() => WithRepository(async (repository, _, _) =>
-    {
-        var context = OperationContext.Create();
-        var before = await repository.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial()));
-        var evidence = RunControlFixture.Prepare(before);
-        var commit = RunControlFixture.Commit(evidence, evidence.Decision,
-            RunControlFixture.Lower(evidence, evidence.Decision, RunControlFixture.Contracts()));
-        var newer = await repository.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial() with { Status = "newer" }, 1));
-        Assert.Equal(EntityTransitionOperationDisposition.ConcurrencyConflict,
-            (await repository.CommitTransitionOperation(context, commit)).Disposition);
-        Assert.Equal(newer, await repository.TryGet(context, "run/1", new(partitionKey: "tenant/a")));
-        Assert.Equal(EntityTransitionOperationDisposition.NotFound,
-            (await repository.TryGetTransitionOperation(context, evidence.Request)).Disposition);
-    });
+
 
     [PostgresFact]
     public Task Corrupt_receipt_is_rejected_instead_of_replayed() => WithRepository(async (repository, database, schema) =>
@@ -143,35 +116,34 @@ public sealed class PostgresRepositoryConformanceTests
         Assert.Equal(1, stored!.Entity.Version);
     });
 
+
+
     [PostgresFact]
-    public Task Creation_receipt_preserves_original_occurrence_across_replacement_attempts() => WithRepository(async (repository, _, _) =>
+    public Task Receipt_schema_is_checked_and_column_order_is_irrelevant() => WithRepository(async (repository, database, schema) =>
     {
-        var context = OperationContext.Create();
-        var creation = TransitionAuthoring.Create<RunControl, RunControl, string>(RunControlFixture.Entity.Shape,
-            id: new("adoption/create-control"), revision: new("1"),
-            transition => transition.CreatesFrom(new("initial"), input => new RunControl(input.Id, input.Tenant,
-                input.Status, input.Attempt, input.Enabled, input.Limit, input.ScheduledAt, input.InputDigest)).Return("created"));
-        var plan = creation.Compile().Plan!;
-        var operation = new ProcessOperationOccurrence(new(new("creation"), new("attempt/1")), new("activation/1"),
-            new("token/1"), new("create"), 0);
-        var input = PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(RunControlFixture.Initial()));
-        var request = new EntityTransitionOperationRequest(operation, new("adoption", "tenant/a"), plan.DefinitionReference,
-            new(new(repository.EntityType), new("run/1")), input);
-        var decision = TransitionReferenceInterpreter.DecideCreation(plan, operation.Activation, input);
-        var candidate = TransitionStateProjector.ApplyToEntity(RunControlFixture.Entity, "run/1", decision);
-        var commit = new EntityTransitionOperationCommit(request, new(candidate.Snapshot), decision.Kind,
-            ProcessOperationResult.Completed(decision.Outcome!), decision.GuaranteeDemands, decision.Evidence,
-            EntityTransitionSubjectCondition.MustBeAbsent);
-        var committed = await repository.CommitTransitionOperation(context, commit);
-        Assert.Equal(EntityTransitionOperationDisposition.Committed, committed.Disposition);
-        var replacementOperation = new ProcessOperationOccurrence(new(new("creation"), new("attempt/2")), new("activation/2"),
-            new("token/1"), new("create"), 0);
-        var replacement = new EntityTransitionOperationRequest(replacementOperation, request.AuthorityScope,
-            request.Transition, request.Subject, input);
-        var replay = await repository.TryGetCreationTransitionOperation(context, replacement);
-        Assert.Equal(EntityTransitionOperationDisposition.Replayed, replay.Disposition);
-        Assert.Equal(operation, replay.Receipt!.Request.Operation);
-        Assert.Equal(committed.Receipt!.Entity, replay.Receipt.Entity);
+        await using (var reorder = database.CreateCommand($"""
+            DROP TABLE {schema}.receipts;
+            CREATE TABLE {schema}.receipts (
+                format_version integer NOT NULL, content_hash text NOT NULL, content bytea NOT NULL,
+                creation_subject text NULL, subject_id text NOT NULL, operation_id text NOT NULL,
+                partition_key text NOT NULL, entity_type text NOT NULL,
+                PRIMARY KEY(entity_type, partition_key, operation_id),
+                UNIQUE(entity_type, partition_key, creation_subject));
+            """)) await reorder.ExecuteNonQueryAsync();
+        var options = new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a");
+        await options.ValidateSchemaAsync(database);
+        await EntityTransitionReceiptConformance.ConcurrentReplay(repository);
+        await using (var change = database.CreateCommand($"ALTER TABLE {schema}.receipts ALTER COLUMN format_version TYPE bigint"))
+            await change.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => options.ValidateSchemaAsync(database));
+    });
+
+    [PostgresFact]
+    public Task Receipt_schema_requires_both_uniqueness_fences() => WithRepository(async (_, database, schema) =>
+    {
+        await using var change = database.CreateCommand($"ALTER TABLE {schema}.receipts DROP CONSTRAINT receipts_entity_type_partition_key_creation_subject_key");
+        await change.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a").ValidateSchemaAsync(database));
     });
 
     sealed class PostgresFactAttribute : FactAttribute

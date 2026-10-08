@@ -315,7 +315,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     }
 
     /// <inheritdoc />
-    public async Task<EntityTransitionOperationResult> CommitTransitionOperation(
+    public Task<EntityTransitionOperationResult> CommitTransitionOperation(
         OperationContext context,
         EntityTransitionOperationCommit commit)
     {
@@ -324,6 +324,11 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         context.ThrowIfCancellationRequested();
         EnsureEntityType(commit.Write.Entity);
 
+        return EntityTransitionCommitProtocol.CommitAsync(this, context, commit, TryCommitTransitionOperation);
+    }
+
+    async Task<EntityTransitionOperationReceipt?> TryCommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
+    {
         var partitionKey = GetPartitionKey(context, commit.Write.Entity);
         var entityDocument = CreateEntityDocument(context, commit.Write.Entity, partitionKey);
         var receiptDocument = CreateTransitionReceiptDocument(
@@ -344,14 +349,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
                     commit.Write.ExpectedConcurrencyToken!.Value,
                     out var currentEtag))
             {
-                return await ResolveTransitionCommitConflict(
-                        context,
-                        commit,
-                        partitionKey,
-                        current is null
-                            ? "preflight subject missing"
-                            : $"preflight token {GetConcurrencyToken(current).Value}")
-                    .ConfigureAwait(false);
+                return null;
             }
             batch.ReplaceItem(
                 id: entityDocument.Id,
@@ -372,15 +370,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             if (response.StatusCode is HttpStatusCode.Conflict or HttpStatusCode.PreconditionFailed
                 or HttpStatusCode.NotFound)
             {
-                var providerStatus = string.Join(
-                    ",",
-                    Enumerable.Range(0, response.Count).Select(index => response[index].StatusCode));
-                return await ResolveTransitionCommitConflict(
-                        context,
-                        commit,
-                        partitionKey,
-                        providerStatus)
-                    .ConfigureAwait(false);
+                return null;
             }
             throw new InvalidOperationException(
                 $"Transactional Cosmos Transition operation commit for "
@@ -390,12 +380,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         var receipt = await TryReadTransitionReceipt(context, receiptDocument.Id, partitionKey).ConfigureAwait(false)
             ?? throw new InvalidOperationException(
                 $"Transactional Cosmos Transition operation commit '{receiptDocument.Id}' succeeded, but its receipt could not be reloaded.");
-        if (receipt.Commit.Fingerprint != commit.Fingerprint)
-        {
-            throw new InvalidOperationException(
-                $"Transactional Cosmos Transition operation commit '{receiptDocument.Id}' reloaded different canonical content.");
-        }
-        return EntityTransitionOperationResult.Committed(receipt);
+        return receipt;
     }
 
     /// <summary>
@@ -788,47 +773,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             TransitionCommitFingerprint: commit.Fingerprint.Value,
             TransitionOperationReceiptId: receipt.Id);
 
-    async Task<EntityTransitionOperationResult> ResolveTransitionCommitConflict(
-        OperationContext context,
-        EntityTransitionOperationCommit commit,
-        string partitionKey,
-        string? providerStatus = null)
-    {
-        var retained = await TryReadTransitionReceipt(
-                context,
-                CreateTransitionOperationReceiptId(commit.Request),
-                partitionKey)
-            .ConfigureAwait(false);
-        if (retained is not null)
-        {
-            return retained.Replay(commit);
-        }
-
-        if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent)
-        {
-            var creation = await TryGetCreationTransitionOperation(context, commit.Request).ConfigureAwait(false);
-            if (creation.Disposition != EntityTransitionOperationDisposition.NotFound)
-            {
-                if (creation.Receipt is { } receipt
-                    && receipt.Request.IntentFingerprint == commit.Request.IntentFingerprint
-                    && receipt.Commit.Fingerprint != commit.Fingerprint)
-                {
-                    return IdentityConflict(
-                        "The entity creation intent is retained with different canonical commit content.",
-                        "/commit");
-                }
-                return creation;
-            }
-            return SubjectStateConflict(
-                $"Entity '{EntityType}:{commit.Write.Entity.EntityId.Value}' must be absent for this Transition operation.");
-        }
-
-        return ConcurrencyConflict(
-            $"Entity '{EntityType}:{commit.Write.Entity.EntityId.Value}' no longer matches concurrency fence "
-            + $"'{commit.Write.ExpectedConcurrencyToken!.Value.Value}'."
-            + (string.IsNullOrWhiteSpace(providerStatus) ? "" : $" Cosmos batch status: {providerStatus}."));
-    }
-
     async Task<EntityTransitionOperationReceipt?> TryReadTransitionReceipt(
         OperationContext context,
         string id,
@@ -1045,33 +989,6 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         }
         return output.ToArray();
     }
-
-    static EntityTransitionOperationResult IdentityConflict(string message, string location) =>
-        EntityTransitionOperationResult.Rejected(
-            EntityTransitionOperationDisposition.IdentityConflict,
-            new(
-                EntityTransitionOperationDiagnosticCodes.IdentityConflict,
-                DiagnosticSeverity.Error,
-                message,
-                location));
-
-    static EntityTransitionOperationResult ConcurrencyConflict(string message) =>
-        EntityTransitionOperationResult.Rejected(
-            EntityTransitionOperationDisposition.ConcurrencyConflict,
-            new(
-                EntityTransitionOperationDiagnosticCodes.ConcurrencyConflict,
-                DiagnosticSeverity.Error,
-                message,
-                "/write/expectedConcurrencyToken"));
-
-    static EntityTransitionOperationResult SubjectStateConflict(string message) =>
-        EntityTransitionOperationResult.Rejected(
-            EntityTransitionOperationDisposition.SubjectStateConflict,
-            new(
-                EntityTransitionOperationDiagnosticCodes.SubjectStateConflict,
-                DiagnosticSeverity.Error,
-                message,
-                "/write/subjectCondition"));
 
     static (InteractionContractReference Contract, PortableValue Payload) GetContent(
         InteractionEnvelope envelope) => envelope switch

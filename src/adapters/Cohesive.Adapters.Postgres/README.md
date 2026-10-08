@@ -178,8 +178,9 @@ boundaries are documented once in the [Storage README](../../Cohesive.Storage/RE
 
 Opt in with `PostgresTransitionReceiptOptions(schema, table, partitionKey)` on the repository or
 `persistence.Repository(entity, transitionReceipts: options)`. Execute `options.SchemaSql` explicitly in your
-schema lifecycle before admitting operations. The DDL uses `IF NOT EXISTS`; it does not validate or migrate
-an existing table. Without options the repository advertises no atomic transition-receipt support.
+schema lifecycle, then await `options.ValidateSchemaAsync(dataSource)` before admitting operations.
+The check rejects incompatible columns or missing immediate primary/creation uniqueness fences without
+migrating the table. Column order is immaterial: the shared SQL builder emits an explicit insert column list. Without options the repository advertises no atomic transition-receipt support.
 
 State and canonical receipt commit in one native transaction. Advisory transaction locks serialize the same
 occurrence/subject; the conditional SQL write still fences external writers. Exact replay returns original
@@ -188,6 +189,11 @@ on read. Oversized receipt writes roll back entity state. No retry is hidden; an
 receipt resolution. Options choose a trusted physical partition, not an authorization grant. Application schema,
 retention and recovery remain explicit. Receipts do not imply an outbox or event-authoritative state.
 
-`CreateIfAbsent` uses `INSERT ... ON CONFLICT DO NOTHING` on the configured identity/partition key, independently
+`Create(..., EntityCreationPolicy.IfAbsent)` uses `INSERT ... ON CONFLICT DO NOTHING` on the configured identity/partition key, independently
 of receipt configuration. `Upsert` retains its existing replacement behavior. Typed wrappers forward both the
 capability and the operation.
+
+The shared Storage receipt protocol owns replay and conflict policy; PostgreSQL supplies the locked native
+transaction and conditional SQL writes. Fixed receipt partition evidence is inherited by process bindings.
+Receipt validation intentionally retains canonical reserialization and hashing: the warm cost is measured in
+`src/Cohesive.Relations.Benchmarks/RESULTS.md`, separately from SQL and network latency.

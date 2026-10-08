@@ -39,7 +39,8 @@ public static class EntityTransitionOperationDiagnosticCodes
 /// <param name="SupportsAtomicStateAndReceipt">
 /// Whether entity state and one Process Transition operation receipt share one indivisible commit boundary.
 /// </param>
-public sealed record EntityTransitionOperationCapabilities(bool SupportsAtomicStateAndReceipt)
+/// <param name="PartitionKey">Optional trusted fixed physical partition; null means context-dependent placement.</param>
+public sealed record EntityTransitionOperationCapabilities(bool SupportsAtomicStateAndReceipt, string? PartitionKey = null)
 {
     /// <summary>Capability evidence for a repository with no atomic Transition operation protocol.</summary>
     public static EntityTransitionOperationCapabilities Unsupported { get; } = new(

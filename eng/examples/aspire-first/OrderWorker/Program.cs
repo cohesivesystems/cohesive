@@ -24,6 +24,7 @@ await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync
 
 await using (var initializeReceipts = database.CreateCommand(receipts.SchemaSql))
     await initializeReceipts.ExecuteNonQueryAsync();
+await receipts.ValidateSchemaAsync(database);
 
 // Prepare once and pass the contracts directly to their sole consumer.
 var details = persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);

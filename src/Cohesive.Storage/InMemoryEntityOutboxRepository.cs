@@ -151,10 +151,12 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     }
 
     /// <inheritdoc />
-    public bool SupportsCreateIfAbsent => true;
+    public EntityCreationCapabilities CreationCapabilities => EntityCreationCapabilities.AtomicAbsence;
     /// <inheritdoc />
-    public Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity)
+    public Task<EntitySnapshot> Create(OperationContext context, EntityObservationSnapshot entity, EntityCreationPolicy policy)
     {
+        CreationCapabilities.Require(policy);
+        if (policy == EntityCreationPolicy.ReplaceExisting) return Upsert(context, new(entity));
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(entity);
         context.ThrowIfCancellationRequested();
@@ -340,80 +342,35 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         context.ThrowIfCancellationRequested();
         EnsureEntityType(commit.Write.Entity);
 
-        lock (gate)
-        {
-            if (transitionOperationReceipts.TryGetValue(commit.Request.Operation, out var retained))
-                return Task.FromResult(retained.Replay(commit));
-            if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
-                && creationTransitionOperationReceiptsBySubject.TryGetValue(
-                    commit.Request.Subject.EntityId.Value,
-                    out retained))
-            {
-                return Task.FromResult(ReplayOrCreationCommitConflict(commit, retained));
-            }
-        }
+        return EntityTransitionCommitProtocol.CommitAsync(this, context, commit, TryCommitTransitionOperation);
+    }
 
+    Task<EntityTransitionOperationReceipt?> TryCommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
+    {
         ObserveTransitionOperationCommitBoundary(EntityTransitionOperationCommitPhase.BeforeAtomicCommit);
-
-        EntityTransitionOperationResult result;
+        EntityTransitionOperationReceipt receipt;
         lock (gate)
         {
-            if (transitionOperationReceipts.TryGetValue(commit.Request.Operation, out var retained))
-            {
-                result = retained.Replay(commit);
-            }
-            else if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
-                && creationTransitionOperationReceiptsBySubject.TryGetValue(
-                    commit.Request.Subject.EntityId.Value,
-                    out retained))
-            {
-                result = ReplayOrCreationCommitConflict(commit, retained);
-            }
-            else
-            {
-                var partitionKey = GetPartitionKey(context, commit.Write.Entity);
-                var key = CreateKey(commit.Write.Entity.EntityId.Value, partitionKey);
-                var expected = commit.Write.ExpectedConcurrencyToken.GetValueOrDefault();
-                if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
-                    && partitionKeysByObservationId.ContainsKey(commit.Write.Entity.EntityId.Value))
-                {
-                    result = EntityTransitionOperationRepositoryExtensions.SubjectStateConflict(
-                        $"Entity '{EntityType}:{commit.Write.Entity.EntityId.Value}' must be absent for this Transition operation.");
-                }
-                else if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustExist
-                    && (!snapshotsByKey.TryGetValue(key, out var current)
-                        || current.ConcurrencyToken != expected))
-                {
-                    result = EntityTransitionOperationRepositoryExtensions.ConcurrencyConflict(
-                        $"Entity '{EntityType}:{commit.Write.Entity.EntityId.Value}' no longer matches concurrency fence "
-                        + $"'{expected.Value}'.");
-                }
-                else
-                {
-                    var snapshot = new EntitySnapshot(
-                        Entity: commit.Write.Entity,
-                        PartitionKey: partitionKey,
-                        ConcurrencyToken: new(CreateConcurrencyToken()));
-                    var receipt = new EntityTransitionOperationReceipt(commit, snapshot, context.UtcNow);
-                    snapshotsByKey[key] = snapshot;
-                    transitionOperationReceipts.Add(commit.Request.Operation, receipt);
-                    if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent)
-                    {
-                        creationTransitionOperationReceiptsBySubject.Add(commit.Request.Subject.EntityId.Value, receipt);
-                    }
-                    TrackObservation(snapshot.Entity.EntityId.Value, partitionKey);
-                    result = EntityTransitionOperationResult.Committed(receipt);
-                }
-            }
+            if (transitionOperationReceipts.ContainsKey(commit.Request.Operation)
+                || (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
+                    && creationTransitionOperationReceiptsBySubject.ContainsKey(commit.Request.Subject.EntityId.Value)))
+                return Task.FromResult<EntityTransitionOperationReceipt?>(null);
+            var partitionKey = GetPartitionKey(context, commit.Write.Entity);
+            var key = CreateKey(commit.Write.Entity.EntityId.Value, partitionKey);
+            if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
+                ? partitionKeysByObservationId.ContainsKey(commit.Write.Entity.EntityId.Value)
+                : !snapshotsByKey.TryGetValue(key, out var current) || current.ConcurrencyToken != commit.Write.ExpectedConcurrencyToken)
+                return Task.FromResult<EntityTransitionOperationReceipt?>(null);
+            var snapshot = new EntitySnapshot(commit.Write.Entity, partitionKey, new(CreateConcurrencyToken()));
+            receipt = new(commit, snapshot, context.UtcNow);
+            snapshotsByKey[key] = snapshot;
+            transitionOperationReceipts.Add(commit.Request.Operation, receipt);
+            if (commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent)
+                creationTransitionOperationReceiptsBySubject.Add(commit.Request.Subject.EntityId.Value, receipt);
+            TrackObservation(snapshot.Entity.EntityId.Value, partitionKey);
         }
-
-        if (result.Disposition == EntityTransitionOperationDisposition.Committed)
-        {
-            ObserveTransitionOperationCommitBoundary(
-                EntityTransitionOperationCommitPhase.AfterAtomicCommitBeforeReturn);
-        }
-
-        return Task.FromResult(result);
+        ObserveTransitionOperationCommitBoundary(EntityTransitionOperationCommitPhase.AfterAtomicCommitBeforeReturn);
+        return Task.FromResult<EntityTransitionOperationReceipt?>(receipt);
     }
 
     EntitySnapshot UpsertUnderLock(OperationContext context, EntityWriteRequest write)
@@ -434,24 +391,6 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
         snapshotsByKey[key] = snapshot;
         TrackObservation(snapshot.Entity.EntityId.Value, partitionKey);
         return snapshot;
-    }
-
-    static EntityTransitionOperationResult ReplayOrCreationCommitConflict(
-        EntityTransitionOperationCommit commit,
-        EntityTransitionOperationReceipt retained)
-    {
-        var request = retained.ReplayCreation(commit.Request);
-        if (request.Disposition != EntityTransitionOperationDisposition.Replayed)
-        {
-            return request;
-        }
-        return retained.Entity.Entity == commit.Write.Entity
-               && retained.Commit.DecisionKind == commit.DecisionKind
-               && retained.Commit.Result.Value == commit.Result.Value
-            ? request
-            : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
-                "The authority-scoped creation Transition intent is retained with another candidate state or typed outcome.",
-                "/commit");
     }
 
     void ObserveTransitionOperationCommitBoundary(EntityTransitionOperationCommitPhase phase) =>

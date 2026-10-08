@@ -230,10 +230,12 @@ public sealed partial class PostgresEntityRepository : IEntityTransitionOperatio
     }
 
     /// <inheritdoc />
-    public bool SupportsCreateIfAbsent => true;
+    public EntityCreationCapabilities CreationCapabilities => EntityCreationCapabilities.AtomicAbsence;
     /// <inheritdoc />
-    public async Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity)
+    public async Task<EntitySnapshot> Create(OperationContext context, EntityObservationSnapshot entity, EntityCreationPolicy policy)
     {
+        CreationCapabilities.Require(policy);
+        if (policy == EntityCreationPolicy.ReplaceExisting) return await Upsert(context, new(entity)).ConfigureAwait(false);
         ArgumentNullException.ThrowIfNull(context);
         var write = new EntityWriteRequest(entity);
         ValidateWrite(write);

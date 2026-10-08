@@ -22,7 +22,7 @@ waits and volume configuration in native Aspire. It adds no second deployment in
    for relationships, storage and queries. `FulfillmentStorage` attaches
    fluent PostgreSQL mappings (`For(entity).Table().Identity().Partition().Build()`)
    and bind the Aspire-supplied data source through
-   `PostgresNpgsqlRuntimeBinding`. Creation uses atomic `CreateIfAbsent`; reads use `TryGet`,
+   `PostgresNpgsqlRuntimeBinding`. Creation uses atomic `Create(..., EntityCreationPolicy.IfAbsent)`; reads use `TryGet`,
    implemented by the existing `Cohesive.Adapters.Postgres` repository.
    `JsonPropertyName` preserves the canonical `id`/`partition` names; writes use the
    record directly through `CreateState`. PostgreSQL mappings add physical details only.

@@ -237,8 +237,8 @@ public sealed partial class OrderStorageIntegrationTests
         public int WriteCount => writes;
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
         public string? IdentityField => inner.IdentityField;
-        public bool SupportsCreateIfAbsent => inner.SupportsCreateIfAbsent;
-        public Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity) => inner.CreateIfAbsent(context, entity);
+        public EntityCreationCapabilities CreationCapabilities => inner.CreationCapabilities;
+        public Task<EntitySnapshot> Create(OperationContext context, EntityObservationSnapshot entity, EntityCreationPolicy policy) => inner.Create(context, entity, policy);
         public async Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null)
         {
             var result = await inner.TryGet(context, id, options);

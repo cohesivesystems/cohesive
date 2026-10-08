@@ -52,7 +52,7 @@ public static partial class FulfillmentProcess
     /// <summary>Explicit native inventory point-read contract.</summary>
     public static HostedQuery<FulfillOrder, InventoryAvailability> Stock { get; } =
         HostedQuery<FulfillOrder, InventoryAvailability>.Create(new("fulfillment/stock"), new("1"),
-            new("aspire-first.inventory-point-read", "1"), FulfillmentDemo.LocalPartition, Provenance);
+            new("aspire-first.inventory-point-read", "1"), FulfillmentDomain.Inventory.Definition.Shape.Id.Value, Provenance);
 
     /// <summary>Generated portable sequence, including explicit domain compensation.</summary>
     public static Process<FulfillOrder, FulfillmentResult> Definition { get; } = Define(new(

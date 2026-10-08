@@ -81,7 +81,7 @@ public sealed class ProcessTransitionOperationBinding
     /// <param name="expectedConcurrencyTokenField">Optional required string input field containing the
     /// captured opaque storage token. Supported only for existing-subject transitions. Exact receipt replay
     /// precedes the current-state check; a fresh invocation fails when the subject changed.</param>
-    /// <param name="partitionKey">Optional trusted subject-read partition, fixed by host composition.</param>
+    /// <param name="partitionKey">Optional trusted subject-read partition. Inherits fixed receipt placement and rejects an explicit mismatch.</param>
     public ProcessTransitionOperationBinding(
         CompiledTransitionPlan plan,
         IEntityRepository repository,
@@ -108,8 +108,11 @@ public sealed class ProcessTransitionOperationBinding
                 throw new ArgumentException("A captured concurrency token requires an existing subject and a required non-null string input field.", nameof(expectedConcurrencyTokenField));
         }
         if (partitionKey is not null) ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
-        PartitionKey = partitionKey;
-        SubjectReadOptions = partitionKey is null ? EntityReadOptions.Full : new(partitionKey: partitionKey);
+        var trustedPartition = repository.TransitionOperationCapabilities.PartitionKey;
+        if (partitionKey is not null && trustedPartition is not null && partitionKey != trustedPartition)
+            throw new ArgumentException("Subject-read partition differs from the repository receipt partition.", nameof(partitionKey));
+        PartitionKey = trustedPartition ?? partitionKey;
+        SubjectReadOptions = PartitionKey is null ? EntityReadOptions.Full : new(partitionKey: PartitionKey);
         ExpectedConcurrencyTokenField = expectedConcurrencyTokenField;
     }
 

@@ -14,6 +14,15 @@ namespace Cohesive.Api.Execution.Services;
 /// <summary>Human-readable authoring of the canonical service document; no runtime objects survive lowering.</summary>
 public static class Service
 {
+    /// <summary>Begins native hosting of a canonical finite process with exact transition and query associations.</summary>
+    /// <typeparam name="TInput">Process input projection.</typeparam>
+    /// <typeparam name="TResult">Process result projection.</typeparam>
+    /// <param name="process">Canonical process to compile at setup.</param>
+    /// <param name="contracts">Explicit interaction catalog; omission selects an empty catalog.</param>
+    /// <returns>A host-lifetime association builder.</returns>
+    public static ServiceProcessHostBuilder<TInput, TResult> Host<TInput, TResult>(Process<TInput, TResult> process,
+        InteractionContractCatalog? contracts = null) => new(process, contracts);
+
     /// <summary>Begins an immutable service declaration with attributable identity and revision.</summary>
     public static ServiceBuilder Define(ExecutionDefinitionId id, ExecutionRevisionId revision, ExecutionProvenance provenance) =>
         new(id, revision, provenance);

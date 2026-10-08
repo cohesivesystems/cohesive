@@ -1,17 +1,10 @@
 using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
-using Cohesive.Api.Services;
-using Cohesive.Execution;
 using Cohesive.Identity;
+using Cohesive.Execution;
 using Cohesive.Model;
-using Cohesive.Prelude;
-using Cohesive.Processes.Execution;
-using Cohesive.Processes.Authoring;
-using Cohesive.Processes.IR;
 using Cohesive.Storage;
-using Cohesive.Transitions.Compilation;
-using Cohesive.Storage.Processes;
 
 namespace AspireFirst.Orders;
 
@@ -25,32 +18,22 @@ public sealed class FulfillmentProcessBindings
     /// <exception cref="InvalidOperationException">Compilation or required persistence capability is invalid.</exception>
     public FulfillmentProcessBindings(IEntityRepository<Order> orders, IEntityRepository<InventoryItem> inventory)
     {
-        var validation = InteractionContractCatalog.TryCreate([], out var contracts);
-        if (!validation.IsValid) throw new InvalidOperationException("The empty interaction catalog is invalid.");
-        var bindings = new[]
-        {
-            new ProcessTransitionOperationBinding(Require(InventoryTransitions.Reserve.Compile()), inventory, contracts!, partitionKey: FulfillmentDemo.LocalPartition),
-            new ProcessTransitionOperationBinding(Require(InventoryTransitions.Release.Compile()), inventory, contracts!, partitionKey: FulfillmentDemo.LocalPartition),
-            new ProcessTransitionOperationBinding(Require(OrderTransitions.Submit.Compile()), orders, contracts!, partitionKey: FulfillmentDemo.LocalPartition)
-        };
-        var compilation = FulfillmentProcess.Definition.Compile(new ProcessDefinitionValidationContext(
-            bindings.Select(binding => binding.CreateProcessDefinitionLink()).Append(FulfillmentProcess.Stock.CreateProcessDefinitionLink())));
-        if (!compilation.IsSuccessful)
-            throw new InvalidOperationException(string.Join("; ", compilation.Validation.Diagnostics.Select(d => d.Code + ": " + d.Message)));
-        var plan = compilation.Plan!;
-        Declaration = Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance)
-            .Operation("fulfill").Run(plan).ExecuteEphemerally(TimeSpan.FromSeconds(15)).Build();
-        var byReference = bindings.ToDictionary(binding => binding.Plan.DefinitionReference);
-        var transitions = new EntityTransitionProcessOperationAdapter(invocation => byReference.GetValueOrDefault(invocation.Definition));
-        var queries = new ProcessRelationHandlerCatalog([
-            ProcessRelationHandlerRegistration.Create(FulfillmentProcess.Stock, async (context, _, input) =>
+        var readOptions = new EntityReadOptions(partitionKey: inventory.TransitionOperationCapabilities.PartitionKey
+            ?? throw new InvalidOperationException("The demo requires a fixed receipt partition."));
+        var hosted = Service.Host(FulfillmentProcess.Definition)
+            .Transition(InventoryTransitions.Reserve, inventory)
+            .Transition(InventoryTransitions.Release, inventory)
+            .Transition(OrderTransitions.Submit, orders)
+            .Query(FulfillmentProcess.Stock, async (context, _, input) =>
             {
-                var item = await inventory.TryGetEntity(context, input.Sku, new(partitionKey: FulfillmentDemo.LocalPartition));
+                var item = await inventory.TryGetEntity(context, input.Sku, readOptions);
                 return new InventoryAvailability(item is not null, item?.Available ?? 0);
-            })]);
-        var host = new RegisteredAsyncProcessReferenceHost(queries, transitions.ExecuteAsync);
-        Runtime = new ServiceRuntime(Declaration, [new ServiceEphemeralProcessBinding("fulfill", plan,
-            "aspire-first", (_, _) => host)], new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
+            })
+            .Build(Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance),
+                operationId: "fulfill", authority: "aspire-first", timeout: TimeSpan.FromSeconds(15),
+                authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
+        Declaration = hosted.Declaration;
+        Runtime = hosted.Runtime;
     }
 
     /// <summary>Service policy declares finite, invocation-local execution.</summary>
@@ -62,8 +45,5 @@ public sealed class FulfillmentProcessBindings
     /// <param name="app">Native endpoint builder.</param>
     public void Map(WebApplication app) => app.MapServiceEphemeralProcess(Declaration, _ => Runtime, "fulfill",
         FulfillmentProcess.Definition, new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
-
-    static CompiledTransitionPlan Require(TransitionCompilationResult compilation) => compilation.Plan
-        ?? throw new InvalidOperationException(string.Join("; ", compilation.Validation.Diagnostics.Select(d => d.Code + ": " + d.Message)));
 
 }

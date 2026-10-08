@@ -18,7 +18,7 @@ public static class OrderEndpoints
     {
         app.MapEntityApi<Order>(FulfillmentDomain.Orders.Definition, orders, partition: FulfillmentDemo.LocalPartition,
             endpoints => endpoints
-                .CreateIfAbsent(OrderApi.Create,
+                .Create(OrderApi.Create, EntityCreationPolicy.IfAbsent,
                     initialize: partition => new Order(Guid.NewGuid().ToString("D"), partition),
                     identity: order => order.Id,
                     respond: order => TypedResults.Created($"/orders/{order.Id}", new OrderCreated(order.Id))

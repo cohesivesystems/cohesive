@@ -3,14 +3,15 @@
 `FulfillmentDomain` remains the state authority. Native Aspire owns resources; native PostgreSQL mappings
 attach to the same domain definitions. `FulfillmentProcess.Run` is authoring syntax compiled into canonical
 Process IR, not an async application coordinator. Its generated definition can be inspected and fingerprinted.
-`FulfillmentProcessBindings` prepares exact transition links and the shared `ServiceRuntime` once at host startup.
+`FulfillmentProcessBindings` uses `Service.Host(process).Transition(...).Query(...).Build(...)` to prepare exact
+links, catalogs and the shared runtime at startup. The host builder retains canonical compiler diagnostics;
+applications bind domain operations to repositories without recreating adapters and dispatch catalogs.
 
 ## What this slice guarantees
 
-- `CreateIfAbsent` turns the initializer's materialized state into canonical creation input, executes the
+- `Create(..., EntityCreationPolicy.IfAbsent, ...)` turns the initializer's materialized state into canonical creation input, executes the
   implied creation decision, validates its candidate, and inserts only if identity plus partition is absent.
-  Repetition with an existing ID returns sanitized 409 without replacing state. Legacy `Create` remains
-  upsert-backed for compatibility; the example explicitly chooses `CreateIfAbsent`.
+  Repetition with an existing ID returns sanitized 409 without replacing state. `ReplaceExisting` is the explicit alternative when replacement is intended.
 - The hosted stock query is an explicit native point read. It is advisory; the guarded reserve transition
   checks current stock and its storage token. The joined reservation-availability relation is separately
   exposed by the running program through its existing prepared native reader.
@@ -56,7 +57,9 @@ curl "$WORKER_URL/orders/<order-id>/availability"
 
 The sample attaches a synthetic local identity explicitly through `FulfillmentDemoIdentity`. It is **not
 production authentication**. Replace the enricher with authenticated identity/grant resolution before exposing
-this application. The service and repositories select the fixed local demo partition.
+this application. The receipt options select the fixed local demo partition. Transition bindings inherit it, and the stock-read
+handler uses that same repository evidence. The hosted query declares the inventory entity authority rather
+than duplicating physical placement in portable query configuration.
 
 ## Failure and recovery boundary
 

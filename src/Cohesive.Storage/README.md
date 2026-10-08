@@ -172,9 +172,32 @@ carry canonical envelope identities and do not infer a POCO mapping.
 
 ## Explicit creation versus upsert
 
-`IEntityRepository.CreateIfAbsent` is an optional atomic absence-fenced primitive. Check `SupportsCreateIfAbsent`
-at registration; unsupported providers fail without writing. PostgreSQL and the in-memory repository implement
-it, and typed wrappers preserve the capability. An existing identity/partition raises the shared concurrency
-conflict. `Upsert` continues to mean insert-or-replace; a pre-read followed by upsert is not an atomic create.
-The ASP.NET `CreateIfAbsent` binding prepares an implied canonical creation transition once and maps conflicts
-to sanitized 409 responses. This does not imply idempotent requests, emission delivery or event sourcing.
+`IEntityRepository.Create(context, state, policy)` makes absence-fenced creation versus unconditional
+replacement explicit. `CreationCapabilities.Require(policy)` admits that guarantee at registration.
+PostgreSQL and memory support atomic absence; typed wrappers forward the capability and policy.
+`Upsert` remains the ordinary update primitive. A pre-read followed by upsert is not atomic creation.
+The typed ASP.NET `Create(endpoint, EntityCreationPolicy.IfAbsent, ...)` binding prepares the implied
+creation transition once and maps duplicate identities to sanitized 409s; it does not recheck capabilities
+on each request. Choose `ReplaceExisting` explicitly to retain the old upsert-backed API behavior.
+This is an authoring change: migrate former `CreateIfAbsent` and implicit `Create` calls to the policy form.
+
+## Shared receipt commit protocol
+
+`EntityTransitionCommitProtocol` owns exact replay, creation-intent replay and conditional-conflict diagnostics.
+Each store supplies one native atomic state/receipt attempt. A null native result means a conditional fence
+failed without changes; the protocol resolves a raced receipt once, then returns the same structured
+`/write/subjectCondition` or `/write/expectedConcurrencyToken` diagnostic across providers. Exceptions and
+ambiguous acknowledgements propagate without retry. Each call performs at most two lookup passes (before
+one native attempt and after a conditional conflict); each pass reads the exact receipt and, only for creation,
+the creation index. This trades additional fresh-operation Cosmos point reads for a shared replay-first policy
+that avoids writing on a known replay. It is not a claim of fewer provider calls. Provider locks, transactions, encoding and integrity
+checks stay native. Creation replay retains the original attempt's evidence, checking candidate and result.
+
+`EntityTransitionOperationCapabilities.PartitionKey` optionally declares fixed trusted receipt placement.
+Process transition bindings inherit it and reject an explicit mismatch at construction. Dynamic repositories
+retain explicit host/context placement. Physical placement is not authorization.
+
+`EntityTransitionReceiptConformance` supplies concurrent replay, stale-fence and creation replacement/conflict
+cases used by memory, SQLite, PostgreSQL and the environment-gated Cosmos suite. Native corruption and rollback
+cases remain with their providers. See `TransitionReceiptValidationBenchmarks` for warm encoding cost; no cache
+bypasses validation of retained or externally modified evidence.

@@ -23,10 +23,10 @@ public sealed class TypedEntityRepository<TEntity>(
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
 
     /// <inheritdoc />
-    public bool SupportsCreateIfAbsent => repository.SupportsCreateIfAbsent;
+    public EntityCreationCapabilities CreationCapabilities => repository.CreationCapabilities;
     /// <inheritdoc />
-    public Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity) =>
-        repository.CreateIfAbsent(context, entity);
+    public Task<EntitySnapshot> Create(OperationContext context, EntityObservationSnapshot entity, EntityCreationPolicy policy) =>
+        repository.Create(context, entity, policy);
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;
@@ -140,10 +140,10 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
 
     /// <inheritdoc />
-    public bool SupportsCreateIfAbsent => repository.SupportsCreateIfAbsent;
+    public EntityCreationCapabilities CreationCapabilities => repository.CreationCapabilities;
     /// <inheritdoc />
-    public Task<EntitySnapshot> CreateIfAbsent(OperationContext context, EntityObservationSnapshot entity) =>
-        repository.CreateIfAbsent(context, entity);
+    public Task<EntitySnapshot> Create(OperationContext context, EntityObservationSnapshot entity, EntityCreationPolicy policy) =>
+        repository.Create(context, entity, policy);
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;

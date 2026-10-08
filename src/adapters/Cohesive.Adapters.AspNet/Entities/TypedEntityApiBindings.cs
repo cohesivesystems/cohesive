@@ -74,48 +74,31 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
         Get(Cohesive.Api.Api.Define().Entity<TEntity>().Query(name).Route("GET", route)
             .RouteParameter<string>("id").Returns<TResponse>().Result(ApiResultKind.NotFound).Build(), respond);
 
-    /// <summary>Binds legacy upsert-backed creation with typed initial state and response.</summary>
-    /// <remarks>This method may replace existing state. Use CreateIfAbsent for an atomic absence guarantee.</remarks>
-    /// <typeparam name="TResponse">Declared success body type.</typeparam>
-    /// <param name="endpoint">Separately authored bodyless command declaring a Created response.</param>
-    /// <param name="initialize">Creates fresh state using the binding's effective partition; must not reuse mutable state across requests.</param>
-    /// <param name="identity">Selects the new entity identity from that initial state.</param>
-    /// <param name="respond">Maps materialized entity state to the declared success response, per request.</param>
-    /// <returns>This registration session.</returns>
-    /// <exception cref="ArgumentNullException">An endpoint or callback is null.</exception>
-    /// <exception cref="ArgumentException">The declaration does not match the entity, operation or response contract.</exception>
-    /// <exception cref="InvalidOperationException">The session is mapped or the endpoint is already bound.</exception>
-    public TypedEntityApiBindings<TEntity> Create<TResponse>(ApiEndpoint endpoint,
-        Func<string, TEntity> initialize, Func<TEntity, string> identity, Func<TEntity, Created<TResponse>> respond)
-    {
-        ArgumentNullException.ThrowIfNull(initialize);
-        ArgumentNullException.ThrowIfNull(identity);
-        ArgumentNullException.ThrowIfNull(respond);
-        Validate<TResponse>(endpoint, ApiOperationKind.Command, ApiResultKind.Created);
-        Add(endpoint, EntityApiOperationBinding.Create(endpoint,
-            (_, _) => { var value = initialize(partition); return entity.CreateState(identity(value), value, version: 1); },
-            (_, snapshot) => respond(Read(snapshot))));
-        return this;
-    }
-
-    /// <summary>Binds an implied canonical creation transition with an atomic absence fence.</summary>
+    /// <summary>Binds creation with an explicit existing-state policy admitted at setup.</summary>
     /// <typeparam name="TResponse">Declared created response.</typeparam>
     /// <param name="endpoint">Separately declared bodyless creation endpoint.</param>
+    /// <param name="policy">Explicit absence-fenced creation or unconditional replacement.</param>
     /// <param name="initialize">Materializes input state using the binding's trusted partition.</param>
     /// <param name="identity">Selects the new subject identity.</param>
     /// <param name="respond">Projects committed state onto the HTTP response.</param>
     /// <returns>This registration session.</returns>
     /// <exception cref="NotSupportedException">The repository cannot enforce absence atomically.</exception>
     /// <exception cref="ArgumentException">The endpoint contract is incompatible.</exception>
-    public TypedEntityApiBindings<TEntity> CreateIfAbsent<TResponse>(ApiEndpoint endpoint,
+    public TypedEntityApiBindings<TEntity> Create<TResponse>(ApiEndpoint endpoint, EntityCreationPolicy policy,
         Func<string, TEntity> initialize, Func<TEntity, string> identity, Func<TEntity, Created<TResponse>> respond)
     {
         ArgumentNullException.ThrowIfNull(initialize);
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(respond);
         Validate<TResponse>(endpoint, ApiOperationKind.Command, ApiResultKind.Created);
-        if (!repository.SupportsCreateIfAbsent)
-            throw new NotSupportedException("Creation requires an atomic absence-fenced repository.");
+        repository.CreationCapabilities.Require(policy);
+        if (policy == EntityCreationPolicy.ReplaceExisting)
+        {
+            Add(endpoint, EntityApiOperationBinding.Create(endpoint,
+                (_, _) => { var value = initialize(partition); return entity.CreateState(identity(value), value, version: 1); },
+                (_, snapshot) => respond(Read(snapshot))));
+            return this;
+        }
         Add(endpoint, new CreateIfAbsentEntityApiOperationBinding(endpoint,
             (_, _) => { var value = initialize(partition); return entity.CreateState(identity(value), value); },
             (_, snapshot) => respond(Read(snapshot))));
@@ -126,6 +109,7 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     /// <typeparam name="TResponse">Declared success body type.</typeparam>
     /// <param name="name">Portable operation name.</param>
     /// <param name="route">POST route template for creation.</param>
+    /// <param name="policy">Explicit absence-fenced creation or unconditional replacement.</param>
     /// <param name="initialize">Creates fresh state using the binding's effective partition; must not reuse mutable state across requests.</param>
     /// <param name="identity">Selects the new entity identity from that initial state.</param>
     /// <param name="respond">Maps materialized entity state to the declared success response, per request.</param>
@@ -133,10 +117,10 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     /// <exception cref="ArgumentNullException">An endpoint or callback is null.</exception>
     /// <exception cref="ArgumentException">The declaration does not match the entity, operation or response contract.</exception>
     /// <exception cref="InvalidOperationException">The session is mapped or the endpoint is already bound.</exception>
-    public TypedEntityApiBindings<TEntity> Create<TResponse>(string name, string route,
+    public TypedEntityApiBindings<TEntity> Create<TResponse>(string name, string route, EntityCreationPolicy policy,
         Func<string, TEntity> initialize, Func<TEntity, string> identity, Func<TEntity, Created<TResponse>> respond) =>
         Create(Cohesive.Api.Api.Define().Entity<TEntity>().Command(name).Route("POST", route).Returns<TResponse>(ApiResultKind.Created).Build(),
-            initialize, identity, respond);
+            policy, initialize, identity, respond);
 
     /// <summary>Starts typed binding of a separately declared exact transition endpoint.</summary>
     /// <typeparam name="TInput">Canonical transition input type.</typeparam>

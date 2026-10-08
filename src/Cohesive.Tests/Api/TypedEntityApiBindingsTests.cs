@@ -41,14 +41,14 @@ public sealed class TypedEntityApiBindingsTests
                 var get = Cohesive.Api.Api.Define().Entity<Order>().Query("Get").Route("GET", "/orders/{id}").RouteParameter<string>("id").Returns<Order>().Build();
                 var submit = Cohesive.Api.Api.Define().Entity<Order>().Command("Submit").Route("POST", "/orders/{id}/submit")
                     .RouteParameter<string>("id").Returns<Order>().Result<Outcome>(ApiResultKind.Conflict).Transition(SubmitTransition.Reference).Build();
-                bindings.Create(create, partition => new Order("one", partition, "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
+                bindings.Create(create, EntityCreationPolicy.ReplaceExisting, partition => new Order("one", partition, "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
                     .Get(get, state => TypedResults.Ok(state))
                     .Transition(submit, SubmitTransition).Input(request => new Submit(request.RequiredEntityId))
                     .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
             }
             else
             {
-                bindings.Create("Create", "/orders", partition => new Order("one", partition, "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
+                bindings.Create("Create", "/orders", EntityCreationPolicy.ReplaceExisting, partition => new Order("one", partition, "Draft"), state => state.Id, state => TypedResults.Created("/orders/one", state))
                     .Get("Get", "/orders/{id}", state => TypedResults.Ok(state))
                     .Transition("Submit", "/orders/{id}/submit", SubmitTransition).Input(request => new Submit(request.RequiredEntityId))
                     .OnApplied((state, outcome) => TypedResults.Ok(state)).OnRejected(outcome => TypedResults.Conflict(outcome));
@@ -78,7 +78,7 @@ public sealed class TypedEntityApiBindingsTests
         var bindings = new TypedEntityApiBindings<Order>(Entity, new UnsupportedCreationRepository(), "local");
         var endpoint = Cohesive.Api.Api.Define().Entity<Order>().Command("Create").Route("POST", "/orders")
             .Returns<Order>(ApiResultKind.Created).Build();
-        Assert.Throws<NotSupportedException>(() => bindings.CreateIfAbsent(endpoint,
+        Assert.Throws<NotSupportedException>(() => bindings.Create(endpoint, EntityCreationPolicy.IfAbsent,
             partition => new Order("one", partition, "Draft"), value => value.Id,
             value => TypedResults.Created("/orders/one", value)));
     }
@@ -103,7 +103,7 @@ public sealed class TypedEntityApiBindingsTests
         app.UseRequestOperationContext();
         var endpoint = Cohesive.Api.Api.Define().Entity<Order>().Command("Create").Route("POST", "/orders")
             .Returns<Order>(ApiResultKind.Created).Build();
-        app.MapEntityApi<Order>(Entity, repository, "local", bindings => bindings.CreateIfAbsent(endpoint,
+        app.MapEntityApi<Order>(Entity, repository, "local", bindings => bindings.Create(endpoint, EntityCreationPolicy.IfAbsent,
             partition => new Order("one", partition, "Draft"), value => value.Id,
             value => TypedResults.Created("/orders/one", value)));
         app.Urls.Add("http://127.0.0.1:0");

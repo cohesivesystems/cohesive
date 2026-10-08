@@ -306,3 +306,16 @@ A failed public result retains native concurrency-conflict semantics only when t
 identifies the failed node as a Transition and the terminal attempt, activation, token and operation
 sequence agree with its retained failure evidence. A matching diagnostic on another node is not enough.
 This classification does not assert rollback of earlier mutations or authorize automatic retry.
+
+
+### Host a finite process with entity transitions and native queries
+
+`Service.Host(process).Transition(transition, repository).Query(query, handler).Build(...)` prepares the exact
+linked process, transition adapter, hosted-query catalog and ephemeral service runtime at host setup. Supply
+an explicit service declaration, operation identity, authority, finite timeout and authorization. A supplied
+interaction catalog is shared by transition associations; omission selects the empty catalog. This convenience
+owns composition only: canonical Process/Transition/Query documents remain the semantic authorities.
+Repositories must advertise atomic state/receipt support. Fixed receipt partitions flow into transition reads;
+conflicting explicit placement is rejected during binding construction. No durable worker, retry loop, tenant
+inference or provider options are introduced. The prepared result exposes the declaration and runtime for the
+existing HTTP binding, independently of endpoint authoring. See the Aspire fulfillment example.

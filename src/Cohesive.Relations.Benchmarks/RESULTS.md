@@ -1374,3 +1374,23 @@ WarmupCount=3
 | WarmInvoke               | True         | 22.840 μs |   0.6118 μs |  0.0335 μs | 10.0098 | 0.8545 |  81.87 KB |
 
 The final warm observations are 2.629 us / 16.89 KB disabled and 22.840 us / 81.87 KB enabled, compared with frozen-profile trace-only 2.620 us / 16.88 KB and 22.945 us / 81.86 KB. Short-job confidence intervals do not establish timing equivalence. The additional timestamp field adds a small retained per-invocation cost; metric recording without listeners has a separate zero-allocation regression. Existing startup/provider/export exclusions apply.
+
+
+## Receipt read integrity boundary (2026-10-07)
+
+Command: `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*TransitionReceiptValidationBenchmarks*' --job short --warmupCount 3 --iterationCount 3`.
+Apple M5 Max, macOS 27.0.1, .NET 10.0.5 arm64, SDK 10.0.201. Warm frozen serializer metadata;
+one canonical process receipt per operation. PayloadBytes is the fixture binary field size, not total wire size.
+The baseline hashes and deserializes (including constructor fingerprint validation); full validation also
+re-encodes and compares canonical bytes, as retained receipt readers do. SQL/network and provider envelope
+checks are excluded. This is a cost characterization, not a before/after optimization or end-to-end claim.
+
+| Binary field | Hash + decode | Full validation | Allocations: baseline / full |
+|---|---:|---:|---:|
+| 32 B | 221.7 µs | 223.2 µs | 137.35 / 226.11 KiB |
+| 16 KiB | 227.4 µs | 486.8 µs | 358.82 / 802.21 KiB |
+
+Three measurement iterations yield wide timing confidence intervals; do not infer a small speed difference.
+The allocation increase is material and scales with payload. Integrity checks remain in place; a future
+optimization must prove canonical/fingerprint equivalence and corruption rejection. No unbounded receipt
+cache or trust bypass was introduced. Benchmark source remains runnable for longer measurements.
