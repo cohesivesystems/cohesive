@@ -147,6 +147,24 @@ type checks used by observation admission without manufacturing a one-field shap
 resolve only in the supplied graph. This validates a concrete type; field presence and nullability
 remain the caller's contract. Relation draft admission uses it for graph-owned enum literals.
 
+Nested object and structural validation retains exact-property precedence. On a case-insensitive
+fallback it builds one operation-local property index, preserving the first matching source
+property; no instance values enter shared caches. Unknown-property diagnostics lazily prepare
+case-insensitive name sets keyed by the owning immutable type object. These weak-key slots publish
+successful preparation once, retry failures, and expire with the type. Allowed union discriminators,
+depth limits, values, and diagnostics remain operation-scoped. The existing structural
+field lookup uses ordinal identity and cannot replace this case-insensitive diagnostic index.
+
+Graph-bound array, object and named validation lazily binds reachable named definitions and child
+links once per exact graph and type object. Graph and root keys are weak; independently requested
+roots share prepared children. A per-graph preparation gate coordinates complete recursive closures,
+while warm readers bypass that gate. Failed preparation publishes no incomplete nodes. Preparation
+uses an iterative work queue; value validation still applies depth limits and builds fresh diagnostics.
+Unbound checks and scalar leaves retain direct dispatch. `ObservationValidationPlan` is an internal
+interpretation of existing declarations, with no additional type IDs, wire format or public contract.
+See `NestedValidationBenchmarks` and `NamedValidationBenchmarks` for representative repeated validation,
+and the [performance overview](../../docs/performance/execution-preparation-allocations.md) for qualification.
+
 ## Exact decimal text
 
 `ObservationValue.TryParseExactDecimal(text, out value)` validates signed invariant decimal text

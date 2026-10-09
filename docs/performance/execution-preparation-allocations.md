@@ -1,8 +1,11 @@
 # Execution preparation: final implementation and qualification
 
-The CLR mapper, TypeRef serializer registry and canonical JSON writer remain the semantic authorities.
-This change reduces repeated preparation and temporary representations; instance-validation plan caching
-is a separate next investigation. No packages are published or Ari pins upgraded here.
+The CLR mapper, TypeRef serializer registry and canonical JSON writer retain their existing contracts.
+ShapeGraph and TypeRef declarations remain the semantic authorities for instance validation.
+This change reduces repeated preparation and temporary representations. Nested instance validation
+now reuses field-name preparation for detailed failures and avoids repeated case-insensitive scans;
+graph-bound named and child links are also prepared lazily. Full validator code generation remains
+a separate investigation. No packages are published or Ari pins upgraded here.
 
 ## Ownership and failure behavior
 
@@ -64,7 +67,87 @@ cache failure/concurrency, collectible metadata, and imported integrity/unused-e
 
 No skips or timeout increases were added. Ari qualification overlays are restored byte-for-byte.
 
-Final qualification: 4,369 Core tests pass (33 existing skips), 1,106 Relations tests pass,
+Final qualification: 4,382 Core tests pass (33 existing skips), 1,106 Relations tests pass,
 and 855 Ari engine tests pass (18 existing skips). The focused compatibility suite passes 80
-tests; additional tests prove corruption rejection, traversal-stack cleanup, retry/concurrent
+tests. The final instance-validation changes include 28 focused checks. Additional tests prove corruption rejection, traversal-stack cleanup, retry/concurrent
 success publication, and collectible CLR metadata ownership.
+
+
+## Nested instance validation
+
+`ObservationValidator` retains its declared type dispatch, exact graph resolution, required/nullability/
+cardinality rules, depth limits and lazy diagnostic paths. Inline objects and named structural objects
+now reuse one local case-insensitive property index after an exact lookup misses. Exact matches still
+win, and fallback retains the first source-enumeration match. Values and indexes are discarded after
+that object check. Unknown-property diagnosis lazily prepares a case-insensitive name set in a weak-key,
+success-only slot for the exact type object; it does not cache validation outcomes or graph bindings.
+Union discriminator allowances remain invocation-specific. The existing structural declaration lookup
+uses ordinal identity, so it cannot express this case-insensitive check without changing its contract.
+This extends existing Cohesive validation and preparation mechanisms without an Ari abstraction or
+another semantic type model.
+
+Concrete qualified example: 128 fields declared `field0` through `field127`, with corresponding instance
+properties `FIELD0` through `FIELD127`. Previously each declaration lookup scanned the immutable instance
+map, twice, with boxed enumerators. One temporary index replaces those repeated scans. On the local
+macOS Arm64 machine, warm validation changes from 278.6 μs / 45,057 B to 8.02 μs / 7,121 B.
+These are synthetic instance workloads, not Ari endpoint or catalog measurements.
+
+The [before](execution-preparation-final/nested-validation-before.md) and
+[after](execution-preparation-final/nested-validation-after.md) reports and adjacent CSVs cover flat,
+eight-level nested, 32-object collection, and 128-field inputs with exact, mismatched-case and unknown
+properties. Type and instance construction occur outside measurement; setup warms validation 64 times.
+BenchmarkDotNet uses the same fixture assembly for both variants, baseline Core from `97e7d1df`,
+4096 invocations, three warmup iterations and eight measured iterations, in-process Short job:
+
+```sh
+dotnet build src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj -c Release
+dotnet src/Cohesive.Relations.Benchmarks/bin/Release/net10.0/Cohesive.Relations.Benchmarks.dll --filter '*NestedValidationBenchmarks*' --inProcess --job Short --warmupCount 3 --iterationCount 8 --invocationCount 4096 --unrollFactor 1
+```
+
+For the baseline, copy that built output to an isolated directory and replace only `Cohesive.dll`
+with the Release assembly built at the baseline revision. Run the same command against the copied DLL.
+Exact-name means are 0.31 μs flat, 0.41 μs nested, 9.71 μs collection and 2.91 μs large after this change.
+These small costs vary with JIT and machine state; avoid a universal speedup claim.
+The occasional 1 B result is benchmark harness amortization; a direct counter regression proves zero
+warm temporary allocation for exact object validation. Wide case-fallback allocation is bounded at
+10 KB per check. A fresh 128-field unknown-property check is bounded at 20 KB including cache population,
+and its second check against another instance at 1 KB. These cold budgets exclude declaration/value
+construction and global runtime initialization. Detailed diagnostics, exact-name precedence after
+fallback preparation, duplicate spellings, instance isolation and same-ID/different-graph named types
+have regression coverage.
+
+
+## Prepared graph-bound validation links
+
+`ObservationValidationPlan` binds only array/object/named nodes reachable from the requested root.
+It holds the original named definitions and child links, not a copied type system or validation result.
+Scalar leaves keep direct checks. For one exact immutable `ShapeGraph`, weak TypeRef keys share completed
+child nodes across roots; graph ownership itself is weak. Missing named links are stable metadata for
+that graph object, while messages still use each occurrence's source and diagnostic cursor. Two graphs
+with identical IDs remain distinct cache scopes. Graphless checks bypass this preparation.
+
+A per-graph gate prepares new closures using an iterative queue, reusing previously published children.
+All new cyclic links are complete before publication; no per-node lock is held while acquiring another.
+Warm lookup bypasses the preparation gate. This specialized closure publication differs from the
+single-key `WeakPreparationCache`; substituting independently locked factories would risk recursive
+initialization and deadlocks. Failed construction retains no incomplete state. Cold first reads of
+different roots in the same graph serialize; unrelated graphs prepare independently. Roots outside
+the graph's declarations can expire even while that graph remains alive. Tests prove these lifetimes,
+concurrent first use, shared children, recursion/depth limits and graph-specific missing-link diagnostics.
+
+The [named baseline](execution-preparation-final/named-validation-before.md) and
+[final report](execution-preparation-final/named-validation-after.md), with adjacent CSVs, use the same
+fixture assembly and published Core baseline `97e7d1df`. The command above can select
+`*NamedValidationBenchmarks*` instead. Types and values are constructed outside timing, then warmed:
+16 named-enum fields (flat), eight named structural parent levels (nested), 32 repeated objects
+(collection), or 128 named-enum fields (large). Warm local means change from 281 to 262 ns flat,
+520 to 419 ns nested, 9.01 to 8.16 μs collection, and 2.69 to 2.38 μs large. These are approximately
+7–19% improvements against the published baseline, combining field lookup and prepared links. They
+are not Ari endpoint or catalog latency measurements.
+
+The dedicated cold counter constructs a fresh 128-field named graph and value outside measurement,
+initializes runtime dispatch with unrelated graph/type keys, then measures first validation: 28,664 B
+locally. Its next 1,000 exact-name validations allocate 0 B. The regression budgets cold preparation
+at 64 KB and requires zero warm allocation. This trades first-use preparation and retained metadata
+for repeated lookup savings; it does not reduce already-zero warm allocation. Runtime values,
+nullability/presence/cardinality decisions, union allowances, depth checks and diagnostics stay fresh.

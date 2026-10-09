@@ -2,9 +2,244 @@ using System.Collections.Immutable;
 
 namespace Cohesive.Tests.Model;
 
-public sealed class ObservationValidatorTests
+public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     const int AllocationWarmupIterations = 1_000;
+
+    [Fact]
+    public void PreparedObjectLookupPreservesCaseDuplicateRulesAndInstanceIsolation()
+    {
+        var type = new ObjectTypeRef([new("name", new ScalarTypeRef(ScalarTypeKind.String))]);
+        Assert.True(ObservationValidator.TryValidateAgainstType(Object(("NAME", ObservationValue.FromString("first"))), type, out _));
+        // Two spellings still trigger the existing unknown-property/count rule.
+        Assert.False(ObservationValidator.TryValidateAgainstType(Object(
+            ("name", ObservationValue.FromString("valid")), ("NAME", ObservationValue.FromInt64(1))), type, out _));
+        Assert.False(ObservationValidator.TryValidateAgainstType(Object(("NAME", ObservationValue.FromInt64(1))), type, out _));
+        Assert.True(ObservationValidator.TryValidateAgainstType(Object(("name", ObservationValue.FromString("last"))), type, out _));
+    }
+
+    [Fact]
+    public void PreparedUnknownPropertyDiagnosticIsOrdinalAndTypeScoped()
+    {
+        var type = new ObjectTypeRef([new("known", new ScalarTypeRef(ScalarTypeKind.String))]);
+        var value = Object(("known", ObservationValue.FromString("ok")),
+            ("z-extra", ObservationValue.FromString("z")), ("a-extra", ObservationValue.FromString("a")));
+        Assert.False(ObservationValidator.TryValidateAgainstType(value, type, out var error));
+        Assert.Contains("a-extra", error);
+        var other = new ObjectTypeRef([new("known", new ScalarTypeRef(ScalarTypeKind.Int64))]);
+        Assert.False(ObservationValidator.TryValidateAgainstType(Object(("known", ObservationValue.FromString("ok"))), other, out _));
+    }
+
+    [Fact]
+    public void WarmExactObjectValidationDoesNotAllocate()
+    {
+        var type = new ObjectTypeRef([new("name", new ScalarTypeRef(ScalarTypeKind.String))]);
+        var value = Object(("name", ObservationValue.FromString("ok")));
+        for (var i = 0; i < AllocationWarmupIterations; i++)
+            _ = ObservationValidator.TryValidateAgainstType(value, type, out _);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var valid = true;
+        for (var i = 0; i < 1000; i++) valid &= ObservationValidator.TryValidateAgainstType(value, type, out _);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(valid);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void WideCaseInsensitiveValidationHasBoundedTemporaryAllocation()
+    {
+        var type = new ObjectTypeRef([..Enumerable.Range(0, 128).Select(i =>
+            new ObjectFieldTypeDef($"field{i}", new ScalarTypeRef(ScalarTypeKind.String)))]);
+        var value = ObservationValue.FromObject(Enumerable.Range(0, 128).ToImmutableDictionary(
+            i => $"FIELD{i}", _ => ObservationValue.FromString("ok")));
+        for (var i = 0; i < AllocationWarmupIterations; i++)
+            _ = ObservationValidator.TryValidateAgainstType(value, type, out _);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var valid = ObservationValidator.TryValidateAgainstType(value, type, out _);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(valid);
+        Assert.InRange(allocated, 0, 10_000);
+    }
+
+    [Fact]
+    public void NamedStructuralPreparationDoesNotCrossGraphBoundaries()
+    {
+        var reference = new NamedTypeRef(new("shared-id"));
+        var text = new TypeDefinition.Structural(reference.TypeId, [new(new("value"), new ScalarTypeRef(ScalarTypeKind.String))]);
+        var number = new TypeDefinition.Structural(reference.TypeId, [new(new("value"), new ScalarTypeRef(ScalarTypeKind.Int64))]);
+        var textGraph = new ShapeGraph(new("text"), [], [text]);
+        var numberGraph = new ShapeGraph(new("number"), [], [number]);
+        var invalid = Object(("VALUE", ObservationValue.FromString("ok")), ("extra", ObservationValue.FromString("x")));
+        Assert.False(ObservationValidator.TryValidateAgainstType(invalid, reference, out _, textGraph));
+        Assert.False(ObservationValidator.TryValidateAgainstType(invalid, reference, out _, numberGraph));
+        var validText = Object(("VALUE", ObservationValue.FromString("ok")));
+        Assert.True(ObservationValidator.TryValidateAgainstType(validText, reference, out _, textGraph));
+        Assert.False(ObservationValidator.TryValidateAgainstType(validText, reference, out _, numberGraph));
+    }
+
+    [Fact]
+    public void UnknownFieldPreparationIsReusedAcrossInstances()
+    {
+        var type = new ObjectTypeRef([..Enumerable.Range(0, 128).Select(i =>
+            new ObjectFieldTypeDef($"field{i}", new ScalarTypeRef(ScalarTypeKind.String)))]);
+        var first = ObservationValue.FromObject(Enumerable.Range(0, 128).ToImmutableDictionary(
+            i => $"field{i}", _ => ObservationValue.FromString("ok")).Add("extra", ObservationValue.FromString("first")));
+        var second = ObservationValue.FromObject(first.Fields!.ToImmutableDictionary().SetItem("extra", ObservationValue.FromString("second")));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var firstValid = ObservationValidator.TryValidateAgainstType(first, type, out var firstError);
+        var cold = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var valid = ObservationValidator.TryValidateAgainstType(second, type, out var secondError);
+        var warm = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.False(firstValid);
+        Assert.False(valid);
+        Assert.Equal(firstError, secondError);
+        Assert.True(cold > warm);
+        Assert.InRange(cold, 0, 20_000);
+        Assert.InRange(warm, 0, 1_000);
+    }
+
+    [Fact]
+    public void ExactPropertyWinsAfterCaseInsensitiveIndexCreation()
+    {
+        var type = new ObjectTypeRef([
+            new("alias", new ScalarTypeRef(ScalarTypeKind.String)),
+            new("name", new ScalarTypeRef(ScalarTypeKind.String)),
+            new("NAME", new ScalarTypeRef(ScalarTypeKind.Int64))]);
+        var value = Object(("ALIAS", ObservationValue.FromString("fallback")),
+            ("name", ObservationValue.FromString("exact")), ("NAME", ObservationValue.FromInt64(7)));
+        Assert.True(ObservationValidator.TryValidateAgainstType(value, type, out _));
+    }
+
+    [Fact]
+    public void PreparedLinksPreserveRecursionAndArePublishedOnce()
+    {
+        var root = new NamedTypeRef(new("recursive-structure"));
+        var definition = new TypeDefinition.Structural(root.TypeId,
+            [new(new("child"), root, presence: FieldPresence.Optional)]);
+        var graph = new ShapeGraph(new("recursive-graph"), [], [definition]);
+        ObservationValidationPlan[] plans = new ObservationValidationPlan[32];
+        Parallel.For(0, plans.Length, i => plans[i] = ObservationValidationPlan.Get(root, graph));
+        foreach (var plan in plans)
+        {
+            Assert.Same(plans[0], plan);
+            Assert.Same(definition, plan.Definition);
+            Assert.Same(plan, plan.Children[0]);
+        }
+        Assert.True(ObservationValidator.TryValidateAgainstType(Object(), root, out _, graph));
+        Assert.True(ObservationValidator.TryValidateAgainstType(Object(("child", Object())), root, out _, graph));
+        var deep = Object();
+        for (var i = 0; i < 70; i++) deep = Object(("child", deep));
+        Assert.False(ObservationValidator.TryValidateAgainstType(deep, root, out var error, graph));
+        Assert.Contains("maximum validation depth", error);
+    }
+
+    [Fact]
+    public void MissingNamedLinksRemainGraphSpecificAndInstanceDiagnosticsRemainFresh()
+    {
+        var root = new NamedTypeRef(new("same-type"));
+        var missing = new ShapeGraph(new("same-graph-id"), [], []);
+        var defined = new ShapeGraph(new("same-graph-id"), [],
+            [new TypeDefinition.Structural(root.TypeId, [new(new("required"), new ScalarTypeRef(ScalarTypeKind.String))])]);
+        Assert.False(ObservationValidator.TryValidateAgainstType(Object(), root, out var missingError, missing));
+        Assert.False(ObservationValidator.TryValidateAgainstType(Object(), root, out var fieldError, defined));
+        Assert.NotEqual(missingError, fieldError);
+        Assert.True(ObservationValidator.TryValidateAgainstType(Object(("required", ObservationValue.FromString("ok"))), root, out _, defined));
+        Assert.False(ObservationValidator.TryValidateAgainstType(Object(), root, out var noGraphError));
+        Assert.NotEqual(missingError, noGraphError);
+    }
+
+    [Fact]
+    public void PreparedChildLinksAreSharedAcrossRootsInOneGraph()
+    {
+        var child = new NamedTypeRef(new("child"));
+        var graph = new ShapeGraph(new("shared"), [],
+            [new TypeDefinition.Structural(child.TypeId, [new(new("value"), new ScalarTypeRef(ScalarTypeKind.String))])]);
+        var left = new ObjectTypeRef([new("left", child)]);
+        var right = new ObjectTypeRef([new("right", child)]);
+        var leftPlan = ObservationValidationPlan.Get(left, graph);
+        var rightPlan = ObservationValidationPlan.Get(right, graph);
+        Assert.Same(leftPlan.Children[0], rightPlan.Children[0]);
+        Assert.Same(leftPlan.Children[0], ObservationValidationPlan.Get(child, graph));
+        Assert.NotSame(ObservationValidationPlan.Get(child, graph),
+            ObservationValidationPlan.Get(child, new ShapeGraph(graph.Id, [], graph.NamedTypes)));
+    }
+
+    [Fact]
+    public void PreparedGraphAndRootCanBeCollected()
+    {
+        var (graph, root) = PrepareCollectibleGraph();
+        for (var i = 0; i < 8 && (graph.IsAlive || root.IsAlive); i++)
+        {
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+        }
+        Assert.False(graph.IsAlive);
+        Assert.False(root.IsAlive);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    static (WeakReference Graph, WeakReference Root) PrepareCollectibleGraph()
+    {
+        var root = new NamedTypeRef(new("collectible"));
+        var graph = new ShapeGraph(new("collectible"), [],
+            [new TypeDefinition.Structural(root.TypeId, [new(new("child"), root, presence: FieldPresence.Optional)])]);
+        _ = ObservationValidationPlan.Get(root, graph);
+        return (new(graph), new(root));
+    }
+
+    [Fact]
+    public void PreparedNamedValidationSeparatesColdPreparationAndZeroAllocationWarmExecution()
+    {
+        var text = new TypeDefinition.Enum(new("text"), PrimitiveType.String, [new("value", "value")]);
+        var root = new NamedTypeRef(new("root"));
+        var definition = new TypeDefinition.Structural(root.TypeId, [..Enumerable.Range(0, 128).Select(i =>
+            new StructuralField(new($"field{i}"), new NamedTypeRef(text.Id)))]);
+        var graph = new ShapeGraph(new("cold-boundary"), [], [text, definition]);
+        var value = ObservationValue.FromObject(Enumerable.Range(0, 128).ToImmutableDictionary(
+            i => $"field{i}", _ => ObservationValue.FromString("value")));
+        // Initialize runtime/type dispatch with unrelated keys; target preparation remains cold.
+        var warmup = new NamedTypeRef(text.Id);
+        var warmupGraph = new ShapeGraph(new("warmup"), [], [text]);
+        for (var i = 0; i < AllocationWarmupIterations; i++)
+            _ = ObservationValidator.TryValidateAgainstType(ObservationValue.FromString("value"), warmup, out _, warmupGraph);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var firstValid = ObservationValidator.TryValidateAgainstType(value, root, out _, graph);
+        var cold = GC.GetAllocatedBytesForCurrentThread() - before;
+        var valid = true;
+        for (var i = 0; i < AllocationWarmupIterations; i++)
+            _ = ObservationValidator.TryValidateAgainstType(value, root, out _, graph);
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++) valid &= ObservationValidator.TryValidateAgainstType(value, root, out _, graph);
+        var warm = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"128-field named graph validation: cold={cold} B, 1000 warm checks={warm} B");
+        Assert.True(firstValid && valid);
+        Assert.InRange(cold, 1, 64_000);
+        Assert.Equal(0, warm);
+    }
+
+    [Fact]
+    public void DynamicPreparedRootsCanExpireWhileGraphRemainsAlive()
+    {
+        var graph = new ShapeGraph(new("long-lived"), [],
+            [new TypeDefinition.Enum(new("text"), PrimitiveType.String, [new("value", "value")])]);
+        var root = PrepareCollectibleRoot(graph);
+        for (var i = 0; i < 8 && root.IsAlive; i++)
+        {
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            GC.WaitForPendingFinalizers();
+        }
+        Assert.False(root.IsAlive);
+        GC.KeepAlive(graph);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    static WeakReference PrepareCollectibleRoot(ShapeGraph graph)
+    {
+        var root = new ObjectTypeRef([new("temporary", new NamedTypeRef(new("text")))]);
+        _ = ObservationValidationPlan.Get(root, graph);
+        return new(root);
+    }
 
     [Theory]
     [InlineData("00", true)]
