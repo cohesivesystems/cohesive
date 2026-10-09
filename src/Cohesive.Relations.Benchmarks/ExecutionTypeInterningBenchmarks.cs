@@ -12,18 +12,20 @@ public class ExecutionTypeInterningBenchmarks
     Definition definition = null!;
     static readonly ExecutionProvenance Provenance = new(new("benchmark", "1"), new("benchmark/type-interning"), DocumentOrigin.Generated);
 
-    [Params("flat", "nested", "collection", "large")]
+    [Params("flat", "nested", "collection", "large", "duplicates")]
     public string Shape { get; set; } = "flat";
 
     [GlobalSetup]
     public void Setup()
     {
-        var count = Shape == "large" ? 512 : Shape == "collection" ? 128 : 16;
+        var count = Shape == "large" ? 512 : (Shape == "collection" || Shape == "duplicates") ? 128 : 16;
         TypeRef value = new ObjectTypeRef([.. Enumerable.Range(0, count).Select(index =>
             new ObjectFieldTypeDef($"field{index}", new ScalarTypeRef(ScalarTypeKind.String)))]);
         if (Shape == "nested")
             for (var depth = 0; depth < 12; depth++) value = new ArrayTypeRef(value);
-        definition = new([value, value]);
+        definition = Shape == "duplicates"
+            ? new([.. Enumerable.Range(0, 64).Select(_ => (TypeRef)new ObjectTypeRef(((ObjectTypeRef)value).Fields))])
+            : new([value, value]);
         // Serializer metadata initialization is distinct from per-document type preparation.
         for (var index = 0; index < 16; index++) _ = Prepare();
     }

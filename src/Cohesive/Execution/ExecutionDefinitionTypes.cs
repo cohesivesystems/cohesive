@@ -1,11 +1,12 @@
 using System.Buffers;
 using System.Buffers.Text;
 using System.Collections.Concurrent;
-using System.Text.Json.Serialization.Metadata;
-using System.Text.Json.Serialization;
+using System.Text;
 using System.Text.Json;
-using Cohesive.Model.Serialization;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Execution;
 
@@ -225,12 +226,30 @@ internal static class ExecutionDefinitionTypes
         }
     }
 
+    // Hashing selects a bucket only. Exact canonical byte equality establishes identity,
+    // including annotations and normalized numbers; borrowed candidates are never retained.
+    sealed class CanonicalBytesComparer : IEqualityComparer<byte[]>, IAlternateEqualityComparer<ReadOnlySpan<byte>, byte[]>
+    {
+        internal static readonly CanonicalBytesComparer Instance = new();
+        public bool Equals(byte[]? left, byte[]? right) =>
+            ReferenceEquals(left, right) || left is not null && right is not null && left.AsSpan().SequenceEqual(right);
+        public bool Equals(ReadOnlySpan<byte> left, byte[] right) => left.SequenceEqual(right);
+        public int GetHashCode(byte[] value) => GetHashCode(value.AsSpan());
+        public int GetHashCode(ReadOnlySpan<byte> value)
+        {
+            HashCode hash = new();
+            hash.AddBytes(value);
+            return hash.ToHashCode();
+        }
+        public byte[] Create(ReadOnlySpan<byte> value) => value.ToArray();
+    }
+
     sealed class TypePool
     {
         readonly Dictionary<TypeRef, int> byIdentity = new(ReferenceEqualityComparer.Instance);
-        readonly Dictionary<string, int> byContent = new(StringComparer.Ordinal);
+        readonly Dictionary<byte[], int> byContent = new(CanonicalBytesComparer.Instance);
         readonly Dictionary<ScalarTypeRef, int> scalars = new();
-        readonly List<string> keys = [];
+        readonly List<string?> keys = [];
         readonly List<byte[]?> payloads = [];
         readonly List<List<ReferenceToken>?> references = [];
         readonly Stack<List<ReferenceToken>?> capturing = new();
@@ -308,19 +327,23 @@ internal static class ExecutionDefinitionTypes
             var depth = childDepths.Pop();
             using var parsed = JsonDocument.Parse(payload);
             var fields = parsed.RootElement;
-            // Retain original parent bytes only when unique. Canonical text deduplicates content;
+            // Retain original parent bytes only when unique. Canonical bytes deduplicate content;
             // converter-recorded token locations permit final numbering without another CLR walk.
-            var entry = depth == 0 ? ExecutionDefinitionFingerprinter.NormalizeDefinition(fields) : default;
-            var key = depth == 0 ? entry.GetRawText() : ExecutionDefinitionFingerprinter.GetCanonicalDefinitionKey(fields);
-            if (!byContent.TryGetValue(key, out index))
+            using PooledByteBufferWriter canonical = new();
+            ExecutionDefinitionFingerprinter.WriteCanonicalDefinition(canonical, fields);
+            var contents = byContent.GetAlternateLookup<ReadOnlySpan<byte>>();
+            if (!contents.TryGetValue(canonical.WrittenSpan, out index))
             {
                 index = Entries.Count;
-                Entries.Add(entry);
-                keys.Add(key);
+                // Only unique leaf entries need an owned canonical document and ordering text.
+                // Parents are normalized after reference renumbering; provisional bytes suffice here.
+                var reader = new Utf8JsonReader(canonical.WrittenSpan);
+                Entries.Add(depth == 0 ? JsonElement.ParseValue(ref reader) : default);
+                keys.Add(depth == 0 ? Encoding.UTF8.GetString(canonical.WrittenSpan) : null);
                 payloads.Add(depth == 0 ? null : payload);
                 references.Add(tokens);
                 depths.Add(depth);
-                byContent.Add(key, index);
+                contents.TryAdd(canonical.WrittenSpan, index);
             }
             byIdentity[value] = index;
             if (value is ScalarTypeRef scalarValue)

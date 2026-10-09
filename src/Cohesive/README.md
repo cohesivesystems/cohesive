@@ -156,7 +156,9 @@ alone permits exponent notation. The expression evaluator delegates to this help
 
 Execution-document normalization and fingerprinting traverse immutable JSON directly; see
 [canonicalization performance](../../docs/performance/execution-canonicalization.md) for ownership,
-exact-byte regression coverage, allocation measurements and remaining costs.
+exact-byte regression coverage, allocation measurements and remaining costs. Compact type interning
+compares borrowed canonical bytes and retains keys only for unique entries; final numbering still uses
+ordinal canonical text ordering. See [canonical byte type keys](../../docs/performance/canonical-byte-type-keys.md).
 
 
 Default CLR root contracts with no explicit mapping or occurrence nullability metadata are

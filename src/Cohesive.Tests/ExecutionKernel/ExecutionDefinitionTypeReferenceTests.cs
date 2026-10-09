@@ -79,6 +79,23 @@ public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITe
     }
 
     [Fact]
+    public void DuplicateParentCandidatesAvoidOwnedCanonicalTextKeys()
+    {
+        var fields = new ObjectTypeRef([.. Enumerable.Range(0, 128).Select(index =>
+            new ObjectFieldTypeDef($"field{index}", new ScalarTypeRef(ScalarTypeKind.String)))]).Fields;
+        var declaration = new Types([.. Enumerable.Range(0, 64).Select(_ => (TypeRef)new ObjectTypeRef(fields))]);
+        for (var i = 0; i < 16; i++) _ = Create(declaration);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var document = Create(declaration);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"64 duplicate parents: {allocated} B.");
+        Assert.Equal(2, document.Definition.GetProperty("$types").GetArrayLength());
+        var decoded = document.GetDefinition<Types>();
+        Assert.All(decoded.Values, value => Assert.Same(decoded.Values[0], value));
+        Assert.InRange(allocated, 1, 2_200_000);
+    }
+
+    [Fact]
     public void ParentKeysDeduplicateCanonicalNumericAnnotationsAndKeepFinalChildNumbers()
     {
         var firstAnnotation = JsonSerializer.Deserialize<AnnotationValue>("{\"z\":1.0000,\"a\":[0,2]}")!;

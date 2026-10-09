@@ -151,24 +151,25 @@ public static class ExecutionDefinitionFingerprinter
 
     internal static JsonElement NormalizeDefinition(JsonElement definition)
     {
-        ValidateDefinition(definition);
-
         using PooledByteBufferWriter buffer = new();
-        using (var writer = CreateCanonicalWriter(buffer))
-            CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
+        WriteCanonicalDefinition(buffer, definition);
         // ParseValue creates an owned element before the temporary pooled bytes are returned.
         var reader = new Utf8JsonReader(buffer.WrittenSpan);
         return JsonElement.ParseValue(ref reader);
     }
 
-    // Canonical content keys need owned text, but no parsed intermediate document. Use the same
-    // validation, number semantics and writer as owned document normalization.
-    internal static string GetCanonicalDefinitionKey(JsonElement definition)
+    // The owning writer remains the authority for validation, number semantics and ordering.
+    internal static void WriteCanonicalDefinition(IBufferWriter<byte> buffer, JsonElement definition)
     {
         ValidateDefinition(definition);
+        using var writer = CreateCanonicalWriter(buffer);
+        CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
+    }
+
+    internal static string GetCanonicalDefinitionKey(JsonElement definition)
+    {
         using PooledByteBufferWriter buffer = new();
-        using (var writer = CreateCanonicalWriter(buffer))
-            CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
+        WriteCanonicalDefinition(buffer, definition);
         return Encoding.UTF8.GetString(buffer.WrittenSpan);
     }
 
