@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Collections;
+using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Text.Json;
 using Cohesive.Execution;
@@ -246,6 +248,40 @@ public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITe
     public void AuthoredReservedTablePropertyIsRejected()
     {
         Assert.Throws<JsonException>(() => Create(new Reserved([])));
+    }
+
+    [Fact]
+    public void ReplayRejectsCorruptTokenBytesAndSerializationRestoresTraversalStacks()
+    {
+        var owner = typeof(ExecutionDefinitionDocument).Assembly.GetType("Cohesive.Execution.ExecutionDefinitionTypes")!;
+        var poolType = owner.GetNestedType("TypePool", BindingFlags.NonPublic)!;
+        var pool = Activator.CreateInstance(poolType, nonPublic: true)!;
+        using var codec = (IDisposable)owner.GetMethod("Rent", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [pool])!;
+        var options = (JsonSerializerOptions)codec.GetType().GetProperty("Options", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(codec)!;
+        var intern = poolType.GetMethod("Intern", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var cyclic = new ArrayTypeRef(new ScalarTypeRef(ScalarTypeKind.String));
+        typeof(ArrayTypeRef).GetProperty(nameof(ArrayTypeRef.ElementType))!.SetValue(cyclic, cyclic);
+        Assert.IsType<JsonException>(Assert.Throws<TargetInvocationException>(() => intern.Invoke(pool, [cyclic, options])).InnerException);
+        foreach (var name in new[] { "capturing", "childDepths" })
+        {
+            var stack = poolType.GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(pool)!;
+            Assert.Equal(0, stack.GetType().GetProperty("Count")!.GetValue(stack));
+        }
+        var parent = new ArrayTypeRef(new ScalarTypeRef(ScalarTypeKind.String));
+        var index = (int)intern.Invoke(pool, [parent, options])!;
+        var entries = (IList)poolType.GetProperty("Entries", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(pool)!;
+        poolType.GetField("orderedIndices", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(pool, Enumerable.Range(0, entries.Count).ToArray());
+        var payloads = (IList)poolType.GetField("payloads", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(pool)!;
+        var references = (IList)poolType.GetField("references", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(pool)!;
+        var token = ((IList)references[index]!)[0]!;
+        var offset = (int)token.GetType().GetProperty("Offset")!.GetValue(token)!;
+        var bytes = (byte[])payloads[index]!;
+        var original = bytes[offset];
+        bytes[offset] = (byte)'9';
+        var remap = poolType.GetMethod("Remap", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Contains("does not match", Assert.IsType<JsonException>(Assert.Throws<TargetInvocationException>(() => remap.Invoke(pool, [index])).InnerException).Message);
+        bytes[offset] = original;
+        Assert.Equal(0, ((JsonElement)remap.Invoke(pool, [index])!).GetProperty("elementType").GetInt32());
     }
 
     public sealed record Payload(string Text, TypeRef[] Values);

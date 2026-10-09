@@ -322,9 +322,23 @@ internal static class ExecutionDefinitionTypes
             // so structural deduplication never repeatedly serializes a complete nested type tree.
             childDepths.Push(0);
             capturing.Push(null);
-            var payload = JsonSerializer.SerializeToUtf8Bytes(value, value.GetType(), options);
-            var tokens = capturing.Pop();
-            var depth = childDepths.Pop();
+            byte[] payload;
+            List<ReferenceToken>? tokens;
+            int depth;
+            try
+            {
+                payload = JsonSerializer.SerializeToUtf8Bytes(value, value.GetType(), options);
+            }
+            catch
+            {
+                byIdentity.Remove(value);
+                throw;
+            }
+            finally
+            {
+                tokens = capturing.Pop();
+                depth = childDepths.Pop();
+            }
             using var parsed = JsonDocument.Parse(payload);
             var fields = parsed.RootElement;
             // Retain original parent bytes only when unique. Canonical bytes deduplicate content;
@@ -374,6 +388,11 @@ internal static class ExecutionDefinitionTypes
             Span<byte> number = stackalloc byte[10];
             foreach (var token in references[index]!)
             {
+                if (token.Offset < previous || token.Length <= 0
+                    || token.Offset > payload.Length - token.Length
+                    || !Utf8Parser.TryParse(payload.AsSpan(token.Offset, token.Length), out int provisional, out var consumed)
+                    || consumed != token.Length || provisional != token.Index)
+                    throw new JsonException("A recorded type reference does not match its serialized payload.");
                 buffer.Write(payload.AsSpan(previous, token.Offset - previous));
                 Utf8Formatter.TryFormat(orderedIndices![token.Index], number, out var length);
                 buffer.Write(number[..length]);

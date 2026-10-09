@@ -1,6 +1,4 @@
-using System.Collections.Concurrent;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Model;
@@ -12,14 +10,13 @@ public static class ShapeTypeInspector
 {
     // Cache only property-declared reflection facts. Values are internal read-only inputs;
     // weak keys add no permanent retention of caller reflection properties or their types.
-    static readonly ConditionalWeakTable<PropertyInfo, Lazy<NullabilityInfo>> PropertyNullabilities = new();
+    static readonly WeakPreparationCache<PropertyInfo, NullabilityInfo> PropertyNullabilities = new();
 
     internal static NullabilityInfo GetPropertyNullability(PropertyInfo property) =>
-        PropertyNullabilities.GetValue(property, static key =>
-            new(() => new NullabilityInfoContext().Create(key))).Value;
+        PropertyNullabilities.Get(property, static key => new NullabilityInfoContext().Create(key));
 
-    static readonly ConcurrentDictionary<Type, PropertyInfo[]> ReadablePropertiesByType = new();
-    static readonly ConcurrentDictionary<Type, ClrPropertyShapeMetadata[]> ShapePropertiesByType = new();
+    static readonly WeakPreparationCache<Type, PropertyInfo[]> ReadablePropertiesByType = new();
+    static readonly WeakPreparationCache<Type, ClrPropertyShapeMetadata[]> ShapePropertiesByType = new();
 
     /// <summary>
     /// Returns cached readable public instance properties in deterministic declaration order.
@@ -30,7 +27,7 @@ public static class ShapeTypeInspector
     public static PropertyInfo[] GetReadableProperties(Type type)
     {
         ArgumentNullException.ThrowIfNull(type);
-        return ReadablePropertiesByType.GetOrAdd(type, static currentType =>
+        return ReadablePropertiesByType.Get(type, static currentType =>
         {
             var allProperties = currentType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
             if (allProperties.Length == 0)
@@ -92,7 +89,7 @@ public static class ShapeTypeInspector
     public static ClrPropertyShapeMetadata[] GetReadablePropertyMetadata(Type type)
     {
         ArgumentNullException.ThrowIfNull(type);
-        return ShapePropertiesByType.GetOrAdd(type, static currentType =>
+        return ShapePropertiesByType.Get(type, static currentType =>
         {
             var properties = GetReadableProperties(currentType);
             if (properties.Length == 0)

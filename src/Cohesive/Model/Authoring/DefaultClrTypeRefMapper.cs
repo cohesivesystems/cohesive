@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -16,10 +15,10 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     readonly ImmutableDictionary<Type, TypeRef> typeMappings;
     // Weak keys bound default contract retention to CLR type lifetime. Nested traversal never
     // consults the root cache: recursive diagnostics depend on the current ancestor path.
-    static readonly ConditionalWeakTable<Type, Lazy<TypeRef>> defaultRootTypes = new();
-    static readonly ConditionalWeakTable<Type, Lazy<bool>> polymorphicTypes = new();
-    static readonly ConditionalWeakTable<Type, Lazy<Type?>> quantityRepresentations = new();
-    static readonly ConditionalWeakTable<Type, Lazy<(PropertyInfo Property, string Name)[]>> structuralProperties = new();
+    static readonly WeakPreparationCache<Type, TypeRef> defaultRootTypes = new();
+    static readonly WeakPreparationCache<Type, bool> polymorphicTypes = new();
+    static readonly WeakPreparationCache<Type, Type?> quantityRepresentations = new();
+    static readonly WeakPreparationCache<Type, (PropertyInfo Property, string Name)[]> structuralProperties = new();
 
     /// <summary>Creates the default portable CLR type projection.</summary>
     public DefaultClrTypeRefMapper() => typeMappings = ImmutableDictionary<Type, TypeRef>.Empty;
@@ -67,20 +66,8 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     {
         ArgumentNullException.ThrowIfNull(clrType);
         if (typeMappings.IsEmpty && nullability is null)
-        {
-            var prepared = defaultRootTypes.GetValue(clrType, static type => new(() =>
-                new DefaultClrTypeRefMapper().MapInternal(type, null, new MappingContext())));
-            try
-            {
-                return prepared.Value;
-            }
-            catch
-            {
-                // Failed preparation must remain retryable rather than becoming a permanent type entry.
-                defaultRootTypes.Remove(clrType);
-                throw;
-            }
-        }
+            return defaultRootTypes.Get(clrType, static type =>
+                new DefaultClrTypeRefMapper().MapInternal(type, null, new MappingContext()));
         return MapInternal(clrType, nullability, new MappingContext());
     }
 
@@ -200,11 +187,11 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         var recursiveEncounters = context.RecursiveEncounters;
         try
         {
-            var properties = structuralProperties.GetValue(unwrapped, static type => new(() =>
+            var properties = structuralProperties.Get(unwrapped, static type =>
                 ShapeTypeInspector.GetReadableProperties(type)
                     .Select(static property => (Property: property, Name: GetSerializedMemberName(property)))
                     .OrderBy(static property => property.Name, StringComparer.Ordinal)
-                    .ToArray())).Value;
+                    .ToArray());
 
             if (properties.Length == 0)
             {
@@ -389,9 +376,9 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     }
 
     static bool IsJsonPolymorphicType(Type type) =>
-        polymorphicTypes.GetValue(type, static key => new(() =>
+        polymorphicTypes.Get(type, static key =>
             key.GetCustomAttribute<JsonPolymorphicAttribute>(inherit: true) is not null
-            || key.GetCustomAttributes<JsonDerivedTypeAttribute>(inherit: true).Any())).Value;
+            || key.GetCustomAttributes<JsonDerivedTypeAttribute>(inherit: true).Any());
 
     static bool TryGetEnumerableElementType(
         Type type,
@@ -438,14 +425,14 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
     static bool TryGetStructuredQuantityRepresentationType(Type type, out Type representationType)
     {
-        var representation = quantityRepresentations.GetValue(type, static key => new(() =>
+        var representation = quantityRepresentations.Get(type, static key =>
         {
             var quantityInterface = key.GetInterfaces().FirstOrDefault(x =>
                 x.IsGenericType
                 && x.GetGenericTypeDefinition() == typeof(IStructuredQuantity<,,>)
                 && x.GetGenericArguments()[0] == key);
             return quantityInterface?.GetGenericArguments()[2];
-        })).Value;
+        });
         representationType = representation ?? typeof(void);
         return representation is not null;
     }

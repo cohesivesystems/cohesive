@@ -105,7 +105,3 @@ TypeScript package builds. A full run encountered an unchanged materializer allo
 
 The dependent Ari qualification passed all 1,263 .NET tests with 18 existing skips against the local
 review packages. The regenerated pinned corpus remained operationally accepted.
-
-The follow-up [canonical fingerprinting optimization](canonical-fingerprinting.md) reuses
-normalized document content and the existing streaming SHA-256 writer while keeping external
-component canonicalization and integrity checks independent.

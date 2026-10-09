@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Model.Serialization;
@@ -14,7 +13,8 @@ internal enum SerializedEnumMemberCatalogFailure
 
 internal sealed class SerializedEnumMemberCatalog
 {
-    static readonly ConditionalWeakTable<Type, CachedDiscovery> Discoveries = new();
+    static readonly WeakPreparationCache<Type, Discovery> StrictDiscoveries = new();
+    static readonly WeakPreparationCache<Type, Discovery> FallbackDiscoveries = new();
     readonly IReadOnlyDictionary<string, string> clrToWire;
     readonly IReadOnlyDictionary<string, string> wireToClr;
 
@@ -48,28 +48,13 @@ internal sealed class SerializedEnumMemberCatalog
             throw new ArgumentException($"Type '{enumType}' is not an enum.", nameof(enumType));
         }
 
-        var prepared = Discoveries.GetValue(enumType, static type => new(type)).Get(useClrNamesForUnsupportedConverter);
+        var strict = StrictDiscoveries.Get(enumType, Discover);
+        var prepared = useClrNamesForUnsupportedConverter && strict.Failure == SerializedEnumMemberCatalogFailure.UnsupportedConverter
+            ? FallbackDiscoveries.Get(enumType, static type => DiscoverMembers(type, false)) : strict;
         catalog = prepared.Catalog;
         failure = prepared.Failure;
         unsupportedConverter = prepared.Converter;
         return catalog is not null;
-    }
-
-    // Enum declarations are stable metadata. Weak keys do not add permanent CLR type retention;
-    // selected lazy entries coordinate first preparation without sharing mutable discovery state.
-    sealed class CachedDiscovery
-    {
-        readonly Lazy<Discovery> strict;
-        readonly Lazy<Discovery> fallback;
-
-        internal CachedDiscovery(Type type)
-        {
-            strict = new(() => Discover(type));
-            fallback = new(() => strict.Value.Failure == SerializedEnumMemberCatalogFailure.UnsupportedConverter
-                ? DiscoverMembers(type, false) : strict.Value);
-        }
-
-        internal Discovery Get(bool useClrNames) => (useClrNames ? fallback : strict).Value;
     }
 
     readonly record struct Discovery(SerializedEnumMemberCatalog? Catalog,

@@ -155,21 +155,10 @@ alone permits exponent notation. The expression evaluator delegates to this help
 `TryGetDecimal` convenience coercion keeps its broader BCL syntax and rounding behavior.
 
 The [execution preparation allocation overview](../../docs/performance/execution-preparation-allocations.md)
-links the current ownership contracts, implementation stages and qualification evidence.
-Execution-document normalization and fingerprinting traverse immutable JSON directly; see
-[canonicalization performance](../../docs/performance/execution-canonicalization.md) for ownership,
-exact-byte regression coverage, allocation measurements and remaining costs. Compact type interning
-compares borrowed canonical bytes and retains keys only for unique entries; final numbering still uses
-ordinal canonical text ordering. See [canonical byte type keys](../../docs/performance/canonical-byte-type-keys.md).
-
-
-Default CLR root contracts with no explicit mapping or occurrence nullability metadata are
-shared immutable projections, retained through weak CLR type keys. Recursive inference remains
-root-local; explicit mappings and occurrence metadata bypass reuse. See
-[default type contract reuse](../../docs/performance/default-type-contract-reuse.md) for ownership,
-canonical equivalence and representative allocation evidence. First traversal also reuses completed
-cycle-free structural children within the mapper invocation; see
-[nested type contract reuse](../../docs/performance/nested-type-contract-reuse.md).
+describes current immutable type reuse, guarded compact reference replay, canonical-byte interning,
+shared node/element canonical traversal, and retryable weak metadata preparation. It links the final
+qualification reports. Execution normalization, type ordering and fingerprints share one canonical
+JSON authority; pooled buffers never escape their operation. Imported documents retain strict validation.
 
 ### Concurrent JSON profile metadata preparation
 
