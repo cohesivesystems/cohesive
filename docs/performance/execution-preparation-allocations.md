@@ -106,7 +106,7 @@ dotnet src/Cohesive.Relations.Benchmarks/bin/Release/net10.0/Cohesive.Relations.
 
 For the baseline, copy that built output to an isolated directory and replace only `Cohesive.dll`
 with the Release assembly built at the baseline revision. Run the same command against the copied DLL.
-Exact-name means are 0.29 μs flat, 0.39 μs nested, 9.56 μs collection and 2.81 μs large after this change.
+Exact-name means are 0.31 μs flat, 0.42 μs nested, 9.72 μs collection and 2.96 μs large after this change.
 These small costs vary with JIT and machine state; avoid a universal speedup claim.
 The occasional 1 B result is benchmark harness amortization; a direct counter regression proves zero
 warm temporary allocation for exact object validation. Wide case-fallback allocation is bounded at
@@ -140,13 +140,13 @@ The [named baseline](execution-preparation-final/named-validation-before.md) and
 fixture assembly and published Core baseline `97e7d1df`. The command above can select
 `*NamedValidationBenchmarks*` instead. Types and values are constructed outside timing, then warmed:
 16 named-enum fields (flat), eight named structural parent levels (nested), 32 repeated objects
-(collection), or 128 named-enum fields (large). Warm local means change from 281 to 242 ns flat,
-520 to 399 ns nested, 9.01 to 7.56 μs collection, and 2.69 to 2.35 μs large. These are approximately
-13–23% improvements against the published baseline, combining field lookup and prepared links. They
+(collection), or 128 named-enum fields (large). Warm local means change from 281 to 255 ns flat,
+520 to 416 ns nested, 9.01 to 8.01 μs collection, and 2.69 to 2.40 μs large. These are approximately
+9–20% improvements against the published baseline, combining field lookup and prepared links. They
 are not Ari endpoint or catalog latency measurements.
 
 The dedicated cold counter constructs a fresh 128-field named graph and value outside measurement,
-initializes runtime dispatch with unrelated graph/type keys, then measures first validation: 30,768 B
+initializes runtime dispatch with unrelated graph/type keys, then measures first validation: 31,752 B
 locally. Its next 1,000 exact-name validations allocate 0 B. The regression budgets cold preparation
 at 64 KB and requires zero warm allocation. This trades first-use preparation and retained metadata
 for repeated lookup savings; it does not reduce already-zero warm allocation. Runtime values,
@@ -162,12 +162,14 @@ remain equivalent accepted spellings. Union insertion preserves the first declar
 Nonstring primitive literals retain the existing representation-sensitive scan: integer `10` does
 not match discriminator text `010`. Graph-bound indexes live on their plan node; standalone checks
 use one weak declaration table.
-A node owns one typed metadata slot, which binds its owner, index type and static factory at
-construction. It publishes successful preparation only and retries failures. Named reference nodes resolving the same declaration share that container
+A node owns metadata bound to its exact declaration. The accessor interface owns the index type,
+static factory and typed slot, with generic constraints enforcing that pairing at compile time.
+There is no owner-to-factory switch; reading indexless metadata is safe. Slots publish successful
+preparation only and retry failures. Named reference nodes resolving the same declaration share that container
 within the graph; a graph-owned dictionary is bounded by its own declarations and retains no reference
 root nodes. Object/inline-enum containers are lazy. Occurrence values are never cached. Node TypeRef identity and positional child
-access have Release checks; metadata access checks exact owner identity and its closed generic index
-type before returning a slot. Slots accept no owner argument when preparing their index; field-name accessors constrain owner types at compile time. The three
+access have Release checks; metadata access verifies exact owner identity before the accessor
+prepares its index in its typed slot; field-name accessors constrain owner types at compile time. The three
 literal paths use one generic hybrid lookup policy, specialized by small static accessors.
 
 The [baseline](execution-preparation-final/literal-validation-before.md) and
@@ -181,29 +183,54 @@ DOTNET_TieredCompilation=0 dotnet src/Cohesive.Relations.Benchmarks/bin/Release/
 
 Both variants disable tiered compilation to avoid tier-promotion noise in these short in-process
 runs; these timings are not comparable to earlier tiered reports or Ari endpoint timings.
-Late inline enum matches change from 265 to 33 ns, named enum literals from 1,543 to 52 ns,
-and union cases from 1,027 to 69 ns. Invalid values change from 535 to 126 ns, 3,057 to 118 ns,
-and 2,135 to 197 ns respectively. First named enum matches improve from 30 to 24 ns; first union
-matches remain approximately unchanged. First inline enum checks add about 0.6 ns. Unchanged object
+Late inline enum matches change from 265 to 33 ns, named enum literals from 1,543 to 55 ns,
+and union cases from 1,027 to 68 ns. Invalid values change from 535 to 121 ns, 3,057 to 122 ns,
+and 2,135 to 196 ns respectively. First named enum matches improve from 30 to 24 ns; first union
+matches remain approximately unchanged. First inline enum checks add about 0.9 ns. Unchanged object
 diagnostic fixtures vary by roughly 0–4%, illustrating measurement noise rather than an unrelated speedup.
 
 Diagnostic allocation sizes are unchanged apart from harness rounding: about 210 B for inline enum
 misses, 169 B for named misses and 314 B for union misses. A direct counter proves zero temporary
 allocation for 1,000 warm inline/union checks;
 the occasional 1 B benchmark result is harness amortization. Fresh late/missing lookups allocate
-2,832 B for inline enum preparation, 4,104 B for union preparation and 5,976 B for named enum
+2,840 B for inline enum preparation, 4,112 B for union preparation and 5,976 B for named enum
 preparation locally. These counters exclude declaration/value construction, global runtime setup,
 and graph-link preparation. Early inline/union matches allocate zero and do not prepare indexes.
-Consolidating preparation adds 2,104 B to the 128-field named graph cold boundary (now 30,768 B),
-including the original TypeRef and lazy metadata slot on each node. Graph-bound and standalone warm
+Consolidating preparation adds 3,088 B to the 128-field named graph cold boundary (now 31,752 B),
+including the original TypeRef and metadata slot on each node, plus a concurrent graph-owned
+declaration registry that permits metadata-only readers without preparing validation closures. Graph-bound and standalone warm
 literal checks have zero-allocation regression coverage. The per-graph closure gate remains the
 intentional publication boundary; this change does not parallelize first-use roots within one graph.
 Tests cover ordinal membership, aliases, duplicate union literals, temporal string values, numeric
 representation sensitivity, distinct declaration identities and cold/warm allocation bounds.
 
-The shape-bound JSON reader passes the prepared union plan through discriminator lookup. A regression
-prepares its graph-owned index, then decodes a fresh document within a 2 KB allocation budget including
-the decoded object; allocating a second standalone 128-case index would exceed that budget. Case lookup
-against the prepared plan allocates zero bytes. Release mismatch tests cover metadata owner/index type
-and positional child identity. A bytes-based named enum with a null member literal rejects empty bytes,
-while a member declaring the empty base64 literal accepts them.
+## Lazy union decoding and exact index reuse
+
+Plain typed decoding checks the first eight union cases without fetching validation plans or shared
+metadata. Only a later match or miss requests the graph's declaration metadata. That concurrent
+registry is bounded by the graph's own named declarations; metadata construction does not walk
+children or compile a validation closure. Named validation plans bind the same metadata container.
+A cold decoding regression proves that both early and late reads leave the union plan unprepared;
+the late read populates its graph-owned dispatch dictionary, and subsequent validation must reuse
+that exact dictionary instance. This replaces the indirect allocation-budget reuse assertion.
+Release mismatch tests protect metadata ownership and positional child identity. Nonstring enum
+members with no literal remain skipped, including the empty-bytes regression.
+
+The [reader baseline](execution-preparation-final/union-reader-before.md) and
+[final report](execution-preparation-final/union-reader-after.md), with adjacent CSVs, measure
+`UnionReaderBenchmarks`: arrays of 1, 32 or 128 union objects, 128 discriminator cases, first versus
+last-case selection, and a typed integer payload. Graph, declarations and JSON bytes are constructed
+outside measurement; 64 reads warm each fixture. Timing includes parsing and owned output allocation,
+but excludes semantic validation. The same fixture assembly runs against baseline Core `1c3dd3a5`
+with only the existing typed reader method's visibility changed from private to internal, permitting
+the benchmark seam; its implementation is unchanged. The final version keeps that internal seam.
+Run the literal command above with `*UnionReaderBenchmarks*` instead, disabling tiered compilation
+for both variants. No test work overlaps these runs.
+
+Warm early-case arrays change from 19.63 to 19.16 μs at 32 objects and 79.10 to 77.30 μs at 128 objects.
+Late-case arrays change from 20.90 to 20.46 μs and 82.06 to 82.14 μs respectively. The single-object
+means are approximately unchanged, as are owned output allocations (roughly 15 KB at 32 objects and
+60 KB at 128; 1–2 B differences are harness amortization). These small warm changes do not establish
+a general speedup. The deterministic improvement is removing unused closure/index preparation and
+reusing the exact graph-owned index. Cold named-graph preparation costs 984 B more than the previous
+revision locally, while 1,000 warm validations still allocate zero bytes.

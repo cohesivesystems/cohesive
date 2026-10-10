@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 
 namespace Cohesive.Model;
@@ -13,7 +14,7 @@ internal sealed class ObservationValidationPlan(TypeRef type)
 
     ObservationValidationMetadata InitializeMetadata()
     {
-        var prepared = ObservationValidationMetadata.Create(Definition ?? (object)Type);
+        var prepared = new ObservationValidationMetadata(Definition ?? (object)Type);
         return Interlocked.CompareExchange(ref metadata, prepared, null) ?? prepared;
     }
 
@@ -38,11 +39,30 @@ internal sealed class ObservationValidationPlan(TypeRef type)
     internal static ObservationValidationPlan Get(TypeRef root, ShapeGraph graph) =>
         Graphs.GetValue(graph, static value => new(value)).Get(root);
 
+    internal static ObservationValidationMetadata GetDefinitionMetadata(TypeDefinition definition, ShapeGraph graph) =>
+        Graphs.GetValue(graph, static value => new(value)).GetMetadata(definition);
+
+    internal static bool TryGet(TypeRef root, ShapeGraph graph, out ObservationValidationPlan? plan)
+    {
+        plan = null;
+        return Graphs.TryGetValue(graph, out var plans) && plans.TryGet(root, out plan);
+    }
+
     sealed class GraphPlans(ShapeGraph graph)
     {
         readonly ConditionalWeakTable<TypeRef, ObservationValidationPlan> nodes = new();
         readonly object gate = new();
-        Dictionary<TypeDefinition, ObservationValidationMetadata>? definitions;
+        readonly ConcurrentDictionary<TypeDefinition, ObservationValidationMetadata> definitions = new(ReferenceEqualityComparer.Instance);
+
+        internal bool TryGet(TypeRef root, out ObservationValidationPlan? plan) => nodes.TryGetValue(root, out plan);
+
+        internal ObservationValidationMetadata GetMetadata(TypeDefinition definition)
+        {
+            if (definitions.TryGetValue(definition, out var metadata)) return metadata;
+            if (!graph.TryGetType(definition.Id, out var declared) || !ReferenceEquals(declared, definition))
+                throw new InvalidOperationException("Validation metadata requires the graph's exact declaration.");
+            return definitions.GetOrAdd(definition, static value => new(value));
+        }
 
         internal ObservationValidationPlan Get(TypeRef root)
         {
@@ -52,14 +72,14 @@ internal sealed class ObservationValidationPlan(TypeRef type)
             lock (gate)
             {
                 if (nodes.TryGetValue(root, out plan)) return plan;
-                return Build(root, graph, nodes, ref definitions);
+                return Build(root, graph, nodes, this);
             }
         }
     }
 
     static ObservationValidationPlan Build(TypeRef root, ShapeGraph graph,
         ConditionalWeakTable<TypeRef, ObservationValidationPlan> prepared,
-        ref Dictionary<TypeDefinition, ObservationValidationMetadata>? definitions)
+        GraphPlans plans)
     {
         Dictionary<TypeRef, ObservationValidationPlan> nodes = new(ReferenceEqualityComparer.Instance);
         Queue<TypeRef> pending = new();
@@ -82,13 +102,7 @@ internal sealed class ObservationValidationPlan(TypeRef type)
                         node.Definition = definition;
                         // Different NamedTypeRef objects can resolve to the same declaration. Share
                         // its metadata within the graph without retaining those reference/root nodes.
-                        definitions ??= new(ReferenceEqualityComparer.Instance);
-                        if (!definitions.TryGetValue(definition, out var metadata))
-                        {
-                            metadata = ObservationValidationMetadata.Create(definition);
-                            definitions.Add(definition, metadata);
-                        }
-                        node.metadata = metadata;
+                        node.metadata = plans.GetMetadata(definition);
                         if (definition is TypeDefinition.Structural structural)
                         {
                             node.Children = new ObservationValidationPlan?[structural.Fields.Length];

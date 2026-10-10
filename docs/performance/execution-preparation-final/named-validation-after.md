@@ -12,7 +12,7 @@ WarmupCount=3
 ```
 | Method   | Shape      | Mean       | Error     | StdDev   | Allocated |
 |--------- |----------- |-----------:|----------:|---------:|----------:|
-| **Validate** | **collection** | **7,555.1 ns** | **113.24 ns** | **59.23 ns** |         **-** |
-| **Validate** | **flat**       |   **241.6 ns** |   **3.36 ns** |  **1.76 ns** |       **1 B** |
-| **Validate** | **large**      | **2,347.9 ns** |  **42.76 ns** | **18.99 ns** |       **1 B** |
-| **Validate** | **nested**     |   **398.9 ns** |   **3.34 ns** |  **1.75 ns** |       **1 B** |
+| **Validate** | **collection** | **8,008.5 ns** | **159.12 ns** | **83.22 ns** |         **-** |
+| **Validate** | **flat**       |   **255.1 ns** |  **18.22 ns** |  **9.53 ns** |       **1 B** |
+| **Validate** | **large**      | **2,396.8 ns** |  **71.10 ns** | **37.19 ns** |       **1 B** |
+| **Validate** | **nested**     |   **416.2 ns** |  **23.39 ns** | **12.23 ns** |       **1 B** |

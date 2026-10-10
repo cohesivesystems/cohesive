@@ -533,7 +533,9 @@ public static class ObservationValidator
     {
         if (graph is null)
             return Fail(ref diagnostics, new(ErrorCode.MissingGraph, namedType.TypeId.Value));
-        plan!.RequireType(namedType);
+        if (plan is null)
+            throw new InvalidOperationException("Named validation requires a prepared graph-bound plan.");
+        plan.RequireType(namedType);
         if (plan!.Definition is not { } definition)
             return Fail(ref diagnostics, new(ErrorCode.MissingNamedType, namedType.TypeId.Value));
 
@@ -741,14 +743,14 @@ public static class ObservationValidator
 
     internal static TypeRef? TryResolveUnionCase(
         TypeDefinition.Union unionType,
-        in ObservationValue discriminatorValue, ObservationValidationPlan? plan = null)
+        in ObservationValue discriminatorValue, ObservationValidationPlan? plan = null, ShapeGraph? graph = null)
     {
-        var index = TryResolveUnionCaseIndex(unionType, discriminatorValue, plan);
+        var index = TryResolveUnionCaseIndex(unionType, discriminatorValue, plan, graph);
         return index < 0 ? null : unionType.Cases[index].Type;
     }
 
     static int TryResolveUnionCaseIndex(TypeDefinition.Union unionType, in ObservationValue value,
-        ObservationValidationPlan? plan = null) => FindLiteral<TypeDefinition.Union, UnionLiteral>(unionType, value, plan);
+        ObservationValidationPlan? plan = null, ShapeGraph? graph = null) => FindLiteral<TypeDefinition.Union, UnionLiteral>(unionType, value, plan, graph);
 
     // One hybrid policy keeps small/early declarations direct and indexes only exact string semantics.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -766,18 +768,18 @@ public static class ObservationValidator
         for (var i = 1; i < count; i++)
             if (TAccessor.Matches(owner, i, value, text)) return i;
         if (!indexed) return -1;
-        return TAccessor.Find(owner, text!, plan, graph);
+        return TAccessor.Find(owner, text!, ObservationValidationMetadata.For(owner, plan, graph));
     }
 
-    interface ILiteralAccessor<TOwner>
+    internal interface ILiteralAccessor<TOwner>
     {
         static abstract bool TryGetText(in ObservationValue value, out string text);
         static abstract int Count(TOwner owner);
         static abstract bool CanIndex(TOwner owner);
         static abstract bool Matches(TOwner owner, int index, in ObservationValue value, string? text);
-        static abstract int Find(TOwner owner, string text, ObservationValidationPlan? plan, ShapeGraph? graph);
+        static abstract int Find(TOwner owner, string text, ObservationValidationMetadata metadata);
     }
-    readonly struct InlineEnumLiteral : ILiteralAccessor<EnumTypeRef>
+    internal readonly struct InlineEnumLiteral : ILiteralAccessor<EnumTypeRef>, IValidationIndexAccessor<EnumTypeRef, HashSet<string>>
     {
         public static bool TryGetText(in ObservationValue value, out string text) => TryGetString(value, out text);
         public static int Count(EnumTypeRef owner) => owner.Members.Length;
@@ -785,10 +787,12 @@ public static class ObservationValidator
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool Matches(EnumTypeRef owner, int index, in ObservationValue value, string? text) =>
             string.Equals(owner.Members[index], text ?? value.GetString() ?? string.Empty, StringComparison.Ordinal);
-        public static int Find(EnumTypeRef owner, string text, ObservationValidationPlan? plan, ShapeGraph? graph) =>
-            ObservationValidationMetadata.For<EnumTypeRef, HashSet<string>>(owner, plan, graph).Index.Contains(text) ? 0 : -1;
+        public static int Find(EnumTypeRef owner, string text, ObservationValidationMetadata metadata) =>
+            metadata.Get<EnumTypeRef, HashSet<string>, InlineEnumLiteral>(owner).Contains(text) ? 0 : -1;
+        public static HashSet<string> Create(EnumTypeRef owner) => new(owner.Members, StringComparer.Ordinal);
+        public static ref HashSet<string>? Slot(ObservationValidationMetadata metadata) => ref metadata.Members;
     }
-    readonly struct NamedEnumLiteral : ILiteralAccessor<TypeDefinition.Enum>
+    internal readonly struct NamedEnumLiteral : ILiteralAccessor<TypeDefinition.Enum>, IValidationIndexAccessor<TypeDefinition.Enum, HashSet<string>>
     {
         public static bool TryGetText(in ObservationValue value, out string text) => TryGetString(value, out text);
         public static int Count(TypeDefinition.Enum owner) => owner.Values.Length;
@@ -799,10 +803,21 @@ public static class ObservationValidator
                 ? string.Equals(owner.Values[index].Name, text ?? value.GetString() ?? string.Empty, StringComparison.Ordinal)
                   || (owner.Values[index].Value is { } stringLiteral && string.Equals(stringLiteral, value.String, StringComparison.Ordinal))
                 : owner.Values[index].Value is { } literal && MatchesPrimitiveLiteral(owner.Underlying, value, literal);
-        public static int Find(TypeDefinition.Enum owner, string text, ObservationValidationPlan? plan, ShapeGraph? graph) =>
-            ObservationValidationMetadata.For<TypeDefinition.Enum, HashSet<string>>(owner, plan).Index.Contains(text) ? 0 : -1;
+        public static int Find(TypeDefinition.Enum owner, string text, ObservationValidationMetadata metadata) =>
+            metadata.Get<TypeDefinition.Enum, HashSet<string>, NamedEnumLiteral>(owner).Contains(text) ? 0 : -1;
+        public static HashSet<string> Create(TypeDefinition.Enum owner)
+        {
+            HashSet<string> result = new(owner.Values.Length * 2, StringComparer.Ordinal);
+            foreach (var member in owner.Values)
+            {
+                result.Add(member.Name);
+                if (member.Value is { } literal) result.Add(literal);
+            }
+            return result;
+        }
+        public static ref HashSet<string>? Slot(ObservationValidationMetadata metadata) => ref metadata.Members;
     }
-    readonly struct UnionLiteral : ILiteralAccessor<TypeDefinition.Union>
+    internal readonly struct UnionLiteral : ILiteralAccessor<TypeDefinition.Union>, IValidationIndexAccessor<TypeDefinition.Union, Dictionary<string, int>>
     {
         public static bool TryGetText(in ObservationValue value, out string text)
         {
@@ -816,9 +831,16 @@ public static class ObservationValidator
             owner.Discriminator.Type == PrimitiveType.String && text is not null
                 ? string.Equals(owner.Cases[index].DiscriminatorValue, text, StringComparison.Ordinal)
                 : MatchesPrimitiveLiteral(owner.Discriminator.Type, value, owner.Cases[index].DiscriminatorValue);
-        public static int Find(TypeDefinition.Union owner, string text, ObservationValidationPlan? plan, ShapeGraph? graph) =>
-            ObservationValidationMetadata.For<TypeDefinition.Union, Dictionary<string, int>>(owner, plan).Index.TryGetValue(text, out var matched)
+        public static int Find(TypeDefinition.Union owner, string text, ObservationValidationMetadata metadata) =>
+            metadata.Get<TypeDefinition.Union, Dictionary<string, int>, UnionLiteral>(owner).TryGetValue(text, out var matched)
                 ? matched : -1;
+        public static Dictionary<string, int> Create(TypeDefinition.Union owner)
+        {
+            Dictionary<string, int> result = new(owner.Cases.Length, StringComparer.Ordinal);
+            for (var i = 0; i < owner.Cases.Length; i++) result.TryAdd(owner.Cases[i].DiscriminatorValue, i);
+            return result;
+        }
+        public static ref Dictionary<string, int>? Slot(ObservationValidationMetadata metadata) => ref metadata.Cases;
     }
 
     static bool TryMatchQuantity<TDiagnostics>(
@@ -1219,7 +1241,7 @@ public static class ObservationValidator
         return true;
     }
 
-    interface IFieldNameAccessor<TOwner, TDefinition>
+    interface IFieldNameAccessor<TOwner, TDefinition> : IValidationIndexAccessor<TOwner, HashSet<string>> where TOwner : class
     {
         static abstract string GetName(TDefinition definition);
         static abstract HashSet<string> GetKnownNames(TOwner owner, ObservationValidationPlan? plan);
@@ -1229,14 +1251,18 @@ public static class ObservationValidator
     {
         public static string GetName(ObjectFieldTypeDef definition) => definition.Name;
         public static HashSet<string> GetKnownNames(ObjectTypeRef owner, ObservationValidationPlan? plan) =>
-            ObservationValidationMetadata.For<ObjectTypeRef, HashSet<string>>(owner, plan).Index;
+            ObservationValidationMetadata.For(owner, plan).Get<ObjectTypeRef, HashSet<string>, ObjectFieldNameAccessor>(owner);
+        public static HashSet<string> Create(ObjectTypeRef owner) => new(owner.Fields.Select(static field => field.Name), StringComparer.OrdinalIgnoreCase);
+        public static ref HashSet<string>? Slot(ObservationValidationMetadata metadata) => ref metadata.KnownNames;
     }
 
     readonly struct StructuralFieldNameAccessor : IFieldNameAccessor<TypeDefinition.Structural, StructuralField>
     {
         public static string GetName(StructuralField definition) => definition.Name.Value;
         public static HashSet<string> GetKnownNames(TypeDefinition.Structural owner, ObservationValidationPlan? plan) =>
-            ObservationValidationMetadata.For<TypeDefinition.Structural, HashSet<string>>(owner, plan).Index;
+            ObservationValidationMetadata.For(owner, plan).Get<TypeDefinition.Structural, HashSet<string>, StructuralFieldNameAccessor>(owner);
+        public static HashSet<string> Create(TypeDefinition.Structural owner) => new(owner.Fields.Select(static field => field.Name.Value), StringComparer.OrdinalIgnoreCase);
+        public static ref HashSet<string>? Slot(ObservationValidationMetadata metadata) => ref metadata.KnownNames;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

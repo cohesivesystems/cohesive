@@ -9,27 +9,39 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
     const int AllocationWarmupIterations = 1_000;
 
     [Fact]
-    public void TypedJsonReaderDoesNotPrepareASecondUnionIndex()
+    public void TypedJsonReaderAndValidationReuseTheExactUnionIndex()
     {
         var type = new NamedTypeRef(new("reader-union"));
         var union = new TypeDefinition.Union(type.TypeId, new UnionDiscriminator("kind"),
             [.. Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}", new ObjectTypeRef([]), $"code{i}"))]);
-        var declaration = new Shape(new("root"), [new(new("item"), type)]);
-        var graph = new ShapeGraph(new("reader-index"), [declaration], [union]);
-        GraphShapeId shape = new(graph, declaration.Id);
-        var layout = ObservationLayout.Create(shape, ["item"]);
-        var plan = ObservationValidationPlan.Get(type, graph);
-        _ = ObservationValidationMetadata.For<TypeDefinition.Union, Dictionary<string, int>>(union, plan).Index;
-        ObservationValue[] values = new ObservationValue[1];
-        ulong[] present = new ulong[1];
-        var reader = new Utf8JsonReader("{\"item\":{\"kind\":\"code127\"}}"u8);
+        var graph = new ShapeGraph(new("reader-index"), [], [union]);
+        var reader = new Utf8JsonReader("{\"kind\":\"code127\"}"u8);
         Assert.True(reader.Read());
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var valid = ObservationJsonReader.TryReadShape(ref reader, shape, layout, values, present, out var error);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
-        Assert.True(valid, error);
-        Assert.InRange(allocated, 0, 2_000); // Includes the decoded object; another union index exceeds this budget.
-        Assert.Equal("code127", values[0].Fields!["kind"].String);
+        var value = ObservationJsonReader.ReadTypedValue(ref reader, type, graph);
+        Assert.False(ObservationValidationPlan.TryGet(type, graph, out _));
+        var readerMetadata = ObservationValidationPlan.GetDefinitionMetadata(union, graph);
+        var readerIndex = ObservationValidator.UnionLiteral.Slot(readerMetadata);
+        Assert.NotNull(readerIndex); // Reading already populated the graph-owned slot, without compiling a closure.
+        Assert.True(ObservationValidator.TryValidateAgainstType(value, type, out _, graph));
+        var plan = ObservationValidationPlan.Get(type, graph);
+        Assert.Same(readerMetadata, plan.Metadata);
+        Assert.Same(readerIndex, plan.Metadata.Get<TypeDefinition.Union, Dictionary<string, int>, ObservationValidator.UnionLiteral>(union));
+    }
+
+    [Fact]
+    public void EarlyUnionDecodingDoesNotPrepareAPlanOrIndex()
+    {
+        var type = new NamedTypeRef(new("early-union"));
+        var union = new TypeDefinition.Union(type.TypeId, new UnionDiscriminator("kind"),
+            [.. Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}", new ObjectTypeRef([]), $"code{i}"))]);
+        var graph = new ShapeGraph(new("early-reader"), [], [union]);
+        var reader = new Utf8JsonReader("{\"kind\":\"code0\"}"u8);
+        Assert.True(reader.Read());
+        _ = ObservationJsonReader.ReadTypedValue(ref reader, type, graph);
+        Assert.False(ObservationValidationPlan.TryGet(type, graph, out _));
+        Assert.Null(ObservationValidator.UnionLiteral.Slot(ObservationValidationPlan.GetDefinitionMetadata(union, graph)));
+        var array = new ArrayTypeRef(new ScalarTypeRef(ScalarTypeKind.String));
+        Assert.Same(array, ObservationValidationPlan.Get(array, graph).Metadata.Owner);
     }
 
     [Fact]
@@ -40,7 +52,7 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
             [.. Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}", new ObjectTypeRef([]), $"code{i}"))]);
         var graph = new ShapeGraph(new("union-reader"), [], [union]);
         var plan = ObservationValidationPlan.Get(root, graph);
-        _ = ObservationValidationMetadata.For<TypeDefinition.Union, Dictionary<string, int>>(union, plan).Index;
+        _ = ObservationValidationMetadata.For(union, plan).Get<TypeDefinition.Union, Dictionary<string, int>, ObservationValidator.UnionLiteral>(union);
         var value = ObservationValue.FromString("code127");
         var before = GC.GetAllocatedBytesForCurrentThread();
         var selected = ObservationValidator.TryResolveUnionCase(union, value, plan);
@@ -68,8 +80,8 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         var second = new EnumTypeRef("second", ["two"]);
         var graph = new ShapeGraph(new("identities"), [], []);
         var plan = ObservationValidationPlan.Get(first, graph);
-        Assert.Throws<InvalidOperationException>(() => ObservationValidationMetadata.For<EnumTypeRef, HashSet<string>>(second, plan));
-        Assert.Throws<InvalidOperationException>(() => ObservationValidationMetadata.For<EnumTypeRef, Dictionary<string, int>>(first, plan));
+        Assert.Throws<InvalidOperationException>(() => ObservationValidationMetadata.For(second, plan));
+        Assert.Throws<InvalidOperationException>(() => plan.Metadata.Get<EnumTypeRef, HashSet<string>, ObservationValidator.InlineEnumLiteral>(second));
         Assert.Throws<InvalidOperationException>(() => plan.RequireType(second));
         var root = new ObjectTypeRef([new("child", first)]);
         Assert.Throws<InvalidOperationException>(() => ObservationValidationPlan.Get(root, graph).Child(0, second));
@@ -119,7 +131,7 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         for (var i = 0; i < 1000; i++)
             if (!ObservationValidator.TryValidateAgainstType(value, root, out _, graph)) throw new InvalidOperationException();
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
-        Assert.NotSame(childPlan.Metadata, ObservationValidationMetadata.For<EnumTypeRef, HashSet<string>>(child, null));
+        Assert.NotSame(childPlan.Metadata, ObservationValidationMetadata.For(child, null));
         Assert.NotSame(childPlan.Metadata, ObservationValidationPlan.Get(child, new ShapeGraph(graph.Id, [], [])).Metadata);
     }
 

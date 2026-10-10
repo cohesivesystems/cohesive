@@ -10,17 +10,17 @@ IterationCount=8  LaunchCount=1  UnrollFactor=1
 WarmupCount=3  
 
 ```
-| Method   | Shape      | Input   | Mean        | Error     | StdDev    | Gen0   | Allocated |
-|--------- |----------- |-------- |------------:|----------:|----------:|-------:|----------:|
-| **Validate** | **collection** | **case**    | **29,229.9 ns** | **126.64 ns** |  **56.23 ns** | **4.3945** |   **38145 B** |
-| **Validate** | **collection** | **exact**   |  **9,562.4 ns** | **756.06 ns** | **335.70 ns** |      **-** |         **-** |
-| **Validate** | **collection** | **unknown** |  **1,560.6 ns** |  **15.95 ns** |   **8.34 ns** |      **-** |     **745 B** |
-| **Validate** | **flat**       | **case**    |    **901.0 ns** |  **11.19 ns** |   **5.85 ns** |      **-** |    **1193 B** |
-| **Validate** | **flat**       | **exact**   |    **291.4 ns** |   **2.28 ns** |   **1.19 ns** |      **-** |       **1 B** |
-| **Validate** | **flat**       | **unknown** |  **1,423.0 ns** |  **21.39 ns** |  **11.19 ns** |      **-** |     **361 B** |
-| **Validate** | **large**      | **case**    |  **7,777.8 ns** | **284.41 ns** | **148.75 ns** | **0.7324** |    **7121 B** |
-| **Validate** | **large**      | **exact**   |  **2,810.1 ns** |  **25.11 ns** |  **13.13 ns** |      **-** |       **1 B** |
-| **Validate** | **large**      | **unknown** |  **7,525.3 ns** |  **37.21 ns** |  **19.46 ns** |      **-** |     **361 B** |
-| **Validate** | **nested**     | **case**    |  **1,049.5 ns** |  **74.82 ns** |  **39.13 ns** |      **-** |    **1193 B** |
-| **Validate** | **nested**     | **exact**   |    **391.0 ns** |   **6.93 ns** |   **3.62 ns** |      **-** |       **1 B** |
-| **Validate** | **nested**     | **unknown** |  **1,421.1 ns** |   **9.59 ns** |   **5.01 ns** |      **-** |    **1177 B** |
+| Method   | Shape      | Input   | Mean        | Error     | StdDev   | Gen0   | Allocated |
+|--------- |----------- |-------- |------------:|----------:|---------:|-------:|----------:|
+| **Validate** | **collection** | **case**    | **29,013.8 ns** | **185.94 ns** | **97.25 ns** | **4.3945** |   **38145 B** |
+| **Validate** | **collection** | **exact**   |  **9,719.5 ns** | **167.81 ns** | **74.51 ns** |      **-** |       **1 B** |
+| **Validate** | **collection** | **unknown** |  **1,567.0 ns** |  **74.10 ns** | **38.76 ns** |      **-** |     **745 B** |
+| **Validate** | **flat**       | **case**    |    **908.9 ns** |  **13.46 ns** |  **7.04 ns** |      **-** |    **1193 B** |
+| **Validate** | **flat**       | **exact**   |    **307.0 ns** |   **8.62 ns** |  **4.51 ns** |      **-** |       **1 B** |
+| **Validate** | **flat**       | **unknown** |  **1,482.1 ns** |  **68.70 ns** | **35.93 ns** |      **-** |     **361 B** |
+| **Validate** | **large**      | **case**    |  **7,782.0 ns** |  **83.43 ns** | **29.75 ns** | **0.7324** |    **7121 B** |
+| **Validate** | **large**      | **exact**   |  **2,955.1 ns** |  **53.17 ns** | **27.81 ns** |      **-** |       **1 B** |
+| **Validate** | **large**      | **unknown** |  **7,760.3 ns** |  **48.58 ns** | **25.41 ns** |      **-** |     **361 B** |
+| **Validate** | **nested**     | **case**    |  **1,060.8 ns** |   **4.81 ns** |  **2.52 ns** |      **-** |    **1193 B** |
+| **Validate** | **nested**     | **exact**   |    **415.7 ns** |  **34.79 ns** | **18.20 ns** |      **-** |         **-** |
+| **Validate** | **nested**     | **unknown** |  **1,476.7 ns** |  **47.79 ns** | **25.00 ns** |      **-** |    **1177 B** |

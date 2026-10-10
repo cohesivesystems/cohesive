@@ -164,8 +164,9 @@ closures,
 while warm readers bypass that gate. Failed preparation publishes no incomplete nodes. Preparation
 uses an iterative work queue; value validation still applies depth limits and builds fresh diagnostics.
 Unbound checks and scalar leaves retain direct dispatch. Nodes retain their original TypeRef, and identity
-checks reject root/child identity mismatches in Release as well as Debug. Each metadata slot binds
-its owner, index type and factory at construction; callers cannot refill it from another declaration.
+checks reject root/child identity mismatches in Release as well as Debug. Each metadata container binds its exact owner. Accessor interfaces own the index type, factory and
+typed slot; generic constraints reject mismatched owner/index/accessor combinations at compilation.
+Reading an indexless node's metadata does not execute a factory or throw.
 Field-name accessors constrain their owner
 types at compile time; enum and union paths share one hybrid lookup policy.
 `ObservationValidationPlan` is an internal interpretation of existing declarations, with no additional type IDs, wire format or public contract.
@@ -174,10 +175,11 @@ on the graph-bound plan node, or in the same standalone declaration table. The f
 retain direct checks; only later matches or misses prepare an index. Named enum names and literal aliases are accepted, and duplicate union
 literals retain the first declared case. Other primitive discriminators retain their existing exact
 representation rules. Weak-key, successful-only preparation shares no instance values or results.
-The shape-bound JSON reader passes the union plan into case lookup, reusing the graph-owned dispatch
-index during decoding and subsequent validation. Named enums skip members without a literal value
+The JSON reader checks early union cases directly. Only a late match or miss requests graph-owned
+dispatch metadata, independently of validation closure preparation. A concurrent declaration registry
+shares the same metadata and index with subsequent validation. Named enums skip members without a literal value
 when matching nonstring primitives.
-See `LiteralValidationBenchmarks` for late-match, invalid-value and early-match measurements.
+See `UnionReaderBenchmarks` for plain typed union collection decoding, and `LiteralValidationBenchmarks` for late-match, invalid-value and early-match measurements.
 
 See `NestedValidationBenchmarks` and `NamedValidationBenchmarks` for representative repeated validation,
 and the [performance overview](../../docs/performance/execution-preparation-allocations.md) for qualification.
