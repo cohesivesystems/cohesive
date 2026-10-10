@@ -1,11 +1,29 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Cohesive.Model;
 
-// Prepared links interpret the original immutable declarations. Only compound nodes need slots;
-// scalar checks remain direct. A completed reachable closure is published atomically per root.
-internal sealed class ObservationValidationPlan
+// Prepared links and metadata interpret the original immutable declarations. Compound and enum
+// nodes have slots; scalar checks remain direct. A completed reachable closure is published atomically per root.
+internal sealed class ObservationValidationPlan(TypeRef type)
 {
+    internal TypeRef Type { get; } = type;
+    ObservationValidationMetadata? metadata;
+    internal ObservationValidationMetadata Metadata =>
+        Volatile.Read(ref metadata) ?? InitializeMetadata();
+
+    ObservationValidationMetadata InitializeMetadata()
+    {
+        var prepared = new ObservationValidationMetadata();
+        return Interlocked.CompareExchange(ref metadata, prepared, null) ?? prepared;
+    }
+
+    internal ObservationValidationPlan? Child(int index, TypeRef expected)
+    {
+        var child = Children[index];
+        Debug.Assert(child is null || ReferenceEquals(child.Type, expected), "Validation child plan/type mismatch.");
+        return child;
+    }
     static readonly ConditionalWeakTable<ShapeGraph, GraphPlans> Graphs = new();
 
     internal TypeDefinition? Definition { get; private set; }
@@ -18,6 +36,7 @@ internal sealed class ObservationValidationPlan
     {
         readonly ConditionalWeakTable<TypeRef, ObservationValidationPlan> nodes = new();
         readonly object gate = new();
+        Dictionary<TypeDefinition, ObservationValidationMetadata>? definitions;
 
         internal ObservationValidationPlan Get(TypeRef root)
         {
@@ -27,13 +46,14 @@ internal sealed class ObservationValidationPlan
             lock (gate)
             {
                 if (nodes.TryGetValue(root, out plan)) return plan;
-                return Build(root, graph, nodes);
+                return Build(root, graph, nodes, ref definitions);
             }
         }
     }
 
     static ObservationValidationPlan Build(TypeRef root, ShapeGraph graph,
-        ConditionalWeakTable<TypeRef, ObservationValidationPlan> prepared)
+        ConditionalWeakTable<TypeRef, ObservationValidationPlan> prepared,
+        ref Dictionary<TypeDefinition, ObservationValidationMetadata>? definitions)
     {
         Dictionary<TypeRef, ObservationValidationPlan> nodes = new(ReferenceEqualityComparer.Instance);
         Queue<TypeRef> pending = new();
@@ -54,6 +74,15 @@ internal sealed class ObservationValidationPlan
                     if (graph.TryGetType(named.TypeId, out var definition))
                     {
                         node.Definition = definition;
+                        // Different NamedTypeRef objects can resolve to the same declaration. Share
+                        // its metadata within the graph without retaining those reference/root nodes.
+                        definitions ??= new(ReferenceEqualityComparer.Instance);
+                        if (!definitions.TryGetValue(definition, out var metadata))
+                        {
+                            metadata = new();
+                            definitions.Add(definition, metadata);
+                        }
+                        node.metadata = metadata;
                         if (definition is TypeDefinition.Structural structural)
                         {
                             node.Children = new ObservationValidationPlan?[structural.Fields.Length];
@@ -75,9 +104,9 @@ internal sealed class ObservationValidationPlan
 
         ObservationValidationPlan? Add(TypeRef type)
         {
-            if (type is not (ArrayTypeRef or ObjectTypeRef or NamedTypeRef)) return null;
+            if (type is not (ArrayTypeRef or ObjectTypeRef or NamedTypeRef or EnumTypeRef)) return null;
             if (prepared.TryGetValue(type, out var node) || nodes.TryGetValue(type, out node)) return node;
-            node = new();
+            node = new(type);
             nodes.Add(type, node);
             pending.Enqueue(type);
             return node;

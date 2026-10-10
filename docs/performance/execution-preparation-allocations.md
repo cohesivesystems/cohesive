@@ -106,7 +106,7 @@ dotnet src/Cohesive.Relations.Benchmarks/bin/Release/net10.0/Cohesive.Relations.
 
 For the baseline, copy that built output to an isolated directory and replace only `Cohesive.dll`
 with the Release assembly built at the baseline revision. Run the same command against the copied DLL.
-Exact-name means are 0.31 μs flat, 0.41 μs nested, 9.71 μs collection and 2.91 μs large after this change.
+Exact-name means are 0.30 μs flat, 0.40 μs nested, 9.66 μs collection and 2.90 μs large after this change.
 These small costs vary with JIT and machine state; avoid a universal speedup claim.
 The occasional 1 B result is benchmark harness amortization; a direct counter regression proves zero
 warm temporary allocation for exact object validation. Wide case-fallback allocation is bounded at
@@ -119,7 +119,7 @@ have regression coverage.
 
 ## Prepared graph-bound validation links
 
-`ObservationValidationPlan` binds only array/object/named nodes reachable from the requested root.
+`ObservationValidationPlan` binds only array/object/named/enum nodes reachable from the requested root.
 It holds the original named definitions and child links, not a copied type system or validation result.
 Scalar leaves keep direct checks. For one exact immutable `ShapeGraph`, weak TypeRef keys share completed
 child nodes across roots; graph ownership itself is weak. Missing named links are stable metadata for
@@ -140,13 +140,13 @@ The [named baseline](execution-preparation-final/named-validation-before.md) and
 fixture assembly and published Core baseline `97e7d1df`. The command above can select
 `*NamedValidationBenchmarks*` instead. Types and values are constructed outside timing, then warmed:
 16 named-enum fields (flat), eight named structural parent levels (nested), 32 repeated objects
-(collection), or 128 named-enum fields (large). Warm local means change from 281 to 262 ns flat,
-520 to 419 ns nested, 9.01 to 8.16 μs collection, and 2.69 to 2.38 μs large. These are approximately
-7–19% improvements against the published baseline, combining field lookup and prepared links. They
+(collection), or 128 named-enum fields (large). Warm local means change from 281 to 247 ns flat,
+520 to 413 ns nested, 9.01 to 7.74 μs collection, and 2.69 to 2.33 μs large. These are approximately
+12–21% improvements against the published baseline, combining field lookup and prepared links. They
 are not Ari endpoint or catalog latency measurements.
 
 The dedicated cold counter constructs a fresh 128-field named graph and value outside measurement,
-initializes runtime dispatch with unrelated graph/type keys, then measures first validation: 28,664 B
+initializes runtime dispatch with unrelated graph/type keys, then measures first validation: 30,768 B
 locally. Its next 1,000 exact-name validations allocate 0 B. The regression budgets cold preparation
 at 64 KB and requires zero warm allocation. This trades first-use preparation and retained metadata
 for repeated lookup savings; it does not reduce already-zero warm allocation. Runtime values,
@@ -160,8 +160,14 @@ check the first eight declarations directly. Larger declarations prepare an ordi
 or first-case dispatch dictionary only on a later match or miss. Named enum labels and literal aliases
 remain equivalent accepted spellings. Union insertion preserves the first declared matching case.
 Nonstring primitive literals retain the existing representation-sensitive scan: integer `10` does
-not match discriminator text `010`. Index keys are the original immutable declaration objects,
-retained weakly by the existing successful-only preparation helper; occurrence values are never cached.
+not match discriminator text `010`. Graph-bound indexes live on their plan node; standalone checks
+use one weak declaration table.
+A node owns one metadata container, whose name, membership and dispatch slots publish successes
+only and retry failures. Named reference nodes resolving the same declaration share that container
+within the graph; a graph-owned dictionary is bounded by its own declarations and retains no reference
+root nodes. Object/inline-enum containers are lazy. Occurrence values are never cached. Node TypeRef identity and positional child
+access have debug assertions; field-name accessors constrain owner types at compile time. The three
+literal paths use one generic hybrid lookup policy, specialized by small static accessors.
 
 The [baseline](execution-preparation-final/literal-validation-before.md) and
 [final](execution-preparation-final/literal-validation-after.md) reports and adjacent CSVs use
@@ -174,17 +180,22 @@ DOTNET_TieredCompilation=0 dotnet src/Cohesive.Relations.Benchmarks/bin/Release/
 
 Both variants disable tiered compilation to avoid tier-promotion noise in these short in-process
 runs; these timings are not comparable to earlier tiered reports or Ari endpoint timings.
-Late inline enum matches change from 262 to 29 ns, named enum literals from 1,551 to 124 ns,
-and union cases from 993 to 115 ns. Invalid values change from 511 to 117 ns, 3,039 to 253 ns,
-and 2,074 to 294 ns respectively. First named enum and union matches are effectively unchanged;
-first inline enum checks add about 0.8 ns. The unchanged object diagnostic fixtures vary by roughly
-3–5%, illustrating measurement noise rather than an unrelated speedup.
+Late inline enum matches change from 265 to 32 ns, named enum literals from 1,543 to 53 ns,
+and union cases from 1,027 to 71 ns. Invalid values change from 535 to 128 ns, 3,057 to 125 ns,
+and 2,135 to 200 ns respectively. First named enum matches improve from 30 to 22 ns; first union
+matches remain approximately unchanged. First inline enum checks add about 1.7 ns. Unchanged object
+diagnostic fixtures vary by roughly 2–6%, illustrating measurement noise rather than an unrelated speedup.
 
-Diagnostic allocations remain 209 B for inline enum misses, 169 B for named misses and 313 B for
-union misses. A direct counter proves zero temporary allocation for 1,000 warm inline/union checks;
+Diagnostic allocation sizes are unchanged apart from harness rounding: about 210 B for inline enum
+misses, 169 B for named misses and 314 B for union misses. A direct counter proves zero temporary
+allocation for 1,000 warm inline/union checks;
 the occasional 1 B benchmark result is harness amortization. Fresh late/missing lookups allocate
-2,824 B for inline enum preparation, 3,832 B for union preparation and 6,008 B for named enum
+2,832 B for inline enum preparation, 4,104 B for union preparation and 5,976 B for named enum
 preparation locally. These counters exclude declaration/value construction, global runtime setup,
 and graph-link preparation. Early inline/union matches allocate zero and do not prepare indexes.
+Consolidating preparation adds 2,104 B to the 128-field named graph cold boundary (now 30,768 B),
+including the original TypeRef and lazy metadata slot on each node. Graph-bound and standalone warm
+literal checks have zero-allocation regression coverage. The per-graph closure gate remains the
+intentional publication boundary; this change does not parallelize first-use roots within one graph.
 Tests cover ordinal membership, aliases, duplicate union literals, temporal string values, numeric
 representation sensitivity, distinct declaration identities and cold/warm allocation bounds.

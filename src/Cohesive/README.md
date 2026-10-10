@@ -150,20 +150,26 @@ remain the caller's contract. Relation draft admission uses it for graph-owned e
 Nested object and structural validation retains exact-property precedence. On a case-insensitive
 fallback it builds one operation-local property index, preserving the first matching source
 property; no instance values enter shared caches. Unknown-property diagnostics lazily prepare
-case-insensitive name sets keyed by the owning immutable type object. These weak-key slots publish
-successful preparation once, retry failures, and expire with the type. Allowed union discriminators,
+case-insensitive name sets on the graph-bound plan node. Standalone checks use one shared weak
+declaration table. Metadata slots publish successful preparation once and retry failures.
+Allowed union discriminators,
 depth limits, values, and diagnostics remain operation-scoped. The existing structural
 field lookup uses ordinal identity and cannot replace this case-insensitive diagnostic index.
 
 Graph-bound array, object and named validation lazily binds reachable named definitions and child
 links once per exact graph and type object. Graph and root keys are weak; independently requested
-roots share prepared children. A per-graph preparation gate coordinates complete recursive closures,
+roots share prepared children. Distinct named references resolving the same declaration also share
+its metadata container within that graph. A per-graph preparation gate coordinates complete recursive closures,
 while warm readers bypass that gate. Failed preparation publishes no incomplete nodes. Preparation
 uses an iterative work queue; value validation still applies depth limits and builds fresh diagnostics.
-Unbound checks and scalar leaves retain direct dispatch. `ObservationValidationPlan` is an internal
+Unbound checks and scalar leaves retain direct dispatch. Nodes retain their original TypeRef, and debug
+assertions guard root/child identity and metadata ownership. Field-name accessors constrain their owner
+types at compile time; enum and union paths share one hybrid lookup policy.
+`ObservationValidationPlan` is an internal
 interpretation of existing declarations, with no additional type IDs, wire format or public contract.
 Large string enums and string-discriminator unions lazily prepare ordinal membership/dispatch indexes
-keyed by the immutable declaration. The first eight entries retain direct checks; only later matches
+on the graph-bound plan node, or in the same standalone declaration table. The first eight entries
+retain direct checks; only later matches
 or misses prepare an index. Named enum names and literal aliases are accepted, and duplicate union
 literals retain the first declared case. Other primitive discriminators retain their existing exact
 representation rules. Weak-key, successful-only preparation shares no instance values or results.

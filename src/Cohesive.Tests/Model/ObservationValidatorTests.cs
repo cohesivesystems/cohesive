@@ -7,6 +7,54 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
     const int AllocationWarmupIterations = 1_000;
 
     [Fact]
+    public void DistinctNamedReferencesShareDeclarationMetadataWithinTheirGraph()
+    {
+        var first = new NamedTypeRef(new("codes"));
+        var second = new NamedTypeRef(first.TypeId);
+        var definition = new TypeDefinition.Enum(first.TypeId, PrimitiveType.String,
+            [.. Enumerable.Range(0, 128).Select(i => new EnumValue($"label{i}", $"code{i}"))]);
+        var graph = new ShapeGraph(new("shared-metadata"), [], [definition]);
+        var firstPlan = ObservationValidationPlan.Get(first, graph);
+        var secondPlan = ObservationValidationPlan.Get(second, graph);
+        Assert.NotSame(firstPlan, secondPlan);
+        Assert.Same(first, firstPlan.Type);
+        Assert.Same(second, secondPlan.Type);
+        Assert.Same(firstPlan.Metadata, secondPlan.Metadata);
+        Assert.NotSame(firstPlan.Metadata, ObservationValidationPlan.Get(first, new ShapeGraph(graph.Id, [], [definition])).Metadata);
+        Assert.True(ObservationValidator.TryValidateAgainstType(ObservationValue.FromString("code127"), first, out _, graph));
+        Assert.True(ObservationValidator.TryValidateAgainstType(ObservationValue.FromString("label127"), second, out _, graph));
+    }
+
+    [Fact]
+    public void PlanOwnsConcurrentMetadataAndChildDeclarationIdentity()
+    {
+        var child = new EnumTypeRef("shared", [.. Enumerable.Range(0, 128).Select(i => $"code{i}")]);
+        var root = new ObjectTypeRef([new("first", child), new("second", child)]);
+        var graph = new ShapeGraph(new("metadata"), [], []);
+        var plan = ObservationValidationPlan.Get(root, graph);
+        var childPlan = plan.Child(0, child)!;
+        Assert.Same(root, plan.Type);
+        Assert.Same(child, childPlan.Type);
+        Assert.Same(childPlan, plan.Child(1, child));
+        ObservationValidationMetadata[] slots = new ObservationValidationMetadata[32];
+        Parallel.For(0, slots.Length, i =>
+        {
+            slots[i] = childPlan.Metadata;
+            Assert.True(ObservationValidator.TryValidateAgainstType(
+                Object(("first", ObservationValue.FromString("code127")), ("second", ObservationValue.FromString("code126"))),
+                root, out _, graph));
+        });
+        foreach (var slot in slots) Assert.Same(childPlan.Metadata, slot);
+        var value = Object(("first", ObservationValue.FromString("code127")), ("second", ObservationValue.FromString("code126")));
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            if (!ObservationValidator.TryValidateAgainstType(value, root, out _, graph)) throw new InvalidOperationException();
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+        Assert.NotSame(childPlan.Metadata, ObservationValidationMetadata.For(child, null));
+        Assert.NotSame(childPlan.Metadata, ObservationValidationPlan.Get(child, new ShapeGraph(graph.Id, [], [])).Metadata);
+    }
+
+    [Fact]
     public void PreparedObjectLookupPreservesCaseDuplicateRulesAndInstanceIsolation()
     {
         var type = new ObjectTypeRef([new("name", new ScalarTypeRef(ScalarTypeKind.String))]);
