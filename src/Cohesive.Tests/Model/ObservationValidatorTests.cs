@@ -1,10 +1,79 @@
 using System.Collections.Immutable;
+using System.Text.Json;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.Model;
 
 public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     const int AllocationWarmupIterations = 1_000;
+
+    [Fact]
+    public void TypedJsonReaderDoesNotPrepareASecondUnionIndex()
+    {
+        var type = new NamedTypeRef(new("reader-union"));
+        var union = new TypeDefinition.Union(type.TypeId, new UnionDiscriminator("kind"),
+            [.. Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}", new ObjectTypeRef([]), $"code{i}"))]);
+        var declaration = new Shape(new("root"), [new(new("item"), type)]);
+        var graph = new ShapeGraph(new("reader-index"), [declaration], [union]);
+        GraphShapeId shape = new(graph, declaration.Id);
+        var layout = ObservationLayout.Create(shape, ["item"]);
+        var plan = ObservationValidationPlan.Get(type, graph);
+        _ = ObservationValidationMetadata.For<TypeDefinition.Union, Dictionary<string, int>>(union, plan).Index;
+        ObservationValue[] values = new ObservationValue[1];
+        ulong[] present = new ulong[1];
+        var reader = new Utf8JsonReader("{\"item\":{\"kind\":\"code127\"}}"u8);
+        Assert.True(reader.Read());
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var valid = ObservationJsonReader.TryReadShape(ref reader, shape, layout, values, present, out var error);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(valid, error);
+        Assert.InRange(allocated, 0, 2_000); // Includes the decoded object; another union index exceeds this budget.
+        Assert.Equal("code127", values[0].Fields!["kind"].String);
+    }
+
+    [Fact]
+    public void GraphOwnedUnionCaseLookupReusesThePreparedIndex()
+    {
+        var root = new NamedTypeRef(new("indexed-union"));
+        var union = new TypeDefinition.Union(root.TypeId, new UnionDiscriminator("kind"),
+            [.. Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}", new ObjectTypeRef([]), $"code{i}"))]);
+        var graph = new ShapeGraph(new("union-reader"), [], [union]);
+        var plan = ObservationValidationPlan.Get(root, graph);
+        _ = ObservationValidationMetadata.For<TypeDefinition.Union, Dictionary<string, int>>(union, plan).Index;
+        var value = ObservationValue.FromString("code127");
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var selected = ObservationValidator.TryResolveUnionCase(union, value, plan);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Same(union.Cases[127].Type, selected);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void NonstringEnumsSkipMembersWithoutLiteralValues()
+    {
+        var type = new NamedTypeRef(new("bytes"));
+        var graph = new ShapeGraph(new("bytes"), [],
+            [new TypeDefinition.Enum(type.TypeId, PrimitiveType.Bytes, [new("missing", null)])]);
+        Assert.False(ObservationValidator.TryValidateAgainstType(ObservationValue.FromBytes(ReadOnlyMemory<byte>.Empty), type, out _, graph));
+        var valid = new ShapeGraph(graph.Id, [],
+            [new TypeDefinition.Enum(type.TypeId, PrimitiveType.Bytes, [new("empty", "")])]);
+        Assert.True(ObservationValidator.TryValidateAgainstType(ObservationValue.FromBytes(ReadOnlyMemory<byte>.Empty), type, out _, valid));
+    }
+
+    [Fact]
+    public void MetadataAndChildIdentityMismatchesFailInRelease()
+    {
+        var first = new EnumTypeRef("first", ["one"]);
+        var second = new EnumTypeRef("second", ["two"]);
+        var graph = new ShapeGraph(new("identities"), [], []);
+        var plan = ObservationValidationPlan.Get(first, graph);
+        Assert.Throws<InvalidOperationException>(() => ObservationValidationMetadata.For<EnumTypeRef, HashSet<string>>(second, plan));
+        Assert.Throws<InvalidOperationException>(() => ObservationValidationMetadata.For<EnumTypeRef, Dictionary<string, int>>(first, plan));
+        Assert.Throws<InvalidOperationException>(() => plan.RequireType(second));
+        var root = new ObjectTypeRef([new("child", first)]);
+        Assert.Throws<InvalidOperationException>(() => ObservationValidationPlan.Get(root, graph).Child(0, second));
+    }
 
     [Fact]
     public void DistinctNamedReferencesShareDeclarationMetadataWithinTheirGraph()
@@ -50,7 +119,7 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         for (var i = 0; i < 1000; i++)
             if (!ObservationValidator.TryValidateAgainstType(value, root, out _, graph)) throw new InvalidOperationException();
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
-        Assert.NotSame(childPlan.Metadata, ObservationValidationMetadata.For(child, null));
+        Assert.NotSame(childPlan.Metadata, ObservationValidationMetadata.For<EnumTypeRef, HashSet<string>>(child, null));
         Assert.NotSame(childPlan.Metadata, ObservationValidationPlan.Get(child, new ShapeGraph(graph.Id, [], [])).Metadata);
     }
 

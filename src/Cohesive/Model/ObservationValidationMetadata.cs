@@ -1,68 +1,75 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Cohesive.Model;
 
-// Graph-bound preparation belongs to the plan node. Standalone declaration checks share one weak
-// fallback table. Each index publishes successes only; failed preparation leaves its slot retryable.
-internal sealed class ObservationValidationMetadata
+// A slot binds its owner, index type and factory once at construction. Consumers cannot refill
+// it from another owner or index kind. Graph plans share declarations; standalone keys remain weak.
+internal abstract class ObservationValidationMetadata
 {
     static readonly ConditionalWeakTable<object, ObservationValidationMetadata> Standalone = new();
-    HashSet<string>? names;
-    HashSet<string>? literals;
-    Dictionary<string, int>? cases;
+    internal abstract object Owner { get; }
 
-    internal static ObservationValidationMetadata For(object owner, ObservationValidationPlan? plan,
-        ShapeGraph? graph = null)
+    internal static ObservationValidationMetadata<TOwner, TIndex> For<TOwner, TIndex>(TOwner owner,
+        ObservationValidationPlan? plan, ShapeGraph? graph = null) where TOwner : class where TIndex : class
     {
         if (plan is null && graph is not null && owner is TypeRef type)
             plan = ObservationValidationPlan.Get(type, graph);
-        Debug.Assert(plan is null || ReferenceEquals(owner, plan.Type) || ReferenceEquals(owner, plan.Definition),
-            "Metadata owner must match its validation plan.");
-        return plan?.Metadata ?? Standalone.GetValue(owner, static _ => new());
+        var metadata = plan?.Metadata ?? Standalone.GetValue(owner, Create);
+        if (!ReferenceEquals(metadata.Owner, owner)
+            || metadata is not ObservationValidationMetadata<TOwner, TIndex> typed)
+            throw new InvalidOperationException("Validation metadata owner or index type does not match the declaration.");
+        return typed;
     }
 
-    internal HashSet<string> KnownNames(ObjectTypeRef owner) => Prepare(ref names, owner,
-        static type => new(type.Fields.Select(static field => field.Name), StringComparer.OrdinalIgnoreCase));
-    internal HashSet<string> KnownNames(TypeDefinition.Structural owner) => Prepare(ref names, owner,
-        static type => new(type.Fields.Select(static field => field.Name.Value), StringComparer.OrdinalIgnoreCase));
-    internal bool Contains(EnumTypeRef owner, string value) => Prepare(ref literals, owner,
-        static type => new(type.Members, StringComparer.Ordinal)).Contains(value);
-    internal bool Contains(TypeDefinition.Enum owner, string value) => Prepare(ref literals, owner, static type =>
+    internal static ObservationValidationMetadata Create(object owner) => owner switch
     {
-        HashSet<string> result = new(type.Values.Length * 2, StringComparer.Ordinal);
-        foreach (var member in type.Values)
+        ObjectTypeRef type => new ObservationValidationMetadata<ObjectTypeRef, HashSet<string>>(type,
+            static value => new(value.Fields.Select(static field => field.Name), StringComparer.OrdinalIgnoreCase)),
+        TypeDefinition.Structural type => new ObservationValidationMetadata<TypeDefinition.Structural, HashSet<string>>(type,
+            static value => new(value.Fields.Select(static field => field.Name.Value), StringComparer.OrdinalIgnoreCase)),
+        EnumTypeRef type => new ObservationValidationMetadata<EnumTypeRef, HashSet<string>>(type,
+            static value => new(value.Members, StringComparer.Ordinal)),
+        TypeDefinition.Enum type => new ObservationValidationMetadata<TypeDefinition.Enum, HashSet<string>>(type, static value =>
         {
-            result.Add(member.Name);
-            if (member.Value is { } literal) result.Add(literal);
-        }
-        return result;
-    }).Contains(value);
-    internal int FindCase(TypeDefinition.Union owner, string value)
-    {
-        var index = Prepare(ref cases, owner, static type =>
-        {
-            Dictionary<string, int> result = new(type.Cases.Length, StringComparer.Ordinal);
-            for (var i = 0; i < type.Cases.Length; i++) result.TryAdd(type.Cases[i].DiscriminatorValue, i);
-            return result;
-        });
-        return index.TryGetValue(value, out var matched) ? matched : -1;
-    }
-
-    TValue Prepare<TOwner, TValue>(ref TValue? slot, TOwner owner, Func<TOwner, TValue> factory)
-        where TValue : class
-    {
-        var prepared = Volatile.Read(ref slot);
-        if (prepared is not null) return prepared;
-        lock (this)
-        {
-            prepared = slot;
-            if (prepared is null)
+            HashSet<string> result = new(value.Values.Length * 2, StringComparer.Ordinal);
+            foreach (var member in value.Values)
             {
-                prepared = factory(owner);
-                Volatile.Write(ref slot, prepared);
+                result.Add(member.Name);
+                if (member.Value is { } literal) result.Add(literal);
             }
-            return prepared;
+            return result;
+        }),
+        TypeDefinition.Union type => new ObservationValidationMetadata<TypeDefinition.Union, Dictionary<string, int>>(type, static value =>
+        {
+            Dictionary<string, int> result = new(value.Cases.Length, StringComparer.Ordinal);
+            for (var i = 0; i < value.Cases.Length; i++) result.TryAdd(value.Cases[i].DiscriminatorValue, i);
+            return result;
+        }),
+        _ => throw new InvalidOperationException("This declaration does not have validation indexes.")
+    };
+}
+
+internal sealed class ObservationValidationMetadata<TOwner, TIndex>(TOwner owner, Func<TOwner, TIndex> factory)
+    : ObservationValidationMetadata where TOwner : class where TIndex : class
+{
+    TIndex? index;
+    internal override object Owner => owner;
+    internal TIndex Index
+    {
+        get
+        {
+            var prepared = Volatile.Read(ref index);
+            if (prepared is not null) return prepared;
+            lock (this)
+            {
+                prepared = index;
+                if (prepared is null)
+                {
+                    prepared = factory(owner);
+                    Volatile.Write(ref index, prepared);
+                }
+                return prepared;
+            }
         }
     }
 }

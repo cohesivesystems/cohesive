@@ -159,20 +159,24 @@ field lookup uses ordinal identity and cannot replace this case-insensitive diag
 Graph-bound array, object and named validation lazily binds reachable named definitions and child
 links once per exact graph and type object. Graph and root keys are weak; independently requested
 roots share prepared children. Distinct named references resolving the same declaration also share
-its metadata container within that graph. A per-graph preparation gate coordinates complete recursive closures,
+its metadata container within that graph. A per-graph preparation gate coordinates complete recursive
+closures,
 while warm readers bypass that gate. Failed preparation publishes no incomplete nodes. Preparation
 uses an iterative work queue; value validation still applies depth limits and builds fresh diagnostics.
-Unbound checks and scalar leaves retain direct dispatch. Nodes retain their original TypeRef, and debug
-assertions guard root/child identity and metadata ownership. Field-name accessors constrain their owner
+Unbound checks and scalar leaves retain direct dispatch. Nodes retain their original TypeRef, and identity
+checks reject root/child identity mismatches in Release as well as Debug. Each metadata slot binds
+its owner, index type and factory at construction; callers cannot refill it from another declaration.
+Field-name accessors constrain their owner
 types at compile time; enum and union paths share one hybrid lookup policy.
-`ObservationValidationPlan` is an internal
-interpretation of existing declarations, with no additional type IDs, wire format or public contract.
+`ObservationValidationPlan` is an internal interpretation of existing declarations, with no additional type IDs, wire format or public contract.
 Large string enums and string-discriminator unions lazily prepare ordinal membership/dispatch indexes
 on the graph-bound plan node, or in the same standalone declaration table. The first eight entries
-retain direct checks; only later matches
-or misses prepare an index. Named enum names and literal aliases are accepted, and duplicate union
+retain direct checks; only later matches or misses prepare an index. Named enum names and literal aliases are accepted, and duplicate union
 literals retain the first declared case. Other primitive discriminators retain their existing exact
 representation rules. Weak-key, successful-only preparation shares no instance values or results.
+The shape-bound JSON reader passes the union plan into case lookup, reusing the graph-owned dispatch
+index during decoding and subsequent validation. Named enums skip members without a literal value
+when matching nonstring primitives.
 See `LiteralValidationBenchmarks` for late-match, invalid-value and early-match measurements.
 
 See `NestedValidationBenchmarks` and `NamedValidationBenchmarks` for representative repeated validation,

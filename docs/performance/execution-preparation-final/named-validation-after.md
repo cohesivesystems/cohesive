@@ -10,9 +10,9 @@ IterationCount=8  LaunchCount=1  UnrollFactor=1
 WarmupCount=3  
 
 ```
-| Method   | Shape      | Mean       | Error    | StdDev   | Allocated |
-|--------- |----------- |-----------:|---------:|---------:|----------:|
-| **Validate** | **collection** | **7,735.3 ns** | **10.19 ns** |  **4.52 ns** |         **-** |
-| **Validate** | **flat**       |   **246.9 ns** | **10.93 ns** |  **5.72 ns** |       **1 B** |
-| **Validate** | **large**      | **2,327.0 ns** | **75.76 ns** | **39.62 ns** |       **1 B** |
-| **Validate** | **nested**     |   **413.4 ns** |  **1.18 ns** |  **0.52 ns** |       **1 B** |
+| Method   | Shape      | Mean       | Error     | StdDev   | Allocated |
+|--------- |----------- |-----------:|----------:|---------:|----------:|
+| **Validate** | **collection** | **7,555.1 ns** | **113.24 ns** | **59.23 ns** |         **-** |
+| **Validate** | **flat**       |   **241.6 ns** |   **3.36 ns** |  **1.76 ns** |       **1 B** |
+| **Validate** | **large**      | **2,347.9 ns** |  **42.76 ns** | **18.99 ns** |       **1 B** |
+| **Validate** | **nested**     |   **398.9 ns** |   **3.34 ns** |  **1.75 ns** |       **1 B** |

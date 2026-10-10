@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 
 namespace Cohesive.Model;
@@ -14,16 +13,23 @@ internal sealed class ObservationValidationPlan(TypeRef type)
 
     ObservationValidationMetadata InitializeMetadata()
     {
-        var prepared = new ObservationValidationMetadata();
+        var prepared = ObservationValidationMetadata.Create(Definition ?? (object)Type);
         return Interlocked.CompareExchange(ref metadata, prepared, null) ?? prepared;
     }
 
     internal ObservationValidationPlan? Child(int index, TypeRef expected)
     {
         var child = Children[index];
-        Debug.Assert(child is null || ReferenceEquals(child.Type, expected), "Validation child plan/type mismatch.");
+        child?.RequireType(expected);
         return child;
     }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void RequireType(TypeRef expected)
+    {
+        if (!ReferenceEquals(Type, expected))
+            throw new InvalidOperationException("Validation plan does not belong to the expected type declaration.");
+    }
+
     static readonly ConditionalWeakTable<ShapeGraph, GraphPlans> Graphs = new();
 
     internal TypeDefinition? Definition { get; private set; }
@@ -79,7 +85,7 @@ internal sealed class ObservationValidationPlan(TypeRef type)
                         definitions ??= new(ReferenceEqualityComparer.Instance);
                         if (!definitions.TryGetValue(definition, out var metadata))
                         {
-                            metadata = new();
+                            metadata = ObservationValidationMetadata.Create(definition);
                             definitions.Add(definition, metadata);
                         }
                         node.metadata = metadata;

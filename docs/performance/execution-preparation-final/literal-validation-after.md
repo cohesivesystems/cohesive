@@ -12,16 +12,16 @@ WarmupCount=3
 ```
 | Method   | Scenario           | Mean         | Error      | StdDev     | Allocated |
 |--------- |------------------- |-------------:|-----------:|-----------:|----------:|
-| **Validate** | **enum-first**         |     **8.803 ns** |  **0.4909 ns** |  **0.2568 ns** |         **-** |
-| **Validate** | **enum-invalid**       |   **127.760 ns** |  **4.3082 ns** |  **2.2533 ns** |     **210 B** |
-| **Validate** | **enum-last**          |    **31.638 ns** |  **0.0335 ns** |  **0.0119 ns** |       **1 B** |
-| **Validate** | **named-alias**        |    **51.617 ns** |  **2.5359 ns** |  **1.1259 ns** |       **1 B** |
-| **Validate** | **named-first**        |    **22.169 ns** |  **0.6504 ns** |  **0.3402 ns** |       **1 B** |
-| **Validate** | **named-invalid**      |   **125.364 ns** | **12.1402 ns** |  **6.3496 ns** |     **169 B** |
-| **Validate** | **named-last**         |    **53.129 ns** |  **0.7680 ns** |  **0.4017 ns** |       **1 B** |
-| **Validate** | **object-first-error** | **3,502.075 ns** | **91.1235 ns** | **47.6594 ns** |     **458 B** |
-| **Validate** | **object-last-error**  | **8,829.385 ns** | **56.3821 ns** | **29.4889 ns** |     **465 B** |
-| **Validate** | **object-valid**       | **4,064.008 ns** | **96.3213 ns** | **50.3779 ns** |       **1 B** |
-| **Validate** | **union-first**        |    **44.296 ns** |  **0.8493 ns** |  **0.4442 ns** |       **1 B** |
-| **Validate** | **union-invalid**      |   **199.600 ns** |  **2.5318 ns** |  **1.1241 ns** |     **314 B** |
-| **Validate** | **union-last**         |    **70.779 ns** |  **1.3754 ns** |  **0.6107 ns** |       **1 B** |
+| **Validate** | **enum-first**         |     **7.685 ns** |  **0.0394 ns** |  **0.0175 ns** |         **-** |
+| **Validate** | **enum-invalid**       |   **126.184 ns** |  **3.9389 ns** |  **2.0601 ns** |     **210 B** |
+| **Validate** | **enum-last**          |    **32.588 ns** |  **1.6504 ns** |  **0.8632 ns** |       **1 B** |
+| **Validate** | **named-alias**        |    **51.755 ns** |  **0.6900 ns** |  **0.3064 ns** |       **1 B** |
+| **Validate** | **named-first**        |    **23.995 ns** |  **0.3782 ns** |  **0.1978 ns** |       **1 B** |
+| **Validate** | **named-invalid**      |   **117.898 ns** |  **3.6692 ns** |  **1.9191 ns** |     **169 B** |
+| **Validate** | **named-last**         |    **52.298 ns** |  **0.8272 ns** |  **0.4327 ns** |       **1 B** |
+| **Validate** | **object-first-error** | **3,307.946 ns** | **51.2333 ns** | **26.7960 ns** |     **458 B** |
+| **Validate** | **object-last-error**  | **8,401.034 ns** | **71.9086 ns** | **37.6096 ns** |     **466 B** |
+| **Validate** | **object-valid**       | **3,839.464 ns** | **83.8426 ns** | **43.8513 ns** |       **1 B** |
+| **Validate** | **union-first**        |    **44.129 ns** |  **1.6527 ns** |  **0.7338 ns** |       **1 B** |
+| **Validate** | **union-invalid**      |   **196.818 ns** |  **4.8941 ns** |  **2.1730 ns** |     **314 B** |
+| **Validate** | **union-last**         |    **68.812 ns** |  **0.9734 ns** |  **0.5091 ns** |       **1 B** |

@@ -106,7 +106,7 @@ dotnet src/Cohesive.Relations.Benchmarks/bin/Release/net10.0/Cohesive.Relations.
 
 For the baseline, copy that built output to an isolated directory and replace only `Cohesive.dll`
 with the Release assembly built at the baseline revision. Run the same command against the copied DLL.
-Exact-name means are 0.30 μs flat, 0.40 μs nested, 9.66 μs collection and 2.90 μs large after this change.
+Exact-name means are 0.29 μs flat, 0.39 μs nested, 9.56 μs collection and 2.81 μs large after this change.
 These small costs vary with JIT and machine state; avoid a universal speedup claim.
 The occasional 1 B result is benchmark harness amortization; a direct counter regression proves zero
 warm temporary allocation for exact object validation. Wide case-fallback allocation is bounded at
@@ -140,9 +140,9 @@ The [named baseline](execution-preparation-final/named-validation-before.md) and
 fixture assembly and published Core baseline `97e7d1df`. The command above can select
 `*NamedValidationBenchmarks*` instead. Types and values are constructed outside timing, then warmed:
 16 named-enum fields (flat), eight named structural parent levels (nested), 32 repeated objects
-(collection), or 128 named-enum fields (large). Warm local means change from 281 to 247 ns flat,
-520 to 413 ns nested, 9.01 to 7.74 μs collection, and 2.69 to 2.33 μs large. These are approximately
-12–21% improvements against the published baseline, combining field lookup and prepared links. They
+(collection), or 128 named-enum fields (large). Warm local means change from 281 to 242 ns flat,
+520 to 399 ns nested, 9.01 to 7.56 μs collection, and 2.69 to 2.35 μs large. These are approximately
+13–23% improvements against the published baseline, combining field lookup and prepared links. They
 are not Ari endpoint or catalog latency measurements.
 
 The dedicated cold counter constructs a fresh 128-field named graph and value outside measurement,
@@ -162,11 +162,12 @@ remain equivalent accepted spellings. Union insertion preserves the first declar
 Nonstring primitive literals retain the existing representation-sensitive scan: integer `10` does
 not match discriminator text `010`. Graph-bound indexes live on their plan node; standalone checks
 use one weak declaration table.
-A node owns one metadata container, whose name, membership and dispatch slots publish successes
-only and retry failures. Named reference nodes resolving the same declaration share that container
+A node owns one typed metadata slot, which binds its owner, index type and static factory at
+construction. It publishes successful preparation only and retries failures. Named reference nodes resolving the same declaration share that container
 within the graph; a graph-owned dictionary is bounded by its own declarations and retains no reference
 root nodes. Object/inline-enum containers are lazy. Occurrence values are never cached. Node TypeRef identity and positional child
-access have debug assertions; field-name accessors constrain owner types at compile time. The three
+access have Release checks; metadata access checks exact owner identity and its closed generic index
+type before returning a slot. Slots accept no owner argument when preparing their index; field-name accessors constrain owner types at compile time. The three
 literal paths use one generic hybrid lookup policy, specialized by small static accessors.
 
 The [baseline](execution-preparation-final/literal-validation-before.md) and
@@ -180,11 +181,11 @@ DOTNET_TieredCompilation=0 dotnet src/Cohesive.Relations.Benchmarks/bin/Release/
 
 Both variants disable tiered compilation to avoid tier-promotion noise in these short in-process
 runs; these timings are not comparable to earlier tiered reports or Ari endpoint timings.
-Late inline enum matches change from 265 to 32 ns, named enum literals from 1,543 to 53 ns,
-and union cases from 1,027 to 71 ns. Invalid values change from 535 to 128 ns, 3,057 to 125 ns,
-and 2,135 to 200 ns respectively. First named enum matches improve from 30 to 22 ns; first union
-matches remain approximately unchanged. First inline enum checks add about 1.7 ns. Unchanged object
-diagnostic fixtures vary by roughly 2–6%, illustrating measurement noise rather than an unrelated speedup.
+Late inline enum matches change from 265 to 33 ns, named enum literals from 1,543 to 52 ns,
+and union cases from 1,027 to 69 ns. Invalid values change from 535 to 126 ns, 3,057 to 118 ns,
+and 2,135 to 197 ns respectively. First named enum matches improve from 30 to 24 ns; first union
+matches remain approximately unchanged. First inline enum checks add about 0.6 ns. Unchanged object
+diagnostic fixtures vary by roughly 0–4%, illustrating measurement noise rather than an unrelated speedup.
 
 Diagnostic allocation sizes are unchanged apart from harness rounding: about 210 B for inline enum
 misses, 169 B for named misses and 314 B for union misses. A direct counter proves zero temporary
@@ -199,3 +200,10 @@ literal checks have zero-allocation regression coverage. The per-graph closure g
 intentional publication boundary; this change does not parallelize first-use roots within one graph.
 Tests cover ordinal membership, aliases, duplicate union literals, temporal string values, numeric
 representation sensitivity, distinct declaration identities and cold/warm allocation bounds.
+
+The shape-bound JSON reader passes the prepared union plan through discriminator lookup. A regression
+prepares its graph-owned index, then decodes a fresh document within a 2 KB allocation budget including
+the decoded object; allocating a second standalone 128-case index would exceed that budget. Case lookup
+against the prepared plan allocates zero bytes. Release mismatch tests cover metadata owner/index type
+and positional child identity. A bytes-based named enum with a null member literal rejects empty bytes,
+while a member declaring the empty base64 literal accepts them.
