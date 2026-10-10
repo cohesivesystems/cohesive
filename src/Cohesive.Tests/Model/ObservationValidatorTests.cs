@@ -25,7 +25,29 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         Assert.True(ObservationValidator.TryValidateAgainstType(value, type, out _, graph));
         var plan = ObservationValidationPlan.Get(type, graph);
         Assert.Same(readerMetadata, plan.Metadata);
-        Assert.Same(readerIndex, plan.Metadata.Get<TypeDefinition.Union, Dictionary<string, int>, ObservationValidator.UnionLiteral>(union));
+        Assert.Same(readerIndex, plan.Metadata.Get(union, ref ObservationValidator.UnionLiteral.Slot(plan.Metadata), ObservationValidator.UnionLiteral.Create));
+    }
+
+    [Fact]
+    public void WarmTypedUnionReaderStaysWithinAllocationBudget()
+    {
+        var type = new NamedTypeRef(new("reader-budget"));
+        var union = new TypeDefinition.Union(type.TypeId, new UnionDiscriminator("kind"),
+            [.. Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}", new ObjectTypeRef([]), $"code{i}"))]);
+        var graph = new ShapeGraph(new("reader-budget"), [], [union]);
+        ObservationValue Read()
+        {
+            var reader = new Utf8JsonReader("{\"kind\":\"code127\"}"u8);
+            reader.Read();
+            return ObservationJsonReader.ReadTypedValue(ref reader, type, graph);
+        }
+        for (var i = 0; i < AllocationWarmupIterations; i++) _ = Read();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var value = Read();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        GC.KeepAlive(value);
+        // Includes owned decoded output; excludes immutable metadata preparation and JIT warmup.
+        Assert.InRange(allocated, 0, 2_048);
     }
 
     [Fact]
@@ -52,7 +74,7 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
             [.. Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}", new ObjectTypeRef([]), $"code{i}"))]);
         var graph = new ShapeGraph(new("union-reader"), [], [union]);
         var plan = ObservationValidationPlan.Get(root, graph);
-        _ = ObservationValidationMetadata.For(union, plan).Get<TypeDefinition.Union, Dictionary<string, int>, ObservationValidator.UnionLiteral>(union);
+        _ = plan.Metadata.Get(union, ref ObservationValidator.UnionLiteral.Slot(plan.Metadata), ObservationValidator.UnionLiteral.Create);
         var value = ObservationValue.FromString("code127");
         var before = GC.GetAllocatedBytesForCurrentThread();
         var selected = ObservationValidator.TryResolveUnionCase(union, value, plan);
@@ -81,7 +103,7 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         var graph = new ShapeGraph(new("identities"), [], []);
         var plan = ObservationValidationPlan.Get(first, graph);
         Assert.Throws<InvalidOperationException>(() => ObservationValidationMetadata.For(second, plan));
-        Assert.Throws<InvalidOperationException>(() => plan.Metadata.Get<EnumTypeRef, HashSet<string>, ObservationValidator.InlineEnumLiteral>(second));
+        Assert.Throws<InvalidOperationException>(() => plan.Metadata.Get(second, ref ObservationValidator.InlineEnumLiteral.Slot(plan.Metadata), ObservationValidator.InlineEnumLiteral.Create));
         Assert.Throws<InvalidOperationException>(() => plan.RequireType(second));
         var root = new ObjectTypeRef([new("child", first)]);
         Assert.Throws<InvalidOperationException>(() => ObservationValidationPlan.Get(root, graph).Child(0, second));

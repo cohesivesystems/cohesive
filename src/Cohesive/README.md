@@ -165,7 +165,9 @@ while warm readers bypass that gate. Failed preparation publishes no incomplete 
 uses an iterative work queue; value validation still applies depth limits and builds fresh diagnostics.
 Unbound checks and scalar leaves retain direct dispatch. Nodes retain their original TypeRef, and identity
 checks reject root/child identity mismatches in Release as well as Debug. Each metadata container binds its exact owner. Accessor interfaces own the index type, factory and
-typed slot; generic constraints reject mismatched owner/index/accessor combinations at compilation.
+typed slot. Factory and slot signatures are statically typed; selecting the correct semantic slot remains
+an accessor convention. The compact container has three optional slots, so adding another index kind
+requires extending it. Exact declaration ownership is checked at runtime.
 Reading an indexless node's metadata does not execute a factory or throw.
 Field-name accessors constrain their owner
 types at compile time; enum and union paths share one hybrid lookup policy.

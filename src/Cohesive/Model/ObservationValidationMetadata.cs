@@ -26,12 +26,11 @@ internal sealed class ObservationValidationMetadata(object owner)
         return metadata;
     }
 
-    internal TIndex Get<TOwner, TIndex, TAccessor>(TOwner owner) where TOwner : class where TIndex : class
-        where TAccessor : struct, IValidationIndexAccessor<TOwner, TIndex>
+    internal TIndex Get<TOwner, TIndex>(TOwner owner, ref TIndex? slot, Func<TOwner, TIndex> create)
+        where TOwner : class where TIndex : class
     {
         if (!ReferenceEquals(Owner, owner))
             throw new InvalidOperationException("Validation index does not belong to the expected declaration.");
-        ref var slot = ref TAccessor.Slot(this);
         var prepared = Volatile.Read(ref slot);
         if (prepared is not null) return prepared;
         lock (this)
@@ -39,7 +38,7 @@ internal sealed class ObservationValidationMetadata(object owner)
             prepared = slot;
             if (prepared is null)
             {
-                prepared = TAccessor.Create(owner);
+                prepared = create(owner);
                 Volatile.Write(ref slot, prepared);
             }
             return prepared;

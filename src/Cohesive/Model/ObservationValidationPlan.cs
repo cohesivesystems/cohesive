@@ -42,6 +42,7 @@ internal sealed class ObservationValidationPlan(TypeRef type)
     internal static ObservationValidationMetadata GetDefinitionMetadata(TypeDefinition definition, ShapeGraph graph) =>
         Graphs.GetValue(graph, static value => new(value)).GetMetadata(definition);
 
+    // Non-preparing inspection lets regression tests distinguish decoding from closure preparation.
     internal static bool TryGet(TypeRef root, ShapeGraph graph, out ObservationValidationPlan? plan)
     {
         plan = null;

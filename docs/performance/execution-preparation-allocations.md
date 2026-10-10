@@ -163,7 +163,10 @@ Nonstring primitive literals retain the existing representation-sensitive scan: 
 not match discriminator text `010`. Graph-bound indexes live on their plan node; standalone checks
 use one weak declaration table.
 A node owns metadata bound to its exact declaration. The accessor interface owns the index type,
-static factory and typed slot, with generic constraints enforcing that pairing at compile time.
+static factory and typed slot. Their signatures enforce type compatibility; choosing the semantic
+slot remains an accessor convention, and exact owner identity is checked at runtime. The compact
+container has three optional slots and requires an extension for another index kind.
+Getter type arguments are inferred from the owner, slot and cached static factory delegate.
 There is no owner-to-factory switch; reading indexless metadata is safe. Slots publish successful
 preparation only and retry failures. Named reference nodes resolving the same declaration share that container
 within the graph; a graph-owned dictionary is bounded by its own declarations and retains no reference
