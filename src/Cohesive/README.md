@@ -162,6 +162,13 @@ while warm readers bypass that gate. Failed preparation publishes no incomplete 
 uses an iterative work queue; value validation still applies depth limits and builds fresh diagnostics.
 Unbound checks and scalar leaves retain direct dispatch. `ObservationValidationPlan` is an internal
 interpretation of existing declarations, with no additional type IDs, wire format or public contract.
+Large string enums and string-discriminator unions lazily prepare ordinal membership/dispatch indexes
+keyed by the immutable declaration. The first eight entries retain direct checks; only later matches
+or misses prepare an index. Named enum names and literal aliases are accepted, and duplicate union
+literals retain the first declared case. Other primitive discriminators retain their existing exact
+representation rules. Weak-key, successful-only preparation shares no instance values or results.
+See `LiteralValidationBenchmarks` for late-match, invalid-value and early-match measurements.
+
 See `NestedValidationBenchmarks` and `NamedValidationBenchmarks` for representative repeated validation,
 and the [performance overview](../../docs/performance/execution-preparation-allocations.md) for qualification.
 

@@ -241,6 +241,109 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         return new(root);
     }
 
+    [Fact]
+    public void IndexedEnumsPreserveOrdinalMembershipAndNamedAliases()
+    {
+        var members = Enumerable.Range(0, 128).Select(i => $"code{i}").ToImmutableArray();
+        var inline = new EnumTypeRef("codes", members);
+        var named = new TypeDefinition.Enum(new("codes"), PrimitiveType.String,
+            [..members.Select((member, i) => new EnumValue($"label{i}", member))]);
+        var reference = new NamedTypeRef(named.Id);
+        var graph = new ShapeGraph(new("codes"), [], [named]);
+        foreach (var text in members.Concat(["CODE127", "unknown", "", "label127"]))
+        {
+            var value = ObservationValue.FromString(text);
+            Assert.Equal(members.Contains(text, StringComparer.Ordinal),
+                ObservationValidator.TryValidateAgainstType(value, inline, out _));
+            Assert.Equal(members.Contains(text, StringComparer.Ordinal) || text == "label127",
+                ObservationValidator.TryValidateAgainstType(value, reference, out _, graph));
+        }
+        var renamed = inline with { Members = ["different"] };
+        Assert.False(ObservationValidator.TryValidateAgainstType(ObservationValue.FromString("code127"), renamed, out _));
+        Assert.True(ObservationValidator.TryValidateAgainstType(ObservationValue.FromString("different"), renamed, out _));
+    }
+
+    [Fact]
+    public void IndexedUnionPreservesFirstMatchAndPrimitiveRepresentations()
+    {
+        var cases = Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}",
+            new ObjectTypeRef([new($"field{i}", new ScalarTypeRef(ScalarTypeKind.String))]),
+            i is 12 or 13 ? "duplicate" : i == 14 ? "2026-10-10" : $"code{i}")).ToImmutableArray();
+        var union = new TypeDefinition.Union(new("union"), new UnionDiscriminator("kind"), cases);
+        foreach (var text in cases.Select(c => c.DiscriminatorValue).Concat(["CODE127", "unknown", ""]))
+        {
+            var expected = cases.FirstOrDefault(c => string.Equals(c.DiscriminatorValue, text, StringComparison.Ordinal))?.Type;
+            Assert.Same(expected, ObservationValidator.TryResolveUnionCase(union, ObservationValue.FromString(text)));
+        }
+        Assert.Same(cases[14].Type, ObservationValidator.TryResolveUnionCase(union, ObservationValue.FromDateOnly(new(2026, 10, 10))));
+        Assert.Null(ObservationValidator.TryResolveUnionCase(union, ObservationValue.FromInt64(127)));
+        var numeric = new TypeDefinition.Union(new("numeric"), new UnionDiscriminator("kind", PrimitiveType.Int64),
+            [..Enumerable.Range(0, 16).Select(i => new UnionCase($"case{i}", cases[i].Type, i == 10 ? "010" : i.ToString()))]);
+        Assert.Null(ObservationValidator.TryResolveUnionCase(numeric, ObservationValue.FromInt64(10)));
+        Assert.Same(numeric.Cases[15].Type, ObservationValidator.TryResolveUnionCase(numeric, ObservationValue.FromInt64(15)));
+    }
+
+    [Fact]
+    public void IndexedLiteralSuccessDoesNotAllocateAfterPreparation()
+    {
+        var inline = new EnumTypeRef("codes", [..Enumerable.Range(0, 128).Select(i => $"code{i}")]);
+        var union = new TypeDefinition.Union(new("union"), new UnionDiscriminator("kind"),
+            [..Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}", new ObjectTypeRef([]), $"code{i}"))]);
+        var value = ObservationValue.FromString("code127");
+        for (var i = 0; i < AllocationWarmupIterations; i++)
+        {
+            _ = ObservationValidator.TryValidateAgainstType(value, inline, out _);
+            _ = ObservationValidator.TryResolveUnionCase(union, value);
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var valid = true;
+        for (var i = 0; i < 1000; i++)
+        {
+            valid &= ObservationValidator.TryValidateAgainstType(value, inline, out _);
+            valid &= ReferenceEquals(union.Cases[127].Type, ObservationValidator.TryResolveUnionCase(union, value));
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(valid);
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void LiteralIndexesHaveBoundedColdAllocationAndNoEarlyCasePreparation()
+    {
+        var members = Enumerable.Range(0, 128).Select(i => $"code{i}").ToImmutableArray();
+        var inline = new EnumTypeRef("cold-codes", members);
+        var union = new TypeDefinition.Union(new("cold-union"), new UnionDiscriminator("kind"),
+            [..members.Select((member, i) => new UnionCase($"case{i}", new ObjectTypeRef([]), member))]);
+        var named = new TypeDefinition.Enum(new("cold-named"), PrimitiveType.String,
+            [..members.Select((member, i) => new EnumValue($"label{i}", member))]);
+        var reference = new NamedTypeRef(named.Id);
+        var graph = new ShapeGraph(new("cold-named"), [], [named]);
+        var first = ObservationValue.FromString("code0");
+        var last = ObservationValue.FromString("code127");
+        _ = ObservationValidator.TryValidateAgainstType(first, reference, out _, graph);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var earlyValid = ObservationValidator.TryValidateAgainstType(first, inline, out _);
+        var earlyCase = ObservationValidator.TryResolveUnionCase(union, first);
+        var early = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var inlineValid = ObservationValidator.TryValidateAgainstType(last, inline, out _);
+        var inlineCold = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var unionCase = ObservationValidator.TryResolveUnionCase(union, last);
+        var unionCold = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var namedValid = ObservationValidator.TryValidateAgainstType(last, reference, out _, graph);
+        var namedCold = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"Literal indexes: early={early} B, inline cold={inlineCold} B, union cold={unionCold} B, named cold={namedCold} B");
+        Assert.True(earlyValid && inlineValid && namedValid);
+        Assert.Same(union.Cases[0].Type, earlyCase);
+        Assert.Same(union.Cases[127].Type, unionCase);
+        Assert.Equal(0, early);
+        Assert.InRange(inlineCold, 1, 16_000);
+        Assert.InRange(unionCold, 1, 16_000);
+        Assert.InRange(namedCold, 1, 32_000);
+    }
+
     [Theory]
     [InlineData("00", true)]
     [InlineData("Original", true)]

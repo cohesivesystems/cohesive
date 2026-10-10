@@ -151,3 +151,40 @@ locally. Its next 1,000 exact-name validations allocate 0 B. The regression budg
 at 64 KB and requires zero warm allocation. This trades first-use preparation and retained metadata
 for repeated lookup savings; it does not reduce already-zero warm allocation. Runtime values,
 nullability/presence/cardinality decisions, union allowances, depth checks and diagnostics stay fresh.
+
+
+## Prepared string literal indexes
+
+Inline string enums, named enums with string underlying types, and string-discriminator unions
+check the first eight declarations directly. Larger declarations prepare an ordinal membership set
+or first-case dispatch dictionary only on a later match or miss. Named enum labels and literal aliases
+remain equivalent accepted spellings. Union insertion preserves the first declared matching case.
+Nonstring primitive literals retain the existing representation-sensitive scan: integer `10` does
+not match discriminator text `010`. Index keys are the original immutable declaration objects,
+retained weakly by the existing successful-only preparation helper; occurrence values are never cached.
+
+The [baseline](execution-preparation-final/literal-validation-before.md) and
+[final](execution-preparation-final/literal-validation-after.md) reports and adjacent CSVs use
+`LiteralValidationBenchmarks`, 128-entry declarations, baseline Core `01dc0d7b`, and the same fixture
+assembly. Types and values are constructed outside measurement and warmed 64 times. Run:
+
+```sh
+DOTNET_TieredCompilation=0 dotnet src/Cohesive.Relations.Benchmarks/bin/Release/net10.0/Cohesive.Relations.Benchmarks.dll --filter '*LiteralValidationBenchmarks*' --inProcess --job Short --warmupCount 3 --iterationCount 8 --invocationCount 4096 --unrollFactor 1
+```
+
+Both variants disable tiered compilation to avoid tier-promotion noise in these short in-process
+runs; these timings are not comparable to earlier tiered reports or Ari endpoint timings.
+Late inline enum matches change from 262 to 29 ns, named enum literals from 1,551 to 124 ns,
+and union cases from 993 to 115 ns. Invalid values change from 511 to 117 ns, 3,039 to 253 ns,
+and 2,074 to 294 ns respectively. First named enum and union matches are effectively unchanged;
+first inline enum checks add about 0.8 ns. The unchanged object diagnostic fixtures vary by roughly
+3–5%, illustrating measurement noise rather than an unrelated speedup.
+
+Diagnostic allocations remain 209 B for inline enum misses, 169 B for named misses and 313 B for
+union misses. A direct counter proves zero temporary allocation for 1,000 warm inline/union checks;
+the occasional 1 B benchmark result is harness amortization. Fresh late/missing lookups allocate
+2,824 B for inline enum preparation, 3,832 B for union preparation and 6,008 B for named enum
+preparation locally. These counters exclude declaration/value construction, global runtime setup,
+and graph-link preparation. Early inline/union matches allocate zero and do not prepare indexes.
+Tests cover ordinal membership, aliases, duplicate union literals, temporal string values, numeric
+representation sensitivity, distinct declaration identities and cold/warm allocation bounds.

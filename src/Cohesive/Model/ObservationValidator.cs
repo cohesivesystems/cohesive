@@ -10,6 +10,10 @@ namespace Cohesive.Model;
 public static class ObservationValidator
 {
     const int MaxValidationDepth = 64;
+    const int DirectLiteralCount = 8;
+    static readonly WeakPreparationCache<EnumTypeRef, HashSet<string>> InlineEnumMembers = new();
+    static readonly WeakPreparationCache<TypeDefinition.Enum, HashSet<string>> NamedEnumMembers = new();
+    static readonly WeakPreparationCache<TypeDefinition.Union, Dictionary<string, int>> UnionCases = new();
     // Only immutable field names are shared here. Union allowances, instance
     // lookup and diagnostics retain their invocation lifetime. Prepare only on detailed failure.
     static readonly WeakPreparationCache<ObjectTypeRef, HashSet<string>> ObjectFieldNames = new();
@@ -442,11 +446,11 @@ public static class ObservationValidator
         if (!TryGetString(value, out var enumValue))
             return Fail(ref diagnostics, new(ErrorCode.ExpectedStringEnum));
 
-        foreach (var member in enumType.Members)
-        {
-            if (string.Equals(member, enumValue, StringComparison.Ordinal))
-                return true;
-        }
+        for (var index = 0; index < Math.Min(DirectLiteralCount, enumType.Members.Length); index++)
+            if (string.Equals(enumType.Members[index], enumValue, StringComparison.Ordinal)) return true;
+        if (enumType.Members.Length > DirectLiteralCount
+            && InlineEnumMembers.Get(enumType, static type => new(type.Members, StringComparer.Ordinal)).Contains(enumValue))
+            return true;
 
         return Fail(ref diagnostics, new(ErrorCode.InvalidInlineEnum, enumType.Name, enumValue));
     }
@@ -664,8 +668,11 @@ public static class ObservationValidator
         if (!MatchesPrimitiveType(enumType.Underlying, value))
             return Fail(ref diagnostics, new(ErrorCode.NamedEnumMismatch, enumType.Id.Value));
 
-        foreach (var enumValue in enumType.Values)
+        var indexed = enumType.Underlying == PrimitiveType.String && enumType.Values.Length > DirectLiteralCount;
+        var count = indexed ? DirectLiteralCount : enumType.Values.Length;
+        for (var index = 0; index < count; index++)
         {
+            var enumValue = enumType.Values[index];
             if (enumType.Underlying == PrimitiveType.String
                 && TryGetString(value, out var stringValue)
                 && string.Equals(enumValue.Name, stringValue, StringComparison.Ordinal))
@@ -677,6 +684,17 @@ public static class ObservationValidator
                 return true;
         }
 
+        if (indexed && TryGetString(value, out var text)
+            && NamedEnumMembers.Get(enumType, static type =>
+            {
+                HashSet<string> members = new(type.Values.Length * 2, StringComparer.Ordinal);
+                foreach (var member in type.Values)
+                {
+                    members.Add(member.Name);
+                    if (member.Value is { } literal) members.Add(literal);
+                }
+                return members;
+            }).Contains(text)) return true;
         return Fail(ref diagnostics, new(ErrorCode.NamedEnumMismatch, enumType.Id.Value));
     }
 
@@ -765,10 +783,22 @@ public static class ObservationValidator
 
     static int TryResolveUnionCaseIndex(TypeDefinition.Union unionType, in ObservationValue value)
     {
-        for (var index = 0; index < unionType.Cases.Length; index++)
+        // Keep small declarations and common early cases direct. Only exact string literals
+        // are indexed; other primitive representations retain their existing matching rules.
+        var indexed = unionType.Discriminator.Type == PrimitiveType.String && unionType.Cases.Length > DirectLiteralCount;
+        var count = indexed ? DirectLiteralCount : unionType.Cases.Length;
+        for (var index = 0; index < count; index++)
             if (MatchesPrimitiveLiteral(unionType.Discriminator.Type, value, unionType.Cases[index].DiscriminatorValue))
                 return index;
-        return -1;
+        if (!indexed || !MatchesPrimitiveType(PrimitiveType.String, value) || value.String is not { } text) return -1;
+        var cases = UnionCases.Get(unionType, static type =>
+        {
+            Dictionary<string, int> result = new(type.Cases.Length, StringComparer.Ordinal);
+            for (var index = 0; index < type.Cases.Length; index++)
+                result.TryAdd(type.Cases[index].DiscriminatorValue, index);
+            return result;
+        });
+        return cases.TryGetValue(text, out var matched) ? matched : -1;
     }
 
     static bool TryMatchQuantity<TDiagnostics>(
