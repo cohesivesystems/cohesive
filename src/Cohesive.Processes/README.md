@@ -200,7 +200,10 @@ selects deployment roots and provides non-Process links, interaction contracts, 
 Process links in external evidence are rejected: the canonical documents own that graph.
 
 Compilation traverses the authored closure iteratively, validates every reachable document through the
-ordinary compiler, and shares successful child plans within the call. A parent's evidence contains only
+ordinary compiler, and shares successful child plans within the call. The strict typed projection decoded
+for discovery is reused during semantic validation; envelope checks, canonical-byte round-trip comparison,
+and context-dependent diagnostics still run for each compilation. No validation result is cached.
+A parent's evidence contains only
 its transitive children, not previously compiled siblings. Unselected documents are not compiled.
 Missing references, incompatible fingerprints, cycles, invalid definitions, unsupported extensions, and
 scope demands fail admission. `FailedDefinition` identifies the failed reference and `Validation`
