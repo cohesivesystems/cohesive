@@ -89,3 +89,8 @@ then passed. The final complete run, including both allocation cases, passed 4,1
 Ari's full engine project passed 854 tests with 18 existing scheduler skips using the same local
 prototype assemblies. Temporary overrides were removed after qualification and are not part of either
 repository's source change.
+
+Current regression boundary: direct and closure compilation both reuse the document projection.
+The 16 KiB and 64 KiB tests allow at most 8 KiB of closure bookkeeping above direct
+compilation, rather than requiring closure to beat a direct path that no longer decodes twice.
+The measurements above describe the original pre-shared-decoding baseline.
