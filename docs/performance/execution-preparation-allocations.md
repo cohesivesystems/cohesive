@@ -162,18 +162,17 @@ remain equivalent accepted spellings. Union insertion preserves the first declar
 Nonstring primitive literals retain the existing representation-sensitive scan: integer `10` does
 not match discriminator text `010`. Graph-bound indexes live on their plan node; standalone checks
 use one weak declaration table.
-A node owns metadata bound to its exact declaration. The accessor interface owns the index type,
-static factory and typed slot. Their signatures enforce type compatibility; choosing the semantic
-slot remains an accessor convention, and exact owner identity is checked at runtime. The compact
-container has three optional slots and requires an extension for another index kind.
-Small accessor helpers bind the owner, index and accessor types once. The constrained metadata getter
-selects the slot on the metadata object it checks and locks; callers cannot supply a separate slot.
+A node owns metadata bound to its exact declaration. Accessor constraints bind the owner, index
+result type and static factory. One shared getter owns a private index reference, checks exact owner
+identity and publishes successfully under the metadata lock. Each current owner needs one index kind,
+so there is no slot-selection API or per-kind field list. Tests have non-preparing read-only inspection.
+
 There is no owner-to-factory switch; reading indexless metadata is safe. Slots publish successful
 preparation only and retry failures. Named reference nodes resolving the same declaration share that container
 within the graph; a graph-owned dictionary is bounded by its own declarations and retains no reference
 root nodes. Object/inline-enum containers are lazy. Occurrence values are never cached. Node TypeRef identity and positional child
 access have Release checks; metadata access verifies exact owner identity before the accessor
-prepares its index in its typed slot; field-name accessors constrain owner types at compile time. The three
+publishes its index privately; field-name accessors constrain owner types at compile time. The three
 literal paths use one generic hybrid lookup policy, specialized by small static accessors.
 
 The [baseline](execution-preparation-final/literal-validation-before.md) and

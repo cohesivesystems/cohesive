@@ -20,12 +20,12 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         var value = ObservationJsonReader.ReadTypedValue(ref reader, type, graph);
         Assert.False(ObservationValidationPlan.TryGet(type, graph, out _));
         var readerMetadata = ObservationValidationPlan.GetDefinitionMetadata(union, graph);
-        var readerIndex = ObservationValidator.UnionLiteral.Slot(readerMetadata);
+        var readerIndex = readerMetadata.PreparedIndex;
         Assert.NotNull(readerIndex); // Reading already populated the graph-owned slot, without compiling a closure.
         Assert.True(ObservationValidator.TryValidateAgainstType(value, type, out _, graph));
         var plan = ObservationValidationPlan.Get(type, graph);
         Assert.Same(readerMetadata, plan.Metadata);
-        Assert.Same(readerIndex, ObservationValidator.UnionLiteral.Get(plan.Metadata, union));
+        Assert.Same(readerIndex, plan.Metadata.Get<TypeDefinition.Union, Dictionary<string, int>, ObservationValidator.UnionLiteral>(union));
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         Assert.True(reader.Read());
         _ = ObservationJsonReader.ReadTypedValue(ref reader, type, graph);
         Assert.False(ObservationValidationPlan.TryGet(type, graph, out _));
-        Assert.Null(ObservationValidator.UnionLiteral.Slot(ObservationValidationPlan.GetDefinitionMetadata(union, graph)));
+        Assert.Null(ObservationValidationPlan.GetDefinitionMetadata(union, graph).PreparedIndex);
         var array = new ArrayTypeRef(new ScalarTypeRef(ScalarTypeKind.String));
         Assert.Same(array, ObservationValidationPlan.Get(array, graph).Metadata.Owner);
     }
@@ -74,7 +74,7 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
             [.. Enumerable.Range(0, 128).Select(i => new UnionCase($"case{i}", new ObjectTypeRef([]), $"code{i}"))]);
         var graph = new ShapeGraph(new("union-reader"), [], [union]);
         var plan = ObservationValidationPlan.Get(root, graph);
-        _ = ObservationValidator.UnionLiteral.Get(plan.Metadata, union);
+        _ = plan.Metadata.Get<TypeDefinition.Union, Dictionary<string, int>, ObservationValidator.UnionLiteral>(union);
         var value = ObservationValue.FromString("code127");
         var before = GC.GetAllocatedBytesForCurrentThread();
         var selected = ObservationValidator.TryResolveUnionCase(union, value, plan);
@@ -101,10 +101,10 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         var owner = new EnumTypeRef("owner", ["one"]);
         var first = new ObservationValidationMetadata(owner);
         var second = new ObservationValidationMetadata(owner);
-        var index = ObservationValidator.InlineEnumLiteral.Get(first, owner);
-        Assert.Same(index, ObservationValidator.InlineEnumLiteral.Slot(first));
-        Assert.Null(ObservationValidator.InlineEnumLiteral.Slot(second));
-        Assert.NotSame(index, ObservationValidator.InlineEnumLiteral.Get(second, owner));
+        var index = first.Get<EnumTypeRef, HashSet<string>, ObservationValidator.InlineEnumLiteral>(owner);
+        Assert.Same(index, first.PreparedIndex);
+        Assert.Null(second.PreparedIndex);
+        Assert.NotSame(index, second.Get<EnumTypeRef, HashSet<string>, ObservationValidator.InlineEnumLiteral>(owner));
     }
 
     [Fact]
@@ -115,7 +115,7 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         var graph = new ShapeGraph(new("identities"), [], []);
         var plan = ObservationValidationPlan.Get(first, graph);
         Assert.Throws<InvalidOperationException>(() => ObservationValidationMetadata.For(second, plan));
-        Assert.Throws<InvalidOperationException>(() => ObservationValidator.InlineEnumLiteral.Get(plan.Metadata, second));
+        Assert.Throws<InvalidOperationException>(() => plan.Metadata.Get<EnumTypeRef, HashSet<string>, ObservationValidator.InlineEnumLiteral>(second));
         Assert.Throws<InvalidOperationException>(() => plan.RequireType(second));
         var root = new ObjectTypeRef([new("child", first)]);
         Assert.Throws<InvalidOperationException>(() => ObservationValidationPlan.Get(root, graph).Child(0, second));
