@@ -20,6 +20,14 @@ public sealed class RelationQueryBoundRealizationCompilerTests
     static readonly RelationQueryTargetCapabilityEvidenceId UnrelatedEvidence = new("evidence/unrelated");
 
     [Fact]
+    public void Compute_RetainsExistingBoundBinaryProfileGoldenDigest()
+    {
+        var request = CreateRequest(LoadCustomerRelationFixture.RepresentativeQueryDocument);
+        var report = RelationQueryBoundRealizationCompiler.Compile(request, CreateCompleteProjection(request));
+        Assert.Equal("b27758408ef99b5289f4138dcfbb81ed23e4ff8479a0e6b5a1ef34212650be09", RelationQueryBoundRealizationFingerprinter.Compute(report).Value);
+    }
+
+    [Fact]
     public void AdapterBindingReference_SemanticEqualityComparesCanonicalEvidenceByValue()
     {
         var request = CreateRequest(LoadCustomerRelationFixture.RepresentativeQueryDocument);

@@ -168,3 +168,6 @@ Construction-plus-invocation is a fresh runtime over warmed dependencies, not pr
 Run `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*ServiceInvocationBenchmarks*'`.
 Use `--job Dry` only to verify harness execution; its single samples are not performance conclusions.
 Retain BenchmarkDotNet environment and allocation reports with any reported comparison.
+
+Realization fingerprint and ordering-key qualification: run filters `*RealizationFingerprintBenchmarks*`
+and `*RealizationSequenceKeyBenchmarks*`. See [workloads, before/after results and boundaries](../../docs/performance/realization-fingerprints.md).
