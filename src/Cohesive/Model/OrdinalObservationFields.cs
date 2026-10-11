@@ -27,10 +27,26 @@ internal sealed class OrdinalObservationFields(ObservationLayout layout, Immutab
         field = (uint)ordinal < (uint)values.Length ? values[ordinal] : default;
         return field.Kind != ObservationValueKind.Undefined;
     }
-    public IEnumerator<KeyValuePair<string, ObservationValue>> GetEnumerator()
-    {
-        for (var ordinal = 0; ordinal < values.Length; ordinal++)
-            if (TryGetField(ordinal, out var field)) yield return new(layout.FieldIdentities[ordinal], field);
-    }
+    public Enumerator GetEnumerator() => new(this);
+    IEnumerator<KeyValuePair<string, ObservationValue>> IEnumerable<KeyValuePair<string, ObservationValue>>.GetEnumerator() => GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    public struct Enumerator(OrdinalObservationFields fields) : IEnumerator<KeyValuePair<string, ObservationValue>>
+    {
+        int ordinal = -1;
+        public KeyValuePair<string, ObservationValue> Current { get; private set; }
+        object IEnumerator.Current => Current;
+        public bool MoveNext()
+        {
+            while (++ordinal < fields.Layout.Count)
+                if (fields.TryGetField(ordinal, out var field))
+                {
+                    Current = new(fields.Layout.FieldIdentities[ordinal], field);
+                    return true;
+                }
+            return false;
+        }
+        public void Dispose() { }
+        public void Reset() => throw new NotSupportedException();
+    }
 }

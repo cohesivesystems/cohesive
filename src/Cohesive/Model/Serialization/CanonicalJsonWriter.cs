@@ -1161,98 +1161,50 @@ public static class CanonicalJsonWriter
         struct ContainerFrame
         {
             ImmutableArray<ObservationValue> items;
-            KeyValuePair<string, ObservationValue>[]? properties;
-            int propertyCount;
+            OrderedObservationFields properties;
+            OrderedObservationFields.Enumerator propertyEnumerator;
             int nextItemIndex;
 
-            ContainerFrame(
-                bool isObject,
-                int childDepth,
-                ImmutableArray<ObservationValue> items,
-                KeyValuePair<string, ObservationValue>[]? properties,
-                int propertyCount)
-            {
-                IsObject = isObject;
-                ChildDepth = childDepth;
-                this.items = items;
-                this.properties = properties;
-                this.propertyCount = propertyCount;
-                nextItemIndex = 0;
-            }
-
-            internal bool IsObject { get; }
-
-            internal int ChildDepth { get; }
+            internal bool IsObject { get; private init; }
+            internal int ChildDepth { get; private init; }
 
             internal static ContainerFrame ForArray(ImmutableArray<ObservationValue> items, int childDepth) =>
-                new(
-                    isObject: false,
-                    childDepth,
-                    items.IsDefault ? [] : items,
-                    properties: null,
-                    propertyCount: 0);
+                new() { IsObject = false, ChildDepth = childDepth, items = items.IsDefault ? [] : items };
 
             internal static ContainerFrame ForObject(
-                IReadOnlyDictionary<string, ObservationValue>? properties,
-                int childDepth)
+                IReadOnlyDictionary<string, ObservationValue>? fields, int childDepth)
             {
-                var ordered = OrderedObservationFields.RentOrderedObservationProperties(properties, out var count);
-                if (ordered is null)
+                var properties = new OrderedObservationFields(fields);
+                try
                 {
-                    return new(
-                        isObject: true,
-                        childDepth,
-                        items: [],
-                        properties: null,
-                        propertyCount: 0);
+                    return new() { IsObject = true, ChildDepth = childDepth,
+                        properties = properties, propertyEnumerator = properties.GetEnumerator() };
                 }
-
-                return new(
-                    isObject: true,
-                    childDepth,
-                    items: [],
-                    properties: ordered,
-                    propertyCount: count);
+                catch { properties.Dispose(); throw; }
             }
 
             internal bool TryMoveNext(out string? property, out ObservationValue value)
             {
+                property = null;
+                value = default;
                 if (IsObject)
                 {
-                    if (nextItemIndex < propertyCount)
-                    {
-                        var current = properties![nextItemIndex++];
-                        property = current.Key;
-                        value = current.Value;
-                        return true;
-                    }
-
-                    property = null;
-                    value = default;
-                    return false;
+                    if (!propertyEnumerator.MoveNext()) return false;
+                    var current = propertyEnumerator.Current;
+                    property = current.Key;
+                    value = current.Value;
+                    return true;
                 }
-
-                property = null;
-                if (nextItemIndex >= items.Length)
-                {
-                    value = default;
-                    return false;
-                }
-
+                if (nextItemIndex >= items.Length) return false;
                 value = items[nextItemIndex++];
                 return true;
             }
 
             internal void Dispose()
             {
-                if (properties is null)
-                    return;
-
-                OrderedObservationFields.ReturnOrderedObservationProperties(properties, propertyCount);
-                properties = null;
-                propertyCount = 0;
-                items = [];
-                nextItemIndex = 0;
+                propertyEnumerator.Dispose();
+                properties.Dispose();
+                this = default;
             }
         }
 

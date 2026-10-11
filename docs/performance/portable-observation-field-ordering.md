@@ -10,9 +10,13 @@ Successful portable validation visits fields in their stored order. Only failing
 ordinally sorted diagnostic groups, retaining depth-first order and escaped locations without
 revalidating subtrees. Canonical and tagged writers share OrderedObservationFields: ordinal immutable
 sorted dictionaries pass through directly; other field collections use a scoped pooled copy and
-sort only if its keys are not already ordered. Both writers retain identical ordinal wire ordering.
+sort only if its keys are not already ordered. Shape-backed fields traverse the layout
+CanonicalJsonOrdinals directly, skipping absent values, without a copy or sort. Both writers retain identical ordinal wire ordering.
 Buffers are cleared and returned on normal completion and exceptions. The iterative streaming writer
-uses the same rental/return functions. No validation evidence is cached, and no fingerprint format changes.
+uses the same owning traversal and enumerator; the rental/return functions are private.
+Validation dispatches concrete dictionary enumerators so nested object visits do not box them.
+Owning traversal structs are transferred, not duplicated; disposing two copies is unsupported and
+the ownership comment documents this constraint. Streaming frame transfers clear their old slots. No validation evidence is cached, and no fingerprint format changes.
 
 ## Measurement
 
@@ -31,15 +35,15 @@ already-warmed static state within each variant. All nine cases passed in each r
 
 | Workload | Before bytes | After bytes | Reduction |
 |---|---:|---:|---:|
-| Cold X12 004010 normal | 1,151,182,176 | 903,437,200 | 21.5% |
-| X12 005030 normal | 950,920,856 | 662,465,360 | 30.3% |
-| FIX normal | 174,823,240 | 156,180,248 | 10.7% |
-| All nine cases | 6,557,908,808 | 4,648,632,768 | 29.1% |
+| Cold X12 004010 normal | 1,151,182,176 | 879,150,272 | 23.6% |
+| X12 005030 normal | 950,920,856 | 634,503,968 | 33.3% |
+| FIX normal | 174,823,240 | 154,757,648 | 11.5% |
+| All nine cases | 6,557,908,808 | 4,464,278,360 | 31.9% |
 
-The cold case's preview allocation falls from 313.5 to 244.3 MB and execution from 522.6 to
-377.2 MB. Definition catalog construction remains about 110.2 MB and seed catalog about 95.1 MB:
+The cold case's preview allocation falls from 313.5 to 235.3 MB and execution from 522.6 to
+364.9 MB. Definition catalog construction remains about 110.7 MB and seed catalog about 95.2 MB:
 this optimization removes repeated runtime work, not catalog authoring. The whole nine-case run
-was 10.07 versus 9.85 seconds, and the cold stage total 3.60 versus 3.43 seconds. Single timing
+was 10.07 versus 9.65 seconds, and the cold stage total 3.60 versus 3.51 seconds. Single timing
 samples do not establish a stable latency improvement.
 
 The checked-in 128-field allocation regression uses booleans to isolate field ordering from scalar
@@ -49,16 +53,18 @@ public entry point, context, location scratch storage and result.
 
 | 128-field input | Tagged writer before/after | Validator before/after |
 |---|---:|---:|
-| Owned unsorted fields | 6,968 / 0 B | 7,240 / 352 B |
-| Ordinal immutable sorted fields | 6,968 / 0 B | 7,240 / 328 B |
+| Owned unsorted fields | 6,968 / 0 B | 7,240 / 272 B |
+| Ordinal immutable sorted fields | 6,968 / 0 B | 7,240 / 272 B |
 
 The baseline intentionally fails the new allocation budgets (writer <=128 B, validator <=1,024 B).
-The revised implementation passes. The difference between sorted and owned validation is constant
-enumerator/context overhead; no per-field sorted array is allocated. Tests also cover nested escaped
+The revised implementation passes. Validation retains constant context/result overhead; no per-object boxed enumerator or
+per-field sorted array is allocated. Tests also cover nested escaped
 diagnostic ordering and reuse after a writer exception. Existing lossless round trips and canonical
 JSON checks remain in force.
 
-[Raw per-stage measurements](portable-observation-field-ordering.csv) cover both variants and all nine cases.
+[Compact measurements](portable-observation-field-ordering.csv) retain cold-case stages and totals
+for all nine cases. Detailed local captures remain outside the repository. Only allocation reduction
+is established; timing values are single samples, not a demonstrated latency gain.
 
 ```bash
 dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj -c Release --filter 'FullyQualifiedName~PortableValueTests|FullyQualifiedName~CanonicalJson'
@@ -69,9 +75,29 @@ Run the second command from Ari after adopting or explicitly overlaying the inte
 No narrow-fixture catalog, spec-hash reuse, EDI provenance, durable commit fingerprint or receipt-admission
 change is included. Those remain separate candidates requiring their own before/after qualification.
 
+## Nested-object regression
+
+The review exposed boxing hidden by the initial flat fixture. The added fixture holds 128 nested
+one-field objects, warms 1,000 calls, excludes construction, and measures the same complete public
+validator plus tagged/streaming writes into reused output buffers. It covers owned, immutable, sorted
+and layout-backed fields. Layout ordinals are reversed physically and contain an absent optional
+field; both writer forms retain canonical order and omit the absent field.
+
+| Storage | Validator before/after | Tagged writer before/after | Streaming writer before/after |
+|---|---:|---:|---:|
+| Owned | 10,592 / 272 B | 0 / 0 B | 0 / 0 B |
+| Immutable | 22,976 / 272 B | 0 / 0 B | 0 / 0 B |
+| Immutable sorted | 7,496 / 272 B | 0 / 0 B | 0 / 0 B |
+| Layout-backed | 9,560 / 272 B | 9,288 / 0 B | 9,288 / 0 B |
+
+The before assembly was built from exact pre-review head deab5257 in an isolated checkout. It
+intentionally fails all four new validator allocation budgets. Sorted input also bypasses copies
+in the streaming writer, even when an already-warm pooled copy would hide that work from counters.
+
 ## Qualification
 
-The full Core suite passed 4,400 tests (33 existing optional skips), Relations passed 1,106,
-and Ari Engine passed 855 (18 existing scheduler skips). The final explicit sorted-enumerator
-cleanup additionally passed all 63 portable-value/canonical JSON focused cases. Package publication
-and Ari dependency upgrades are not part of this change.
+The full Core suite passed 4,404 tests (33 existing optional skips), Relations passed 1,106,
+and Ari Engine passed 855 (18 existing scheduler skips). All 92 portable-value, core-observation and
+canonical JSON focused cases pass, including the nested allocation checks. All nine original Ari
+cases also pass in the refreshed final allocation run. Package publication and Ari dependency
+upgrades are not part of this change.

@@ -964,16 +964,27 @@ public static class PortableExecutionValidator
                         MalformedObservation(value.Kind, location);
                         break;
                     }
-                    List<(string Name, int Start, int Count)>? failures = null;
-                    foreach (var field in value.Fields)
+                    switch (value.Fields)
                     {
-                        var start = diagnostics.Count;
-                        ValidateObservationField(field, location);
-                        if (diagnostics.Count != start)
-                            (failures ??= []).Add((field.Key, start, diagnostics.Count - start));
+                        case OwnedObservationFields owned:
+                            ValidateObservationFields(owned.GetEnumerator(), location);
+                            break;
+                        case OrdinalObservationFields ordinal:
+                            ValidateObservationFields(ordinal.GetEnumerator(), location);
+                            break;
+                        case ImmutableDictionary<string, ObservationValue> immutable:
+                            ValidateObservationFields(immutable.GetEnumerator(), location);
+                            break;
+                        case ImmutableSortedDictionary<string, ObservationValue> sorted:
+                            ValidateObservationFields(sorted.GetEnumerator(), location);
+                            break;
+                        case Dictionary<string, ObservationValue> dictionary:
+                            ValidateObservationFields(dictionary.GetEnumerator(), location);
+                            break;
+                        default:
+                            ValidateObservationFields(value.Fields.GetEnumerator(), location);
+                            break;
                     }
-                    if (failures is { Count: > 1 })
-                        OrderObservationFailures(failures);
                     break;
                 case ObservationValueKind.Array:
                     if (value.Array.IsDefault)
@@ -991,6 +1002,26 @@ public static class PortableExecutionValidator
                         location);
                     break;
             }
+        }
+
+        void ValidateObservationFields<TEnumerator>(TEnumerator fields, Location location)
+            where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+        {
+            List<(string Name, int Start, int Count)>? failures = null;
+            try
+            {
+                while (fields.MoveNext())
+                {
+                    var field = fields.Current;
+                    var start = diagnostics.Count;
+                    ValidateObservationField(field, location);
+                    if (diagnostics.Count != start)
+                        (failures ??= []).Add((field.Key, start, diagnostics.Count - start));
+                }
+                if (failures is { Count: > 1 })
+                    OrderObservationFailures(failures);
+            }
+            finally { fields.Dispose(); }
         }
 
         void OrderObservationFailures(List<(string Name, int Start, int Count)> failures)

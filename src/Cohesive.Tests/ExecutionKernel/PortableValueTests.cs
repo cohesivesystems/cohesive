@@ -47,6 +47,75 @@ public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper outp
         Assert.InRange(validationBytes, 0, 1_024);
     }
 
+    [Theory]
+    [InlineData("owned")]
+    [InlineData("immutable")]
+    [InlineData("sorted")]
+    [InlineData("ordinal")]
+    public void NestedObjectTraversalHasConstantWarmAllocation(string storage)
+    {
+        var fields = Enumerable.Range(0, 128).Reverse().ToDictionary(i => $"field{i:D3}",
+            _ => CreateFields(storage, new() { ["value"] = ObservationValue.FromBool(true) }), StringComparer.Ordinal);
+        var observation = CreateFields(storage, fields);
+        var portable = PortableValue.Concrete(new ValueContract(new JsonTypeRef(JsonTypeKind.Object)), observation);
+        var buffer = new ArrayBufferWriter<byte>();
+        var streaming = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(buffer);
+        for (var i = 0; i < 1_000; i++)
+        {
+            Assert.True(PortableExecutionValidator.Validate(portable).IsValid);
+            buffer.Clear(); writer.Reset(buffer);
+            PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+            writer.Flush();
+            streaming.Clear();
+            CanonicalJsonWriter.WriteCanonicalObservationValue(streaming, observation);
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = PortableExecutionValidator.Validate(portable);
+        var validationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        buffer.Clear(); writer.Reset(buffer);
+        before = GC.GetAllocatedBytesForCurrentThread();
+        PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+        writer.Flush();
+        var writerBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        streaming.Clear();
+        before = GC.GetAllocatedBytesForCurrentThread();
+        CanonicalJsonWriter.WriteCanonicalObservationValue(streaming, observation);
+        var streamingBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"128 nested objects ({storage}): validate={validationBytes} B, tagged={writerBytes} B, streaming={streamingBytes} B");
+        Assert.True(result.IsValid);
+        Assert.InRange(validationBytes, 0, 1_024);
+        Assert.InRange(writerBytes, 0, 128);
+        Assert.InRange(streamingBytes, 0, 128);
+        var expected = new ArrayBufferWriter<byte>();
+        using (var canonicalWriter = new Utf8JsonWriter(expected))
+        {
+            CanonicalJsonWriter.WriteCanonicalObservationValue(canonicalWriter, observation);
+            canonicalWriter.Flush();
+        }
+        Assert.Equal(expected.WrittenSpan.ToArray(), streaming.WrittenSpan.ToArray());
+        using var document = JsonDocument.Parse(streaming.WrittenMemory);
+        Assert.Equal(Enumerable.Range(0, 128).Select(i => $"field{i:D3}"),
+            document.RootElement.EnumerateObject().Select(property => property.Name));
+        Assert.All(document.RootElement.EnumerateObject(), property =>
+            Assert.Equal(new[] { "value" }, property.Value.EnumerateObject().Select(child => child.Name)));
+    }
+
+    static ObservationValue CreateFields(string storage, Dictionary<string, ObservationValue> fields)
+    {
+        if (storage == "immutable") return ObservationValue.FromObject(fields.ToImmutableDictionary(StringComparer.Ordinal));
+        if (storage == "sorted") return ObservationValue.FromObject(fields.ToImmutableSortedDictionary(StringComparer.Ordinal));
+        if (storage != "ordinal") return ObservationValue.FromObject(fields);
+        var shape = new Shape(new("fields"),
+            [.. fields.Select(field => new FieldDefinition(new(field.Key), field.Value.Kind == ObservationValueKind.Bool
+                ? new ScalarTypeRef(ScalarTypeKind.Bool) : new JsonTypeRef(JsonTypeKind.Object))),
+             new(new("__missing"), new ScalarTypeRef(ScalarTypeKind.Bool), presence: FieldPresence.Optional)]);
+        var graph = new ShapeGraph(new("layout"), [shape]);
+        var layout = ObservationLayout.Create(new GraphShapeId(graph, shape.Id), shape.Fields.Select(field => field.Name.Value).Reverse());
+        var values = layout.FieldIdentities.Select(name => fields.TryGetValue(name, out var value) ? value : ObservationValue.Undefined).ToImmutableArray();
+        return ObservationValue.FromOrdinalFields(new OrdinalObservationFields(layout, values, fields.Count));
+    }
+
     [Fact]
     public void UnorderedInvalidObjectPreservesOrdinalDepthFirstDiagnosticOrder()
     {

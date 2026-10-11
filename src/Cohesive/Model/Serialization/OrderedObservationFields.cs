@@ -5,15 +5,23 @@ namespace Cohesive.Model.Serialization;
 
 // Canonical observation encodings share ordinal property ordering. Already-sorted immutable input
 // needs no copy; other inputs use a scoped pooled buffer cleared on every exit, including exceptions.
-internal readonly ref struct OrderedObservationFields
+internal struct OrderedObservationFields : IDisposable
 {
-    readonly ImmutableSortedDictionary<string, ObservationValue>? sorted;
-    readonly KeyValuePair<string, ObservationValue>[]? buffer;
-    readonly int count;
+    ImmutableSortedDictionary<string, ObservationValue>? sorted;
+    OrdinalObservationFields? ordinal;
+    KeyValuePair<string, ObservationValue>[]? buffer;
+    int count;
 
     internal OrderedObservationFields(IReadOnlyDictionary<string, ObservationValue>? fields)
     {
-        if (fields is ImmutableSortedDictionary<string, ObservationValue> ordered
+        ordinal = fields as OrdinalObservationFields;
+        if (ordinal is not null)
+        {
+            sorted = null;
+            buffer = null;
+            count = 0;
+        }
+        else if (fields is ImmutableSortedDictionary<string, ObservationValue> ordered
             && ReferenceEquals(ordered.KeyComparer, StringComparer.Ordinal))
         {
             sorted = ordered;
@@ -27,20 +35,33 @@ internal readonly ref struct OrderedObservationFields
         }
     }
 
-    public Enumerator GetEnumerator() => new(sorted, buffer, count);
-    public void Dispose() => ReturnOrderedObservationProperties(buffer, count);
+    public Enumerator GetEnumerator() => new(sorted, ordinal, buffer, count);
+    // Ownership is transferred, never duplicated: dispose only the owning instance. Copies must
+    // not both be disposed. Streaming frames move ownership and clear the old slot after transfer.
+    public void Dispose()
+    {
+        ReturnOrderedObservationProperties(buffer, count);
+        buffer = null;
+        sorted = null;
+        ordinal = null;
+        count = 0;
+    }
 
     internal struct Enumerator : IDisposable
     {
         readonly KeyValuePair<string, ObservationValue>[]? buffer;
         readonly int count;
         readonly bool isSorted;
+        readonly OrdinalObservationFields? ordinal;
+        KeyValuePair<string, ObservationValue> current;
         ImmutableSortedDictionary<string, ObservationValue>.Enumerator sorted;
         int index;
 
         internal Enumerator(ImmutableSortedDictionary<string, ObservationValue>? fields,
-            KeyValuePair<string, ObservationValue>[]? buffer, int count)
+            OrdinalObservationFields? ordinal, KeyValuePair<string, ObservationValue>[]? buffer, int count)
         {
+            this.ordinal = ordinal;
+            current = default;
             this.buffer = buffer;
             this.count = count;
             isSorted = fields is not null;
@@ -48,12 +69,24 @@ internal readonly ref struct OrderedObservationFields
             index = -1;
         }
 
-        public KeyValuePair<string, ObservationValue> Current => isSorted ? sorted.Current : buffer![index];
-        public bool MoveNext() => isSorted ? sorted.MoveNext() : ++index < count;
+        public KeyValuePair<string, ObservationValue> Current => ordinal is not null ? current : isSorted ? sorted.Current : buffer![index];
+        public bool MoveNext()
+        {
+            if (ordinal is null) return isSorted ? sorted.MoveNext() : ++index < count;
+            var order = ordinal.Layout.CanonicalJsonOrdinals;
+            while (++index < order.Length)
+            {
+                var fieldIndex = order[index];
+                if (!ordinal.TryGetField(fieldIndex, out var field)) continue;
+                current = new(ordinal.Layout.FieldIdentities[fieldIndex], field);
+                return true;
+            }
+            return false;
+        }
         public void Dispose() { if (isSorted) sorted.Dispose(); }
     }
 
-    internal static KeyValuePair<string, ObservationValue>[]? RentOrderedObservationProperties(
+    static KeyValuePair<string, ObservationValue>[]? RentOrderedObservationProperties(
         IReadOnlyDictionary<string, ObservationValue>? properties,
         out int count)
     {
@@ -105,7 +138,7 @@ internal readonly ref struct OrderedObservationFields
         }
     }
 
-    internal static void ReturnOrderedObservationProperties(
+    static void ReturnOrderedObservationProperties(
         KeyValuePair<string, ObservationValue>[]? properties,
         int count)
     {
