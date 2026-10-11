@@ -10,6 +10,8 @@ namespace Cohesive.Model;
 public static class ObservationValidator
 {
     const int MaxValidationDepth = 64;
+    const int DirectLiteralCount = 8;
+
 
     /// <summary>Validates a portable value against a type using the same semantics as observation admission.</summary>
     /// <param name="value">Concrete value to validate; undefined values are rejected.</param>
@@ -347,6 +349,7 @@ public static class ObservationValidator
             return Fail(ref diagnostics, new(ErrorCode.ExpectedArray));
 
         var items = value.EnumerateArray();
+        ObservationValidationPlan? plan = null;
         for (var index = 0; index < items.Length; index++)
         {
             diagnostics.PushElement(index);
@@ -358,9 +361,12 @@ public static class ObservationValidator
                 if (field.Nullability == FieldNullability.NonNullable)
                     return Fail(ref diagnostics, new(ErrorCode.NonNullableValueIsNull));
             }
-            else if (!TryMatchTypeCore(field.Type, item, graph, MaxValidationDepth, ref diagnostics))
+            else
             {
-                return false;
+                if (graph is not null && plan is null && field.Type is (ArrayTypeRef or ObjectTypeRef or NamedTypeRef))
+                    plan = ObservationValidationPlan.Get(field.Type, graph);
+                if (!TryMatchTypeCore(field.Type, item, graph, MaxValidationDepth, ref diagnostics, plan))
+                    return false;
             }
             diagnostics.Pop();
         }
@@ -382,31 +388,36 @@ public static class ObservationValidator
         in ObservationValue value,
         ShapeGraph? graph,
         int maxDepth,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        ObservationValidationPlan? plan = null)
         where TDiagnostics : IValidationDiagnostics
     {
         if (maxDepth <= 0)
             return Fail(ref diagnostics, new(ErrorCode.MaximumDepthExceeded, type: type));
 
+        plan?.RequireType(type);
         switch (type)
         {
             case ScalarTypeRef scalar:
                 return MatchesScalarType(scalar.Kind, value)
                     || Fail(ref diagnostics, new(ErrorCode.ScalarTypeMismatch, numeric: (int)scalar.Kind));
             case EnumTypeRef enumType:
-                return TryMatchInlineEnum(enumType, value, ref diagnostics);
+                return TryMatchInlineEnum(enumType, value, ref diagnostics, plan, graph);
             case EntityReferenceTypeRef:
                 return TryGetString(value, out var entityReference)
                        && !string.IsNullOrWhiteSpace(entityReference)
                     || Fail(ref diagnostics, new(ErrorCode.EntityReferenceMismatch));
             case ArrayTypeRef arrayType:
-                return TryMatchArray(arrayType, value, graph, maxDepth, ref diagnostics);
+                plan = PrepareCompound(type, graph, plan);
+                return TryMatchArray(arrayType, value, graph, maxDepth, ref diagnostics, plan);
             case ObjectTypeRef objectType:
-                return TryMatchObject(objectType, value, graph, maxDepth - 1, ref diagnostics);
+                plan = PrepareCompound(type, graph, plan);
+                return TryMatchObject(objectType, value, graph, maxDepth - 1, ref diagnostics, plan: plan);
             case QuantityTypeRef quantityType:
                 return TryMatchQuantity(quantityType, value, maxDepth - 1, ref diagnostics);
             case NamedTypeRef namedType:
-                return TryMatchNamed(namedType, value, graph, maxDepth - 1, ref diagnostics);
+                plan = PrepareCompound(type, graph, plan);
+                return TryMatchNamed(namedType, value, graph, maxDepth - 1, ref diagnostics, plan);
             case OpaqueRuntimeTypeRef opaqueType:
                 return MatchesOpaque(opaqueType, value)
                     || Fail(ref diagnostics, new(ErrorCode.OpaqueTypeMismatch, opaqueType.RuntimeType));
@@ -417,20 +428,20 @@ public static class ObservationValidator
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static ObservationValidationPlan? PrepareCompound(TypeRef type, ShapeGraph? graph, ObservationValidationPlan? plan) =>
+        plan ?? (graph is null ? null : ObservationValidationPlan.Get(type, graph));
+
     static bool TryMatchInlineEnum<TDiagnostics>(
         EnumTypeRef enumType,
         in ObservationValue value,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics, ObservationValidationPlan? plan, ShapeGraph? graph)
         where TDiagnostics : IValidationDiagnostics
     {
         if (!TryGetString(value, out var enumValue))
             return Fail(ref diagnostics, new(ErrorCode.ExpectedStringEnum));
 
-        foreach (var member in enumType.Members)
-        {
-            if (string.Equals(member, enumValue, StringComparison.Ordinal))
-                return true;
-        }
+        if (FindLiteral<EnumTypeRef, InlineEnumLiteral>(enumType, value, plan, graph) >= 0) return true;
 
         return Fail(ref diagnostics, new(ErrorCode.InvalidInlineEnum, enumType.Name, enumValue));
     }
@@ -440,7 +451,8 @@ public static class ObservationValidator
         in ObservationValue value,
         ShapeGraph? graph,
         int maxDepth,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        ObservationValidationPlan? plan)
         where TDiagnostics : IValidationDiagnostics
     {
         if (value.Kind != ObservationValueKind.Array)
@@ -451,7 +463,8 @@ public static class ObservationValidator
         {
             diagnostics.PushElement(index);
             var item = items[index];
-            if (!TryMatchType(arrayType.ElementType, item, graph, maxDepth - 1, ref diagnostics))
+            if (!TryValidatePortableKind(item, ref diagnostics)
+                || !TryMatchTypeCore(arrayType.ElementType, item, graph, maxDepth - 1, ref diagnostics, plan?.Child(0, arrayType.ElementType)))
                 return false;
             diagnostics.Pop();
         }
@@ -464,25 +477,26 @@ public static class ObservationValidator
         ShapeGraph? graph,
         int maxDepth,
         ref TDiagnostics diagnostics,
-        string? allowedProperty = null)
+        string? allowedProperty = null,
+        ObservationValidationPlan? plan = null)
         where TDiagnostics : IValidationDiagnostics
     {
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedObject));
 
-        if (TryFindUnknownProperty<ObjectFieldTypeDef, ObjectFieldNameAccessor>(
-                value.Fields,
-                objectType.Fields,
-                allowedProperty,
-                diagnostics.RequiresFailureDetails,
-                out var unknown))
+        var lookup = new ObjectFieldLookup(value.Fields);
+        if (TryFindUnknownProperty<ObjectTypeRef, ObjectFieldTypeDef, ObjectFieldNameAccessor>(
+                ref lookup, objectType.Fields, objectType, plan,
+                allowedProperty, diagnostics.RequiresFailureDetails, out var unknown))
         {
             return Fail(ref diagnostics, new(ErrorCode.UnknownObjectProperty, unknown));
         }
 
+        var fieldIndex = 0;
         foreach (var field in objectType.Fields)
         {
-            if (!TryGetPropertyIgnoreCase(value.Fields, field.Name, out var fieldValue))
+            var childPlan = plan?.Child(fieldIndex++, field.Type);
+            if (!lookup.TryGet(field.Name, out var fieldValue))
             {
                 if (field.Presence != FieldPresence.Required)
                     continue;
@@ -499,7 +513,7 @@ public static class ObservationValidator
                     field.Nullability,
                     graph,
                     maxDepth,
-                    ref diagnostics))
+                    ref diagnostics, childPlan))
             {
                 return false;
             }
@@ -513,21 +527,25 @@ public static class ObservationValidator
         in ObservationValue value,
         ShapeGraph? graph,
         int maxDepth,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        ObservationValidationPlan? plan)
         where TDiagnostics : IValidationDiagnostics
     {
         if (graph is null)
             return Fail(ref diagnostics, new(ErrorCode.MissingGraph, namedType.TypeId.Value));
-        if (!graph.TryGetType(namedType.TypeId, out var definition))
+        if (plan is null)
+            throw new InvalidOperationException("Named validation requires a prepared graph-bound plan.");
+        plan.RequireType(namedType);
+        if (plan.Definition is not { } definition)
             return Fail(ref diagnostics, new(ErrorCode.MissingNamedType, namedType.TypeId.Value));
 
         return definition switch
         {
             TypeDefinition.Structural structural => TryMatchStructural(
-                structural, value, graph, maxDepth, ref diagnostics),
-            TypeDefinition.Enum enumType => TryMatchNamedEnum(enumType, value, ref diagnostics),
+                structural, value, graph, maxDepth, ref diagnostics, plan: plan),
+            TypeDefinition.Enum enumType => TryMatchNamedEnum(enumType, value, ref diagnostics, plan),
             TypeDefinition.Union unionType => TryMatchUnion(
-                unionType, value, graph, maxDepth, ref diagnostics),
+                unionType, value, graph, maxDepth, ref diagnostics, plan),
             _ => Fail(ref diagnostics, new(ErrorCode.UnsupportedNamedType, definition.GetType().Name))
         };
     }
@@ -538,27 +556,28 @@ public static class ObservationValidator
         ShapeGraph graph,
         int maxDepth,
         ref TDiagnostics diagnostics,
-        string? allowedProperty = null)
+        string? allowedProperty = null,
+        ObservationValidationPlan? plan = null)
         where TDiagnostics : IValidationDiagnostics
     {
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedStructuralObject, structural.Id.Value));
 
-        if (TryFindUnknownProperty<StructuralField, StructuralFieldNameAccessor>(
-                value.Fields,
-                structural.Fields,
-                allowedProperty,
-                diagnostics.RequiresFailureDetails,
-                out var unknown))
+        var lookup = new ObjectFieldLookup(value.Fields);
+        if (TryFindUnknownProperty<TypeDefinition.Structural, StructuralField, StructuralFieldNameAccessor>(
+                ref lookup, structural.Fields, structural, plan,
+                allowedProperty, diagnostics.RequiresFailureDetails, out var unknown))
         {
             return Fail(
                 ref diagnostics,
                 new(ErrorCode.UnknownStructuralProperty, unknown, structural.Id.Value));
         }
 
+        var fieldIndex = 0;
         foreach (var field in structural.Fields)
         {
-            if (!TryGetPropertyIgnoreCase(value.Fields, field.Name.Value, out var fieldValue))
+            var childPlan = plan?.Child(fieldIndex++, field.Type);
+            if (!lookup.TryGet(field.Name.Value, out var fieldValue))
             {
                 if (field.Presence != FieldPresence.Required)
                     continue;
@@ -577,7 +596,7 @@ public static class ObservationValidator
                     field.Nullability,
                     graph,
                     maxDepth,
-                    ref diagnostics))
+                    ref diagnostics, childPlan))
             {
                 return false;
             }
@@ -594,7 +613,8 @@ public static class ObservationValidator
         FieldNullability nullability,
         ShapeGraph? graph,
         int maxDepth,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        ObservationValidationPlan? plan = null)
         where TDiagnostics : IValidationDiagnostics
     {
         if (!TryValidatePortableKind(value, ref diagnostics))
@@ -608,7 +628,7 @@ public static class ObservationValidator
         }
 
         if (cardinality != FieldCardinality.Many)
-            return TryMatchTypeCore(type, value, graph, maxDepth, ref diagnostics);
+            return TryMatchTypeCore(type, value, graph, maxDepth, ref diagnostics, plan);
         if (value.Kind != ObservationValueKind.Array)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedArray));
 
@@ -624,7 +644,7 @@ public static class ObservationValidator
                 if (nullability == FieldNullability.NonNullable)
                     return Fail(ref diagnostics, new(ErrorCode.NonNullableValueIsNull));
             }
-            else if (!TryMatchTypeCore(type, item, graph, maxDepth, ref diagnostics))
+            else if (!TryMatchTypeCore(type, item, graph, maxDepth, ref diagnostics, plan))
             {
                 return false;
             }
@@ -636,25 +656,13 @@ public static class ObservationValidator
     static bool TryMatchNamedEnum<TDiagnostics>(
         TypeDefinition.Enum enumType,
         in ObservationValue value,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics, ObservationValidationPlan? plan)
         where TDiagnostics : IValidationDiagnostics
     {
         if (!MatchesPrimitiveType(enumType.Underlying, value))
             return Fail(ref diagnostics, new(ErrorCode.NamedEnumMismatch, enumType.Id.Value));
 
-        foreach (var enumValue in enumType.Values)
-        {
-            if (enumType.Underlying == PrimitiveType.String
-                && TryGetString(value, out var stringValue)
-                && string.Equals(enumValue.Name, stringValue, StringComparison.Ordinal))
-            {
-                return true;
-            }
-            if (enumValue.Value is { } literal
-                && MatchesPrimitiveLiteral(enumType.Underlying, value, literal))
-                return true;
-        }
-
+        if (FindLiteral<TypeDefinition.Enum, NamedEnumLiteral>(enumType, value, plan) >= 0) return true;
         return Fail(ref diagnostics, new(ErrorCode.NamedEnumMismatch, enumType.Id.Value));
     }
 
@@ -663,7 +671,8 @@ public static class ObservationValidator
         in ObservationValue value,
         ShapeGraph graph,
         int maxDepth,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        ObservationValidationPlan plan)
         where TDiagnostics : IValidationDiagnostics
     {
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
@@ -695,15 +704,17 @@ public static class ObservationValidator
                     (int)unionType.Discriminator.Type));
         }
 
-        var matchingType = TryResolveUnionCase(unionType, discriminatorValue);
+        var matchingIndex = TryResolveUnionCaseIndex(unionType, discriminatorValue, plan);
 
-        if (matchingType is null)
+        if (matchingIndex < 0)
         {
             return Fail(
                 ref diagnostics,
                 new(ErrorCode.InvalidUnionDiscriminator, unionType.Id.Value, unionType.Discriminator.FieldName));
         }
 
+        var matchingType = unionType.Cases[matchingIndex].Type;
+        var childPlan = plan.Child(matchingIndex, matchingType);
         if (matchingType is ObjectTypeRef objectType)
         {
             return TryMatchObject(
@@ -712,12 +723,11 @@ public static class ObservationValidator
                 graph,
                 maxDepth,
                 ref diagnostics,
-                unionType.Discriminator.FieldName);
+                unionType.Discriminator.FieldName, childPlan);
         }
 
         if (matchingType is NamedTypeRef namedType
-            && graph.TryGetType(namedType.TypeId, out var definition)
-            && definition is TypeDefinition.Structural structural)
+            && childPlan?.Definition is TypeDefinition.Structural structural)
         {
             return TryMatchStructural(
                 structural,
@@ -725,28 +735,114 @@ public static class ObservationValidator
                 graph,
                 maxDepth,
                 ref diagnostics,
-                unionType.Discriminator.FieldName);
+                unionType.Discriminator.FieldName, childPlan);
         }
 
-        return TryMatchTypeCore(matchingType, value, graph, maxDepth, ref diagnostics);
+        return TryMatchTypeCore(matchingType, value, graph, maxDepth, ref diagnostics, childPlan);
     }
 
     internal static TypeRef? TryResolveUnionCase(
         TypeDefinition.Union unionType,
-        in ObservationValue discriminatorValue)
+        in ObservationValue discriminatorValue, ObservationValidationPlan? plan = null, ShapeGraph? graph = null)
     {
-        foreach (var unionCase in unionType.Cases)
+        var index = TryResolveUnionCaseIndex(unionType, discriminatorValue, plan, graph);
+        return index < 0 ? null : unionType.Cases[index].Type;
+    }
+
+    static int TryResolveUnionCaseIndex(TypeDefinition.Union unionType, in ObservationValue value,
+        ObservationValidationPlan? plan = null, ShapeGraph? graph = null) => FindLiteral<TypeDefinition.Union, UnionLiteral>(unionType, value, plan, graph);
+
+    // One hybrid policy keeps small/early declarations direct and indexes only exact string semantics.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    static int FindLiteral<TOwner, TAccessor>(TOwner owner, in ObservationValue value,
+        ObservationValidationPlan? plan, ShapeGraph? graph = null) where TOwner : class
+        where TAccessor : struct, ILiteralAccessor<TOwner>
+    {
+        var length = TAccessor.Count(owner);
+        if (length > 0 && TAccessor.Matches(owner, 0, value, null)) return 0;
+        var stringLiterals = TAccessor.CanIndex(owner);
+        string? text = null;
+        if (stringLiterals && !TAccessor.TryGetText(value, out text)) return -1;
+        var indexed = length > DirectLiteralCount && stringLiterals;
+        var count = indexed ? DirectLiteralCount : length;
+        for (var i = 1; i < count; i++)
+            if (TAccessor.Matches(owner, i, value, text)) return i;
+        if (!indexed) return -1;
+        return TAccessor.Find(owner, text!, ObservationValidationMetadata.For(owner, plan, graph));
+    }
+
+    internal interface ILiteralAccessor<TOwner>
+    {
+        static abstract bool TryGetText(in ObservationValue value, out string text);
+        static abstract int Count(TOwner owner);
+        static abstract bool CanIndex(TOwner owner);
+        static abstract bool Matches(TOwner owner, int index, in ObservationValue value, string? text);
+        static abstract int Find(TOwner owner, string text, ObservationValidationMetadata metadata);
+    }
+    // Internal accessors expose index identity to regression tests without adding public API.
+    internal readonly struct InlineEnumLiteral : ILiteralAccessor<EnumTypeRef>, IValidationIndexAccessor<EnumTypeRef, HashSet<string>>
+    {
+        internal static ObservationValidationMetadata.Accessor<EnumTypeRef, HashSet<string>, InlineEnumLiteral> Index => default;
+        public static bool TryGetText(in ObservationValue value, out string text) => TryGetString(value, out text);
+        public static int Count(EnumTypeRef owner) => owner.Members.Length;
+        public static bool CanIndex(EnumTypeRef owner) => true;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool Matches(EnumTypeRef owner, int index, in ObservationValue value, string? text) =>
+            string.Equals(owner.Members[index], text ?? value.GetString() ?? string.Empty, StringComparison.Ordinal);
+        public static int Find(EnumTypeRef owner, string text, ObservationValidationMetadata metadata) =>
+            Index.Get(metadata, owner).Contains(text) ? 0 : -1;
+        public static HashSet<string> Create(EnumTypeRef owner) => new(owner.Members, StringComparer.Ordinal);
+    }
+    internal readonly struct NamedEnumLiteral : ILiteralAccessor<TypeDefinition.Enum>, IValidationIndexAccessor<TypeDefinition.Enum, HashSet<string>>
+    {
+        internal static ObservationValidationMetadata.Accessor<TypeDefinition.Enum, HashSet<string>, NamedEnumLiteral> Index => default;
+        public static bool TryGetText(in ObservationValue value, out string text) => TryGetString(value, out text);
+        public static int Count(TypeDefinition.Enum owner) => owner.Values.Length;
+        public static bool CanIndex(TypeDefinition.Enum owner) => owner.Underlying == PrimitiveType.String;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool Matches(TypeDefinition.Enum owner, int index, in ObservationValue value, string? text) =>
+            owner.Underlying == PrimitiveType.String
+                ? string.Equals(owner.Values[index].Name, text ?? value.GetString() ?? string.Empty, StringComparison.Ordinal)
+                  || (owner.Values[index].Value is { } stringLiteral && string.Equals(stringLiteral, value.String, StringComparison.Ordinal))
+                : owner.Values[index].Value is { } literal && MatchesPrimitiveLiteral(owner.Underlying, value, literal);
+        public static int Find(TypeDefinition.Enum owner, string text, ObservationValidationMetadata metadata) =>
+            Index.Get(metadata, owner).Contains(text) ? 0 : -1;
+        public static HashSet<string> Create(TypeDefinition.Enum owner)
         {
-            if (MatchesPrimitiveLiteral(
-                    unionType.Discriminator.Type,
-                    discriminatorValue,
-                    unionCase.DiscriminatorValue))
+            HashSet<string> result = new(owner.Values.Length * 2, StringComparer.Ordinal);
+            foreach (var member in owner.Values)
             {
-                return unionCase.Type;
+                result.Add(member.Name);
+                if (member.Value is { } literal) result.Add(literal);
             }
+            return result;
+        }
+    }
+    internal readonly struct UnionLiteral : ILiteralAccessor<TypeDefinition.Union>, IValidationIndexAccessor<TypeDefinition.Union, Dictionary<string, int>>
+    {
+        internal static ObservationValidationMetadata.Accessor<TypeDefinition.Union, Dictionary<string, int>, UnionLiteral> Index => default;
+        public static bool TryGetText(in ObservationValue value, out string text)
+        {
+            text = value.String!;
+            return MatchesPrimitiveType(PrimitiveType.String, value) && text is not null;
+        }
+        public static int Count(TypeDefinition.Union owner) => owner.Cases.Length;
+        public static bool CanIndex(TypeDefinition.Union owner) => owner.Discriminator.Type == PrimitiveType.String;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool Matches(TypeDefinition.Union owner, int index, in ObservationValue value, string? text) =>
+            owner.Discriminator.Type == PrimitiveType.String && text is not null
+                ? string.Equals(owner.Cases[index].DiscriminatorValue, text, StringComparison.Ordinal)
+                : MatchesPrimitiveLiteral(owner.Discriminator.Type, value, owner.Cases[index].DiscriminatorValue);
+        public static int Find(TypeDefinition.Union owner, string text, ObservationValidationMetadata metadata) =>
+            Index.Get(metadata, owner).TryGetValue(text, out var matched)
+                ? matched : -1;
+        public static Dictionary<string, int> Create(TypeDefinition.Union owner)
+        {
+            Dictionary<string, int> result = new(owner.Cases.Length, StringComparer.Ordinal);
+            for (var i = 0; i < owner.Cases.Length; i++) result.TryAdd(owner.Cases[i].DiscriminatorValue, i);
+            return result;
         }
 
-        return null;
     }
 
     static bool TryMatchQuantity<TDiagnostics>(
@@ -1072,13 +1168,38 @@ public static class ObservationValidator
         return false;
     }
 
-    static bool TryFindUnknownProperty<TDefinition, TNameAccessor>(
-        IReadOnlyDictionary<string, ObservationValue> fields,
+    // Instance values stay local. Exact lookup wins; fallback preserves the first matching
+    // property in source enumeration, including differently cased duplicate spellings.
+    struct ObjectFieldLookup(IReadOnlyDictionary<string, ObservationValue> fields)
+    {
+        internal readonly IReadOnlyDictionary<string, ObservationValue> Fields = fields;
+        Dictionary<string, ObservationValue>? insensitive;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool TryGet(string name, out ObservationValue value) =>
+            Fields.TryGetValue(name, out value) || TryGetInsensitive(name, out value);
+
+        bool TryGetInsensitive(string name, out ObservationValue value)
+        {
+            if (insensitive is null)
+            {
+                insensitive = new(Fields.Count, StringComparer.OrdinalIgnoreCase);
+                foreach (var property in Fields) insensitive.TryAdd(property.Key, property.Value);
+            }
+            return insensitive.TryGetValue(name, out value);
+        }
+    }
+
+    static bool TryFindUnknownProperty<TOwner, TDefinition, TNameAccessor>(
+        ref ObjectFieldLookup lookup,
         ImmutableArray<TDefinition> definitions,
+        TOwner owner,
+        ObservationValidationPlan? plan,
         string? allowedProperty,
         bool includeFailureDetails,
         out string? unknown)
-        where TNameAccessor : struct, IFieldNameAccessor<TDefinition>
+        where TOwner : class
+        where TNameAccessor : struct, IFieldNameAccessor<TOwner, TDefinition>
     {
         unknown = null;
         var matchedCount = 0;
@@ -1091,36 +1212,29 @@ public static class ObservationValidator
             {
                 allowedPropertyIsDefined = true;
             }
-            if (TryGetPropertyIgnoreCase(fields, definitionName, out _))
+            if (lookup.TryGet(definitionName, out _))
                 matchedCount++;
         }
         if (allowedProperty is not null
             && !allowedPropertyIsDefined
-            && TryGetPropertyIgnoreCase(fields, allowedProperty, out _))
+            && lookup.TryGet(allowedProperty, out _))
         {
             matchedCount++;
         }
-        if (matchedCount == fields.Count)
+        if (matchedCount == lookup.Fields.Count)
             return false;
         if (!includeFailureDetails)
             return true;
 
-        foreach (var propertyName in fields.Keys)
+        var knownNames = TNameAccessor.GetKnownNames(owner, plan);
+        foreach (var propertyName in lookup.Fields.Keys)
         {
             if (allowedProperty is not null
                 && string.Equals(propertyName, allowedProperty, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
-            var known = false;
-            foreach (var field in definitions)
-            {
-                if (!string.Equals(TNameAccessor.GetName(field), propertyName, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                known = true;
-                break;
-            }
-            if (known)
+            if (knownNames.Contains(propertyName))
                 continue;
 
             if (unknown is null || string.CompareOrdinal(propertyName, unknown) < 0)
@@ -1129,19 +1243,38 @@ public static class ObservationValidator
         return true;
     }
 
-    interface IFieldNameAccessor<TDefinition>
+    static HashSet<string> CreateKnownNames<TOwner, TDefinition, TAccessor>(ImmutableArray<TDefinition> fields)
+        where TOwner : class where TAccessor : struct, IFieldNameAccessor<TOwner, TDefinition>
+    {
+        var names = new HashSet<string>(fields.Length, StringComparer.OrdinalIgnoreCase);
+        foreach (var field in fields) names.Add(TAccessor.GetName(field));
+        return names;
+    }
+
+    interface IFieldNameAccessor<TOwner, TDefinition> : IValidationIndexAccessor<TOwner, HashSet<string>> where TOwner : class
     {
         static abstract string GetName(TDefinition definition);
+        static abstract HashSet<string> GetKnownNames(TOwner owner, ObservationValidationPlan? plan);
     }
 
-    readonly struct ObjectFieldNameAccessor : IFieldNameAccessor<ObjectFieldTypeDef>
+    readonly struct ObjectFieldNameAccessor : IFieldNameAccessor<ObjectTypeRef, ObjectFieldTypeDef>
     {
+        internal static ObservationValidationMetadata.Accessor<ObjectTypeRef, HashSet<string>, ObjectFieldNameAccessor> Index => default;
         public static string GetName(ObjectFieldTypeDef definition) => definition.Name;
+        public static HashSet<string> GetKnownNames(ObjectTypeRef owner, ObservationValidationPlan? plan) =>
+            Index.Get(ObservationValidationMetadata.For(owner, plan), owner);
+        public static HashSet<string> Create(ObjectTypeRef owner) => CreateKnownNames<ObjectTypeRef, ObjectFieldTypeDef, ObjectFieldNameAccessor>(owner.Fields);
+
     }
 
-    readonly struct StructuralFieldNameAccessor : IFieldNameAccessor<StructuralField>
+    readonly struct StructuralFieldNameAccessor : IFieldNameAccessor<TypeDefinition.Structural, StructuralField>
     {
+        internal static ObservationValidationMetadata.Accessor<TypeDefinition.Structural, HashSet<string>, StructuralFieldNameAccessor> Index => default;
         public static string GetName(StructuralField definition) => definition.Name.Value;
+        public static HashSet<string> GetKnownNames(TypeDefinition.Structural owner, ObservationValidationPlan? plan) =>
+            Index.Get(ObservationValidationMetadata.For(owner, plan), owner);
+        public static HashSet<string> Create(TypeDefinition.Structural owner) => CreateKnownNames<TypeDefinition.Structural, StructuralField, StructuralFieldNameAccessor>(owner.Fields);
+
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

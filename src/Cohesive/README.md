@@ -147,6 +147,20 @@ type checks used by observation admission without manufacturing a one-field shap
 resolve only in the supplied graph. This validates a concrete type; field presence and nullability
 remain the caller's contract. Relation draft admission uses it for graph-owned enum literals.
 
+Nested object and structural validation preserves exact-property precedence and uses case-insensitive
+fallback matching. Unknown-property diagnostics preserve declaration order. Named enums accept both
+member names and literal aliases; duplicate union discriminators select the first declared case.
+Nonstring primitive literals retain their representation-sensitive matching rules.
+
+Repeated validation shares immutable preparation within the exact graph and type declarations.
+Cache keys are weak, concurrent preparation is safe, and failed preparation can be retried. Instance
+values, allowed union discriminators, depth limits and diagnostics remain operation-scoped.
+JSON decoding shares prepared dispatch indexes with validation without preparing unrelated closures.
+These optimizations introduce no public type IDs or wire contracts and do not replace validation.
+
+See the [performance overview](../../docs/performance/execution-preparation-allocations.md) for cache
+ownership, implementation invariants, benchmarks and qualification.
+
 ## Exact decimal text
 
 `ObservationValue.TryParseExactDecimal(text, out value)` validates signed invariant decimal text

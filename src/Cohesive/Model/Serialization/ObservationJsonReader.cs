@@ -134,7 +134,8 @@ public static class ObservationJsonReader
             : ReadTypedValue(ref reader, field.Type, graph);
     }
 
-    static ObservationValue ReadTypedValue(
+    // Plain typed hydration without semantic admission; TryReadShape validates at the public boundary.
+    internal static ObservationValue ReadTypedValue(
         ref Utf8JsonReader reader,
         TypeRef type,
         ShapeGraph graph)
@@ -325,13 +326,13 @@ public static class ObservationJsonReader
             return ReadValueCore(ref reader);
 
         var probe = reader;
-        var selectedType = FindUnionCase(ref probe, union);
+        var selectedType = FindUnionCase(ref probe, union, graph);
         return selectedType is null
             ? ReadValueCore(ref reader)
             : ReadTypedValue(ref reader, selectedType, graph);
     }
 
-    static TypeRef? FindUnionCase(ref Utf8JsonReader reader, TypeDefinition.Union union)
+    static TypeRef? FindUnionCase(ref Utf8JsonReader reader, TypeDefinition.Union union, ShapeGraph graph)
     {
         while (reader.Read())
         {
@@ -350,7 +351,7 @@ public static class ObservationJsonReader
             }
 
             var discriminator = ReadPrimitive(ref reader, union.Discriminator.Type);
-            return ObservationValidator.TryResolveUnionCase(union, discriminator);
+            return ObservationValidator.TryResolveUnionCase(union, discriminator, graph: graph);
         }
 
         throw new JsonException("The JSON object is incomplete.");
