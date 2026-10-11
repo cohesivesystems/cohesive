@@ -50,10 +50,9 @@ public class DeclaredProjectionBenchmarks
 
 [MemoryDiagnoser]
 [ShortRunJob]
-public class HostedDecodeBenchmarks
+public class TypedValueDecodeBenchmarks
 {
-    PortableValue input = null!;
-    readonly ValueContract contract = new(new JsonTypeRef());
+    ObservationValue input;
     JsonSerializerOptions options = null!;
 
     [Params(1, 1024)]
@@ -66,29 +65,51 @@ public class HostedDecodeBenchmarks
         options.PropertyNamingPolicy = null;
         options.Converters.Insert(0, new DeclaredJsonValueConverterFactory());
         options.MakeReadOnly(populateMissingResolver: true);
-        input = PortableValue.Concrete(contract, ObservationValue.FromObject(new Payload(Enumerable.Range(0, Rows)
-            .Select(i => new Row(i, "é<>&🙂", 1.2300m)).ToArray())));
-        var expected = ClonedElement();
-        var actual = ScopedDocument();
-        if (expected.Type != ResultType.Success || actual.Type != ResultType.Success
-            || !expected.Success!.Rows.SequenceEqual(actual.Success!.Rows))
+        input = ObservationValue.FromObject(new Payload(Enumerable.Range(0, Rows)
+            .Select(i => new Row(i, "é<>&🙂", 1.2300m)).ToArray()));
+        var expected = StringReference();
+        if (!expected.Rows.SequenceEqual(PooledUtf8().Rows)
+            || !expected.Rows.SequenceEqual(DocumentReference().Rows))
             throw new InvalidOperationException("Decoded result differs.");
     }
 
     [Benchmark(Baseline = true)]
-    public Result<Payload, DocumentValidationDiagnostic> ClonedElement()
+    public Payload StringReference() => JsonSerializer.Deserialize<Payload>(input.GetRawText(), options)!;
+
+    [Benchmark]
+    public Payload DocumentReference()
     {
-        if (input.Contract != contract || input.State != PortableValueState.Concrete) throw new InvalidOperationException();
-        var validation = PortableExecutionValidator.Validate(input);
-        if (validation.Diagnostics.FirstOrDefault(d => d.Severity == DiagnosticSeverity.Error) is { } error)
-            return Result<Payload, DocumentValidationDiagnostic>.FromFailure(error);
-        var element = JsonSerializer.SerializeToElement(input.Value!.Value, options);
-        return Result<Payload, DocumentValidationDiagnostic>.FromSuccess(element.Deserialize<Payload>(options)!);
+        using var document = JsonSerializer.SerializeToDocument(input, options);
+        return document.RootElement.Deserialize<Payload>(options)!;
     }
 
     [Benchmark]
-    public Result<Payload, DocumentValidationDiagnostic> ScopedDocument() => HostedQueryValueAdapter.Decode<Payload>(input, contract);
+    public Payload PooledUtf8() => input.Deserialize<Payload>(options)!;
 
     public sealed record Payload(Row[] Rows);
     public sealed record Row(long Number, string Text, decimal Amount);
+}
+
+[MemoryDiagnoser]
+[ShortRunJob]
+public class HostedAdapterDecodeBenchmarks
+{
+    PortableValue input = null!;
+    readonly ValueContract contract = new(new JsonTypeRef());
+
+    [Params(1, 1024)]
+    public int Rows { get; set; }
+
+    [GlobalSetup]
+    public void Setup()
+    {
+        input = PortableValue.Concrete(contract, ObservationValue.FromObject(new TypedValueDecodeBenchmarks.Payload(
+            Enumerable.Range(0, Rows).Select(i => new TypedValueDecodeBenchmarks.Row(i, "é<>&🙂", 1.2300m)).ToArray())));
+        if (Decode().Type != ResultType.Success) throw new InvalidOperationException("Decode failed.");
+    }
+
+    // The real adapter owns fresh admission; no copied admission oracle can drift.
+    [Benchmark]
+    public Result<TypedValueDecodeBenchmarks.Payload, DocumentValidationDiagnostic> Decode() =>
+        HostedQueryValueAdapter.Decode<TypedValueDecodeBenchmarks.Payload>(input, contract);
 }

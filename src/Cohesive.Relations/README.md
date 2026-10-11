@@ -14,8 +14,8 @@ Canonical execution IR declares `IImmutableExecutionDefinition`, so repeated typ
 document-owned immutable decoding. Integrity, canonical-wire, contextual semantics, and deployment
 admission remain independently validated. See [immutable execution preparation](../../docs/performance/immutable-execution-preparation.md).
 
-Hosted typed handlers retain fresh portable-value admission while using scoped JSON storage for
-CLR decoding. See [qualification](../../docs/performance/hosted-value-projection.md).
+Hosted typed handlers retain fresh portable-value admission while delegating CLR decoding to
+Core’s pooled UTF-8 boundary. See [qualification](../../docs/performance/hosted-value-projection.md).
 
 Realization fingerprints retain their existing binary profiles while streaming temporary output.
 See [performance qualification](../../docs/performance/realization-fingerprints.md).
