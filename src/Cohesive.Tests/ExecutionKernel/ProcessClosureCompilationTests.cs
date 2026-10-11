@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -111,6 +113,58 @@ public sealed class ProcessClosureCompilationTests
         Assert.False(result.IsSuccessful);
         Assert.Equal(Reference(Request), result.FailedDefinition);
         Assert.Contains(result.Validation.Diagnostics, d => d.Code == ProcessDefinitionDocumentDiagnosticCodes.KindMismatch);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedNoncanonicalWire_PreservesDirectCompilationDiagnostics(bool unknownMember)
+    {
+        var source = Document("imported");
+        var payload = JsonNode.Parse(source.Definition.GetRawText())!.AsObject();
+        if (unknownMember)
+            payload["futureMember"] = true;
+        else
+            Assert.True(payload.Remove("recoveryPolicy"));
+        using var parsed = JsonDocument.Parse(payload.ToJsonString());
+        var fingerprint = ExecutionDefinitionFingerprinter.Compute(source.Metadata.SchemaVersion,
+            source.Kind, parsed.RootElement, source.Extensions);
+        var imported = new ExecutionDefinitionDocument(source.Kind,
+            new(source.Metadata.DefinitionId, source.Metadata.RevisionId, source.Metadata.SchemaVersion,
+                fingerprint, source.Metadata.Provenance), parsed.RootElement, source.Extensions);
+        var direct = ProcessStaticCompiler.Compile(imported, new());
+        var closure = Compile([Reference(imported)], [imported]);
+        Assert.False(direct.IsSuccessful);
+        Assert.False(closure.IsSuccessful);
+        Assert.Empty(closure.Plans);
+        Assert.Equal(JsonSerializer.Serialize(direct.Validation.Diagnostics),
+            JsonSerializer.Serialize(closure.Validation.Diagnostics));
+    }
+
+    [Theory]
+    [InlineData(16_384)]
+    [InlineData(65_536)]
+    public void LargeClosure_ReusesProjectionWithoutRetainingValidation(int payloadLength)
+    {
+        var document = ProcessDefinitionDocuments.Create(new("large"), new("1"),
+            new(Contract, Contract, new("return"),
+                [new ReturnProcessNode(new("return"), Expr.Const(new string('x', payloadLength)))],
+                ProcessRecoveryPolicy.ContinueAttempt), Provenance);
+        ExecutionDefinitionDocumentCatalog.TryCreate([document], out var catalog);
+        ProcessDefinitionValidationContext context = new();
+        ExecutionDefinitionReference[] roots = [Reference(document)];
+        Assert.True(ProcessStaticCompiler.Compile(document, context).IsSuccessful);
+        Assert.True(ProcessStaticCompiler.CompileClosure(roots, catalog!, context).IsSuccessful);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var direct = ProcessStaticCompiler.Compile(document, context);
+        var directBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var closure = ProcessStaticCompiler.CompileClosure(roots, catalog!, context);
+        var closureBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(direct.IsSuccessful && closure.IsSuccessful);
+        Assert.Equal(direct.Plan!.Definition, Assert.Single(closure.Plans).Definition);
+        Assert.True(closureBytes < directBytes,
+            $"Closure {closureBytes} bytes should avoid the repeated projection in direct compilation {directBytes} bytes.");
     }
 
     static ProcessClosureCompilationResult Compile(ExecutionDefinitionReference[] roots, ExecutionDefinitionDocument[] documents)

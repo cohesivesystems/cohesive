@@ -49,3 +49,43 @@ Ari adoption must remove both its explicit bottom-up deployment sequence and rec
 in validation-context helpers. Product-selected roots, non-Process relation/transition evidence,
 interaction contracts, and fresh physical capability checks remain Ari policy. This capability must be
 published and consumed before replacing that code; copying Cohesive implementation into Ari is excluded.
+
+## Reuse the discovered typed projection during validation
+
+Ari's exact alpha127 admission profile attributed about 505 MB of cold allocation to canonical
+preparation, including 317 MB inside closure compilation. Across the complete authored Process catalog,
+one typed projection pass allocated about 44 MB. Closure discovery had already decoded each reachable
+document, but validation decoded it again before discarding that second projection.
+
+The compiler now supplies its strictly decoded, call-scoped projection to an internal shared document
+validation path. The JSON document remains authoritative. Envelope/integrity checks, strict canonical
+byte equality, block semantics, source-map attribution, and context-dependent diagnostics remain fresh.
+The internal path accepts only the projection discovered from that exact immutable document; public
+compilation and imported-document admission still use strict decoding. No new cache or public API is
+introduced, and no normalized-byte comparison is replaced by digest equality.
+
+Local Ari Release qualification used an isolated checkout and temporary core/Process assembly overrides
+for the prototype, compared with exact published alpha127 packages in the same checkout. Catalog
+authoring precedes measurement; first admission includes preparation, realization, and physical admission.
+
+| Admission | Published alpha127 allocated bytes | Prepared projection allocated bytes |
+| --- | ---: | ---: |
+| First | 549,600,016 | 508,074,320 |
+| Warm | 42,938,960 | 42,935,632 |
+
+The cold reduction is 41,525,696 bytes (about 7.6%). Warm preparation reuse is preserved. This is a local
+source-assembly allocation qualification, not a published-package or CI-latency claim. Concurrent testing
+makes the observed elapsed-time samples unsuitable for a timing comparison. Environment: macOS,
+.NET SDK 10.0.201, Release; test boundary
+`RepeatedAdmissionSharesPreparationButRetainsFreshDeploymentValidation`.
+
+Regression coverage compares direct and closure diagnostic JSON for omitted canonical members and
+unknown imported members, preserves exact canonical bytes and child evidence, and checks that 16 KiB
+and 64 KiB Process payloads avoid repeated projection allocation after warmup. Full core qualification
+passed 4,194 tests with 33 existing skips before adding the two allocation cases; all 11 closure cases
+then passed. The final complete run, including both allocation cases, passed 4,196 tests with
+33 existing skips.
+
+Ari's full engine project passed 854 tests with 18 existing scheduler skips using the same local
+prototype assemblies. Temporary overrides were removed after qualification and are not part of either
+repository's source change.

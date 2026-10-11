@@ -180,6 +180,15 @@ public static class ProcessDefinitionDocuments
             out _);
     }
 
+    internal static DocumentValidationResult ValidatePrepared(
+        ExecutionDefinitionDocument document,
+        ProcessDefinition definition,
+        ProcessDefinitionValidationContext context) => Projection.ValidatePrepared(
+            ExecutionDefinitionDocumentValidator.Validate(document, context.ShapeGraph),
+            document,
+            definition,
+            candidate => ProcessDefinitionValidator.Validate(candidate, context, DefinitionReference(document)));
+
     internal static DocumentValidationResult ValidateAuthored(
         ExecutionDefinitionDocument document,
         ProcessDefinition definition)
