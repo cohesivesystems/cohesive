@@ -163,8 +163,9 @@ public sealed class ProcessClosureCompilationTests
         var closureBytes = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.True(direct.IsSuccessful && closure.IsSuccessful);
         Assert.Equal(direct.Plan!.Definition, Assert.Single(closure.Plans).Definition);
-        Assert.True(closureBytes < directBytes,
-            $"Closure {closureBytes} bytes should avoid the repeated projection in direct compilation {directBytes} bytes.");
+        // Both paths now reuse the document's typed projection. Closure graph bookkeeping
+        // is bounded; another decode of either large payload would exceed this allowance.
+        Assert.InRange(closureBytes - directBytes, -8_192, 8_192);
     }
 
     static ProcessClosureCompilationResult Compile(ExecutionDefinitionReference[] roots, ExecutionDefinitionDocument[] documents)
