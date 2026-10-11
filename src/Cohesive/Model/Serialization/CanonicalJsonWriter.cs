@@ -819,19 +819,13 @@ public static class CanonicalJsonWriter
                 return;
             case ObservationValueKind.Object:
                 writer.WriteStartObject();
-                var ordered = RentOrderedObservationProperties(value.Fields, out var propertyCount);
-                try
+                using (var fields = new OrderedObservationFields(value.Fields))
                 {
-                    for (var index = 0; index < propertyCount; index++)
+                    foreach (var (property, child) in fields)
                     {
-                        var (property, child) = ordered![index];
                         writer.WritePropertyName(property);
                         WriteCanonicalObservationValue(writer, child, bytesEncoding);
                     }
-                }
-                finally
-                {
-                    ReturnOrderedObservationProperties(ordered, propertyCount);
                 }
                 writer.WriteEndObject();
                 return;
@@ -863,63 +857,6 @@ public static class CanonicalJsonWriter
         }
 
         writer.WriteRawValue(formatted[..written], skipInputValidation: true);
-    }
-
-    static KeyValuePair<string, ObservationValue>[]? RentOrderedObservationProperties(
-        IReadOnlyDictionary<string, ObservationValue>? properties,
-        out int count)
-    {
-        count = 0;
-        if (properties is null || properties.Count == 0)
-            return null;
-
-        var ordered = ArrayPool<KeyValuePair<string, ObservationValue>>.Shared.Rent(properties.Count);
-        try
-        {
-            switch (properties)
-            {
-                case ImmutableDictionary<string, ObservationValue> immutable:
-                    foreach (var property in immutable)
-                        ordered[count++] = property;
-                    break;
-                case ImmutableSortedDictionary<string, ObservationValue> sorted:
-                    foreach (var property in sorted)
-                        ordered[count++] = property;
-                    break;
-                case Dictionary<string, ObservationValue> dictionary:
-                    foreach (var property in dictionary)
-                        ordered[count++] = property;
-                    break;
-                case OwnedObservationFields owned:
-                    foreach (var property in owned)
-                        ordered[count++] = property;
-                    break;
-                default:
-                    foreach (var property in properties)
-                        ordered[count++] = property;
-                    break;
-            }
-
-            ordered.AsSpan(0, count).Sort(
-                static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
-            return ordered;
-        }
-        catch
-        {
-            ReturnOrderedObservationProperties(ordered, count);
-            throw;
-        }
-    }
-
-    static void ReturnOrderedObservationProperties(
-        KeyValuePair<string, ObservationValue>[]? properties,
-        int count)
-    {
-        if (properties is null)
-            return;
-
-        properties.AsSpan(0, count).Clear();
-        ArrayPool<KeyValuePair<string, ObservationValue>>.Shared.Return(properties);
     }
 
     /// <summary>Streams one observation value as canonical portable UTF-8 JSON without token-sized buffering.</summary>
@@ -1259,7 +1196,7 @@ public static class CanonicalJsonWriter
                 IReadOnlyDictionary<string, ObservationValue>? properties,
                 int childDepth)
             {
-                var ordered = RentOrderedObservationProperties(properties, out var count);
+                var ordered = OrderedObservationFields.RentOrderedObservationProperties(properties, out var count);
                 if (ordered is null)
                 {
                     return new(
@@ -1311,7 +1248,7 @@ public static class CanonicalJsonWriter
                 if (properties is null)
                     return;
 
-                ReturnOrderedObservationProperties(properties, propertyCount);
+                OrderedObservationFields.ReturnOrderedObservationProperties(properties, propertyCount);
                 properties = null;
                 propertyCount = 0;
                 items = [];

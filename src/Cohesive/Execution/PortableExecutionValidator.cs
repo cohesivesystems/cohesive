@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Globalization;
@@ -963,17 +964,16 @@ public static class PortableExecutionValidator
                         MalformedObservation(value.Kind, location);
                         break;
                     }
-                    foreach (var field in value.Fields.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+                    List<(string Name, int Start, int Count)>? failures = null;
+                    foreach (var field in value.Fields)
                     {
-                        if (string.IsNullOrWhiteSpace(field.Key))
-                        {
-                            Error(
-                                PortableExecutionDiagnosticCodes.MalformedObservation,
-                                "Object observation property names must be non-empty.",
-                                location);
-                        }
-                        ValidateObservation(field.Value, Child(location, field.Key));
+                        var start = diagnostics.Count;
+                        ValidateObservationField(field, location);
+                        if (diagnostics.Count != start)
+                            (failures ??= []).Add((field.Key, start, diagnostics.Count - start));
                     }
+                    if (failures is { Count: > 1 })
+                        OrderObservationFailures(failures);
                     break;
                 case ObservationValueKind.Array:
                     if (value.Array.IsDefault)
@@ -991,6 +991,40 @@ public static class PortableExecutionValidator
                         location);
                     break;
             }
+        }
+
+        void OrderObservationFailures(List<(string Name, int Start, int Count)> failures)
+        {
+            // Order only diagnostic groups, never revisit invalid subtrees. Each group's nested
+            // diagnostics already have depth-first ordering and rendered, independent locations.
+            var start = failures[0].Start;
+            var count = diagnostics.Count - start;
+            failures.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Name, right.Name));
+            var ordered = ArrayPool<DocumentValidationDiagnostic>.Shared.Rent(count);
+            try
+            {
+                var next = 0;
+                foreach (var group in failures)
+                    for (var index = 0; index < group.Count; index++)
+                        ordered[next++] = diagnostics[group.Start + index];
+                for (var index = 0; index < count; index++)
+                    diagnostics[start + index] = ordered[index];
+            }
+            finally
+            {
+                ordered.AsSpan(0, count).Clear();
+                ArrayPool<DocumentValidationDiagnostic>.Shared.Return(ordered);
+            }
+        }
+
+        void ValidateObservationField(KeyValuePair<string, ObservationValue> field, Location location)
+        {
+            if (string.IsNullOrWhiteSpace(field.Key))
+                Error(
+                    PortableExecutionDiagnosticCodes.MalformedObservation,
+                    "Object observation property names must be non-empty.",
+                    location);
+            ValidateObservation(field.Value, Child(location, field.Key));
         }
 
         void MalformedObservation(ObservationValueKind kind, Location location) =>

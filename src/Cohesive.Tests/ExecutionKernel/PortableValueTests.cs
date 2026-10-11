@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -7,8 +8,91 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
-public sealed class PortableValueTests
+public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ObjectFieldOrderingPreservesBytesAndBoundsWarmAllocation(bool alreadySorted)
+    {
+        var fields = Enumerable.Range(0, 128).Reverse()
+            .ToDictionary(i => $"field{i:D3}", _ => ObservationValue.FromBool(true), StringComparer.Ordinal);
+        var sorted = fields.ToImmutableSortedDictionary(StringComparer.Ordinal);
+        var observation = ObservationValue.FromObject(alreadySorted ? sorted : fields);
+        var portable = PortableValue.Concrete(new ValueContract(new JsonTypeRef(JsonTypeKind.Object)), observation);
+        var expected = JsonSerializer.Serialize(ObservationValue.FromObject(sorted), TaggedOptions);
+        Assert.Equal(expected, JsonSerializer.Serialize(observation, TaggedOptions));
+        var buffer = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(buffer);
+        for (var i = 0; i < 1_000; i++)
+        {
+            buffer.Clear();
+            writer.Reset(buffer);
+            PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+            writer.Flush();
+            Assert.True(PortableExecutionValidator.Validate(portable).IsValid);
+        }
+        buffer.Clear();
+        writer.Reset(buffer);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+        writer.Flush();
+        var writerBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var result = PortableExecutionValidator.Validate(portable);
+        var validationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"128 fields (sorted={alreadySorted}): writer={writerBytes} B, validation={validationBytes} B");
+        Assert.True(result.IsValid);
+        Assert.InRange(writerBytes, 0, 128);
+        Assert.InRange(validationBytes, 0, 1_024);
+    }
+
+    [Fact]
+    public void UnorderedInvalidObjectPreservesOrdinalDepthFirstDiagnosticOrder()
+    {
+        var observation = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+        {
+            ["z"] = ObservationValue.Undefined,
+            ["a/"] = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+            {
+                ["z"] = ObservationValue.FromDouble(double.NaN),
+                ["a~"] = ObservationValue.Undefined
+            }),
+            ["a"] = ObservationValue.Undefined
+        });
+        var result = PortableExecutionValidator.Validate(PortableValue.Concrete(
+            new ValueContract(new JsonTypeRef(JsonTypeKind.Object)), observation));
+        Assert.Equal(new[] { "/value/a", "/value/a~1/a~0", "/value/a~1/z", "/value/z" },
+            result.Diagnostics.Select(diagnostic => diagnostic.Location));
+    }
+
+    [Fact]
+    public void PooledFieldOrderingIsReusableAfterWriterFailure()
+    {
+        var invalid = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+        {
+            ["z"] = ObservationValue.FromBool(true),
+            ["a"] = ObservationValue.FromDouble(double.PositiveInfinity)
+        });
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(invalid, TaggedOptions));
+        var valid = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+        {
+            ["z"] = ObservationValue.FromBool(true), ["a"] = ObservationValue.FromBool(false)
+        });
+        Assert.Equal(JsonSerializer.Serialize(ObservationValue.FromObject(
+            valid.Fields!.ToImmutableSortedDictionary(StringComparer.Ordinal)), TaggedOptions),
+            JsonSerializer.Serialize(valid, TaggedOptions));
+    }
+
+    static readonly JsonSerializerOptions TaggedOptions = CreateTaggedOptions();
+    static JsonSerializerOptions CreateTaggedOptions()
+    {
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(PortableValueJsonConverter.TaggedObservationValues);
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
+    }
+
     static readonly ValueContract OptionalNullableString = new(
         new ScalarTypeRef(ScalarTypeKind.String),
         presence: FieldPresence.Optional,
