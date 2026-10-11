@@ -1,4 +1,3 @@
-using System.Security.Cryptography;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
@@ -49,7 +48,7 @@ static class ProcessStorageContentFingerprints
     internal static ProcessCommitFingerprint Value<T>(T value) where T : class => Compute(value);
 
     internal static ProcessCommitFingerprint Value<T>(T value, System.Text.Json.JsonSerializerOptions options, string profile) where T : class =>
-        new($"{profile}:{Convert.ToHexStringLower(SHA256.HashData(StrictDocumentJson.GetCanonicalBytes(value, options)))}");
+        new($"{profile}:{Convert.ToHexStringLower(StrictDocumentJson.ComputeCanonicalSha256(value, options))}");
 
     static ProcessCommitFingerprint Compute<T>(T value) where T : class => new(ComputeValue(value));
 

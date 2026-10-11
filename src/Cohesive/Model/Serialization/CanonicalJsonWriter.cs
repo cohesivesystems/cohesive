@@ -329,6 +329,16 @@ public static class CanonicalJsonWriter
         return buffer.WrittenSpan.ToArray();
     }
 
+    internal static byte[] ComputeCanonicalSequenceSha256(JsonElement element)
+    {
+        using Sha256BufferWriter output = new();
+        using (var writer = CreateElementWriter(output))
+            WriteCanonicalSequence(writer, element);
+        var digest = new byte[System.Security.Cryptography.SHA256.HashSizeInBytes];
+        output.Complete(digest);
+        return digest;
+    }
+
     static Utf8JsonWriter CreateElementWriter(IBufferWriter<byte> output) => new(output, new JsonWriterOptions
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
