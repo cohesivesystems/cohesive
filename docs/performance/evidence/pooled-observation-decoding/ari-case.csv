@@ -1,0 +1,5 @@
+variant,source,phase,allocated_bytes,elapsed_ms
+parent,x12-004010-204,cold,488237376,3327.422
+parent,x12-004010-204,repeated,222743896,1318.137
+native-parser,x12-004010-204,cold,481937032,3393.187
+native-parser,x12-004010-204,repeated,216940528,1080.909

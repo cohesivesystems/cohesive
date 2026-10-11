@@ -8,38 +8,24 @@ namespace Cohesive.Tests.ExecutionKernel;
 public sealed class HostedQueryValueAdapterProjectionTests
 {
     static readonly ValueContract Contract = new(new JsonTypeRef());
-    static readonly JsonSerializerOptions Options = CreateOptions();
-
-    static JsonSerializerOptions CreateOptions()
-    {
-        var options = ExecutionDefinitionJsonSerializer.CreateOptions();
-        options.PropertyNamingPolicy = null;
-        options.Converters.Insert(0, new DeclaredJsonValueConverterFactory());
-        options.MakeReadOnly(populateMissingResolver: true);
-        return options;
-    }
-
     [Fact]
-    public void LargeTypedDecodeAvoidsTheClonedElementAllocation()
+    public void WarmLargeTypedDecodeHasABoundedAllocationPerRow()
     {
         var payload = new Payload(Enumerable.Range(0, 1024).Select(i => new Row(i, "é<>&🙂", 1.2300m)).ToArray());
         var input = PortableValue.Concrete(Contract, ObservationValue.FromObject(payload));
-        for (var warm = 0; warm < 4; warm++)
+        for (var warm = 0; warm < 4; warm++) HostedQueryValueAdapter.Decode<Payload>(input, Contract);
+        var samples = new long[7];
+        Result<Payload, DocumentValidationDiagnostic> actual = default;
+        for (var i = 0; i < samples.Length; i++)
         {
-            Previous(input);
-            HostedQueryValueAdapter.Decode<Payload>(input, Contract);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            actual = HostedQueryValueAdapter.Decode<Payload>(input, Contract);
+            samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
         }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var expected = Previous(input);
-        var previousAllocation = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        var actual = HostedQueryValueAdapter.Decode<Payload>(input, Contract);
-        var allocation = GC.GetAllocatedBytesForCurrentThread() - before;
+        Array.Sort(samples);
         Assert.Equal(ResultType.Success, actual.Type);
-        Assert.Equal(expected.Rows, actual.Success!.Rows);
-        var payloadSize = JsonSerializer.SerializeToUtf8Bytes(payload, Options).Length;
-        Assert.True(previousAllocation - allocation > payloadSize,
-            $"Cloned-element decode allocated {previousAllocation}; scoped decode allocated {allocation}; JSON {payloadSize} bytes.");
+        Assert.Equal(payload.Rows, actual.Success!.Rows);
+        Assert.True(samples[3] <= 304L * 1024, $"Median hosted decode allocation {samples[3]} exceeds 304 bytes per row.");
     }
 
     [Fact]
@@ -64,13 +50,6 @@ public sealed class HostedQueryValueAdapterProjectionTests
         Assert.Equal(HostedQueryValueDiagnosticCodes.InputContractMismatch, mismatch.Failure!.Code);
         var missing = HostedQueryValueAdapter.Decode<NumericPayload>(PortableValue.Missing(Contract), Contract);
         Assert.Equal(HostedQueryValueDiagnosticCodes.InputValueInvalid, missing.Failure!.Code);
-    }
-
-    static Payload Previous(PortableValue input)
-    {
-        Assert.True(PortableExecutionValidator.Validate(input).IsValid);
-        var element = JsonSerializer.SerializeToElement(input.Value!.Value, Options);
-        return element.Deserialize<Payload>(Options)!;
     }
 
     public sealed record Payload(Row[] Rows);

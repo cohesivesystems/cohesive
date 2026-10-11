@@ -6,13 +6,14 @@ expands that serialized output into a mutable JsonNode tree first. Root and decl
 conversion share one helper and the existing token-to-observation walk. Values own their strings
 and collection snapshots before the document is disposed.
 
-Declared projection rejects duplicate object properties while adding them to its existing immutable
-builder, including duplicates with equal values. It does not scan the JSON a second time. Public
+Declared projection rejects duplicate object properties through the declared .NET 10 serializer
+profile, including duplicates with equal values, and now throws JsonException for malformed JSON.
+The earlier builder-based check and its ArgumentException behavior have been removed. Public
 `FromJsonElement` retains its existing last-property-wins behavior. Declared serialization options,
 discriminators, numeric observation kinds and array order remain authoritative.
 
-Relations' `HostedQueryValueAdapter.Decode` uses a scoped JsonDocument instead of an owned
-SerializeToElement clone. It retains exact contract matching, fresh value validation, declared CLR
+Relations' `HostedQueryValueAdapter.Decode` now delegates to Core's pooled UTF-8
+`ObservationValue.Deserialize<T>` instead of retaining a temporary JsonDocument or element clone. It retains exact contract matching, fresh value validation, declared CLR
 serialization and structured conversion diagnostics. Typed outputs, including JsonElement
 properties, own any JSON storage they retain after the temporary document is disposed. No input,
 result, admission or contextual evidence is cached.
@@ -101,10 +102,12 @@ failure codes remain covered alongside the existing GraphDelta portable round tr
 
 ```bash
 dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj -c Release
-dotnet run --project eng/runtime-performance/canonical-hashes/CanonicalHashes.csproj -c Release -- --filter '*DeclaredProjection*' '*HostedDecode*'
+dotnet run --project eng/runtime-performance/value-conversion/ValueConversion.csproj -c Release -- --filter '*DeclaredProjection*' '*TypedValueDecode*' '*HostedAdapterDecode*'
 ```
 
 The opt-in benchmarks compare the previous physical paths against production conversion. Setup
 requires exact projected/typed results. Inputs are outside measurement; required fresh validation
 is inside both decoder methods. The Ari case uses #210's existing opt-in protocol-preparation
 harness with matched source-module overlays, restored afterward. Ordinary runs use pinned packages.
+
+See [pooled decoding follow-up](pooled-observation-decoding.md) for current ceiling guards, parser-policy tradeoffs and revised benchmark boundaries. The tables above qualify the earlier #415 implementation.

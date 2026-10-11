@@ -27,7 +27,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
 {
     static readonly Lazy<JsonSerializerOptions> DeclaredJsonOptions = new(() =>
     {
-        var options = new JsonSerializerOptions();
+        var options = new JsonSerializerOptions { AllowDuplicateProperties = false };
         options.Converters.Add(new DeclaredJsonValueConverterFactory());
         options.MakeReadOnly(populateMissingResolver: true);
         return options;
@@ -520,9 +520,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// Converts a <see cref="JsonElement"/> into an <see cref="ObservationValue"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">Unsupported JsonValueKind.</exception>
-    public static ObservationValue FromJsonElement(JsonElement element) => FromJsonElementCore(element, rejectDuplicates: false);
-
-    static ObservationValue FromJsonElementCore(JsonElement element, bool rejectDuplicates) => element.ValueKind switch
+    public static ObservationValue FromJsonElement(JsonElement element) => element.ValueKind switch
     {
         JsonValueKind.Undefined => Undefined,
         JsonValueKind.Null => Null,
@@ -533,8 +531,8 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         JsonValueKind.Number when TryParseExactJsonDecimal(element.GetRawText(), out var dec) => FromDecimal(dec),
         JsonValueKind.Number when element.TryGetDouble(out var dbl) => FromDouble(dbl),
         JsonValueKind.Number => FromDouble(double.Parse(element.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture)),
-        JsonValueKind.Object => FromObject(ReadObject(element, rejectDuplicates)),
-        JsonValueKind.Array => FromImmutableArray(ReadArray(element, rejectDuplicates)),
+        JsonValueKind.Object => FromObject(ReadObject(element)),
+        JsonValueKind.Array => FromImmutableArray(ReadArray(element)),
         _ => throw new InvalidOperationException($"Unsupported JsonValueKind '{element.ValueKind}'.")
     };
 
@@ -606,7 +604,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// <returns>The recursively projected portable observation value.</returns>
     /// <exception cref="NotSupportedException"></exception>
     /// <exception cref="InvalidOperationException"></exception>
-    /// <exception cref="JsonException"></exception>
+    /// <exception cref="JsonException">Declared JSON conversion produces malformed JSON, including duplicate object properties.</exception>
     public static ObservationValue FromObject(object? value)
     {
         HashSet<object>? visited = null;
@@ -846,8 +844,8 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         var type = value.GetType();
         if (type.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is not null)
         {
-            var node = JsonSerializer.SerializeToNode(value, type, DeclaredJsonOptions.Value);
-            if (node is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var converted) && !string.IsNullOrWhiteSpace(converted))
+            var projected = ProjectDeclaredJsonValue(value, type);
+            if (projected.Kind == ObservationValueKind.String && projected.String is { } converted && !string.IsNullOrWhiteSpace(converted))
             {
                 key = converted;
                 return true;
@@ -923,9 +921,9 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     static ObservationValue ProjectDeclaredJsonValue(object value, Type declaredType)
     {
         using var document = JsonSerializer.SerializeToDocument(value, declaredType, DeclaredJsonOptions.Value);
-        // Declared conversion retains JsonNode's collision failures; direct public token
-        // projection keeps its established last-property-wins behavior.
-        return FromJsonElementCore(document.RootElement, rejectDuplicates: true);
+        // The declared serializer rejects duplicate properties while parsing converter output.
+        // Public token projection keeps its established last-property-wins behavior.
+        return FromJsonElement(document.RootElement);
     }
 
     static bool ShouldProjectWithDeclaredJsonType(Type type)
@@ -1530,10 +1528,22 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// <summary>
     /// Deserializes this value into a CLR type using JSON conversion.
     /// </summary>
-    /// <exception cref="JsonException"></exception>
-    /// <exception cref="NotSupportedException"></exception>
-    public T? Deserialize<T>(JsonSerializerOptions? options = null, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw) =>
-        JsonSerializer.Deserialize<T>(GetRawText(bytesEncoding), options);
+    /// <param name="options">CLR deserialization options; observation JSON encoding retains its plain-value contract.</param>
+    /// <param name="bytesEncoding">Encoding for binary values, including nested values.</param>
+    /// <returns>The typed value, owning any retained JSON storage after temporary pooled bytes are returned.</returns>
+    /// <exception cref="JsonException">JSON cannot be converted to the requested CLR contract.</exception>
+    /// <exception cref="NotSupportedException">The requested CLR contract is unsupported by its serializer.</exception>
+    /// <exception cref="InvalidOperationException">A value has no JSON representation under the selected binary encoding.</exception>
+    public T? Deserialize<T>(JsonSerializerOptions? options = null, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw)
+    {
+        using PooledByteBufferWriter buffer = new();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            WriteTo(writer, bytesEncoding);
+            writer.Flush();
+        }
+        return JsonSerializer.Deserialize<T>(buffer.WrittenSpan, options);
+    }
 
     /// <summary>
     /// Writes this value as JSON using the provided writer.
@@ -1719,31 +1729,19 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         }
     }
 
-    static IImmutableDictionary<string, ObservationValue> ReadObject(JsonElement element, bool rejectDuplicates)
+    static IImmutableDictionary<string, ObservationValue> ReadObject(JsonElement element)
     {
         var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
-        {
-            var value = FromJsonElementCore(property.Value, rejectDuplicates);
-            if (!rejectDuplicates)
-                values[property.Name] = value;
-            else
-            {
-                var previousCount = values.Count;
-                values.Add(property.Name, value);
-                // ImmutableSortedDictionary.Add permits an equal duplicate; JsonNode did not.
-                if (values.Count == previousCount)
-                    throw new ArgumentException($"Duplicate JSON property '{property.Name}'.");
-            }
-        }
+            values[property.Name] = FromJsonElement(property.Value);
         return values.ToImmutable();
     }
 
-    static ImmutableArray<ObservationValue> ReadArray(JsonElement element, bool rejectDuplicates)
+    static ImmutableArray<ObservationValue> ReadArray(JsonElement element)
     {
         var values = ImmutableArray.CreateBuilder<ObservationValue>(element.GetArrayLength());
         foreach (var item in element.EnumerateArray())
-            values.Add(FromJsonElementCore(item, rejectDuplicates));
+            values.Add(FromJsonElement(item));
         return values.MoveToImmutable();
     }
 

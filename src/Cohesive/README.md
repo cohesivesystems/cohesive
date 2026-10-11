@@ -52,6 +52,8 @@ SHA-256 digest; the consuming block owns its fingerprint profile and prefix. See
 
 Declared converter/polymorphic values project directly into owned observations without a mutable
 JSON tree. See [typed projection qualification](../../docs/performance/hosted-value-projection.md).
+`ObservationValue.Deserialize<T>` uses pooled UTF-8 storage; results own retained JSON data.
+See [decoding contracts and allocation budgets](../../docs/performance/pooled-observation-decoding.md).
 
 ## Observations and snapshots
 

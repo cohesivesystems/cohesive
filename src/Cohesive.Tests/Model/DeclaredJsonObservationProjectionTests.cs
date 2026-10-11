@@ -43,7 +43,7 @@ public sealed class DeclaredJsonObservationProjectionTests
     [InlineData("{\"a\":1,\"a\":2}")]
     [InlineData("{\"a\":1,\"a\":1}")]
     [InlineData("{\"array\":[{\"a/b~\":1,\"a/b~\":2}]}")]
-    public void ConverterDuplicatesRetainPreviousFailureType(string json)
+    public void ConverterDuplicatesFailAtTheDeclaredParser(string json)
     {
         var value = new RawValue(json);
         var expected = Record.Exception(() => Previous(value, typeof(RawValue)));
@@ -52,8 +52,9 @@ public sealed class DeclaredJsonObservationProjectionTests
         Assert.NotNull(expected);
         Assert.NotNull(root);
         Assert.NotNull(nested);
-        Assert.Equal(expected.GetType(), root.GetType());
-        Assert.Equal(expected.GetType(), nested.GetType());
+        Assert.IsType<ArgumentException>(expected);
+        Assert.IsType<JsonException>(root);
+        Assert.IsType<JsonException>(nested);
     }
 
     [Fact]
@@ -76,28 +77,57 @@ public sealed class DeclaredJsonObservationProjectionTests
     }
 
     [Fact]
-    public void LargeConvertedProjectionAvoidsMutableJsonTreeAllocations()
+    public void WarmLargeConvertedProjectionHasABoundedAllocationPerRow()
     {
-        var value = new RawValue(JsonSerializer.Serialize(Enumerable.Range(0, 1024)
-            .Select(i => new { number = i, text = "é<>&🙂", nested = new { enabled = true } })));
+        // Token input matches the opt-in projection benchmark.
+        using var source = JsonSerializer.SerializeToDocument(Enumerable.Range(0, 1024)
+            .Select(i => new { number = i, text = "é<>&🙂", nested = new { enabled = true } }));
+        var value = new TokenValue(source.RootElement);
         for (var i = 0; i < 4; i++)
         {
-            Previous(value, typeof(RawValue));
+            Previous(value, typeof(TokenValue));
             ObservationValue.FromObject(value);
         }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var expected = Previous(value, typeof(RawValue));
-        var oldAllocation = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        var actual = ObservationValue.FromObject(value);
-        var allocation = GC.GetAllocatedBytesForCurrentThread() - before;
+        var expected = Previous(value, typeof(TokenValue));
+        ObservationValue actual = default;
+        var samples = new long[7];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            actual = ObservationValue.FromObject(value);
+            samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Array.Sort(samples);
         Assert.Equal(expected, actual);
-        Assert.True(oldAllocation - allocation > value.Json.Length,
-            $"Node projection allocated {oldAllocation}; immutable projection allocated {allocation}, input {value.Json.Length} characters.");
+        Assert.True(samples[3] <= 960L * 1024, $"Median projection allocation {samples[3]} exceeds 960 bytes per row.");
+    }
+
+    [Fact]
+    public void FlatConvertedProjectionHasABoundedAllocationPerField()
+    {
+        var value = new RawValue(JsonSerializer.Serialize(Enumerable.Range(0, 128).ToDictionary(i => $"field{i:D3}", i => i)));
+        for (var i = 0; i < 4; i++) ObservationValue.FromObject(value);
+        var samples = new long[7];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            ObservationValue.FromObject(value);
+            samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Array.Sort(samples);
+        Assert.True(samples[3] <= 176L * 128, $"Median projection allocation {samples[3]} exceeds 176 bytes per field.");
     }
 
     static ObservationValue Previous(object value, Type declaredType) =>
         ObservationValue.FromJsonNode(JsonSerializer.SerializeToNode(value, declaredType, Options));
+
+    [JsonConverter(typeof(TokenValueConverter))]
+    public sealed record TokenValue(JsonElement Value);
+    public sealed class TokenValueConverter : JsonConverter<TokenValue>
+    {
+        public override TokenValue Read(ref Utf8JsonReader reader, Type type, JsonSerializerOptions options) => throw new NotSupportedException();
+        public override void Write(Utf8JsonWriter writer, TokenValue value, JsonSerializerOptions options) => value.Value.WriteTo(writer);
+    }
 
     [JsonConverter(typeof(RawValueConverter))]
     public sealed record RawValue(string Json);
