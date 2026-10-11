@@ -87,7 +87,9 @@ public static partial class ProcessStaticCompiler
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(options);
 
-        var validation = ProcessDefinitionDocuments.Validate(document, context);
+        var validation = preparedDefinition is null
+            ? ProcessDefinitionDocuments.Validate(document, context)
+            : ProcessDefinitionDocuments.ValidatePrepared(document, preparedDefinition, context);
         if (!validation.IsValid)
             return new(document, definition: null, plan: null, validation);
 
