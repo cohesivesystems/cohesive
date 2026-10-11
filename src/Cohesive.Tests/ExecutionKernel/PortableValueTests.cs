@@ -32,15 +32,14 @@ public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper outp
             writer.Flush();
             Assert.True(PortableExecutionValidator.Validate(portable).IsValid);
         }
-        buffer.Clear();
-        writer.Reset(buffer);
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
-        writer.Flush();
-        var writerBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
+        var writerBytes = MeasureWarmAllocation(() =>
+        {
+            buffer.Clear(); writer.Reset(buffer);
+            PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+            writer.Flush();
+        });
+        var validationBytes = MeasureWarmAllocation(() => PortableExecutionValidator.Validate(portable));
         var result = PortableExecutionValidator.Validate(portable);
-        var validationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
         output.WriteLine($"128 fields (sorted={alreadySorted}): writer={writerBytes} B, validation={validationBytes} B");
         Assert.True(result.IsValid);
         Assert.InRange(writerBytes, 0, 128);
@@ -70,18 +69,19 @@ public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper outp
             streaming.Clear();
             CanonicalJsonWriter.WriteCanonicalObservationValue(streaming, observation);
         }
-        var before = GC.GetAllocatedBytesForCurrentThread();
+        var validationBytes = MeasureWarmAllocation(() => PortableExecutionValidator.Validate(portable));
         var result = PortableExecutionValidator.Validate(portable);
-        var validationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        buffer.Clear(); writer.Reset(buffer);
-        before = GC.GetAllocatedBytesForCurrentThread();
-        PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
-        writer.Flush();
-        var writerBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        streaming.Clear();
-        before = GC.GetAllocatedBytesForCurrentThread();
-        CanonicalJsonWriter.WriteCanonicalObservationValue(streaming, observation);
-        var streamingBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var writerBytes = MeasureWarmAllocation(() =>
+        {
+            buffer.Clear(); writer.Reset(buffer);
+            PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+            writer.Flush();
+        });
+        var streamingBytes = MeasureWarmAllocation(() =>
+        {
+            streaming.Clear();
+            CanonicalJsonWriter.WriteCanonicalObservationValue(streaming, observation);
+        });
         output.WriteLine($"128 nested objects ({storage}): validate={validationBytes} B, tagged={writerBytes} B, streaming={streamingBytes} B");
         Assert.True(result.IsValid);
         Assert.InRange(validationBytes, 0, 1_024);
@@ -99,6 +99,21 @@ public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper outp
             document.RootElement.EnumerateObject().Select(property => property.Name));
         Assert.All(document.RootElement.EnumerateObject(), property =>
             Assert.Equal(new[] { "value" }, property.Value.EnumerateObject().Select(child => child.Name)));
+    }
+
+    static long MeasureWarmAllocation(Action action)
+    {
+        // Keep the budget on recurring work; shared runtime/cache maintenance can affect one sample.
+        // Delegate capture happens before this boundary and is excluded from every sample.
+        Span<long> samples = stackalloc long[7];
+        for (var index = 0; index < samples.Length; index++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            action();
+            samples[index] = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        samples.Sort();
+        return samples[samples.Length / 2];
     }
 
     static ObservationValue CreateFields(string storage, Dictionary<string, ObservationValue> fields)
@@ -154,27 +169,41 @@ public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper outp
     }
 
     [Fact]
+    public void OrdinalEnumeratorKeepsItsSingleOwnerPublicConstructor()
+    {
+        var type = typeof(OrdinalObservationFields.Enumerator);
+        Assert.NotNull(type.GetConstructor([typeof(OrdinalObservationFields)]));
+        Assert.Null(type.GetConstructor([typeof(OrdinalObservationFields), typeof(bool)]));
+        var observation = CreateFields("ordinal", new() { ["value"] = ObservationValue.FromBool(true) });
+        var iterator = new OrdinalObservationFields.Enumerator((OrdinalObservationFields)observation.Fields!);
+        Assert.True(iterator.MoveNext());
+        Assert.Equal("value", iterator.Current.Key);
+        Assert.False(iterator.MoveNext());
+    }
+
+    [Fact]
     public void CopiedFieldLeaseReturnsExactlyOnceAndCannotReturnReusedRental()
     {
         var pool = new CountingFieldPool();
         var fields = new Dictionary<string, ObservationValue> { ["b"] = ObservationValue.FromBool(true) };
         var owner = new OrderedObservationFields(fields, pool);
         var copy = owner;
+        var borrowed = owner.GetEnumerator();
+        Assert.True(borrowed.MoveNext());
         owner.Dispose();
         Assert.Equal(1, pool.Returns);
-        // More than the bounded cache capacity forces the original lease to be reused,
-        // independently of other tests' warmed leases.
-        var rentals = new OrderedObservationFields[257];
-        for (var index = 0; index < rentals.Length; index++) rentals[index] = new(fields, pool);
+        var next = new OrderedObservationFields(fields, pool);
+        Assert.Same(copy.RentalIdentity, next.RentalIdentity);
+        Assert.Throws<ObjectDisposedException>(() => borrowed.Current);
+        var staleEnumerator = copy.GetEnumerator();
+        Assert.Throws<ObjectDisposedException>(() => staleEnumerator.MoveNext());
+        Assert.Throws<ObjectDisposedException>(() => Enumerate(copy));
         copy.Dispose();
         Assert.Equal(1, pool.Returns);
-        Assert.All(rentals, rental => Assert.Single(Enumerate(rental)));
-        for (var index = 0; index < rentals.Length; index++)
-        {
-            rentals[index].Dispose();
-            rentals[index].Dispose();
-        }
-        Assert.Equal(258, pool.Returns);
+        Assert.Single(Enumerate(next));
+        next.Dispose();
+        next.Dispose();
+        Assert.Equal(2, pool.Returns);
         Assert.Equal(pool.Rents, pool.Returns);
     }
 

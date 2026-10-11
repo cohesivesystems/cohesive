@@ -9,7 +9,6 @@ internal struct OrderedObservationFields : IDisposable
 {
     ImmutableSortedDictionary<string, ObservationValue>? sorted;
     OrdinalObservationFields? ordinal;
-    KeyValuePair<string, ObservationValue>[]? buffer;
     int count;
     Lease? lease;
     long generation;
@@ -22,21 +21,19 @@ internal struct OrderedObservationFields : IDisposable
         if (ordinal is not null)
         {
             sorted = null;
-            buffer = null;
             count = 0;
         }
         else if (fields is ImmutableSortedDictionary<string, ObservationValue> ordered
             && ReferenceEquals(ordered.KeyComparer, StringComparer.Ordinal))
         {
             sorted = ordered;
-            buffer = null;
             count = 0;
         }
         else
         {
             sorted = null;
             pool ??= ArrayPool<KeyValuePair<string, ObservationValue>>.Shared;
-            buffer = RentOrderedObservationProperties(fields, pool, out count);
+            var buffer = RentOrderedObservationProperties(fields, pool, out count);
             if (buffer is not null)
             {
                 lease = Lease.Acquire(buffer, count, pool);
@@ -45,13 +42,14 @@ internal struct OrderedObservationFields : IDisposable
         }
     }
 
-    public Enumerator GetEnumerator() => new(sorted, ordinal, buffer, count);
+    internal object? RentalIdentity => lease;
+
+    public Enumerator GetEnumerator() => new(sorted, ordinal, lease, generation, count);
     // Copies share a generation-stamped lease: stale copies cannot return a later rental.
     public void Dispose()
     {
         lease?.Return(generation);
         lease = null;
-        buffer = null;
         sorted = null;
         ordinal = null;
         count = 0;
@@ -59,7 +57,8 @@ internal struct OrderedObservationFields : IDisposable
 
     internal struct Enumerator : IDisposable
     {
-        readonly KeyValuePair<string, ObservationValue>[]? buffer;
+        readonly Lease? lease;
+        readonly long generation;
         readonly int count;
         readonly bool isSorted;
         readonly OrdinalObservationFields? ordinal;
@@ -68,21 +67,27 @@ internal struct OrderedObservationFields : IDisposable
         int index;
 
         internal Enumerator(ImmutableSortedDictionary<string, ObservationValue>? fields,
-            OrdinalObservationFields? ordinal, KeyValuePair<string, ObservationValue>[]? buffer, int count)
+            OrdinalObservationFields? ordinal, Lease? lease, long generation, int count)
         {
             this.ordinal = ordinal;
             ordinalEnumerator = ordinal is null ? default : ordinal.GetCanonicalEnumerator();
-            this.buffer = buffer;
+            this.lease = lease;
+            this.generation = generation;
             this.count = count;
             isSorted = fields is not null;
             sorted = fields is null ? default : fields.GetEnumerator();
             index = -1;
         }
 
-        public KeyValuePair<string, ObservationValue> Current => ordinal is not null ? ordinalEnumerator.Current : isSorted ? sorted.Current : buffer![index];
+        public KeyValuePair<string, ObservationValue> Current => ordinal is not null ? ordinalEnumerator.Current : isSorted ? sorted.Current : lease!.Read(generation, index);
         public bool MoveNext()
         {
-            if (ordinal is null) return isSorted ? sorted.MoveNext() : ++index < count;
+            if (ordinal is null)
+            {
+                if (isSorted) return sorted.MoveNext();
+                lease?.RequireActive(generation);
+                return ++index < count;
+            }
             return ordinalEnumerator.MoveNext();
         }
         public void Dispose() { if (isSorted) sorted.Dispose(); }
@@ -143,42 +148,52 @@ internal struct OrderedObservationFields : IDisposable
         }
     }
 
-    sealed class Lease
+    internal sealed class Lease
     {
-        static readonly Queue<Lease> available = new();
+        // Synchronous traversals reuse only their own thread's metadata. No shared queue or lock.
+        [ThreadStatic] static Stack<Lease>? available;
         KeyValuePair<string, ObservationValue>[]? buffer;
         ArrayPool<KeyValuePair<string, ObservationValue>> pool = null!;
         int count;
-        internal long Generation { get; private set; }
+        long state = 1; // odd = returned, even = active
+        internal long Generation => Volatile.Read(ref state);
 
         internal static Lease Acquire(KeyValuePair<string, ObservationValue>[] buffer, int count,
             ArrayPool<KeyValuePair<string, ObservationValue>> pool)
         {
-            Lease lease;
-            lock (available) lease = available.Count == 0 ? new() : available.Dequeue();
-            lock (lease)
-            {
-                lease.Generation = checked(lease.Generation + 1);
-                lease.buffer = buffer;
-                lease.count = count;
-                lease.pool = pool;
-            }
+            var lease = available is { Count: > 0 } ? available.Pop() : new Lease();
+            lease.buffer = buffer;
+            lease.count = count;
+            lease.pool = pool;
+            Interlocked.Increment(ref lease.state);
             return lease;
+        }
+
+        internal void RequireActive(long generation)
+        {
+            if (Volatile.Read(ref state) != generation)
+                throw new ObjectDisposedException(nameof(OrderedObservationFields));
+        }
+
+        internal KeyValuePair<string, ObservationValue> Read(long generation, int index)
+        {
+            RequireActive(generation);
+            return buffer![index];
         }
 
         internal void Return(long generation)
         {
-            lock (this)
-            {
-                if (generation != Generation || buffer is null) return;
-                var rented = buffer;
-                buffer = null;
-                ReturnOrderedObservationProperties(rented, count, pool);
-                pool = null!;
-                count = 0;
-            }
-            // Bound retained lease metadata; buffers and their values are never retained.
-            lock (available) if (available.Count < 256) available.Enqueue(this);
+            if (Interlocked.CompareExchange(ref state, generation + 1, generation) != generation) return;
+            var rented = buffer;
+            buffer = null;
+            var rentalPool = pool;
+            pool = null!;
+            var rentalCount = count;
+            count = 0;
+            ReturnOrderedObservationProperties(rented, rentalCount, rentalPool);
+            // Keep no values/buffers alive; overflow leases are collected. Never recycle at wraparound.
+            if ((available?.Count ?? 0) < 256 && generation < long.MaxValue - 1)
+                (available ??= new()).Push(this);
         }
     }
 }

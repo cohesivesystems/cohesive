@@ -32,9 +32,19 @@ internal sealed class OrdinalObservationFields(ObservationLayout layout, Immutab
     IEnumerator<KeyValuePair<string, ObservationValue>> IEnumerable<KeyValuePair<string, ObservationValue>>.GetEnumerator() => GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-    public struct Enumerator(OrdinalObservationFields fields, bool canonical = false) : IEnumerator<KeyValuePair<string, ObservationValue>>
+    public struct Enumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
     {
-        int ordinal = -1;
+        readonly OrdinalObservationFields fields;
+        readonly bool canonical;
+        int ordinal;
+        public Enumerator(OrdinalObservationFields fields) : this(fields, false) { }
+        internal Enumerator(OrdinalObservationFields fields, bool canonical)
+        {
+            this.fields = fields;
+            this.canonical = canonical;
+            ordinal = -1;
+            Current = default;
+        }
         public KeyValuePair<string, ObservationValue> Current { get; private set; }
         object IEnumerator.Current => Current;
         public bool MoveNext()

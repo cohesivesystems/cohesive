@@ -17,9 +17,11 @@ Buffers are cleared and returned on normal completion and exceptions. The iterat
 uses the same owning traversal and enumerator; the rental/return functions are private.
 Validation and pooled copying share one generic storage dispatch, avoiding boxed nested enumerators.
 Copies share a generation-stamped lease with exactly-once return: an old copy cannot return a later
-rental. At most 256 cleared lease objects are retained; warm rentals reuse them, while deeper or
-concurrent traversals may allocate more lease objects. Return is synchronized; concurrent disposal
-is safe, but traversal must finish before disposal. Streaming frame transfers clear their old slots. No validation evidence is cached, and no fingerprint format changes.
+rental. At most 256 cleared lease objects are retained per thread. The thread-local stack takes
+no shared locks; an atomic generation transition makes copied disposal exactly-once. Stale owners
+and borrowed enumerators reject reads after return or reuse. Traversal must finish before disposal;
+concurrent reading and disposal are unsupported. Deeper traversals can allocate overflow lease
+metadata, but other threads no longer consume this thread's cache capacity. Streaming frame transfers clear their old slots. No validation evidence is cached, and no fingerprint format changes.
 
 ## Measurement
 
@@ -38,20 +40,21 @@ already-warmed static state within each variant. All nine cases passed in each r
 
 | Workload | Before bytes | After bytes | Reduction |
 |---|---:|---:|---:|
-| Cold X12 004010 normal | 1,151,182,176 | 879,940,680 | 23.6% |
-| X12 005030 normal | 950,920,856 | 634,473,008 | 33.3% |
-| FIX normal | 174,823,240 | 154,140,584 | 11.8% |
-| All nine cases | 6,557,908,808 | 4,453,822,240 | 32.1% |
+| Cold X12 004010 normal | 1,151,182,176 | 881,025,296 | 23.5% |
+| X12 005030 normal | 950,920,856 | 634,557,456 | 33.3% |
+| FIX normal | 174,823,240 | 151,706,584 | 13.2% |
+| All nine cases | 6,557,908,808 | 4,450,690,368 | 32.1% |
 
 The cold case's preview allocation falls from 313.5 to 236.4 MB and execution from 522.6 to
-364.9 MB. Definition catalog construction remains about 110.6 MB and seed catalog about 95.2 MB:
+365.1 MB. Definition catalog construction remains about 110.7 MB and seed catalog about 95.2 MB:
 this optimization removes repeated runtime work, not catalog authoring. The whole nine-case run
-was 10.07 versus 8.92 seconds, and the cold stage total 3.60 versus 3.52 seconds. Single timing
+was 10.07 versus 9.91 seconds, and the cold stage total 3.60 versus 3.85 seconds. Single timing
 samples do not establish a stable latency improvement.
 
 The checked-in 128-field allocation regression uses booleans to isolate field ordering from scalar
 formatting, warms 1,000 times, and reuses Utf8JsonWriter plus its output buffer. Immutable values and
-serializer metadata are created before the counter. The validator counter includes its complete
+serializer metadata are created before the counter. Warm allocation guards use the median of
+seven calls at the same budget, avoiding one-off shared runtime/cache maintenance in a full suite. The validator counter includes its complete
 public entry point, context, location scratch storage and result.
 
 | 128-field input | Tagged writer before/after | Validator before/after |
@@ -98,10 +101,42 @@ The before assembly was built from exact pre-review head deab5257 in an isolated
 intentionally fails all four new validator allocation budgets. Sorted input also bypasses copies
 in the streaming writer, even when an already-warm pooled copy would hide that work from counters.
 
+## Parallel ownership check
+
+The synthetic `PortableFieldConcurrencyTests` compares the lock-based implementation at 6478df9f
+with the thread-local implementation. Each dedicated worker performs 2,000 validations plus canonical
+streaming writes, after 256 excluded warmup iterations. Three samples run at each of 1, 2, 4 and 8
+workers; creation and warmup are excluded, while the start gate, completion and one byte-equivalence
+check per worker are included in elapsed time. Worker allocation counters exclude setup. Runs were
+isolated from other builds and tests, in separate test processes on the environment above.
+
+| Input | 1 worker before / after ms | 8 workers before / after ms | Warm writer bytes after |
+|---|---:|---:|---:|
+| 128 flat fields | 40.7 / 43.3 | 48.9 / 51.0 | 0 |
+| 128 one-field children | 95.8 / 94.0 | 728.9 / 105.8 | 0 |
+| 385 nested objects | 255.8 / 257.6 | 3,053.5 / 1,056.5 | 6,192 |
+
+Nested parallel work improves substantially; flat work has a small local timing regression, so this
+is not a universal speedup or an Ari request-latency claim. The deep input exceeds the per-thread
+256-lease retention bound: 129 overflow leases allocate 6,192 bytes on each warm write. Its validator
+separately allocates 16,696 bytes for traversal/context work. The old shared cache's deep allocations
+vary with interleaving and can be lower because threads reuse one another's returned leases.
+The thread-local design trades that sharing for predictable ownership and removal of contention.
+A thread retains at most 256 cleared lease objects and the bounded stack until it terminates; neither
+buffers nor observation values remain attached to returned metadata. Concurrent reads and disposal
+remain unsupported; concurrent disposal of copies and sequential stale reads are tested.
+
+[Compact concurrency measurements](portable-observation-field-concurrency.csv) contain the three-sample
+medians and separate allocation snapshots. Reproduce the longer measurement with:
+
+```bash
+COHESIVE_FIELD_BENCHMARK_ITERATIONS=2000 dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj -c Release --filter FullyQualifiedName~PortableFieldConcurrencyTests --logger 'console;verbosity=detailed'
+```
+
 ## Qualification
 
-The full Core suite passed 4,408 tests (33 existing optional skips), Relations passed 1,106,
-and Ari Engine passed 855 (18 existing scheduler skips). All 122 portable-value, core-observation and
+The full Core suite passed 4,412 tests (33 existing optional skips), Relations passed 1,106,
+and Ari Engine passed 855 (18 existing scheduler skips). All 126 portable-value, core-observation and
 canonical JSON focused cases pass, including the nested allocation checks. All nine original Ari
 cases also pass in the refreshed final allocation run. Package publication and Ari dependency
 upgrades are not part of this change.
