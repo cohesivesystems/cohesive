@@ -6,7 +6,8 @@ Cohesive owns portable-value validation, tagged serialization and canonical obse
 ObservationValue remains the authority for owned immutable fields. This change extends the existing
 canonical writer's pooled ordering mechanism rather than adding an Ari-specific codec or cache.
 
-Successful portable validation visits fields in their stored order. Only failing fields create
+Portable validation walks ordinal layouts and ordinal sorted dictionaries in canonical order; other
+inputs use their stored order. Only failing fields in unordered inputs create
 ordinally sorted diagnostic groups, retaining depth-first order and escaped locations without
 revalidating subtrees. Canonical and tagged writers share OrderedObservationFields: ordinal immutable
 sorted dictionaries pass through directly; other field collections use a scoped pooled copy and
@@ -14,9 +15,11 @@ sort only if its keys are not already ordered. Shape-backed fields traverse the 
 CanonicalJsonOrdinals directly, skipping absent values, without a copy or sort. Both writers retain identical ordinal wire ordering.
 Buffers are cleared and returned on normal completion and exceptions. The iterative streaming writer
 uses the same owning traversal and enumerator; the rental/return functions are private.
-Validation dispatches concrete dictionary enumerators so nested object visits do not box them.
-Owning traversal structs are transferred, not duplicated; disposing two copies is unsupported and
-the ownership comment documents this constraint. Streaming frame transfers clear their old slots. No validation evidence is cached, and no fingerprint format changes.
+Validation and pooled copying share one generic storage dispatch, avoiding boxed nested enumerators.
+Copies share a generation-stamped lease with exactly-once return: an old copy cannot return a later
+rental. At most 256 cleared lease objects are retained; warm rentals reuse them, while deeper or
+concurrent traversals may allocate more lease objects. Return is synchronized; concurrent disposal
+is safe, but traversal must finish before disposal. Streaming frame transfers clear their old slots. No validation evidence is cached, and no fingerprint format changes.
 
 ## Measurement
 
@@ -35,15 +38,15 @@ already-warmed static state within each variant. All nine cases passed in each r
 
 | Workload | Before bytes | After bytes | Reduction |
 |---|---:|---:|---:|
-| Cold X12 004010 normal | 1,151,182,176 | 879,150,272 | 23.6% |
-| X12 005030 normal | 950,920,856 | 634,503,968 | 33.3% |
-| FIX normal | 174,823,240 | 154,757,648 | 11.5% |
-| All nine cases | 6,557,908,808 | 4,464,278,360 | 31.9% |
+| Cold X12 004010 normal | 1,151,182,176 | 879,940,680 | 23.6% |
+| X12 005030 normal | 950,920,856 | 634,473,008 | 33.3% |
+| FIX normal | 174,823,240 | 154,140,584 | 11.8% |
+| All nine cases | 6,557,908,808 | 4,453,822,240 | 32.1% |
 
-The cold case's preview allocation falls from 313.5 to 235.3 MB and execution from 522.6 to
-364.9 MB. Definition catalog construction remains about 110.7 MB and seed catalog about 95.2 MB:
+The cold case's preview allocation falls from 313.5 to 236.4 MB and execution from 522.6 to
+364.9 MB. Definition catalog construction remains about 110.6 MB and seed catalog about 95.2 MB:
 this optimization removes repeated runtime work, not catalog authoring. The whole nine-case run
-was 10.07 versus 9.65 seconds, and the cold stage total 3.60 versus 3.51 seconds. Single timing
+was 10.07 versus 8.92 seconds, and the cold stage total 3.60 versus 3.52 seconds. Single timing
 samples do not establish a stable latency improvement.
 
 The checked-in 128-field allocation regression uses booleans to isolate field ordering from scalar
@@ -59,7 +62,8 @@ public entry point, context, location scratch storage and result.
 The baseline intentionally fails the new allocation budgets (writer <=128 B, validator <=1,024 B).
 The revised implementation passes. Validation retains constant context/result overhead; no per-object boxed enumerator or
 per-field sorted array is allocated. Tests also cover nested escaped
-diagnostic ordering and reuse after a writer exception. Existing lossless round trips and canonical
+diagnostic ordering. A counting pool checks cleared slots and exactly-once returns during nested
+streaming-writer failure, concurrent disposal of copies, and disposal of a stale copy after lease reuse. Existing lossless round trips and canonical
 JSON checks remain in force.
 
 [Compact measurements](portable-observation-field-ordering.csv) retain cold-case stages and totals
@@ -96,8 +100,8 @@ in the streaming writer, even when an already-warm pooled copy would hide that w
 
 ## Qualification
 
-The full Core suite passed 4,404 tests (33 existing optional skips), Relations passed 1,106,
-and Ari Engine passed 855 (18 existing scheduler skips). All 92 portable-value, core-observation and
+The full Core suite passed 4,408 tests (33 existing optional skips), Relations passed 1,106,
+and Ari Engine passed 855 (18 existing scheduler skips). All 122 portable-value, core-observation and
 canonical JSON focused cases pass, including the nested allocation checks. All nine original Ari
 cases also pass in the refreshed final allocation run. Package publication and Ari dependency
 upgrades are not part of this change.

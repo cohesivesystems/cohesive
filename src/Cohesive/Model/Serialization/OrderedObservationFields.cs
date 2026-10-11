@@ -11,9 +11,13 @@ internal struct OrderedObservationFields : IDisposable
     OrdinalObservationFields? ordinal;
     KeyValuePair<string, ObservationValue>[]? buffer;
     int count;
+    Lease? lease;
+    long generation;
 
-    internal OrderedObservationFields(IReadOnlyDictionary<string, ObservationValue>? fields)
+    internal OrderedObservationFields(IReadOnlyDictionary<string, ObservationValue>? fields, ArrayPool<KeyValuePair<string, ObservationValue>>? pool = null)
     {
+        lease = null;
+        generation = 0;
         ordinal = fields as OrdinalObservationFields;
         if (ordinal is not null)
         {
@@ -31,16 +35,22 @@ internal struct OrderedObservationFields : IDisposable
         else
         {
             sorted = null;
-            buffer = RentOrderedObservationProperties(fields, out count);
+            pool ??= ArrayPool<KeyValuePair<string, ObservationValue>>.Shared;
+            buffer = RentOrderedObservationProperties(fields, pool, out count);
+            if (buffer is not null)
+            {
+                lease = Lease.Acquire(buffer, count, pool);
+                generation = lease.Generation;
+            }
         }
     }
 
     public Enumerator GetEnumerator() => new(sorted, ordinal, buffer, count);
-    // Ownership is transferred, never duplicated: dispose only the owning instance. Copies must
-    // not both be disposed. Streaming frames move ownership and clear the old slot after transfer.
+    // Copies share a generation-stamped lease: stale copies cannot return a later rental.
     public void Dispose()
     {
-        ReturnOrderedObservationProperties(buffer, count);
+        lease?.Return(generation);
+        lease = null;
         buffer = null;
         sorted = null;
         ordinal = null;
@@ -53,7 +63,7 @@ internal struct OrderedObservationFields : IDisposable
         readonly int count;
         readonly bool isSorted;
         readonly OrdinalObservationFields? ordinal;
-        KeyValuePair<string, ObservationValue> current;
+        OrdinalObservationFields.Enumerator ordinalEnumerator;
         ImmutableSortedDictionary<string, ObservationValue>.Enumerator sorted;
         int index;
 
@@ -61,7 +71,7 @@ internal struct OrderedObservationFields : IDisposable
             OrdinalObservationFields? ordinal, KeyValuePair<string, ObservationValue>[]? buffer, int count)
         {
             this.ordinal = ordinal;
-            current = default;
+            ordinalEnumerator = ordinal is null ? default : ordinal.GetCanonicalEnumerator();
             this.buffer = buffer;
             this.count = count;
             isSorted = fields is not null;
@@ -69,57 +79,30 @@ internal struct OrderedObservationFields : IDisposable
             index = -1;
         }
 
-        public KeyValuePair<string, ObservationValue> Current => ordinal is not null ? current : isSorted ? sorted.Current : buffer![index];
+        public KeyValuePair<string, ObservationValue> Current => ordinal is not null ? ordinalEnumerator.Current : isSorted ? sorted.Current : buffer![index];
         public bool MoveNext()
         {
             if (ordinal is null) return isSorted ? sorted.MoveNext() : ++index < count;
-            var order = ordinal.Layout.CanonicalJsonOrdinals;
-            while (++index < order.Length)
-            {
-                var fieldIndex = order[index];
-                if (!ordinal.TryGetField(fieldIndex, out var field)) continue;
-                current = new(ordinal.Layout.FieldIdentities[fieldIndex], field);
-                return true;
-            }
-            return false;
+            return ordinalEnumerator.MoveNext();
         }
         public void Dispose() { if (isSorted) sorted.Dispose(); }
     }
 
     static KeyValuePair<string, ObservationValue>[]? RentOrderedObservationProperties(
         IReadOnlyDictionary<string, ObservationValue>? properties,
+        ArrayPool<KeyValuePair<string, ObservationValue>> pool,
         out int count)
     {
         count = 0;
         if (properties is null || properties.Count == 0)
             return null;
 
-        var ordered = ArrayPool<KeyValuePair<string, ObservationValue>>.Shared.Rent(properties.Count);
+        var ordered = pool.Rent(properties.Count);
         try
         {
-            switch (properties)
-            {
-                case ImmutableDictionary<string, ObservationValue> immutable:
-                    foreach (var property in immutable)
-                        ordered[count++] = property;
-                    break;
-                case ImmutableSortedDictionary<string, ObservationValue> sorted:
-                    foreach (var property in sorted)
-                        ordered[count++] = property;
-                    break;
-                case Dictionary<string, ObservationValue> dictionary:
-                    foreach (var property in dictionary)
-                        ordered[count++] = property;
-                    break;
-                case OwnedObservationFields owned:
-                    foreach (var property in owned)
-                        ordered[count++] = property;
-                    break;
-                default:
-                    foreach (var property in properties)
-                        ordered[count++] = property;
-                    break;
-            }
+            var copier = new FieldCopier(ordered);
+            try { ObservationFieldTraversal.Visit(properties, ref copier); }
+            finally { count = copier.Count; }
 
             for (var index = 1; index < count; index++)
             {
@@ -133,19 +116,69 @@ internal struct OrderedObservationFields : IDisposable
         }
         catch
         {
-            ReturnOrderedObservationProperties(ordered, count);
+            ReturnOrderedObservationProperties(ordered, count, pool);
             throw;
         }
     }
 
     static void ReturnOrderedObservationProperties(
         KeyValuePair<string, ObservationValue>[]? properties,
-        int count)
+        int count, ArrayPool<KeyValuePair<string, ObservationValue>> pool)
     {
         if (properties is null)
             return;
 
         properties.AsSpan(0, count).Clear();
-        ArrayPool<KeyValuePair<string, ObservationValue>>.Shared.Return(properties);
+        pool.Return(properties);
+    }
+
+    struct FieldCopier(KeyValuePair<string, ObservationValue>[] buffer) : IObservationFieldVisitor
+    {
+        internal int Count;
+        public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+            where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+        {
+            try { while (fields.MoveNext()) buffer[Count++] = fields.Current; }
+            finally { fields.Dispose(); }
+        }
+    }
+
+    sealed class Lease
+    {
+        static readonly Queue<Lease> available = new();
+        KeyValuePair<string, ObservationValue>[]? buffer;
+        ArrayPool<KeyValuePair<string, ObservationValue>> pool = null!;
+        int count;
+        internal long Generation { get; private set; }
+
+        internal static Lease Acquire(KeyValuePair<string, ObservationValue>[] buffer, int count,
+            ArrayPool<KeyValuePair<string, ObservationValue>> pool)
+        {
+            Lease lease;
+            lock (available) lease = available.Count == 0 ? new() : available.Dequeue();
+            lock (lease)
+            {
+                lease.Generation = checked(lease.Generation + 1);
+                lease.buffer = buffer;
+                lease.count = count;
+                lease.pool = pool;
+            }
+            return lease;
+        }
+
+        internal void Return(long generation)
+        {
+            lock (this)
+            {
+                if (generation != Generation || buffer is null) return;
+                var rented = buffer;
+                buffer = null;
+                ReturnOrderedObservationProperties(rented, count, pool);
+                pool = null!;
+                count = 0;
+            }
+            // Bound retained lease metadata; buffers and their values are never retained.
+            lock (available) if (available.Count < 256) available.Enqueue(this);
+        }
     }
 }

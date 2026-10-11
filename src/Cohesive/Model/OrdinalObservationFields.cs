@@ -28,10 +28,11 @@ internal sealed class OrdinalObservationFields(ObservationLayout layout, Immutab
         return field.Kind != ObservationValueKind.Undefined;
     }
     public Enumerator GetEnumerator() => new(this);
+    internal Enumerator GetCanonicalEnumerator() => new(this, true);
     IEnumerator<KeyValuePair<string, ObservationValue>> IEnumerable<KeyValuePair<string, ObservationValue>>.GetEnumerator() => GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 
-    public struct Enumerator(OrdinalObservationFields fields) : IEnumerator<KeyValuePair<string, ObservationValue>>
+    public struct Enumerator(OrdinalObservationFields fields, bool canonical = false) : IEnumerator<KeyValuePair<string, ObservationValue>>
     {
         int ordinal = -1;
         public KeyValuePair<string, ObservationValue> Current { get; private set; }
@@ -39,9 +40,9 @@ internal sealed class OrdinalObservationFields(ObservationLayout layout, Immutab
         public bool MoveNext()
         {
             while (++ordinal < fields.Layout.Count)
-                if (fields.TryGetField(ordinal, out var field))
+                if (fields.TryGetField(canonical ? fields.Layout.CanonicalJsonOrdinals[ordinal] : ordinal, out var field))
                 {
-                    Current = new(fields.Layout.FieldIdentities[ordinal], field);
+                    Current = new(fields.Layout.FieldIdentities[canonical ? fields.Layout.CanonicalJsonOrdinals[ordinal] : ordinal], field);
                     return true;
                 }
             return false;

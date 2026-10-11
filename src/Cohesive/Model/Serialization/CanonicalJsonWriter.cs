@@ -917,6 +917,11 @@ public static class CanonicalJsonWriter
         new CanonicalObservationUtf8Writer(output, bytesEncoding).Write(value, enclosingDepth);
     }
 
+    internal static void WriteCanonicalObservationValueWithPool(
+        IBufferWriter<byte> output, ObservationValue value,
+        ArrayPool<KeyValuePair<string, ObservationValue>> fieldPool)
+        => new CanonicalObservationUtf8Writer(output, ObservationBytesJsonEncoding.Base64String, fieldPool).Write(value, 0);
+
     static class CanonicalObservationJsonWriterPool
     {
         static readonly JsonWriterOptions Options = new()
@@ -967,7 +972,8 @@ public static class CanonicalJsonWriter
 
     readonly struct CanonicalObservationUtf8Writer(
         IBufferWriter<byte> output,
-        ObservationBytesJsonEncoding bytesEncoding)
+        ObservationBytesJsonEncoding bytesEncoding,
+        ArrayPool<KeyValuePair<string, ObservationValue>>? fieldPool = null)
     {
         const int MaximumChunkBytes = 4 * 1024;
         internal const int MaximumDepth = 1_000;
@@ -1009,14 +1015,15 @@ public static class CanonicalJsonWriter
                             {
                                 RequireContainerDepth(currentDepth);
                                 WriteRaw("{"u8);
-                                var frame = ContainerFrame.ForObject(current.Fields, checked(currentDepth + 1));
+                                var frame = ContainerFrame.ForObject(current.Fields, checked(currentDepth + 1), fieldPool);
                                 if (frame.TryMoveNext(out var property, out var child))
                                 {
-                                    Push(ref containers, ref containerCount, frame);
+                                    var childDepth = frame.ChildDepth;
+                                    Push(ref containers, ref containerCount, ref frame);
                                     WriteString(property!);
                                     WriteRaw(":"u8);
                                     current = child;
-                                    currentDepth = frame.ChildDepth;
+                                    currentDepth = childDepth;
                                     descended = true;
                                 }
                                 else
@@ -1033,9 +1040,10 @@ public static class CanonicalJsonWriter
                                 var frame = ContainerFrame.ForArray(current.Array, checked(currentDepth + 1));
                                 if (frame.TryMoveNext(out _, out var child))
                                 {
-                                    Push(ref containers, ref containerCount, frame);
+                                    var childDepth = frame.ChildDepth;
+                                    Push(ref containers, ref containerCount, ref frame);
                                     current = child;
-                                    currentDepth = frame.ChildDepth;
+                                    currentDepth = childDepth;
                                     descended = true;
                                 }
                                 else
@@ -1172,9 +1180,10 @@ public static class CanonicalJsonWriter
                 new() { IsObject = false, ChildDepth = childDepth, items = items.IsDefault ? [] : items };
 
             internal static ContainerFrame ForObject(
-                IReadOnlyDictionary<string, ObservationValue>? fields, int childDepth)
+                IReadOnlyDictionary<string, ObservationValue>? fields, int childDepth,
+                ArrayPool<KeyValuePair<string, ObservationValue>>? pool)
             {
-                var properties = new OrderedObservationFields(fields);
+                var properties = new OrderedObservationFields(fields, pool);
                 try
                 {
                     return new() { IsObject = true, ChildDepth = childDepth,
@@ -1211,7 +1220,7 @@ public static class CanonicalJsonWriter
         static void Push(
             ref ContainerFrame[]? containers,
             ref int containerCount,
-            ContainerFrame frame)
+            ref ContainerFrame frame)
         {
             try
             {
@@ -1226,6 +1235,7 @@ public static class CanonicalJsonWriter
                 }
 
                 containers[containerCount++] = frame;
+                frame = default;
             }
             catch
             {

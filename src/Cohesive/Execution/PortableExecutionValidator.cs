@@ -964,27 +964,8 @@ public static class PortableExecutionValidator
                         MalformedObservation(value.Kind, location);
                         break;
                     }
-                    switch (value.Fields)
-                    {
-                        case OwnedObservationFields owned:
-                            ValidateObservationFields(owned.GetEnumerator(), location);
-                            break;
-                        case OrdinalObservationFields ordinal:
-                            ValidateObservationFields(ordinal.GetEnumerator(), location);
-                            break;
-                        case ImmutableDictionary<string, ObservationValue> immutable:
-                            ValidateObservationFields(immutable.GetEnumerator(), location);
-                            break;
-                        case ImmutableSortedDictionary<string, ObservationValue> sorted:
-                            ValidateObservationFields(sorted.GetEnumerator(), location);
-                            break;
-                        case Dictionary<string, ObservationValue> dictionary:
-                            ValidateObservationFields(dictionary.GetEnumerator(), location);
-                            break;
-                        default:
-                            ValidateObservationFields(value.Fields.GetEnumerator(), location);
-                            break;
-                    }
+                    var visitor = new ObservationFieldValidator(this, location);
+                    ObservationFieldTraversal.Visit(value.Fields, ref visitor);
                     break;
                 case ObservationValueKind.Array:
                     if (value.Array.IsDefault)
@@ -1004,7 +985,14 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateObservationFields<TEnumerator>(TEnumerator fields, Location location)
+        readonly struct ObservationFieldValidator(ValidationContext context, Location location) : IObservationFieldVisitor
+        {
+            public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+                where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+                => context.ValidateObservationFields(fields, location, canonical);
+        }
+
+        void ValidateObservationFields<TEnumerator>(TEnumerator fields, Location location, bool canonical)
             where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
         {
             List<(string Name, int Start, int Count)>? failures = null;
@@ -1015,7 +1003,7 @@ public static class PortableExecutionValidator
                     var field = fields.Current;
                     var start = diagnostics.Count;
                     ValidateObservationField(field, location);
-                    if (diagnostics.Count != start)
+                    if (!canonical && diagnostics.Count != start)
                         (failures ??= []).Add((field.Key, start, diagnostics.Count - start));
                 }
                 if (failures is { Count: > 1 })

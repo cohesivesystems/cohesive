@@ -153,6 +153,110 @@ public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper outp
             JsonSerializer.Serialize(valid, TaggedOptions));
     }
 
+    [Fact]
+    public void CopiedFieldLeaseReturnsExactlyOnceAndCannotReturnReusedRental()
+    {
+        var pool = new CountingFieldPool();
+        var fields = new Dictionary<string, ObservationValue> { ["b"] = ObservationValue.FromBool(true) };
+        var owner = new OrderedObservationFields(fields, pool);
+        var copy = owner;
+        owner.Dispose();
+        Assert.Equal(1, pool.Returns);
+        // More than the bounded cache capacity forces the original lease to be reused,
+        // independently of other tests' warmed leases.
+        var rentals = new OrderedObservationFields[257];
+        for (var index = 0; index < rentals.Length; index++) rentals[index] = new(fields, pool);
+        copy.Dispose();
+        Assert.Equal(1, pool.Returns);
+        Assert.All(rentals, rental => Assert.Single(Enumerate(rental)));
+        for (var index = 0; index < rentals.Length; index++)
+        {
+            rentals[index].Dispose();
+            rentals[index].Dispose();
+        }
+        Assert.Equal(258, pool.Returns);
+        Assert.Equal(pool.Rents, pool.Returns);
+    }
+
+    [Fact]
+    public void ConcurrentDisposalOfLeaseCopiesReturnsOnlyOnce()
+    {
+        var pool = new CountingFieldPool();
+        var owner = new OrderedObservationFields(new Dictionary<string, ObservationValue>
+        {
+            ["value"] = ObservationValue.FromBool(true)
+        }, pool);
+        var copies = Enumerable.Repeat(owner, 16).ToArray();
+        Parallel.For(0, copies.Length, index => copies[index].Dispose());
+        owner.Dispose();
+        Assert.Equal(1, pool.Rents);
+        Assert.Equal(1, pool.Returns);
+    }
+
+    [Fact]
+    public void FieldLeaseClearsAndReturnsBufferWhenValueWriterThrows()
+    {
+        var pool = new CountingFieldPool();
+        var fields = new Dictionary<string, ObservationValue>
+        {
+            ["z"] = ObservationValue.FromBool(true),
+            ["a"] = ObservationValue.FromDouble(double.PositiveInfinity)
+        };
+        Assert.Throws<JsonException>(() =>
+        {
+            using var ordered = new OrderedObservationFields(fields, pool);
+            foreach (var field in ordered) JsonSerializer.Serialize(field.Value, TaggedOptions);
+        });
+        Assert.Equal(1, pool.Rents);
+        Assert.Equal(1, pool.Returns);
+    }
+
+    [Fact]
+    public void StreamingWriterReturnsAllClearedRentalsOnNestedFailure()
+    {
+        var pool = new CountingFieldPool();
+        var invalid = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+        {
+            ["child"] = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+            {
+                ["invalid"] = ObservationValue.FromDouble(double.PositiveInfinity)
+            })
+        });
+        Assert.Throws<InvalidOperationException>(() => CanonicalJsonWriter.WriteCanonicalObservationValueWithPool(
+            new ArrayBufferWriter<byte>(), invalid, pool));
+        Assert.Equal(2, pool.Rents);
+        Assert.Equal(2, pool.Returns);
+    }
+
+    static List<KeyValuePair<string, ObservationValue>> Enumerate(OrderedObservationFields fields)
+    {
+        var result = new List<KeyValuePair<string, ObservationValue>>();
+        foreach (var field in fields) result.Add(field);
+        return result;
+    }
+
+    sealed class CountingFieldPool : ArrayPool<KeyValuePair<string, ObservationValue>>
+    {
+        readonly Stack<KeyValuePair<string, ObservationValue>[]> available = new();
+        readonly HashSet<KeyValuePair<string, ObservationValue>[]> rented = new();
+        internal int Rents;
+        internal int Returns;
+        public override KeyValuePair<string, ObservationValue>[] Rent(int minimumLength)
+        {
+            Rents++;
+            var result = available.Count == 0 ? new KeyValuePair<string, ObservationValue>[minimumLength] : available.Pop();
+            Assert.True(rented.Add(result));
+            return result;
+        }
+        public override void Return(KeyValuePair<string, ObservationValue>[] array, bool clearArray = false)
+        {
+            Assert.True(rented.Remove(array));
+            Assert.All(array, field => Assert.Equal(default, field));
+            Returns++;
+            available.Push(array);
+        }
+    }
+
     static readonly JsonSerializerOptions TaggedOptions = CreateTaggedOptions();
     static JsonSerializerOptions CreateTaggedOptions()
     {
