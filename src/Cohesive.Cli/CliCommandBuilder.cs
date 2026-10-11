@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.Collections.Immutable;
 using System.CommandLine;
 using System.CommandLine.Parsing;
 using System.Linq.Expressions;
@@ -18,6 +19,11 @@ public sealed class CliCommandBuilder<TConfiguration>(
     Action<CliCommandNode>? applyRegisteredPipelines = null
     ) : CliCommandNode
 {
+    internal IReadOnlyDictionary<string, string>? ExplicitEnvironmentNames { get; init; }
+    readonly List<CliConstraint> constraints = [];
+    bool explainConfiguration;
+    const string ExplainConfigurationName = "--explain-configuration";
+
     internal bool IsRoot { get; init; }
     internal IReadOnlyList<ConfigurationParameterDescriptor>? ExplicitDescriptors { get; init; }
     internal Func<IConfiguration, TConfiguration>? ExplicitParser { get; init; }
@@ -54,6 +60,70 @@ public sealed class CliCommandBuilder<TConfiguration>(
     /// </summary>
     public IReadOnlyList<ConfigurationParameterOption> Options =>
         new ReadOnlyCollection<ConfigurationParameterOption>(parameterOptions.Options.ToList());
+
+    /// <summary>Gets the immutable snapshot of declarative constraints for inspection and help.</summary>
+    public ImmutableArray<CliConstraint> Constraints
+    {
+        get
+        {
+            var descriptors = DescribeParameters();
+            return [.. constraints.Select(constraint => constraint.Resolve(descriptors))];
+        }
+    }
+
+    /// <summary>Adds a declarative rule over effective bound values from all configuration sources.</summary>
+    /// <param name="constraint">A rule referencing configuration keys rather than CLI aliases.</param>
+    /// <returns>The current builder.</returns>
+    /// <exception cref="ArgumentNullException">The rule is null.</exception>
+    /// <exception cref="ArgumentException">A referenced parameter is unknown or its type is unsupported.</exception>
+    public CliCommandBuilder<TConfiguration> Constrain(CliConstraint constraint)
+    {
+        ArgumentNullException.ThrowIfNull(constraint);
+        constraints.Add(constraint.Bind(DescribeParameters().ToDictionary(parameter => parameter.ConfigurationKey, StringComparer.OrdinalIgnoreCase)));
+        return this;
+    }
+
+    /// <summary>Requires a numeric property to be positive, capturing its effective configuration key.</summary>
+    /// <typeparam name="TParameter">Integral or decimal property type, optionally nullable.</typeparam>
+    /// <param name="parameter">Property selector.</param>
+    /// <returns>The current builder.</returns>
+    /// <exception cref="ArgumentNullException">The selector is null.</exception>
+    /// <exception cref="ArgumentException">The selector is invalid or the parameter is nonnumeric.</exception>
+    /// <exception cref="InvalidOperationException">The command uses explicit declarations.</exception>
+    public CliCommandBuilder<TConfiguration> RequirePositive<TParameter>(Expression<Func<TConfiguration, TParameter>> parameter) =>
+        Constrain(CliConstraint.Positive(CaptureParameterKey(parameter)));
+
+    /// <summary>Constrains a numeric property to inclusive bounds.</summary>
+    /// <typeparam name="TParameter">Integral or decimal property type, optionally nullable.</typeparam>
+    /// <param name="parameter">Property selector.</param>
+    /// <param name="minimum">Inclusive lower bound, or null.</param>
+    /// <param name="maximum">Inclusive upper bound, or null.</param>
+    /// <returns>The current builder.</returns>
+    /// <exception cref="ArgumentNullException">The selector is null.</exception>
+    /// <exception cref="ArgumentException">The selector, numeric type, or bounds are invalid.</exception>
+    /// <exception cref="InvalidOperationException">The command uses explicit declarations.</exception>
+    public CliCommandBuilder<TConfiguration> RequireRange<TParameter>(
+        Expression<Func<TConfiguration, TParameter>> parameter, decimal? minimum = null, decimal? maximum = null) =>
+        Constrain(CliConstraint.Range(CaptureParameterKey(parameter), minimum, maximum));
+
+    string CaptureParameterKey<TParameter>(Expression<Func<TConfiguration, TParameter>> parameter)
+    {
+        RequirePropertyAuthoring();
+        ArgumentNullException.ThrowIfNull(parameter);
+        var path = CliExpressionPath.CreateFieldPath(CliExpressionPath.CapturePropertyChain(parameter));
+        return DescribeParameters().FirstOrDefault(descriptor => descriptor.Path == path)?.ConfigurationKey
+            ?? throw new ArgumentException($"Selector '{path}' does not identify a bindable parameter.", nameof(parameter));
+    }
+
+    /// <summary>Enables --explain-configuration to print redacted effective values and sources without running handlers.</summary>
+    /// <returns>The current builder.</returns>
+    /// <remarks>Explanation binds and converts parameters but does not run middleware, custom validators,
+    /// or declarative constraints. Invalid inputs still fail binding. The switch name is reserved when enabled.</remarks>
+    public CliCommandBuilder<TConfiguration> WithConfigurationExplanation()
+    {
+        explainConfiguration = true;
+        return this;
+    }
 
     /// <summary>
     /// Adds command-specific configuration providers that run before environment variables and CLI values.
@@ -238,6 +308,21 @@ public sealed class CliCommandBuilder<TConfiguration>(
             ? new RootCommand(Description ?? application.Description ?? string.Empty)
             : new Command(Name, Description ?? string.Empty);
         var descriptors = DescribeParameters();
+        var descriptorsByKey = descriptors.ToDictionary(parameter => parameter.ConfigurationKey, StringComparer.OrdinalIgnoreCase);
+        var effectiveConstraints = constraints.Select(constraint => constraint.Resolve(descriptors)).ToArray();
+        foreach (var constraint in effectiveConstraints) constraint.ValidateDeclaration(descriptorsByKey);
+        string DisplayName(string key) => $"'{descriptorsByKey[key].CliName}'";
+        if (constraints.Count > 0)
+            command.Description = string.Join(Environment.NewLine, new[] { command.Description }
+                .Concat(effectiveConstraints.Select(constraint => constraint.Describe(DisplayName))));
+        Option<bool>? explainOption = null;
+        if (explainConfiguration)
+        {
+            if (descriptors.Any(parameter => parameter.CliName == ExplainConfigurationName || parameter.CliShortName == ExplainConfigurationName))
+                throw new InvalidOperationException($"Option '{ExplainConfigurationName}' is reserved for configuration explanation.");
+            explainOption = new Option<bool>(ExplainConfigurationName) { Description = "Explain effective configuration and sources without executing the command." };
+            command.Options.Add(explainOption);
+        }
         var descriptorsByPath = descriptors.ToDictionary(descriptor => descriptor.Path, descriptor => descriptor);
         var positionalPaths = arguments.Select(argument => argument.Path).ToHashSet();
         List<CliSymbolBinding> bindings = [];
@@ -266,9 +351,9 @@ public sealed class CliCommandBuilder<TConfiguration>(
             command.Subcommands.Add(subcommand.BuildCommand(application, io));
         }
 
-        if (handler is not null)
+        if (handler is not null || explainOption is not null)
         {
-            command.SetAction((parseResult, ct) => InvokeAsync(application, parseResult, bindings, io, ct));
+            command.SetAction((parseResult, ct) => InvokeAsync(application, parseResult, bindings, io, ct, explainOption));
         }
         else if (subcommands.Count > 0)
         {
@@ -286,11 +371,11 @@ public sealed class CliCommandBuilder<TConfiguration>(
         return command;
     }
 
-    async Task<int> InvokeAsync(CliApplication application, ParseResult parseResult, IReadOnlyList<CliSymbolBinding> bindings, CommandIo io, CancellationToken ct)
+    async Task<int> InvokeAsync(CliApplication application, ParseResult parseResult, IReadOnlyList<CliSymbolBinding> bindings, CommandIo io, CancellationToken ct, Option<bool>? explainOption)
     {
         try
         {
-            var configuration = BuildConfiguration(application, bindings, parseResult);
+            var (configuration, providers) = BuildConfiguration(application, bindings, parseResult);
             var parameters = ExplicitParser is null
                 ? ConfigurationParameterParser.Parse(configuration, parameterOptions)
                 : ExplicitParser(configuration);
@@ -301,8 +386,27 @@ public sealed class CliCommandBuilder<TConfiguration>(
                 ct,
                 io,
                 serviceProvider: null);
+            var descriptors = DescribeParameters();
+            context.BoundParameterValues = CliParameterInspection.ReadValues(parameters, descriptors);
+            context.ConfigurationProvenance = CliParameterInspection.Explain(configuration, providers, descriptors,
+                context.BoundParameterValues, ExplicitEnvironmentNames, application.EnvironmentVariablePrefix,
+                explicitDeclarations: ExplicitDescriptors is not null);
+            if (explainOption is not null && parseResult.GetValue(explainOption))
+            {
+                context.WriteConfigurationExplanation();
+                return 0;
+            }
+            if (handler is null)
+            {
+                if (subcommands.Count > 0)
+                {
+                    io.WriteErrorLine($"Command '{Name}' requires a subcommand.");
+                    return 1;
+                }
+                throw new InvalidOperationException($"Command '{Name}' does not have an execution handler.");
+            }
             var pipeline = BuildExecutionPipeline();
-            return handler is null ? 0 : await pipeline(context).ConfigureAwait(false);
+            return await pipeline(context).ConfigureAwait(false);
         }
         catch (ConfigurationParameterParseException ex)
         {
@@ -316,7 +420,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
         }
     }
 
-    IConfigurationRoot BuildConfiguration(CliApplication application, IReadOnlyList<CliSymbolBinding> bindings, ParseResult parseResult)
+    (IConfigurationRoot Configuration, IReadOnlyList<CliConfigurationProvider> Providers) BuildConfiguration(CliApplication application, IReadOnlyList<CliSymbolBinding> bindings, ParseResult parseResult)
     {
         Dictionary<string, string?> values = new(StringComparer.OrdinalIgnoreCase);
         foreach (var binding in bindings)
@@ -342,8 +446,16 @@ public sealed class CliCommandBuilder<TConfiguration>(
         }
 
         var builder = new ConfigurationBuilder();
+        Dictionary<IConfigurationSource, (CliConfigurationSourceKind Kind, bool ExplicitEnvironment)> sourceKinds =
+            new(ReferenceEqualityComparer.Instance);
+        void MarkSources(CliConfigurationSourceKind kind, bool explicitEnvironment = false)
+        {
+            foreach (var source in builder.Sources) sourceKinds.TryAdd(source, (kind, explicitEnvironment));
+        }
         application.ApplySharedConfiguration(builder);
+        MarkSources(CliConfigurationSourceKind.ApplicationConfiguration);
         configureConfiguration?.Invoke(builder);
+        MarkSources(CliConfigurationSourceKind.CommandConfiguration);
 
         if (application.UseEnvironmentVariables && application.EnvironmentVariablePrefix is null)
         {
@@ -354,11 +466,16 @@ public sealed class CliCommandBuilder<TConfiguration>(
             builder.AddEnvironmentVariables(prefix: application.EnvironmentVariablePrefix);
         }
 
+        MarkSources(CliConfigurationSourceKind.Environment);
         if (application.UseEnvironmentVariables)
             ConfigureEnvironmentMappings?.Invoke(builder);
+        MarkSources(CliConfigurationSourceKind.Environment, explicitEnvironment: true);
         builder.AddInMemoryCollection(values);
+        MarkSources(CliConfigurationSourceKind.CommandLine);
         var configuration = builder.Build();
-        return ApplyDefaults?.Invoke(configuration) ?? configuration;
+        var providers = configuration.Providers.Select((provider, index) => new CliConfigurationProvider(
+            provider, sourceKinds[builder.Sources[index]].Kind, $"{provider.GetType().FullName}#{index}", sourceKinds[builder.Sources[index]].ExplicitEnvironment)).ToArray();
+        return (ApplyDefaults?.Invoke(configuration) ?? configuration, providers);
     }
 
     static void AddCollectionValues(IDictionary<string, string?> values, string configurationKey, IReadOnlyList<string>? entries)
@@ -390,6 +507,18 @@ public sealed class CliCommandBuilder<TConfiguration>(
 
         if ((Nullable.GetUnderlyingType(descriptor.ParameterType) ?? descriptor.ParameterType) == typeof(bool))
         {
+            if (descriptor.Sensitive)
+            {
+                // Consume the raw value as text so System.CommandLine cannot echo a rejected boolean
+                // token as an unrecognized argument. Shared configuration conversion owns diagnostics.
+                return new Option<string?>(descriptor.CliName,
+                    descriptor.CliShortName is null ? [] : [descriptor.CliShortName])
+                {
+                    Arity = ArgumentArity.ZeroOrOne,
+                    CustomParser = result => result.Tokens.Count == 0 ? "true" : result.Tokens[0].Value,
+                    Description = BuildDescription(descriptor.Description, descriptor.Required, [])
+                };
+            }
             return new Option<bool>(descriptor.CliName,
                 descriptor.CliShortName is null ? [] : [descriptor.CliShortName])
             {
@@ -408,10 +537,10 @@ public sealed class CliCommandBuilder<TConfiguration>(
 
         var option = new Option<string?>(descriptor.CliName, aliases)
         {
-            Description = BuildDescription(descriptor.Description, descriptor.Required, descriptor.AllowedValues)
+            Description = BuildDescription(descriptor.Description, descriptor.Required, descriptor.Sensitive ? [] : descriptor.AllowedValues)
         };
 
-        if (descriptor.AllowedValues.Count > 0)
+        if (!descriptor.Sensitive && descriptor.AllowedValues.Count > 0)
         {
             option.AcceptOnlyFromAmong([.. descriptor.AllowedValues]);
         }
@@ -427,7 +556,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
             Arity = ArgumentArity.OneOrMore,
             AllowMultipleArgumentsPerToken = true,
             CustomParser = result => ParseStringCollectionValues(result, descriptor),
-            Description = BuildDescription(descriptor.Description, descriptor.Required, descriptor.AllowedValues)
+            Description = BuildDescription(descriptor.Description, descriptor.Required, descriptor.Sensitive ? [] : descriptor.AllowedValues)
         };
     }
 
@@ -451,11 +580,11 @@ public sealed class CliCommandBuilder<TConfiguration>(
             Description = BuildDescription(
                 description: argumentDefinition.Description ?? descriptor.Description,
                 required: descriptor.Required,
-                allowedValues: descriptor.AllowedValues
+                allowedValues: descriptor.Sensitive ? [] : descriptor.AllowedValues
                 )
         };
 
-        if (descriptor.AllowedValues.Count > 0)
+        if (!descriptor.Sensitive && descriptor.AllowedValues.Count > 0)
         {
             argument.AcceptOnlyFromAmong([.. descriptor.AllowedValues]);
         }
@@ -475,7 +604,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
             Description = BuildDescription(
                 argumentDefinition.Description ?? descriptor.Description,
                 descriptor.Required,
-                descriptor.AllowedValues
+                descriptor.Sensitive ? [] : descriptor.AllowedValues
                 )
         };
     }
@@ -494,7 +623,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
                          .Where(value => !descriptor.AllowedValues.Contains(value, StringComparer.OrdinalIgnoreCase))
                          .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                result.AddError($"Argument '{descriptor.CliName}' must contain only values from [{string.Join(", ", descriptor.AllowedValues)}], but included '{invalidValue}'.");
+                result.AddError($"Argument '{descriptor.CliName}' must contain only values from [{(descriptor.Sensitive ? ConfigurationParameterParser.RedactedValue : string.Join(", ", descriptor.AllowedValues))}], but included '{(descriptor.Sensitive ? ConfigurationParameterParser.RedactedValue : invalidValue)}'.");
             }
         }
 
@@ -590,6 +719,15 @@ public sealed class CliCommandBuilder<TConfiguration>(
     async Task<CliValidationResult> ValidateAsync(CliCommandContext context)
     {
         List<string>? errors = null;
+        var parameterDescriptors = DescribeParameters();
+        var descriptors = parameterDescriptors.ToDictionary(parameter => parameter.ConfigurationKey, StringComparer.OrdinalIgnoreCase);
+        foreach (var declaration in constraints)
+        {
+            var constraint = declaration.Resolve(parameterDescriptors);
+            if (constraint.IsSatisfied(context.BoundParameterValues)) continue;
+            errors ??= [];
+            errors.Add(constraint.Describe(key => $"'{descriptors[key].CliName}'"));
+        }
         foreach (var validator in validators)
         {
             var result = await validator(context).ConfigureAwait(false);
@@ -628,24 +766,8 @@ public sealed class CliCommandBuilder<TConfiguration>(
         params Expression<Func<TConfiguration, string?>>[] parameters)
     {
         var bindings = CaptureStringParameters(parameters);
-        validators.Add(context =>
-        {
-            var configuration = RequireTypedContext(context).Configuration;
-            var selectedCount = 0;
-            foreach (var binding in bindings)
-            {
-                if (!string.IsNullOrWhiteSpace(binding.Read(configuration)))
-                {
-                    selectedCount++;
-                }
-            }
-
-            return Task.FromResult(selectedCount == 1
-                ? CliValidationResult.Success
-                : CliValidationResult.Failure(
-                    $"Specify exactly one of {FormatOptionNames(bindings)}."));
-        });
-        return this;
+        var descriptors = DescribeParameters().ToDictionary(parameter => parameter.Path);
+        return Constrain(CliConstraint.ExactlyOne([.. bindings.Select(binding => descriptors[binding].ConfigurationKey)]));
     }
 
     /// <summary>Allows at most one selected parameter to read from standard input.</summary>
@@ -660,24 +782,8 @@ public sealed class CliCommandBuilder<TConfiguration>(
         params Expression<Func<TConfiguration, string?>>[] parameters)
     {
         var bindings = CaptureStringParameters(parameters);
-        validators.Add(context =>
-        {
-            var configuration = RequireTypedContext(context).Configuration;
-            var selectedCount = 0;
-            foreach (var binding in bindings)
-            {
-                if (CommandIo.IsStandardStreamPath(binding.Read(configuration)))
-                {
-                    selectedCount++;
-                }
-            }
-
-            return Task.FromResult(selectedCount <= 1
-                ? CliValidationResult.Success
-                : CliValidationResult.Failure(
-                    $"Only one of {FormatOptionNames(bindings)} can read from standard input."));
-        });
-        return this;
+        var descriptors = DescribeParameters().ToDictionary(parameter => parameter.Path);
+        return Constrain(CliConstraint.AtMostOneStandardInput([.. bindings.Select(binding => descriptors[binding].ConfigurationKey)]));
     }
 
     /// <summary>Registers a dynamically bound validator.</summary>
@@ -691,7 +797,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
         return this;
     }
 
-    (FieldPath Path, Func<TConfiguration, string?> Read)[] CaptureStringParameters(
+    FieldPath[] CaptureStringParameters(
         IReadOnlyList<Expression<Func<TConfiguration, string?>>> parameters)
     {
         ArgumentNullException.ThrowIfNull(parameters);
@@ -704,7 +810,7 @@ public sealed class CliCommandBuilder<TConfiguration>(
             .Select(static descriptor => descriptor.Path)
             .ToHashSet();
         HashSet<FieldPath> selectedPaths = [];
-        var bindings = new (FieldPath Path, Func<TConfiguration, string?> Read)[parameters.Count];
+        var bindings = new FieldPath[parameters.Count];
         for (var index = 0; index < parameters.Count; index++)
         {
             var selector = parameters[index]
@@ -724,31 +830,10 @@ public sealed class CliCommandBuilder<TConfiguration>(
                     nameof(parameters));
             }
 
-            bindings[index] = (path, selector.Compile());
+            bindings[index] = path;
         }
 
         return bindings;
-    }
-
-    string FormatOptionNames(IReadOnlyList<(FieldPath Path, Func<TConfiguration, string?> Read)> bindings)
-    {
-        var namesByPath = DescribeParameters()
-            .ToDictionary(static descriptor => descriptor.Path, static descriptor => descriptor.CliName);
-        string[] names = new string[bindings.Count];
-        for (var index = 0; index < bindings.Count; index++)
-        {
-            if (!namesByPath.TryGetValue(bindings[index].Path, out var name))
-            {
-                throw new InvalidOperationException(
-                    $"CLI parameter metadata no longer contains '{bindings[index].Path}'.");
-            }
-
-            names[index] = $"'{name}'";
-        }
-
-        return names.Length == 2
-            ? $"{names[0]} and {names[1]}"
-            : $"{string.Join(", ", names[..^1])}, and {names[^1]}";
     }
 
     internal override void ApplyParameterConfiguration(Type configurationType, Delegate configure)

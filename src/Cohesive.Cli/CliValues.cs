@@ -16,6 +16,8 @@ public sealed class CliValues
             parameter => parameter.ParameterType, StringComparer.OrdinalIgnoreCase);
     }
 
+    internal object? ReadValue(string name) => values.TryGetValue(name, out var value) ? value : null;
+
     /// <summary>Reads a declared value using its exact declared type.</summary>
     /// <typeparam name="T">The declared option type.</typeparam>
     /// <param name="name">Unprefixed option name, matched ignoring case.</param>

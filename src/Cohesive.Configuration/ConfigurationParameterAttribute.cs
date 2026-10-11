@@ -14,6 +14,9 @@ namespace Cohesive.Configuration;
 [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
 public sealed class ConfigurationParameterAttribute(string? keyOverride = null) : Attribute
 {
+    /// <summary>Gets whether values must be redacted from explanations and diagnostics.</summary>
+    public bool Sensitive { get; init; }
+
     static readonly ConfigurationTimeUnit UnspecifiedTimeUnit = (ConfigurationTimeUnit)(-1);
 
     /// <summary>

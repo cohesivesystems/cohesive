@@ -91,6 +91,84 @@ model. `ConfigurationParameterParser.ParseValues` validates and converts direct 
 synthetic CLR types; typed object binding consumes that same conversion mechanism. These are the current
 runtime declaration APIs, not a versioned portable command IR or serialization format.
 
+## Configuration provenance and declarative constraints
+
+Constraints are data declarations evaluated against effective bound values from every source,
+including defaults. Typed selectors capture parameter identity, so later configuration-key or CLI-name
+mapping changes remain attached to the same property:
+
+```csharp
+app.Command<ViewBarsOptions>("bars")
+    .RequirePositive(options => options.Limit)
+    .RequireRange(options => options.Limit, maximum: 1000)
+    .WithConfigurationExplanation()
+    .OnExecute(context =>
+    {
+        // context.ConfigurationProvenance is an immutable, redaction-safe snapshot.
+        context.WriteConfigurationExplanation();
+        return 0;
+    });
+```
+
+Explicit commands declare the same rules using configuration keys (not aliases):
+
+```csharp
+app.RootCommand(new Dictionary<string, CliOption>
+    {
+        ["limit"] = CliOption.For(defaultValue: 20),
+        ["upload"] = CliOption.For(defaultValue: false),
+        ["offline"] = CliOption.For(defaultValue: false),
+        ["token"] = CliOption.For<string>() with { Sensitive = true }
+    })
+    .Constrain(CliConstraint.Positive("limit"))
+    .Constrain(CliConstraint.Range("limit", maximum: 1000))
+    .Constrain(CliConstraint.AtMostOne("upload", "offline"))
+    .Constrain(CliConstraint.Requires("upload", "token"))
+    .WithConfigurationExplanation()
+    .OnExecute(context => 0);
+```
+
+`CliConstraint.ExactlyOne(...)` requires one selected value. Selection means nonempty text or collection,
+true for a boolean, and non-null for other scalars; numeric zero is selected. Numeric positive and range
+rules support 8–64-bit integral types and decimal, including nullable forms. Range endpoints are inclusive.
+Absent optional numeric values are skipped; use `Required` when presence is mandatory. Floating-point
+numeric rules are currently rejected rather than silently rounded into decimal bounds. Unknown parameter
+references and unsupported rule/type combinations fail when registering constraints and are rechecked
+when building the command. Existing typed `RequireExactlyOne` and standard-input exclusivity helpers
+now produce the same declarative rules (`AtMostOneStandardInput` is also available directly). `command.Constraints` exposes resolved immutable declarations;
+help displays their requirements using effective CLI names. Custom delegate validators remain available.
+
+`context.ConfigurationProvenance` reports the effective display value and winning sources for each
+parameter. It distinguishes command-line inputs, automatic and explicit environment binding, application
+and command providers, explicit declaration defaults, CLR defaults, and absent optional explicit values.
+Collections report each consumed child key's source, preserving existing provider merging behavior;
+comma-separated scalar collection inputs have one origin. Values reflect bound semantics, not raw input
+spelling. Provider identities use their CLR type and registration index, avoiding provider `ToString()`
+implementations that may disclose credentials. Automatic environment origins identify the binding key
+and configured prefix; explicitly mapped origins identify the actual declared variable name. CLR defaults
+identify initialization or the type default; arbitrary constructor/property-initializer internals are not
+traced. Ignored whitespace inputs report the effective fallback rather than claiming to supply a value.
+Provenance is captured before middleware runs and is retained when host integrations derive a new context.
+Manually constructed contexts have an empty provenance snapshot.
+
+`WithConfigurationExplanation()` opts a command into `--explain-configuration`. The switch binds and
+converts inputs, prints effective values and origins, then exits without running middleware, declarative
+constraints, custom validators, or handlers. This permits inspecting configuration that fails a cross-option
+constraint; missing required inputs and conversion failures still prevent explanation. The switch name is
+reserved only when enabled. Programmatic explanation is always available through the context.
+
+Mark sensitive typed properties with `[ConfigurationParameter(Sensitive = true)]` or
+`command.Map(options => options.Token).AsSensitive()`. Explicit declarations use `Sensitive = true`.
+The shared descriptor owns this policy. Explanations and built-in allowed-value diagnostics use
+`ConfigurationParameterParser.RedactedValue`; allowed values are omitted from help for sensitive
+parameters. Sensitive boolean values are consumed as text and converted by the shared binder so rejected
+values cannot be echoed by System.CommandLine's boolean-token heuristic. Application handlers, custom
+validators, and user-supplied descriptions own their own disclosure policy; raw configuration and typed
+values remain available for normal execution.
+
+These APIs provide invocation provenance and declarative runtime validation; a versioned portable command
+IR and structured diagnostic codes remain separate work.
+
 ## Standard streams and cancellation
 
 `CommandIo` is the single invocation-scoped authority for raw input and output streams, error output, UTF-8 text
