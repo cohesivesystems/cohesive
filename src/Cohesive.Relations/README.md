@@ -17,6 +17,9 @@ admission remain independently validated. See [immutable execution preparation](
 Hosted typed handlers retain fresh portable-value admission while using scoped JSON storage for
 CLR decoding. See [qualification](../../docs/performance/hosted-value-projection.md).
 
+Realization fingerprints retain their existing binary profiles while streaming temporary output.
+See [performance qualification](../../docs/performance/realization-fingerprints.md).
+
 ## Install
 
 ```bash
