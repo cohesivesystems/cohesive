@@ -50,6 +50,9 @@ to hash the same bytes as `GetCanonicalBytes` without retaining canonical output
 SHA-256 digest; the consuming block owns its fingerprint profile and prefix. See the
 [qualification and operating boundary](../../docs/performance/strict-document-hashes.md).
 
+Declared converter/polymorphic values project directly into owned observations without a mutable
+JSON tree. See [typed projection qualification](../../docs/performance/hosted-value-projection.md).
+
 ## Observations and snapshots
 
 An `Observation` describes an immutable shaped value. Entity identity and version remain explicit rather than being
