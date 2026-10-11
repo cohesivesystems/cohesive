@@ -819,19 +819,13 @@ public static class CanonicalJsonWriter
                 return;
             case ObservationValueKind.Object:
                 writer.WriteStartObject();
-                var ordered = RentOrderedObservationProperties(value.Fields, out var propertyCount);
-                try
+                using (var fields = new OrderedObservationFields(value.Fields))
                 {
-                    for (var index = 0; index < propertyCount; index++)
+                    foreach (var (property, child) in fields)
                     {
-                        var (property, child) = ordered![index];
                         writer.WritePropertyName(property);
                         WriteCanonicalObservationValue(writer, child, bytesEncoding);
                     }
-                }
-                finally
-                {
-                    ReturnOrderedObservationProperties(ordered, propertyCount);
                 }
                 writer.WriteEndObject();
                 return;
@@ -863,63 +857,6 @@ public static class CanonicalJsonWriter
         }
 
         writer.WriteRawValue(formatted[..written], skipInputValidation: true);
-    }
-
-    static KeyValuePair<string, ObservationValue>[]? RentOrderedObservationProperties(
-        IReadOnlyDictionary<string, ObservationValue>? properties,
-        out int count)
-    {
-        count = 0;
-        if (properties is null || properties.Count == 0)
-            return null;
-
-        var ordered = ArrayPool<KeyValuePair<string, ObservationValue>>.Shared.Rent(properties.Count);
-        try
-        {
-            switch (properties)
-            {
-                case ImmutableDictionary<string, ObservationValue> immutable:
-                    foreach (var property in immutable)
-                        ordered[count++] = property;
-                    break;
-                case ImmutableSortedDictionary<string, ObservationValue> sorted:
-                    foreach (var property in sorted)
-                        ordered[count++] = property;
-                    break;
-                case Dictionary<string, ObservationValue> dictionary:
-                    foreach (var property in dictionary)
-                        ordered[count++] = property;
-                    break;
-                case OwnedObservationFields owned:
-                    foreach (var property in owned)
-                        ordered[count++] = property;
-                    break;
-                default:
-                    foreach (var property in properties)
-                        ordered[count++] = property;
-                    break;
-            }
-
-            ordered.AsSpan(0, count).Sort(
-                static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
-            return ordered;
-        }
-        catch
-        {
-            ReturnOrderedObservationProperties(ordered, count);
-            throw;
-        }
-    }
-
-    static void ReturnOrderedObservationProperties(
-        KeyValuePair<string, ObservationValue>[]? properties,
-        int count)
-    {
-        if (properties is null)
-            return;
-
-        properties.AsSpan(0, count).Clear();
-        ArrayPool<KeyValuePair<string, ObservationValue>>.Shared.Return(properties);
     }
 
     /// <summary>Streams one observation value as canonical portable UTF-8 JSON without token-sized buffering.</summary>
@@ -980,6 +917,11 @@ public static class CanonicalJsonWriter
         new CanonicalObservationUtf8Writer(output, bytesEncoding).Write(value, enclosingDepth);
     }
 
+    internal static void WriteCanonicalObservationValueWithPool(
+        IBufferWriter<byte> output, ObservationValue value,
+        ArrayPool<KeyValuePair<string, ObservationValue>> fieldPool)
+        => new CanonicalObservationUtf8Writer(output, ObservationBytesJsonEncoding.Base64String, fieldPool).Write(value, 0);
+
     static class CanonicalObservationJsonWriterPool
     {
         static readonly JsonWriterOptions Options = new()
@@ -1030,7 +972,8 @@ public static class CanonicalJsonWriter
 
     readonly struct CanonicalObservationUtf8Writer(
         IBufferWriter<byte> output,
-        ObservationBytesJsonEncoding bytesEncoding)
+        ObservationBytesJsonEncoding bytesEncoding,
+        ArrayPool<KeyValuePair<string, ObservationValue>>? fieldPool = null)
     {
         const int MaximumChunkBytes = 4 * 1024;
         internal const int MaximumDepth = 1_000;
@@ -1072,10 +1015,11 @@ public static class CanonicalJsonWriter
                             {
                                 RequireContainerDepth(currentDepth);
                                 WriteRaw("{"u8);
-                                var frame = ContainerFrame.ForObject(current.Fields, checked(currentDepth + 1));
+                                if (current.Fields is null or { Count: 0 }) { WriteRaw("}"u8); break; }
+                                ref var frame = ref Push(ref containers, ref containerCount, checked(currentDepth + 1));
+                                frame.InitializeObject(current.Fields, fieldPool);
                                 if (frame.TryMoveNext(out var property, out var child))
                                 {
-                                    Push(ref containers, ref containerCount, frame);
                                     WriteString(property!);
                                     WriteRaw(":"u8);
                                     current = child;
@@ -1085,6 +1029,7 @@ public static class CanonicalJsonWriter
                                 else
                                 {
                                     frame.Dispose();
+                                    containerCount--;
                                     WriteRaw("}"u8);
                                 }
                                 break;
@@ -1093,16 +1038,19 @@ public static class CanonicalJsonWriter
                             {
                                 RequireContainerDepth(currentDepth);
                                 WriteRaw("["u8);
-                                var frame = ContainerFrame.ForArray(current.Array, checked(currentDepth + 1));
+                                if (current.Array.IsDefaultOrEmpty) { WriteRaw("]"u8); break; }
+                                ref var frame = ref Push(ref containers, ref containerCount, checked(currentDepth + 1));
+                                frame.InitializeArray(current.Array);
                                 if (frame.TryMoveNext(out _, out var child))
                                 {
-                                    Push(ref containers, ref containerCount, frame);
                                     current = child;
                                     currentDepth = frame.ChildDepth;
                                     descended = true;
                                 }
                                 else
                                 {
+                                    frame.Dispose();
+                                    containerCount--;
                                     WriteRaw("]"u8);
                                 }
                                 break;
@@ -1226,123 +1174,73 @@ public static class CanonicalJsonWriter
             ImmutableArray<ObservationValue> items;
             KeyValuePair<string, ObservationValue>[]? properties;
             int propertyCount;
+            ArrayPool<KeyValuePair<string, ObservationValue>>? propertyPool;
+            OrderedObservationFields.Enumerator propertyEnumerator;
             int nextItemIndex;
 
-            ContainerFrame(
-                bool isObject,
-                int childDepth,
-                ImmutableArray<ObservationValue> items,
-                KeyValuePair<string, ObservationValue>[]? properties,
-                int propertyCount)
+            internal bool IsObject { get; private set; }
+            internal int ChildDepth;
+
+            internal void InitializeArray(ImmutableArray<ObservationValue> values)
             {
-                IsObject = isObject;
-                ChildDepth = childDepth;
-                this.items = items;
-                this.properties = properties;
-                this.propertyCount = propertyCount;
-                nextItemIndex = 0;
+                items = values.IsDefault ? [] : values;
             }
 
-            internal bool IsObject { get; }
-
-            internal int ChildDepth { get; }
-
-            internal static ContainerFrame ForArray(ImmutableArray<ObservationValue> items, int childDepth) =>
-                new(
-                    isObject: false,
-                    childDepth,
-                    items.IsDefault ? [] : items,
-                    properties: null,
-                    propertyCount: 0);
-
-            internal static ContainerFrame ForObject(
-                IReadOnlyDictionary<string, ObservationValue>? properties,
-                int childDepth)
+            internal void InitializeObject(IReadOnlyDictionary<string, ObservationValue>? fields,
+                ArrayPool<KeyValuePair<string, ObservationValue>>? pool)
             {
-                var ordered = RentOrderedObservationProperties(properties, out var count);
-                if (ordered is null)
+                IsObject = true;
+                var ordered = new OrderedObservationFields(fields, pool);
+                try
                 {
-                    return new(
-                        isObject: true,
-                        childDepth,
-                        items: [],
-                        properties: null,
-                        propertyCount: 0);
+                    propertyEnumerator = ordered.GetEnumerator();
+                    ordered.MoveBufferTo(out properties, out propertyCount, out propertyPool);
                 }
-
-                return new(
-                    isObject: true,
-                    childDepth,
-                    items: [],
-                    properties: ordered,
-                    propertyCount: count);
+                finally { ordered.Dispose(); }
             }
 
             internal bool TryMoveNext(out string? property, out ObservationValue value)
             {
+                property = null;
+                value = default;
                 if (IsObject)
                 {
-                    if (nextItemIndex < propertyCount)
-                    {
-                        var current = properties![nextItemIndex++];
-                        property = current.Key;
-                        value = current.Value;
-                        return true;
-                    }
-
-                    property = null;
-                    value = default;
-                    return false;
+                    if (!propertyEnumerator.MoveNext()) return false;
+                    var current = propertyEnumerator.Current;
+                    property = current.Key;
+                    value = current.Value;
+                    return true;
                 }
-
-                property = null;
-                if (nextItemIndex >= items.Length)
-                {
-                    value = default;
-                    return false;
-                }
-
+                if (nextItemIndex >= items.Length) return false;
                 value = items[nextItemIndex++];
                 return true;
             }
 
             internal void Dispose()
             {
-                if (properties is null)
-                    return;
-
-                ReturnOrderedObservationProperties(properties, propertyCount);
-                properties = null;
-                propertyCount = 0;
-                items = [];
-                nextItemIndex = 0;
+                propertyEnumerator.Dispose();
+                OrderedObservationFields.ReturnBuffer(properties, propertyCount, propertyPool!);
+                this = default;
             }
         }
 
-        static void Push(
-            ref ContainerFrame[]? containers,
-            ref int containerCount,
-            ContainerFrame frame)
+        static ref ContainerFrame Push(
+            ref ContainerFrame[]? containers, ref int containerCount, int childDepth)
         {
-            try
+            containers ??= ArrayPool<ContainerFrame>.Shared.Rent(minimumLength: 8);
+            if (containerCount == containers.Length)
             {
-                containers ??= ArrayPool<ContainerFrame>.Shared.Rent(minimumLength: 8);
-                if (containerCount == containers.Length)
-                {
-                    var replacement = ArrayPool<ContainerFrame>.Shared.Rent(checked(containerCount * 2));
-                    containers.AsSpan(0, containerCount).CopyTo(replacement);
-                    containers.AsSpan(0, containerCount).Clear();
-                    ArrayPool<ContainerFrame>.Shared.Return(containers);
-                    containers = replacement;
-                }
-
-                containers[containerCount++] = frame;
+                var replacement = ArrayPool<ContainerFrame>.Shared.Rent(checked(containerCount * 2));
+                // Relocate private owners, then erase the old slots before returning their storage.
+                containers.AsSpan(0, containerCount).CopyTo(replacement);
+                containers.AsSpan(0, containerCount).Clear();
+                ArrayPool<ContainerFrame>.Shared.Return(containers);
+                containers = replacement;
             }
-            catch
-            {
-                frame.Dispose();
-                throw;
-            }
+            ref var frame = ref containers[containerCount++];
+            frame = default;
+            frame.ChildDepth = childDepth;
+            return ref frame;
         }
 
         static void RequireContainerDepth(int enclosingDepth)

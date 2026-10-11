@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -7,8 +8,239 @@ using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
-public sealed class PortableValueTests
+public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ObjectFieldOrderingPreservesBytesAndBoundsWarmAllocation(bool alreadySorted)
+    {
+        var fields = Enumerable.Range(0, 128).Reverse()
+            .ToDictionary(i => $"field{i:D3}", _ => ObservationValue.FromBool(true), StringComparer.Ordinal);
+        var sorted = fields.ToImmutableSortedDictionary(StringComparer.Ordinal);
+        var observation = ObservationValue.FromObject(alreadySorted ? sorted : fields);
+        var portable = PortableValue.Concrete(new ValueContract(new JsonTypeRef(JsonTypeKind.Object)), observation);
+        var expected = JsonSerializer.Serialize(ObservationValue.FromObject(sorted), TaggedOptions);
+        Assert.Equal(expected, JsonSerializer.Serialize(observation, TaggedOptions));
+        var buffer = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(buffer);
+        for (var i = 0; i < 1_000; i++)
+        {
+            buffer.Clear();
+            writer.Reset(buffer);
+            PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+            writer.Flush();
+            Assert.True(PortableExecutionValidator.Validate(portable).IsValid);
+        }
+        var writerBytes = MeasureWarmAllocation(() =>
+        {
+            buffer.Clear(); writer.Reset(buffer);
+            PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+            writer.Flush();
+        });
+        var validationBytes = MeasureWarmAllocation(() => PortableExecutionValidator.Validate(portable));
+        var result = PortableExecutionValidator.Validate(portable);
+        output.WriteLine($"128 fields (sorted={alreadySorted}): writer={writerBytes} B, validation={validationBytes} B");
+        Assert.True(result.IsValid);
+        Assert.InRange(writerBytes, 0, 128);
+        Assert.InRange(validationBytes, 0, 1_024);
+    }
+
+    [Theory]
+    [InlineData("owned")]
+    [InlineData("immutable")]
+    [InlineData("sorted")]
+    [InlineData("ordinal")]
+    public void NestedObjectTraversalHasConstantWarmAllocation(string storage)
+    {
+        var fields = Enumerable.Range(0, 128).Reverse().ToDictionary(i => $"field{i:D3}",
+            _ => CreateFields(storage, new() { ["value"] = ObservationValue.FromBool(true) }), StringComparer.Ordinal);
+        var observation = CreateFields(storage, fields);
+        var portable = PortableValue.Concrete(new ValueContract(new JsonTypeRef(JsonTypeKind.Object)), observation);
+        var buffer = new ArrayBufferWriter<byte>();
+        var streaming = new ArrayBufferWriter<byte>();
+        using var writer = new Utf8JsonWriter(buffer);
+        for (var i = 0; i < 1_000; i++)
+        {
+            Assert.True(PortableExecutionValidator.Validate(portable).IsValid);
+            buffer.Clear(); writer.Reset(buffer);
+            PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+            writer.Flush();
+            streaming.Clear();
+            CanonicalJsonWriter.WriteCanonicalObservationValue(streaming, observation);
+        }
+        var validationBytes = MeasureWarmAllocation(() => PortableExecutionValidator.Validate(portable));
+        var result = PortableExecutionValidator.Validate(portable);
+        var writerBytes = MeasureWarmAllocation(() =>
+        {
+            buffer.Clear(); writer.Reset(buffer);
+            PortableValueJsonConverter.TaggedObservationValues.Write(writer, observation, TaggedOptions);
+            writer.Flush();
+        });
+        var streamingBytes = MeasureWarmAllocation(() =>
+        {
+            streaming.Clear();
+            CanonicalJsonWriter.WriteCanonicalObservationValue(streaming, observation);
+        });
+        output.WriteLine($"128 nested objects ({storage}): validate={validationBytes} B, tagged={writerBytes} B, streaming={streamingBytes} B");
+        Assert.True(result.IsValid);
+        Assert.InRange(validationBytes, 0, 1_024);
+        Assert.InRange(writerBytes, 0, 128);
+        Assert.InRange(streamingBytes, 0, 128);
+        var expected = new ArrayBufferWriter<byte>();
+        using (var canonicalWriter = new Utf8JsonWriter(expected))
+        {
+            CanonicalJsonWriter.WriteCanonicalObservationValue(canonicalWriter, observation);
+            canonicalWriter.Flush();
+        }
+        Assert.Equal(expected.WrittenSpan.ToArray(), streaming.WrittenSpan.ToArray());
+        using var document = JsonDocument.Parse(streaming.WrittenMemory);
+        Assert.Equal(Enumerable.Range(0, 128).Select(i => $"field{i:D3}"),
+            document.RootElement.EnumerateObject().Select(property => property.Name));
+        Assert.All(document.RootElement.EnumerateObject(), property =>
+            Assert.Equal(new[] { "value" }, property.Value.EnumerateObject().Select(child => child.Name)));
+    }
+
+    static long MeasureWarmAllocation(Action action)
+    {
+        // Keep the budget on recurring work; shared runtime/cache maintenance can affect one sample.
+        // Delegate capture happens before this boundary and is excluded from every sample.
+        Span<long> samples = stackalloc long[7];
+        for (var index = 0; index < samples.Length; index++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            action();
+            samples[index] = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        samples.Sort();
+        return samples[samples.Length / 2];
+    }
+
+    static ObservationValue CreateFields(string storage, Dictionary<string, ObservationValue> fields)
+    {
+        if (storage == "immutable") return ObservationValue.FromObject(fields.ToImmutableDictionary(StringComparer.Ordinal));
+        if (storage == "sorted") return ObservationValue.FromObject(fields.ToImmutableSortedDictionary(StringComparer.Ordinal));
+        if (storage != "ordinal") return ObservationValue.FromObject(fields);
+        var shape = new Shape(new("fields"),
+            [.. fields.Select(field => new FieldDefinition(new(field.Key), field.Value.Kind == ObservationValueKind.Bool
+                ? new ScalarTypeRef(ScalarTypeKind.Bool) : new JsonTypeRef(JsonTypeKind.Object))),
+             new(new("__missing"), new ScalarTypeRef(ScalarTypeKind.Bool), presence: FieldPresence.Optional)]);
+        var graph = new ShapeGraph(new("layout"), [shape]);
+        var layout = ObservationLayout.Create(new GraphShapeId(graph, shape.Id), shape.Fields.Select(field => field.Name.Value).Reverse());
+        var values = layout.FieldIdentities.Select(name => fields.TryGetValue(name, out var value) ? value : ObservationValue.Undefined).ToImmutableArray();
+        return ObservationValue.FromOrdinalFields(new OrdinalObservationFields(layout, values, fields.Count));
+    }
+
+    [Fact]
+    public void UnorderedInvalidObjectPreservesOrdinalDepthFirstDiagnosticOrder()
+    {
+        var observation = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+        {
+            ["z"] = ObservationValue.Undefined,
+            ["a/"] = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+            {
+                ["z"] = ObservationValue.FromDouble(double.NaN),
+                ["a~"] = ObservationValue.Undefined
+            }),
+            ["a"] = ObservationValue.Undefined
+        });
+        var result = PortableExecutionValidator.Validate(PortableValue.Concrete(
+            new ValueContract(new JsonTypeRef(JsonTypeKind.Object)), observation));
+        Assert.Equal(new[] { "/value/a", "/value/a~1/a~0", "/value/a~1/z", "/value/z" },
+            result.Diagnostics.Select(diagnostic => diagnostic.Location));
+    }
+
+    [Fact]
+    public void DeepStreamingFieldOrderingDoesNotAllocateAfterWarmup()
+    {
+        var observation = ObservationValue.FromBool(true);
+        for (var depth = 0; depth < 385; depth++)
+            observation = ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["child"] = observation });
+        var buffer = new ArrayBufferWriter<byte>();
+        for (var warm = 0; warm < 100; warm++)
+        {
+            buffer.Clear();
+            CanonicalJsonWriter.WriteCanonicalObservationValue(buffer, observation);
+        }
+        var bytes = MeasureWarmAllocation(() =>
+        {
+            buffer.Clear();
+            CanonicalJsonWriter.WriteCanonicalObservationValue(buffer, observation);
+        });
+        output.WriteLine($"385 nested objects: streaming={bytes} B");
+        Assert.InRange(bytes, 0, 128);
+        using var document = JsonDocument.Parse(buffer.WrittenMemory, new JsonDocumentOptions { MaxDepth = 1_000 });
+        var value = document.RootElement;
+        for (var depth = 0; depth < 385; depth++) value = value.GetProperty("child");
+        Assert.True(value.GetBoolean());
+    }
+
+    [Fact]
+    public void ScopedFieldOrderingClearsAndReturnsBufferWhenValueWriterThrows()
+    {
+        var pool = new CountingFieldPool();
+        var fields = new Dictionary<string, ObservationValue>
+        {
+            ["z"] = ObservationValue.FromBool(true),
+            ["a"] = ObservationValue.FromDouble(double.PositiveInfinity)
+        };
+        Assert.Throws<JsonException>(() =>
+        {
+            using var ordered = new OrderedObservationFields(fields, pool);
+            foreach (var field in ordered) JsonSerializer.Serialize(field.Value, TaggedOptions);
+        });
+        Assert.Equal(1, pool.Rents);
+        Assert.Equal(1, pool.Returns);
+    }
+
+    [Fact]
+    public void StreamingWriterReturnsAllClearedRentalsOnNestedFailure()
+    {
+        var pool = new CountingFieldPool();
+        var invalid = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+        {
+            ["child"] = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+            {
+                ["invalid"] = ObservationValue.FromDouble(double.PositiveInfinity)
+            })
+        });
+        Assert.Throws<InvalidOperationException>(() => CanonicalJsonWriter.WriteCanonicalObservationValueWithPool(
+            new ArrayBufferWriter<byte>(), invalid, pool));
+        Assert.Equal(2, pool.Rents);
+        Assert.Equal(2, pool.Returns);
+    }
+
+    sealed class CountingFieldPool : ArrayPool<KeyValuePair<string, ObservationValue>>
+    {
+        readonly Stack<KeyValuePair<string, ObservationValue>[]> available = new();
+        readonly HashSet<KeyValuePair<string, ObservationValue>[]> rented = new();
+        internal int Rents;
+        internal int Returns;
+        public override KeyValuePair<string, ObservationValue>[] Rent(int minimumLength)
+        {
+            Rents++;
+            var result = available.Count == 0 ? new KeyValuePair<string, ObservationValue>[minimumLength] : available.Pop();
+            Assert.True(rented.Add(result));
+            return result;
+        }
+        public override void Return(KeyValuePair<string, ObservationValue>[] array, bool clearArray = false)
+        {
+            Assert.True(rented.Remove(array));
+            Assert.All(array, field => Assert.Equal(default, field));
+            Returns++;
+            available.Push(array);
+        }
+    }
+
+    static readonly JsonSerializerOptions TaggedOptions = CreateTaggedOptions();
+    static JsonSerializerOptions CreateTaggedOptions()
+    {
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(PortableValueJsonConverter.TaggedObservationValues);
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
+    }
+
     static readonly ValueContract OptionalNullableString = new(
         new ScalarTypeRef(ScalarTypeKind.String),
         presence: FieldPresence.Optional,

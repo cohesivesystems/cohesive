@@ -1,0 +1,7 @@
+phase,measurement,calls,allocated_bytes
+cold,same-spec-payload-hash,9,71206240
+cold,shape-graph-hash,2,28868928
+cold,provenance-for-constructs,1534,94689008
+warm,same-spec-payload-hash,9,71205576
+warm,shape-graph-hash,2,26612912
+warm,provenance-for-constructs,734,45280448

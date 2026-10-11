@@ -1,5 +1,8 @@
 using BenchmarkDotNet.Running;
 
+if (args is ["--portable-field-concurrency", .. var fieldArgs])
+    return Cohesive.Relations.Benchmarks.PortableFieldConcurrencyBenchmark.Run(fieldArgs);
+
 var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 var discovered = false;
 foreach (var summary in summaries)
