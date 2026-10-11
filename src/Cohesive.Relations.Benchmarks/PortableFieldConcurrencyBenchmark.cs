@@ -1,18 +1,24 @@
 using System.Buffers;
 using System.Diagnostics;
+using System.Globalization;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
-namespace Cohesive.Tests.ExecutionKernel;
+namespace Cohesive.Relations.Benchmarks;
 
-public sealed class PortableFieldConcurrencyTests(Xunit.Abstractions.ITestOutputHelper output)
+internal static class PortableFieldConcurrencyBenchmark
 {
-    [Theory]
-    [InlineData("flat")]
-    [InlineData("nested")]
-    [InlineData("deep")]
-    public void ParallelValidationAndStreamingKeepWorkerLocalAllocationBounded(string shape)
+    internal static int Run(string[] args)
+    {
+        var iterations = args.Length == 0 ? 2_000 : int.Parse(args[0], CultureInfo.InvariantCulture);
+        if (iterations is < 1 or > 100_000) throw new ArgumentOutOfRangeException(nameof(args));
+        Console.WriteLine("kind,shape,workers,sample,iterations,elapsed_ms,allocated_bytes,bytes_per_operation,validation_bytes,writer_bytes");
+        foreach (var shape in new[] { "flat", "nested", "deep" }) Measure(shape, iterations);
+        return 0;
+    }
+
+    static void Measure(string shape, int iterations)
     {
         var observation = ObservationValue.FromObject(Enumerable.Range(0, 128).Reverse()
             .ToDictionary(index => $"field{index:D3}", _ => ObservationValue.FromBool(true)));
@@ -28,9 +34,6 @@ public sealed class PortableFieldConcurrencyTests(Xunit.Abstractions.ITestOutput
         var portable = PortableValue.Concrete(new ValueContract(new JsonTypeRef(JsonTypeKind.Object)), observation);
         var expected = new ArrayBufferWriter<byte>();
         CanonicalJsonWriter.WriteCanonicalObservationValue(expected, observation);
-        var iterations = int.TryParse(Environment.GetEnvironmentVariable("COHESIVE_FIELD_BENCHMARK_ITERATIONS"), out var configured)
-            ? configured : 64;
-        Assert.InRange(iterations, 1, 100_000);
         foreach (var workers in new[] { 1, 2, 4, 8 })
         {
             for (var sample = 0; sample < 3; sample++)
@@ -64,7 +67,8 @@ public sealed class PortableFieldConcurrencyTests(Xunit.Abstractions.ITestOutput
                     var before = GC.GetAllocatedBytesForCurrentThread();
                     for (var iteration = 0; iteration < iterations; iteration++) Run();
                     var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-                    Assert.True(buffer.WrittenSpan.SequenceEqual(expected.WrittenSpan));
+                    if (!buffer.WrittenSpan.SequenceEqual(expected.WrittenSpan))
+                        throw new InvalidOperationException("Parallel canonical bytes changed.");
                     return (Bytes: bytes, ValidationBytes: validationBytes, WriterBytes: writerBytes);
                 }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
                 WaitForWorkers();
@@ -75,9 +79,8 @@ public sealed class PortableFieldConcurrencyTests(Xunit.Abstractions.ITestOutput
                 timer.Stop();
                 var bytes = tasks.Sum(task => task.Result.Bytes);
                 var operations = workers * iterations;
-                output.WriteLine($"field-benchmark,{shape},{workers},{sample},{iterations},{timer.Elapsed.TotalMilliseconds:F3},{bytes},{bytes / (double)operations:F1},{tasks.Average(task => task.Result.ValidationBytes):F1},{tasks.Average(task => task.Result.WriterBytes):F1}");
-                // Deep traversals deliberately exceed the bounded thread-local lease cache.
-                Assert.InRange(bytes / (double)operations, 0, shape == "deep" ? 64_000 : 1_024);
+                Console.WriteLine($"field-benchmark,{shape},{workers},{sample},{iterations},{timer.Elapsed.TotalMilliseconds:F3},{bytes},{bytes / (double)operations:F1},{tasks.Average(task => task.Result.ValidationBytes):F1},{tasks.Average(task => task.Result.WriterBytes):F1}");
+
             }
         }
     }

@@ -1015,20 +1015,21 @@ public static class CanonicalJsonWriter
                             {
                                 RequireContainerDepth(currentDepth);
                                 WriteRaw("{"u8);
-                                var frame = ContainerFrame.ForObject(current.Fields, checked(currentDepth + 1), fieldPool);
+                                if (current.Fields is null or { Count: 0 }) { WriteRaw("}"u8); break; }
+                                ref var frame = ref Push(ref containers, ref containerCount, checked(currentDepth + 1));
+                                frame.InitializeObject(current.Fields, fieldPool);
                                 if (frame.TryMoveNext(out var property, out var child))
                                 {
-                                    var childDepth = frame.ChildDepth;
-                                    Push(ref containers, ref containerCount, ref frame);
                                     WriteString(property!);
                                     WriteRaw(":"u8);
                                     current = child;
-                                    currentDepth = childDepth;
+                                    currentDepth = frame.ChildDepth;
                                     descended = true;
                                 }
                                 else
                                 {
                                     frame.Dispose();
+                                    containerCount--;
                                     WriteRaw("}"u8);
                                 }
                                 break;
@@ -1037,17 +1038,19 @@ public static class CanonicalJsonWriter
                             {
                                 RequireContainerDepth(currentDepth);
                                 WriteRaw("["u8);
-                                var frame = ContainerFrame.ForArray(current.Array, checked(currentDepth + 1));
+                                if (current.Array.IsDefaultOrEmpty) { WriteRaw("]"u8); break; }
+                                ref var frame = ref Push(ref containers, ref containerCount, checked(currentDepth + 1));
+                                frame.InitializeArray(current.Array);
                                 if (frame.TryMoveNext(out _, out var child))
                                 {
-                                    var childDepth = frame.ChildDepth;
-                                    Push(ref containers, ref containerCount, ref frame);
                                     current = child;
-                                    currentDepth = childDepth;
+                                    currentDepth = frame.ChildDepth;
                                     descended = true;
                                 }
                                 else
                                 {
+                                    frame.Dispose();
+                                    containerCount--;
                                     WriteRaw("]"u8);
                                 }
                                 break;
@@ -1169,27 +1172,31 @@ public static class CanonicalJsonWriter
         struct ContainerFrame
         {
             ImmutableArray<ObservationValue> items;
-            OrderedObservationFields properties;
+            KeyValuePair<string, ObservationValue>[]? properties;
+            int propertyCount;
+            ArrayPool<KeyValuePair<string, ObservationValue>>? propertyPool;
             OrderedObservationFields.Enumerator propertyEnumerator;
             int nextItemIndex;
 
-            internal bool IsObject { get; private init; }
-            internal int ChildDepth { get; private init; }
+            internal bool IsObject { get; private set; }
+            internal int ChildDepth;
 
-            internal static ContainerFrame ForArray(ImmutableArray<ObservationValue> items, int childDepth) =>
-                new() { IsObject = false, ChildDepth = childDepth, items = items.IsDefault ? [] : items };
+            internal void InitializeArray(ImmutableArray<ObservationValue> values)
+            {
+                items = values.IsDefault ? [] : values;
+            }
 
-            internal static ContainerFrame ForObject(
-                IReadOnlyDictionary<string, ObservationValue>? fields, int childDepth,
+            internal void InitializeObject(IReadOnlyDictionary<string, ObservationValue>? fields,
                 ArrayPool<KeyValuePair<string, ObservationValue>>? pool)
             {
-                var properties = new OrderedObservationFields(fields, pool);
+                IsObject = true;
+                var ordered = new OrderedObservationFields(fields, pool);
                 try
                 {
-                    return new() { IsObject = true, ChildDepth = childDepth,
-                        properties = properties, propertyEnumerator = properties.GetEnumerator() };
+                    propertyEnumerator = ordered.GetEnumerator();
+                    ordered.MoveBufferTo(out properties, out propertyCount, out propertyPool);
                 }
-                catch { properties.Dispose(); throw; }
+                finally { ordered.Dispose(); }
             }
 
             internal bool TryMoveNext(out string? property, out ObservationValue value)
@@ -1212,36 +1219,28 @@ public static class CanonicalJsonWriter
             internal void Dispose()
             {
                 propertyEnumerator.Dispose();
-                properties.Dispose();
+                OrderedObservationFields.ReturnBuffer(properties, propertyCount, propertyPool!);
                 this = default;
             }
         }
 
-        static void Push(
-            ref ContainerFrame[]? containers,
-            ref int containerCount,
-            ref ContainerFrame frame)
+        static ref ContainerFrame Push(
+            ref ContainerFrame[]? containers, ref int containerCount, int childDepth)
         {
-            try
+            containers ??= ArrayPool<ContainerFrame>.Shared.Rent(minimumLength: 8);
+            if (containerCount == containers.Length)
             {
-                containers ??= ArrayPool<ContainerFrame>.Shared.Rent(minimumLength: 8);
-                if (containerCount == containers.Length)
-                {
-                    var replacement = ArrayPool<ContainerFrame>.Shared.Rent(checked(containerCount * 2));
-                    containers.AsSpan(0, containerCount).CopyTo(replacement);
-                    containers.AsSpan(0, containerCount).Clear();
-                    ArrayPool<ContainerFrame>.Shared.Return(containers);
-                    containers = replacement;
-                }
-
-                containers[containerCount++] = frame;
-                frame = default;
+                var replacement = ArrayPool<ContainerFrame>.Shared.Rent(checked(containerCount * 2));
+                // Relocate private owners, then erase the old slots before returning their storage.
+                containers.AsSpan(0, containerCount).CopyTo(replacement);
+                containers.AsSpan(0, containerCount).Clear();
+                ArrayPool<ContainerFrame>.Shared.Return(containers);
+                containers = replacement;
             }
-            catch
-            {
-                frame.Dispose();
-                throw;
-            }
+            ref var frame = ref containers[containerCount++];
+            frame = default;
+            frame.ChildDepth = childDepth;
+            return ref frame;
         }
 
         static void RequireContainerDepth(int enclosingDepth)

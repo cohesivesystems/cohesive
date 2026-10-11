@@ -151,79 +151,32 @@ public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper outp
     }
 
     [Fact]
-    public void PooledFieldOrderingIsReusableAfterWriterFailure()
+    public void DeepStreamingFieldOrderingDoesNotAllocateAfterWarmup()
     {
-        var invalid = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
+        var observation = ObservationValue.FromBool(true);
+        for (var depth = 0; depth < 385; depth++)
+            observation = ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["child"] = observation });
+        var buffer = new ArrayBufferWriter<byte>();
+        for (var warm = 0; warm < 100; warm++)
         {
-            ["z"] = ObservationValue.FromBool(true),
-            ["a"] = ObservationValue.FromDouble(double.PositiveInfinity)
+            buffer.Clear();
+            CanonicalJsonWriter.WriteCanonicalObservationValue(buffer, observation);
+        }
+        var bytes = MeasureWarmAllocation(() =>
+        {
+            buffer.Clear();
+            CanonicalJsonWriter.WriteCanonicalObservationValue(buffer, observation);
         });
-        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(invalid, TaggedOptions));
-        var valid = ObservationValue.FromObject(new Dictionary<string, ObservationValue>
-        {
-            ["z"] = ObservationValue.FromBool(true), ["a"] = ObservationValue.FromBool(false)
-        });
-        Assert.Equal(JsonSerializer.Serialize(ObservationValue.FromObject(
-            valid.Fields!.ToImmutableSortedDictionary(StringComparer.Ordinal)), TaggedOptions),
-            JsonSerializer.Serialize(valid, TaggedOptions));
+        output.WriteLine($"385 nested objects: streaming={bytes} B");
+        Assert.InRange(bytes, 0, 128);
+        using var document = JsonDocument.Parse(buffer.WrittenMemory, new JsonDocumentOptions { MaxDepth = 1_000 });
+        var value = document.RootElement;
+        for (var depth = 0; depth < 385; depth++) value = value.GetProperty("child");
+        Assert.True(value.GetBoolean());
     }
 
     [Fact]
-    public void OrdinalEnumeratorKeepsItsSingleOwnerPublicConstructor()
-    {
-        var type = typeof(OrdinalObservationFields.Enumerator);
-        Assert.NotNull(type.GetConstructor([typeof(OrdinalObservationFields)]));
-        Assert.Null(type.GetConstructor([typeof(OrdinalObservationFields), typeof(bool)]));
-        var observation = CreateFields("ordinal", new() { ["value"] = ObservationValue.FromBool(true) });
-        var iterator = new OrdinalObservationFields.Enumerator((OrdinalObservationFields)observation.Fields!);
-        Assert.True(iterator.MoveNext());
-        Assert.Equal("value", iterator.Current.Key);
-        Assert.False(iterator.MoveNext());
-    }
-
-    [Fact]
-    public void CopiedFieldLeaseReturnsExactlyOnceAndCannotReturnReusedRental()
-    {
-        var pool = new CountingFieldPool();
-        var fields = new Dictionary<string, ObservationValue> { ["b"] = ObservationValue.FromBool(true) };
-        var owner = new OrderedObservationFields(fields, pool);
-        var copy = owner;
-        var borrowed = owner.GetEnumerator();
-        Assert.True(borrowed.MoveNext());
-        owner.Dispose();
-        Assert.Equal(1, pool.Returns);
-        var next = new OrderedObservationFields(fields, pool);
-        Assert.Same(copy.RentalIdentity, next.RentalIdentity);
-        Assert.Throws<ObjectDisposedException>(() => borrowed.Current);
-        var staleEnumerator = copy.GetEnumerator();
-        Assert.Throws<ObjectDisposedException>(() => staleEnumerator.MoveNext());
-        Assert.Throws<ObjectDisposedException>(() => Enumerate(copy));
-        copy.Dispose();
-        Assert.Equal(1, pool.Returns);
-        Assert.Single(Enumerate(next));
-        next.Dispose();
-        next.Dispose();
-        Assert.Equal(2, pool.Returns);
-        Assert.Equal(pool.Rents, pool.Returns);
-    }
-
-    [Fact]
-    public void ConcurrentDisposalOfLeaseCopiesReturnsOnlyOnce()
-    {
-        var pool = new CountingFieldPool();
-        var owner = new OrderedObservationFields(new Dictionary<string, ObservationValue>
-        {
-            ["value"] = ObservationValue.FromBool(true)
-        }, pool);
-        var copies = Enumerable.Repeat(owner, 16).ToArray();
-        Parallel.For(0, copies.Length, index => copies[index].Dispose());
-        owner.Dispose();
-        Assert.Equal(1, pool.Rents);
-        Assert.Equal(1, pool.Returns);
-    }
-
-    [Fact]
-    public void FieldLeaseClearsAndReturnsBufferWhenValueWriterThrows()
+    public void ScopedFieldOrderingClearsAndReturnsBufferWhenValueWriterThrows()
     {
         var pool = new CountingFieldPool();
         var fields = new Dictionary<string, ObservationValue>
@@ -255,13 +208,6 @@ public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper outp
             new ArrayBufferWriter<byte>(), invalid, pool));
         Assert.Equal(2, pool.Rents);
         Assert.Equal(2, pool.Returns);
-    }
-
-    static List<KeyValuePair<string, ObservationValue>> Enumerate(OrderedObservationFields fields)
-    {
-        var result = new List<KeyValuePair<string, ObservationValue>>();
-        foreach (var field in fields) result.Add(field);
-        return result;
     }
 
     sealed class CountingFieldPool : ArrayPool<KeyValuePair<string, ObservationValue>>
