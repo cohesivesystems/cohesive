@@ -20,6 +20,11 @@ This extends existing Core serialization and Storage responsibilities. A Storage
 or another canonical walk would duplicate existing mechanisms. Incremental receipt-ledger hashing
 is deliberately separate: avoiding the growing-history walk requires an explicit profile design.
 
+A subsequent [checkpoint breakdown](hosted-value-projection.md) shows that the large envelopes
+are dominated by operation values in continuation bindings and replay receipts. Activation trace
+receipts are under 0.5% of this case. Growing-history hashing remains a general scaling concern,
+but typed value conversion is the larger next allocation target in this workload.
+
 ## Local allocation evidence
 
 October 11, 2026, Apple M5 Max/macOS arm64, .NET SDK 10.0.201/runtime 10.0.5, Release.

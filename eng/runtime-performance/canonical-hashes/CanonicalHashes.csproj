@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../../../src/Cohesive/Cohesive.csproj" />
+    <ProjectReference Include="../../../src/Cohesive.Relations/Cohesive.Relations.csproj" />
     <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
   </ItemGroup>
 </Project>

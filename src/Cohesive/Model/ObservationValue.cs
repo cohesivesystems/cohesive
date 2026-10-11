@@ -520,7 +520,9 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// Converts a <see cref="JsonElement"/> into an <see cref="ObservationValue"/>.
     /// </summary>
     /// <exception cref="InvalidOperationException">Unsupported JsonValueKind.</exception>
-    public static ObservationValue FromJsonElement(JsonElement element) => element.ValueKind switch
+    public static ObservationValue FromJsonElement(JsonElement element) => FromJsonElementCore(element, rejectDuplicates: false);
+
+    static ObservationValue FromJsonElementCore(JsonElement element, bool rejectDuplicates) => element.ValueKind switch
     {
         JsonValueKind.Undefined => Undefined,
         JsonValueKind.Null => Null,
@@ -531,8 +533,8 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         JsonValueKind.Number when TryParseExactJsonDecimal(element.GetRawText(), out var dec) => FromDecimal(dec),
         JsonValueKind.Number when element.TryGetDouble(out var dbl) => FromDouble(dbl),
         JsonValueKind.Number => FromDouble(double.Parse(element.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture)),
-        JsonValueKind.Object => FromObject(ReadObject(element)),
-        JsonValueKind.Array => FromImmutableArray(ReadArray(element)),
+        JsonValueKind.Object => FromObject(ReadObject(element, rejectDuplicates)),
+        JsonValueKind.Array => FromImmutableArray(ReadArray(element, rejectDuplicates)),
         _ => throw new InvalidOperationException($"Unsupported JsonValueKind '{element.ValueKind}'.")
     };
 
@@ -801,7 +803,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             return false;
         }
 
-        observed = FromJsonNode(JsonSerializer.SerializeToNode(value, type, DeclaredJsonOptions.Value));
+        observed = ProjectDeclaredJsonValue(value, type);
         return true;
     }
 
@@ -913,9 +915,17 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             return Null;
 
         if (ShouldProjectWithDeclaredJsonType(property.PropertyType))
-            return FromJsonNode(JsonSerializer.SerializeToNode(value, property.PropertyType, DeclaredJsonOptions.Value));
+            return ProjectDeclaredJsonValue(value, property.PropertyType);
 
         return FromObjectCore(value, ref visited);
+    }
+
+    static ObservationValue ProjectDeclaredJsonValue(object value, Type declaredType)
+    {
+        using var document = JsonSerializer.SerializeToDocument(value, declaredType, DeclaredJsonOptions.Value);
+        // Declared conversion retains JsonNode's collision failures; direct public token
+        // projection keeps its established last-property-wins behavior.
+        return FromJsonElementCore(document.RootElement, rejectDuplicates: true);
     }
 
     static bool ShouldProjectWithDeclaredJsonType(Type type)
@@ -1709,19 +1719,31 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         }
     }
 
-    static IImmutableDictionary<string, ObservationValue> ReadObject(JsonElement element)
+    static IImmutableDictionary<string, ObservationValue> ReadObject(JsonElement element, bool rejectDuplicates)
     {
         var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
-            values[property.Name] = FromJsonElement(property.Value);
+        {
+            var value = FromJsonElementCore(property.Value, rejectDuplicates);
+            if (!rejectDuplicates)
+                values[property.Name] = value;
+            else
+            {
+                var previousCount = values.Count;
+                values.Add(property.Name, value);
+                // ImmutableSortedDictionary.Add permits an equal duplicate; JsonNode did not.
+                if (values.Count == previousCount)
+                    throw new ArgumentException($"Duplicate JSON property '{property.Name}'.");
+            }
+        }
         return values.ToImmutable();
     }
 
-    static ImmutableArray<ObservationValue> ReadArray(JsonElement element)
+    static ImmutableArray<ObservationValue> ReadArray(JsonElement element, bool rejectDuplicates)
     {
         var values = ImmutableArray.CreateBuilder<ObservationValue>(element.GetArrayLength());
         foreach (var item in element.EnumerateArray())
-            values.Add(FromJsonElement(item));
+            values.Add(FromJsonElementCore(item, rejectDuplicates));
         return values.MoveToImmutable();
     }
 

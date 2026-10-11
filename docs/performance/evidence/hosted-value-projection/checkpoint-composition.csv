@@ -1,0 +1,3 @@
+commit_activation_receipts,checkpoint_bytes,activation_receipt_bytes,continuation_bytes,operation_replay_bytes
+1,4099884,11188,2042532,2038930
+2,8842026,41975,4410506,4381672
