@@ -165,7 +165,10 @@ use one weak declaration table.
 A node owns metadata bound to its exact declaration. Accessor constraints bind the owner, index
 result type and static factory. One shared getter owns a private index reference, checks exact owner
 identity and publishes successfully under the metadata lock. Each current owner needs one index kind,
-so there is no slot-selection API or per-kind field list. Tests have non-preparing read-only inspection.
+so there is no slot-selection API or per-kind field list. Successful publication also records accessor
+identity, checked before casts on every read; a different accessor receives InvalidOperationException,
+including when both return HashSet<string>. A zero-state typed token binds generic arguments once
+and supplies short getter calls without boxing. Tests have non-preparing read-only inspection.
 
 There is no owner-to-factory switch; reading indexless metadata is safe. Slots publish successful
 preparation only and retry failures. Named reference nodes resolving the same declaration share that container

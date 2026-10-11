@@ -165,7 +165,10 @@ while warm readers bypass that gate. Failed preparation publishes no incomplete 
 uses an iterative work queue; value validation still applies depth limits and builds fresh diagnostics.
 Unbound checks and scalar leaves retain direct dispatch. Nodes retain their original TypeRef, and identity
 checks reject root/child identity mismatches in Release as well as Debug. Each metadata container binds its exact owner and holds one private index reference: each current
-owner has one index kind. Accessor constraints bind the owner, result type and factory. One shared
+owner has one index kind. The first successful publication records its accessor type; subsequent
+requests with a different accessor fail with InvalidOperationException before any cast, even when
+the index result types coincide. Accessor constraints bind the owner, result type and factory.
+A zero-state typed token supplies the short getter form without boxing or writable slots. One shared
 getter checks owner identity and coordinates publication; no accessor or test receives a writable slot.
 Tests inspect the prepared reference without triggering preparation. Exact ownership remains a runtime check.
 Reading an indexless node's metadata does not execute a factory or throw.
