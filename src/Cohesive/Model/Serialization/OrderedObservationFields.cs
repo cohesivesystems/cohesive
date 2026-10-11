@@ -5,58 +5,46 @@ namespace Cohesive.Model.Serialization;
 
 // Canonical observation encodings share ordinal property ordering. Already-sorted immutable input
 // needs no copy; other inputs use a scoped pooled buffer cleared on every exit, including exceptions.
-// Keep a sole owner: do not copy it. Enumerators borrow its rental and must finish before disposal.
+// A ref struct is still copyable: keep a sole owner and never dispose a copy. Enumerators borrow
+// its rental; reading after owner disposal or transfer completion is unsupported and may read reused
+// storage. Finish enumeration before disposal. Streaming frames transfer ownership by reference.
 internal ref struct OrderedObservationFields
 {
     ImmutableSortedDictionary<string, ObservationValue>? sorted;
     OrdinalObservationFields? ordinal;
-    int count;
-    KeyValuePair<string, ObservationValue>[]? buffer;
-    ArrayPool<KeyValuePair<string, ObservationValue>>? pool;
+    ObservationFieldBuffer rental;
 
     internal OrderedObservationFields(IReadOnlyDictionary<string, ObservationValue>? fields, ArrayPool<KeyValuePair<string, ObservationValue>>? pool = null)
     {
-        buffer = null;
-        this.pool = pool ?? ArrayPool<KeyValuePair<string, ObservationValue>>.Shared;
+        rental = default;
+        pool ??= ArrayPool<KeyValuePair<string, ObservationValue>>.Shared;
         ordinal = fields as OrdinalObservationFields;
         if (ordinal is not null)
         {
             sorted = null;
-            count = 0;
         }
         else if (fields is ImmutableSortedDictionary<string, ObservationValue> ordered
             && ReferenceEquals(ordered.KeyComparer, StringComparer.Ordinal))
         {
             sorted = ordered;
-            count = 0;
         }
         else
         {
             sorted = null;
-            buffer = RentOrderedObservationProperties(fields, this.pool, out count);
+            rental = RentOrderedObservationProperties(fields, pool);
         }
     }
 
-    public Enumerator GetEnumerator() => new(sorted, ordinal, buffer, count);
+    public Enumerator GetEnumerator() => new(sorted, ordinal, rental.Buffer, rental.Count);
 
-    // Move the sole rental into a private streaming-stack slot; this scoped owner becomes empty.
-    internal void MoveBufferTo(out KeyValuePair<string, ObservationValue>[]? target,
-        out int targetCount, out ArrayPool<KeyValuePair<string, ObservationValue>>? targetPool)
-    {
-        target = buffer;
-        targetCount = count;
-        targetPool = pool;
-        buffer = null;
-        count = 0;
-    }
+    // Move the sole rental into an empty private streaming-stack slot.
+    internal void MoveBufferTo(ref ObservationFieldBuffer target) => rental.MoveTo(ref target);
 
     public void Dispose()
     {
-        ReturnBuffer(buffer, count, pool!);
-        buffer = null;
+        rental.Dispose();
         sorted = null;
         ordinal = null;
-        count = 0;
     }
 
     internal struct Enumerator : IDisposable
@@ -94,14 +82,13 @@ internal ref struct OrderedObservationFields
         public void Dispose() { if (isSorted) sorted.Dispose(); }
     }
 
-    static KeyValuePair<string, ObservationValue>[]? RentOrderedObservationProperties(
+    static ObservationFieldBuffer RentOrderedObservationProperties(
         IReadOnlyDictionary<string, ObservationValue>? properties,
-        ArrayPool<KeyValuePair<string, ObservationValue>> pool,
-        out int count)
+        ArrayPool<KeyValuePair<string, ObservationValue>> pool)
     {
-        count = 0;
+        var count = 0;
         if (properties is null || properties.Count == 0)
-            return null;
+            return default;
 
         var ordered = pool.Rent(properties.Count);
         try
@@ -118,24 +105,14 @@ internal ref struct OrderedObservationFields
                     static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
                 break;
             }
-            return ordered;
+            return new ObservationFieldBuffer(ordered, count, pool);
         }
         catch
         {
-            ReturnBuffer(ordered, count, pool);
+            var failed = new ObservationFieldBuffer(ordered, count, pool);
+            failed.Dispose();
             throw;
         }
-    }
-
-    internal static void ReturnBuffer(
-        KeyValuePair<string, ObservationValue>[]? properties,
-        int count, ArrayPool<KeyValuePair<string, ObservationValue>> pool)
-    {
-        if (properties is null)
-            return;
-
-        properties.AsSpan(0, count).Clear();
-        pool.Return(properties);
     }
 
     struct FieldCopier(KeyValuePair<string, ObservationValue>[] buffer) : IObservationFieldVisitor
@@ -149,4 +126,34 @@ internal ref struct OrderedObservationFields
         }
     }
 
+}
+
+// Sole owner of a pooled field buffer. Copying does not duplicate ownership: use MoveTo for transfers
+// and never dispose or enumerate a stale copy. Private frame relocation clears the previous slots.
+internal struct ObservationFieldBuffer(
+    KeyValuePair<string, ObservationValue>[] buffer,
+    int count,
+    ArrayPool<KeyValuePair<string, ObservationValue>> pool)
+{
+    internal KeyValuePair<string, ObservationValue>[]? Buffer { get; private set; } = buffer;
+    internal int Count { get; private set; } = count;
+    ArrayPool<KeyValuePair<string, ObservationValue>>? pool = pool;
+
+    internal void MoveTo(ref ObservationFieldBuffer target)
+    {
+        System.Diagnostics.Debug.Assert(target.Buffer is null, "Ownership must move into an empty slot.");
+        target = this;
+        this = default;
+    }
+
+    internal void Dispose()
+    {
+        if (Buffer is null) return;
+        var returned = Buffer;
+        var returnedCount = Count;
+        var returnedPool = pool!;
+        this = default;
+        returned.AsSpan(0, returnedCount).Clear();
+        returnedPool.Return(returned);
+    }
 }

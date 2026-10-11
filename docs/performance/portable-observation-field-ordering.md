@@ -19,7 +19,11 @@ Validation and pooled copying share one generic storage dispatch, avoiding boxed
 OrderedObservationFields is an internal scoped ref struct. Recursive writers keep its sole owner
 in a using scope; borrowed enumerators finish before disposal. The iterative writer initializes
 private frames directly by reference and transfers a rental into that frame, emptying the scoped
-owner. Stack growth relocates frames and clears old slots before returning storage. Owners must
+owner. Both use ObservationFieldBuffer as the sole buffer/count/pool owner, with one
+clear-and-return implementation; transfers empty the source and assert an empty target in debug.
+A ref struct is still copyable: disposing copies and reading borrowed enumerators after disposal
+are unsupported. These are internal lifetime rules, not runtime stale-read guarantees.
+Stack growth relocates frames and clears old slots before returning storage. Owners must
 not be copied or read across disposal; the private traversal does not share them between threads.
 There are no lease objects, caches, locks or per-element volatile checks. No validation evidence
 is cached, and no fingerprint format changes.
@@ -160,3 +164,8 @@ and Ari Engine passed 855 (18 existing scheduler skips). All 120 portable-value,
 canonical JSON focused cases pass, including the nested allocation checks. All nine original Ari
 cases also pass in the refreshed final allocation run. Package publication and Ari dependency
 upgrades are not part of this change.
+
+The shared-buffer-owner follow-up passes all 120 focused tests using the newly built Core assembly
+overlaid into the previously qualified test assembly, then restored. Core builds successfully;
+a fresh test-project build encounters unrelated missing Cosmos, Cli and Identity references.
+The full-suite counts above belong to the preceding qualification.

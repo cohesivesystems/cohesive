@@ -1172,9 +1172,7 @@ public static class CanonicalJsonWriter
         struct ContainerFrame
         {
             ImmutableArray<ObservationValue> items;
-            KeyValuePair<string, ObservationValue>[]? properties;
-            int propertyCount;
-            ArrayPool<KeyValuePair<string, ObservationValue>>? propertyPool;
+            ObservationFieldBuffer properties;
             OrderedObservationFields.Enumerator propertyEnumerator;
             int nextItemIndex;
 
@@ -1194,7 +1192,7 @@ public static class CanonicalJsonWriter
                 try
                 {
                     propertyEnumerator = ordered.GetEnumerator();
-                    ordered.MoveBufferTo(out properties, out propertyCount, out propertyPool);
+                    ordered.MoveBufferTo(ref properties);
                 }
                 finally { ordered.Dispose(); }
             }
@@ -1219,7 +1217,7 @@ public static class CanonicalJsonWriter
             internal void Dispose()
             {
                 propertyEnumerator.Dispose();
-                OrderedObservationFields.ReturnBuffer(properties, propertyCount, propertyPool!);
+                properties.Dispose();
                 this = default;
             }
         }
