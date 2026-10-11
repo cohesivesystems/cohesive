@@ -214,6 +214,9 @@ public sealed class StrictDocumentJsonTests
         Assert.NotNull(referenceFailure);
         Assert.NotNull(actualFailure);
         Assert.Equal(referenceFailure.GetType(), actualFailure.GetType());
+        var hashFailure = Record.Exception(() => StrictDocumentJson.ComputeCanonicalSha256(value, options));
+        Assert.NotNull(hashFailure);
+        Assert.Equal(actualFailure.GetType(), hashFailure.GetType());
     }
 
     [Fact]
@@ -264,6 +267,65 @@ public sealed class StrictDocumentJsonTests
         Assert.NotNull(before);
         Assert.NotNull(after);
         Assert.Equal(before.GetType(), after.GetType());
+        var hashFailure = Record.Exception(() => StrictDocumentJson.ComputeCanonicalSha256(binary, options));
+        Assert.NotNull(hashFailure);
+        Assert.Equal(after.GetType(), hashFailure.GetType());
+    }
+
+    [Fact]
+    public void CanonicalHashDoesNotCacheMutableValuesOrRetainFullCanonicalOutput()
+    {
+        var options = StrictDocumentJson.CreateOptions();
+        var mutable = new MutableDocument { Name = "before" };
+        var first = StrictDocumentJson.ComputeCanonicalSha256(mutable, options);
+        mutable.Name = "after";
+        var second = StrictDocumentJson.ComputeCanonicalSha256(mutable, options);
+        Assert.NotEqual(first, second);
+        Assert.Equal(SHA256.HashData(StrictDocumentJson.GetCanonicalBytes(mutable, options)), second);
+
+        var value = new JsonDocumentValue(JsonSerializer.SerializeToElement(Enumerable.Range(0, 4096)
+            .Select(i => new { z = i, a = "<>&🙂", nested = new { enabled = true, values = new[] { 3, 1, 2 } } })));
+        for (var warm = 0; warm < 4; warm++)
+        {
+            StrictDocumentJson.ComputeCanonicalSha256(value, options);
+            StrictDocumentJson.GetCanonicalBytes(value, options);
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var canonical = StrictDocumentJson.GetCanonicalBytes(value, options);
+        var contiguousAllocation = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var streamed = StrictDocumentJson.ComputeCanonicalSha256(value, options);
+        var streamedAllocation = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(SHA256.HashData(canonical), streamed);
+        Assert.True(contiguousAllocation - streamedAllocation > canonical.Length,
+            $"Canonical output {canonical.Length} bytes; contiguous allocated {contiguousAllocation}, streamed {streamedAllocation}.");
+    }
+
+    [Fact]
+    public void ConcurrentCanonicalHashesHaveIndependentSinkOwnership()
+    {
+        var options = StrictDocumentJson.CreateOptions();
+        var value = new JsonDocumentValue(JsonSerializer.SerializeToElement(Enumerable.Range(0, 512)
+            .Select(i => new { key = i, text = "é<>&🙂", amount = 1.2300m })));
+        var expected = SHA256.HashData(StrictDocumentJson.GetCanonicalBytes(value, options));
+        Parallel.For(0, 32, _ => Assert.Equal(expected, StrictDocumentJson.ComputeCanonicalSha256(value, options)));
+    }
+
+    [Fact]
+    public void CanonicalHashMatchesNullProjectionAndDepthFailures()
+    {
+        using var nullRoot = JsonDocument.Parse("null");
+        using var deepRoot = JsonDocument.Parse("{\"a\":{\"b\":{\"c\":1}}}");
+        foreach (var value in new[] { new RawRoot(nullRoot.RootElement), new RawRoot(deepRoot.RootElement) })
+        {
+            var options = StrictDocumentJson.CreateOptions();
+            options.MaxDepth = 2;
+            var expected = Record.Exception(() => StrictDocumentJson.GetCanonicalBytes(value, options));
+            var actual = Record.Exception(() => StrictDocumentJson.ComputeCanonicalSha256(value, options));
+            Assert.NotNull(expected);
+            Assert.NotNull(actual);
+            Assert.Equal(expected.GetType(), actual.GetType());
+        }
     }
 
     [JsonConverter(typeof(RawRootConverter))]
@@ -281,6 +343,7 @@ public sealed class StrictDocumentJsonTests
         var actual = StrictDocumentJson.GetCanonicalBytes(value, options);
         Assert.Equal(reference, actual);
         Assert.Equal(SHA256.HashData(reference), SHA256.HashData(actual));
+        Assert.Equal(SHA256.HashData(actual), StrictDocumentJson.ComputeCanonicalSha256(value, options));
     }
 
     static byte[] NodeReference<T>(T value, JsonSerializerOptions options) where T : class =>

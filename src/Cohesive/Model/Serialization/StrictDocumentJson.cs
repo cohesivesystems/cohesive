@@ -122,6 +122,35 @@ public static class StrictDocumentJson
         return CanonicalJsonWriter.GetCanonicalSequenceBytes(document.RootElement);
     }
 
+    /// <summary>Computes SHA-256 over the exact canonical UTF-8 representation of a typed document.</summary>
+    /// <remarks>
+    /// The digest is identical to hashing <see cref="GetCanonicalBytes{T}(T, JsonSerializerOptions)"/>.
+    /// Strict case-sensitive contracts stream the existing canonical walk into a pooled hash sink,
+    /// avoiding full canonical output buffers. Temporary serialized JSON remains invocation-owned;
+    /// values, admission results and digests are not cached. Non-strict case-insensitive options
+    /// retain the existing node-based collision behavior and contiguous canonical-byte fallback.
+    /// </remarks>
+    /// <typeparam name="T">Closed object contract used for serialization.</typeparam>
+    /// <param name="value">Typed object to hash.</param>
+    /// <param name="options">Serializer options defining the same wire contract as canonical encoding.</param>
+    /// <returns>A caller-owned 32-byte SHA-256 digest without an algorithm or profile prefix.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> or <paramref name="options"/> is null.</exception>
+    /// <exception cref="JsonException">The value cannot be written under the supplied options.</exception>
+    /// <exception cref="NotSupportedException">A value has no serializer under the supplied options.</exception>
+    /// <exception cref="InvalidOperationException">The typed value has no canonical representation.</exception>
+    /// <exception cref="ArgumentException">A converter writes colliding object property names.</exception>
+    public static byte[] ComputeCanonicalSha256<T>(T value, JsonSerializerOptions options) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.PropertyNameCaseInsensitive)
+            return System.Security.Cryptography.SHA256.HashData(GetCanonicalBytes(value, options));
+        using var document = JsonSerializer.SerializeToDocument(value, typeof(T), options);
+        if (document.RootElement.ValueKind == JsonValueKind.Null)
+            throw new InvalidOperationException($"Failed to materialize {typeof(T).Name} JSON.");
+        return CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement);
+    }
+
     /// <summary>
     /// Attempts to read one typed object through the strict canonical portable-document wire contract.
     /// </summary>

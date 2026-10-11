@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Security.Cryptography;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
@@ -407,15 +406,13 @@ static class ProcessDurableCommitFingerprinter
             commit.Checkpoint,
             commit.LocalMutations,
             commit.ObservedAtUtc);
-        var bytes = StrictDocumentJson.GetCanonicalBytes(content, Options);
-        var digest = SHA256.HashData(bytes);
+        var digest = StrictDocumentJson.ComputeCanonicalSha256(content, Options);
         return new($"sha256-v1:{Convert.ToHexStringLower(digest)}");
     }
 
     internal static ProcessCommitFingerprint ComputeCheckpoint(ProcessDurableCheckpoint checkpoint)
     {
-        var bytes = ProcessDurableCheckpointJsonSerializer.GetCanonicalBytes(checkpoint);
-        var digest = SHA256.HashData(bytes);
+        var digest = StrictDocumentJson.ComputeCanonicalSha256(checkpoint, Options);
         return new($"sha256-v1:{Convert.ToHexStringLower(digest)}");
     }
 

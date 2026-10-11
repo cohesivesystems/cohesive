@@ -45,6 +45,11 @@ It can be persisted, validated, generated into another host language, or interpr
 The package does not define Relations, Transitions, Processes, APIs, presentation, storage, or provider behavior.
 Those blocks depend on these shared semantic contracts.
 
+Strict portable-document consumers can use `StrictDocumentJson.ComputeCanonicalSha256(value, options)`
+to hash the same bytes as `GetCanonicalBytes` without retaining canonical output. It returns a raw
+SHA-256 digest; the consuming block owns its fingerprint profile and prefix. See the
+[qualification and operating boundary](../../docs/performance/strict-document-hashes.md).
+
 ## Observations and snapshots
 
 An `Observation` describes an immutable shaped value. Entity identity and version remain explicit rather than being
