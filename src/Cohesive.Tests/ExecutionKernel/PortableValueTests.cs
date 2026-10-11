@@ -156,16 +156,19 @@ public sealed class PortableValueTests(Xunit.Abstractions.ITestOutputHelper outp
         var observation = ObservationValue.FromBool(true);
         for (var depth = 0; depth < 385; depth++)
             observation = ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["child"] = observation });
+        // Shared pool retention varies with host CPU count and concurrent users.
+        // Isolate recurring writer work with enough retained slots for this depth.
+        var pool = ArrayPool<KeyValuePair<string, ObservationValue>>.Create(16, 512);
         var buffer = new ArrayBufferWriter<byte>();
         for (var warm = 0; warm < 100; warm++)
         {
             buffer.Clear();
-            CanonicalJsonWriter.WriteCanonicalObservationValue(buffer, observation);
+            CanonicalJsonWriter.WriteCanonicalObservationValueWithPool(buffer, observation, pool);
         }
         var bytes = MeasureWarmAllocation(() =>
         {
             buffer.Clear();
-            CanonicalJsonWriter.WriteCanonicalObservationValue(buffer, observation);
+            CanonicalJsonWriter.WriteCanonicalObservationValueWithPool(buffer, observation, pool);
         });
         output.WriteLine($"385 nested objects: streaming={bytes} B");
         Assert.InRange(bytes, 0, 128);
