@@ -71,7 +71,10 @@ The baseline intentionally fails the new allocation budgets (writer <=128 B, val
 The revised implementation passes. Validation retains constant context/result overhead; no per-object boxed enumerator or
 per-field sorted array is allocated. Tests also cover nested escaped
 diagnostic ordering. A counting pool checks cleared slots and exactly-once returns during nested
-streaming-writer failure. A 385-object deep writer regression has a 128-byte budget and measures
+streaming-writer failure. The deep regression uses a dedicated pool retaining all 385 field buffers;
+shared pool retention varies with host CPU count and concurrent users, so a warm shared-pool write
+can still allocate replacement buffers. This isolates recurring writer work from retention policy.
+A 385-object deep writer regression has a 128-byte budget and measures
 zero bytes after warmup; the previous lease implementation fails it at 6,192 bytes. Existing lossless round trips and canonical
 JSON checks remain in force.
 
