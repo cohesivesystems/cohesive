@@ -505,6 +505,53 @@ public sealed class RelationQueryIRTests
     }
 
     [Fact]
+    public void FingerprintMatchesPreviousNodeCanonicalizationAndIndependentDigest()
+    {
+        var definition = CreateLoadSearchRelation();
+        var options = RelationQueryJsonSerializer.CreateOptions();
+        var node = JsonSerializer.SerializeToNode<RelationQueryDefinition>(definition, options)!;
+        var previous = CanonicalJsonWriter.GetCanonicalBytes(node, options, RelationCanonicalJsonArrayOrderings.Definition);
+        Assert.Equal(previous, RelationQueryDefinitionFingerprinter.GetCanonicalDefinitionBytes(definition));
+        var prefix = System.Text.Encoding.UTF8.GetBytes(RelationQueryDocument.CurrentSchemaVersion + "\0");
+        var bytes = new byte[prefix.Length + previous.Length];
+        prefix.CopyTo(bytes, 0);
+        previous.CopyTo(bytes, prefix.Length);
+        Assert.Equal(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)),
+            RelationQueryDefinitionFingerprinter.Compute(definition).Value);
+        Parallel.For(0, 32, _ => Assert.Equal(previous,
+            RelationQueryDefinitionFingerprinter.GetCanonicalDefinitionBytes(definition)));
+    }
+
+    [Fact]
+    public void FingerprintAvoidsMutableTreeAndEnvelopeAllocationWithMetadataAlreadyShared()
+    {
+        var definition = CreateLoadSearchRelation();
+        var options = RelationQueryJsonSerializer.GetReadOnlyOptions();
+        for (var iteration = 0; iteration < 16; iteration++)
+            Assert.Equal(Reference(), RelationQueryDefinitionFingerprinter.Compute(definition).Value);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var expected = Reference();
+        var referenceBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var actual = RelationQueryDefinitionFingerprinter.Compute(definition).Value;
+        var directBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(expected, actual);
+        Assert.True(directBytes < referenceBytes * 3 / 4,
+            $"Immutable fingerprint {directBytes} B, shared-metadata node reference {referenceBytes} B.");
+
+        string Reference()
+        {
+            var node = JsonSerializer.SerializeToNode<RelationQueryDefinition>(definition, options)!;
+            var canonical = CanonicalJsonWriter.GetCanonicalBytes(node, options, RelationCanonicalJsonArrayOrderings.Definition);
+            var prefix = System.Text.Encoding.UTF8.GetBytes(RelationQueryDocument.CurrentSchemaVersion + "\0");
+            var bytes = new byte[prefix.Length + canonical.Length];
+            prefix.CopyTo(bytes, 0);
+            canonical.CopyTo(bytes, prefix.Length);
+            return Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
+        }
+    }
+
+    [Fact]
     public void Fingerprint_MatchesKnownCanonicalizationVector()
     {
         var fingerprint = RelationQueryDefinitionFingerprinter.Compute(CreateLoadSearchRelation());

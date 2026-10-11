@@ -154,10 +154,11 @@ without rounding. It shares bounded coefficient parsing with JSON-number acquisi
 alone permits exponent notation. The expression evaluator delegates to this helper. The existing
 `TryGetDecimal` convenience coercion keeps its broader BCL syntax and rounding behavior.
 
-Execution-document normalization and fingerprinting traverse immutable JSON directly; see
-[canonicalization performance](../../docs/performance/execution-canonicalization.md) for ownership,
-exact-byte regression coverage, allocation measurements and remaining costs.
-
+The [execution preparation allocation overview](../../docs/performance/execution-preparation-allocations.md)
+describes current immutable type reuse, guarded compact reference replay, canonical-byte interning,
+shared node/element canonical traversal, and retryable weak metadata preparation. It links the final
+qualification reports. Execution normalization, type ordering and fingerprints share one canonical
+JSON authority; pooled buffers never escape their operation. Imported documents retain strict validation.
 
 ### Concurrent JSON profile metadata preparation
 

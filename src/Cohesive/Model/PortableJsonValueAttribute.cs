@@ -1,6 +1,5 @@
 namespace Cohesive.Model;
 
-using System.Collections.Concurrent;
 using System.Reflection;
 
 /// <summary>
@@ -15,7 +14,7 @@ using System.Reflection;
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Struct, Inherited = false)]
 public sealed class PortableJsonValueAttribute : Attribute
 {
-    static readonly ConcurrentDictionary<Type, JsonTypeKind?> KindByClrType = [];
+    static readonly WeakPreparationCache<Type, JsonTypeKind?> KindByClrType = new();
 
     /// <summary>Creates a portable JSON value declaration.</summary>
     /// <param name="kind">The JSON value shape guaranteed by every serialized instance.</param>
@@ -38,7 +37,7 @@ public sealed class PortableJsonValueAttribute : Attribute
     public static bool TryGetKind(Type clrType, out JsonTypeKind kind)
     {
         ArgumentNullException.ThrowIfNull(clrType);
-        var declaredKind = KindByClrType.GetOrAdd(
+        var declaredKind = KindByClrType.Get(
             clrType,
             static type => type.GetCustomAttribute<PortableJsonValueAttribute>(inherit: false)?.Kind);
         kind = declaredKind.GetValueOrDefault();

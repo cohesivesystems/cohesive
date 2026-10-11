@@ -82,6 +82,27 @@ public sealed class ExecutionDefinitionFingerprintReuseTests
         Assert.Same(fingerprint, ExecutionDefinitionFingerprinter.Compute(document));
     }
 
+    [Theory]
+    [InlineData(128)]
+    [InlineData(4096)]
+    public void ImportedFirstFingerprintDoesNotAllocateAFullCanonicalEnvelope(int rows)
+    {
+        using var json = JsonDocument.Parse("{\"rows\":[" + string.Join(",", Enumerable.Repeat(
+            "{\"z\":\"λ/\\\"<>&\",\"values\":[1.00,-0.0,1e21,null],\"a\":true}", rows)) + "]}");
+        var expected = ExecutionDefinitionFingerprinter.Compute(ExecutionDefinitionDocument.CurrentSchemaVersion, new("test"), json.RootElement);
+        var metadata = new ExecutionDefinitionMetadata(new("streaming"), new("1"),
+            ExecutionDefinitionDocument.CurrentSchemaVersion, expected, Provenance());
+        _ = ExecutionDefinitionFingerprinter.Compute(new(new("test"), metadata, json.RootElement));
+        var imported = new ExecutionDefinitionDocument(new("test"), metadata, json.RootElement);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var actual = ExecutionDefinitionFingerprinter.Compute(imported);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(expected, actual);
+        // Normalization and owned document construction precede this boundary. First digest
+        // computation must retain only its digest, without allocating a payload-sized envelope.
+        Assert.InRange(allocated, 0, 16_384);
+    }
+
     [Fact]
     public void WarmRepeatedCompute_DoesNotAllocatePayloadSizedWork()
     {

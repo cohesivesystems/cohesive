@@ -4,11 +4,16 @@ using Cohesive.Model.Authoring;
 
 namespace Cohesive.Relations.Benchmarks;
 
-/// <summary>Measures traversal-scoped reflection preparation across representative CLR contracts.</summary>
+/// <summary>Measures warmed default CLR contract reuse for representative structural shapes.</summary>
 [MemoryDiagnoser]
 public class ClrTypeRefMappingBenchmarks
 {
     readonly DefaultClrTypeRefMapper mapper = new();
+    // A nonempty, unused override measures fresh traversal independently of default root caching.
+    readonly DefaultClrTypeRefMapper traversalMapper = new(new Dictionary<Type, TypeRef>
+    {
+        [typeof(decimal)] = new ScalarTypeRef(ScalarTypeKind.Decimal)
+    });
     Type input = null!;
 
     [Params("flat", "nested", "collection", "large")]
@@ -26,6 +31,9 @@ public class ClrTypeRefMappingBenchmarks
 
     [Benchmark]
     public TypeRef Map() => mapper.Map(input, null);
+
+    [Benchmark]
+    public TypeRef Traverse() => traversalMapper.Map(input, null);
 
     sealed record Leaf(string Name, string? Description, long Sequence, DateTimeOffset Time);
     sealed record Branch(Leaf First, Leaf Second, Leaf Third, Leaf Fourth);

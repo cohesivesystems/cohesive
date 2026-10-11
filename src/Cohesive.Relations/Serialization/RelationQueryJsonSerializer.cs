@@ -8,7 +8,17 @@ namespace Cohesive.Relations.Serialization;
 /// </summary>
 public static class RelationQueryJsonSerializer
 {
-    /// <summary>Creates the canonical compact value profile for declared portable JSON projection.</summary>
+    static readonly Lazy<JsonSerializerOptions> FingerprintOptions = new(static () =>
+    {
+        var options = CreateOptions();
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
+    });
+
+    internal static JsonSerializerOptions GetReadOnlyOptions() => FingerprintOptions.Value;
+
+    /// <summary>Creates an independently mutable compact profile for declared portable JSON projection.</summary>
+    /// <remarks>Framework fingerprinting uses a shared frozen profile; callers retain their own customization boundary.</remarks>
     public static JsonSerializerOptions CreateOptions() => CreateOptions(indented: false);
 
     /// <summary>Creates strict serializer options for canonical relation/query IR.</summary>

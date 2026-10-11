@@ -60,7 +60,9 @@ public class ExecutionDefinitionFingerprintReuseBenchmarks
     [Benchmark, BenchmarkCategory("AuthoredFirstUse")]
     public ExecutionDefinitionFingerprint CreateAndReuse() => ExecutionDefinitionFingerprinter.Compute(Create());
 
-    ExecutionDefinitionDocument Create() => ExecutionDefinitionDocument.Create(new("benchmark"), new("fingerprint"), new("1"), payload, Provenance);
+    ExecutionDefinitionDocument Create() => ExecutionDefinitionDocument.Create(new("benchmark"), new("fingerprint"), new("1"), new Definition(payload), Provenance);
+    public sealed record Definition(JsonElement Content);
+
     ExecutionDefinitionDocument Import() => new(document.Kind, document.Metadata, document.Definition, document.Extensions);
     ExecutionDefinitionFingerprint Recompute(ExecutionDefinitionDocument value) => recompute(
         value.Metadata.SchemaVersion, value.Kind, value.Definition, value.Extensions);

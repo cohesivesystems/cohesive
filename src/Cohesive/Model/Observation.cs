@@ -355,6 +355,16 @@ sealed class PooledByteBufferWriter : IBufferWriter<byte>, IDisposable
     int writtenCount;
     bool disposed;
 
+    // Borrowed only until disposal; readers must finish before pooled storage is returned.
+    internal ReadOnlyMemory<byte> WrittenMemory
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(disposed, this);
+            return buffer.AsMemory(0, writtenCount);
+        }
+    }
+
     public ReadOnlySpan<byte> WrittenSpan
     {
         get
@@ -454,7 +464,7 @@ sealed class Sha256BufferWriter : IBufferWriter<byte>, IDisposable
         ObjectDisposedException.ThrowIf(disposed, this);
         Flush();
         if (!hash.TryGetHashAndReset(destination, out var written) || written != SHA256.HashSizeInBytes)
-            throw new InvalidOperationException("The canonical observation fingerprint could not be completed.");
+            throw new InvalidOperationException("The canonical SHA-256 fingerprint could not be completed.");
     }
 
     public void Dispose()

@@ -13,6 +13,12 @@ namespace Cohesive.Model.Authoring;
 public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 {
     readonly ImmutableDictionary<Type, TypeRef> typeMappings;
+    // Weak keys bound default contract retention to CLR type lifetime. Nested traversal never
+    // consults the root cache: recursive diagnostics depend on the current ancestor path.
+    static readonly WeakPreparationCache<Type, TypeRef> defaultRootTypes = new();
+    static readonly WeakPreparationCache<Type, bool> polymorphicTypes = new();
+    static readonly WeakPreparationCache<Type, Type?> quantityRepresentations = new();
+    static readonly WeakPreparationCache<Type, (PropertyInfo Property, string Name)[]> structuralProperties = new();
 
     /// <summary>Creates the default portable CLR type projection.</summary>
     public DefaultClrTypeRefMapper() => typeMappings = ImmutableDictionary<Type, TypeRef>.Empty;
@@ -46,9 +52,11 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     /// object fields use <see cref="JsonPropertyNameAttribute"/> when present and otherwise use the CLR property
     /// name. Fields are ordered ordinally by that semantic name. Unsupported, recursive, polymorphic, or ambiguous
     /// CLR shapes produce an <see cref="OpaqueRuntimeTypeRef"/> carrying a type-inference diagnostic.
-    /// Reflection nullability metadata is prepared once per property within this invocation and
-    /// released with the traversal. Concurrent invocations do not share mutable reflection state;
-    /// inferred contracts are not cached across occurrence nullability or recursion paths.
+    /// Property-declared nullability metadata is lazily shared through weak reflection-property keys.
+    /// Concurrent first use is coordinated; mutable reflection contexts are confined to preparation.
+    /// Default root contracts without occurrence metadata are immutable and shared by CLR type.
+    /// Explicit mappings and occurrence metadata bypass that cache. Completed cycle-free structural children
+    /// are reused within traversal; recursive projections retain their ancestor-specific diagnostics.
     /// </remarks>
     /// <param name="clrType">CLR type to project into a portable semantic type reference.</param>
     /// <param name="nullability">Optional reflection nullability metadata for the mapped occurrence.</param>
@@ -57,6 +65,9 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     public TypeRef Map(Type clrType, NullabilityInfo? nullability)
     {
         ArgumentNullException.ThrowIfNull(clrType);
+        if (typeMappings.IsEmpty && nullability is null)
+            return defaultRootTypes.Get(clrType, static type =>
+                new DefaultClrTypeRefMapper().MapInternal(type, null, new MappingContext()));
         return MapInternal(clrType, nullability, new MappingContext());
     }
 
@@ -161,22 +172,26 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                 "Abstract/interface CLR types cannot be represented structurally without a concrete type set.");
         }
 
+        if (context.StructuralTypes.TryGetValue(unwrapped, out var prepared))
+            return prepared;
+
         if (!context.Path.Add(unwrapped))
         {
+            context.RecursiveEncounters++;
             return Opaque(
                 unwrapped,
                 TypeInferenceDiagnosticReasons.RecursiveType,
                 "Recursive CLR types require named type definitions and references before they can be represented structurally.");
         }
 
+        var recursiveEncounters = context.RecursiveEncounters;
         try
         {
-            var properties = ShapeTypeInspector.GetReadableProperties(unwrapped)
-                .Select(static property => (
-                    Property: property,
-                    Name: GetSerializedMemberName(property)))
-                .OrderBy(static property => property.Name, StringComparer.Ordinal)
-                .ToArray();
+            var properties = structuralProperties.Get(unwrapped, static type =>
+                ShapeTypeInspector.GetReadableProperties(type)
+                    .Select(static property => (Property: property, Name: GetSerializedMemberName(property)))
+                    .OrderBy(static property => property.Name, StringComparer.Ordinal)
+                    .ToArray());
 
             if (properties.Length == 0)
             {
@@ -186,16 +201,17 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                     "The CLR type has no readable public instance properties to infer from.");
             }
 
-            if (properties.Select(static property => property.Name).Distinct(StringComparer.Ordinal).Count()
-                != properties.Length)
+            // Ordinal sorting makes duplicates adjacent; no per-traversal set is needed.
+            for (var index = 1; index < properties.Length; index++)
             {
-                return Opaque(
-                    unwrapped,
-                    TypeInferenceDiagnosticReasons.AmbiguousSerializedProperty,
-                    "The CLR type maps more than one readable property to the same serialized field name.");
+                if (StringComparer.Ordinal.Equals(properties[index - 1].Name, properties[index].Name))
+                    return Opaque(
+                        unwrapped,
+                        TypeInferenceDiagnosticReasons.AmbiguousSerializedProperty,
+                        "The CLR type maps more than one readable property to the same serialized field name.");
             }
 
-            return new ObjectTypeRef(
+            var result = new ObjectTypeRef(
                 [.. properties.Select(x =>
                 {
                     var propertyNullability = context.PropertyNullability(x.Property);
@@ -214,6 +230,11 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
                             : FieldNullability.NonNullable
                             );
                 })]);
+            // Only cycle-free structural projections are path-independent. Structural field
+            // nullability comes from declarations, never from this object's occurrence metadata.
+            if (recursiveEncounters == context.RecursiveEncounters)
+                context.StructuralTypes.Add(unwrapped, result);
+            return result;
         }
         finally
         {
@@ -247,7 +268,7 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
             };
         }
 
-        return new EnumTypeRef(name: enumType.Name, members: [.. catalog!.WireMembers]);
+        return new EnumTypeRef(name: enumType.Name, members: catalog!.WireMembers);
     }
 
     /// <summary>Returns the deterministic JSON field identity of a reflected member.</summary>
@@ -355,8 +376,9 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
     }
 
     static bool IsJsonPolymorphicType(Type type) =>
-        type.GetCustomAttribute<JsonPolymorphicAttribute>(inherit: true) is not null
-        || type.GetCustomAttributes<JsonDerivedTypeAttribute>(inherit: true).Any();
+        polymorphicTypes.Get(type, static key =>
+            key.GetCustomAttribute<JsonPolymorphicAttribute>(inherit: true) is not null
+            || key.GetCustomAttributes<JsonDerivedTypeAttribute>(inherit: true).Any());
 
     static bool TryGetEnumerableElementType(
         Type type,
@@ -403,20 +425,16 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
 
     static bool TryGetStructuredQuantityRepresentationType(Type type, out Type representationType)
     {
-        var structuredQuantityInterface = type.GetInterfaces()
-            .FirstOrDefault(x =>
+        var representation = quantityRepresentations.Get(type, static key =>
+        {
+            var quantityInterface = key.GetInterfaces().FirstOrDefault(x =>
                 x.IsGenericType
                 && x.GetGenericTypeDefinition() == typeof(IStructuredQuantity<,,>)
-                && x.GetGenericArguments()[0] == type);
-
-        if (structuredQuantityInterface is null)
-        {
-            representationType = typeof(void);
-            return false;
-        }
-
-        representationType = structuredQuantityInterface.GetGenericArguments()[2];
-        return true;
+                && x.GetGenericArguments()[0] == key);
+            return quantityInterface?.GetGenericArguments()[2];
+        });
+        representationType = representation ?? typeof(void);
+        return representation is not null;
     }
 
     static bool TryGetKeyValuePairTypes(
@@ -521,31 +539,24 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         return false;
     }
 
-    // Reflection preparation belongs to one traversal. Inferred contracts still depend on
-    // occurrence nullability, explicit mappings and the current recursion path.
+    // Reuse cycle-free structural projections within this traversal's explicit-mapping scope.
+    // Recursive projections must be rebuilt under each ancestor path.
     sealed class MappingContext
     {
-        NullabilityInfoContext? nullabilityContext;
-        Dictionary<PropertyInfo, NullabilityInfo?>? propertyNullabilities;
-
         public HashSet<Type> Path { get; } = [];
+        public Dictionary<Type, ObjectTypeRef> StructuralTypes { get; } = [];
+        public int RecursiveEncounters { get; set; }
 
         public NullabilityInfo? PropertyNullability(PropertyInfo property)
         {
-            propertyNullabilities ??= [];
-            if (propertyNullabilities.TryGetValue(property, out var prepared))
-                return prepared;
-            nullabilityContext ??= new();
             try
             {
-                prepared = nullabilityContext.Create(property);
+                return ShapeTypeInspector.GetPropertyNullability(property);
             }
             catch (ArgumentException)
             {
-                prepared = null;
+                return null;
             }
-            propertyNullabilities.Add(property, prepared);
-            return prepared;
         }
     }
 

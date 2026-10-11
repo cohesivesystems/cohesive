@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json.Serialization;
 
@@ -9,8 +8,15 @@ namespace Cohesive.Model;
 /// </summary>
 public static class ShapeTypeInspector
 {
-    static readonly ConcurrentDictionary<Type, PropertyInfo[]> ReadablePropertiesByType = new();
-    static readonly ConcurrentDictionary<Type, ClrPropertyShapeMetadata[]> ShapePropertiesByType = new();
+    // Cache only property-declared reflection facts. Values are internal read-only inputs;
+    // weak keys add no permanent retention of caller reflection properties or their types.
+    static readonly WeakPreparationCache<PropertyInfo, NullabilityInfo> PropertyNullabilities = new();
+
+    internal static NullabilityInfo GetPropertyNullability(PropertyInfo property) =>
+        PropertyNullabilities.Get(property, static key => new NullabilityInfoContext().Create(key));
+
+    static readonly WeakPreparationCache<Type, PropertyInfo[]> ReadablePropertiesByType = new();
+    static readonly WeakPreparationCache<Type, ClrPropertyShapeMetadata[]> ShapePropertiesByType = new();
 
     /// <summary>
     /// Returns cached readable public instance properties in deterministic declaration order.
@@ -21,7 +27,7 @@ public static class ShapeTypeInspector
     public static PropertyInfo[] GetReadableProperties(Type type)
     {
         ArgumentNullException.ThrowIfNull(type);
-        return ReadablePropertiesByType.GetOrAdd(type, static currentType =>
+        return ReadablePropertiesByType.Get(type, static currentType =>
         {
             var allProperties = currentType.GetProperties(BindingFlags.Public | BindingFlags.Instance);
             if (allProperties.Length == 0)
@@ -83,20 +89,17 @@ public static class ShapeTypeInspector
     public static ClrPropertyShapeMetadata[] GetReadablePropertyMetadata(Type type)
     {
         ArgumentNullException.ThrowIfNull(type);
-        return ShapePropertiesByType.GetOrAdd(type, static currentType =>
+        return ShapePropertiesByType.Get(type, static currentType =>
         {
             var properties = GetReadableProperties(currentType);
             if (properties.Length == 0)
                 return [];
 
-            // NullabilityInfoContext maintains mutable internal caches and is not thread-safe. The
-            // completed metadata array is cached, so keep the context local to this value factory.
-            NullabilityInfoContext nullabilityContext = new();
             var metadata = new ClrPropertyShapeMetadata[properties.Length];
             for (var i = 0; i < properties.Length; i++)
             {
                 var property = properties[i];
-                var nullability = nullabilityContext.Create(property);
+                var nullability = GetPropertyNullability(property);
                 metadata[i] = new ClrPropertyShapeMetadata(
                     property: property,
                     isOptional: IsOptional(property.PropertyType, nullability));

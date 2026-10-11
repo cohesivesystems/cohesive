@@ -1,9 +1,11 @@
 using System.Buffers;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Execution;
@@ -72,25 +74,31 @@ public static class ExecutionDefinitionFingerprinter
         ValidateDefinitionComponents(schemaVersion, kind, definition);
         ValidateDefinitionProperties(definition);
         var normalizedExtensions = ExecutionDefinitionDocument.NormalizeExtensions(extensions);
-        return ComputeNormalized(schemaVersion, kind, definition, normalizedExtensions);
+        return ComputeCore(schemaVersion, kind, definition, normalizedExtensions, definitionIsCanonical: false);
     }
 
     internal static ExecutionDefinitionFingerprint ComputeNormalized(
         ExecutionIrSchemaVersion schemaVersion,
         ExecutionDefinitionKind kind,
         JsonElement canonicalDefinition,
-        ImmutableArray<ExecutionDefinitionExtension> normalizedExtensions)
+        ImmutableArray<ExecutionDefinitionExtension> normalizedExtensions) =>
+        ComputeCore(schemaVersion, kind, canonicalDefinition, normalizedExtensions, definitionIsCanonical: true);
+
+    static ExecutionDefinitionFingerprint ComputeCore(
+        ExecutionIrSchemaVersion schemaVersion,
+        ExecutionDefinitionKind kind,
+        JsonElement definition,
+        ImmutableArray<ExecutionDefinitionExtension> normalizedExtensions,
+        bool definitionIsCanonical)
     {
-        var normalized = GetNormalizedSemanticBytesCore(
-            schemaVersion,
-            kind,
-            canonicalDefinition,
-            normalizedExtensions);
-        var digest = SHA256.HashData(normalized);
-        return new(
-            algorithm: Algorithm,
-            canonicalization: Canonicalization,
-            value: Convert.ToHexStringLower(digest));
+        // Reuse the core observation writer: only the digest is retained, and hashing needs no
+        // contiguous envelope buffer or payload-sized copy. Both paths share the envelope writer.
+        using Sha256BufferWriter hash = new();
+        using (var writer = CreateCanonicalWriter(hash))
+            WriteNormalizedSemanticContent(writer, schemaVersion, kind, definition, normalizedExtensions, definitionIsCanonical);
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        hash.Complete(digest);
+        return new(Algorithm, Canonicalization, Convert.ToHexStringLower(digest));
     }
 
     /// <summary>Gets the exact normalized semantic bytes hashed for a document.</summary>
@@ -107,7 +115,8 @@ public static class ExecutionDefinitionFingerprinter
             document.Metadata.SchemaVersion,
             document.Kind,
             document.Definition,
-            document.Extensions);
+            document.Extensions,
+            definitionIsCanonical: true);
     }
 
     /// <summary>Gets the exact normalized semantic bytes hashed by the v1 profile.</summary>
@@ -142,57 +151,84 @@ public static class ExecutionDefinitionFingerprinter
 
     internal static JsonElement NormalizeDefinition(JsonElement definition)
     {
-        if (definition.ValueKind != JsonValueKind.Object)
-        {
-            throw new ArgumentException(
-                "Canonical execution-definition content must be a JSON object.",
-                nameof(definition));
-        }
-        ValidateDefinitionProperties(definition);
+        using PooledByteBufferWriter buffer = new();
+        WriteCanonicalDefinition(buffer, definition);
+        // ParseValue creates an owned element before the temporary pooled bytes are returned.
+        var reader = new Utf8JsonReader(buffer.WrittenSpan);
+        return JsonElement.ParseValue(ref reader);
+    }
 
-        ArrayBufferWriter<byte> buffer = new();
-        using (var writer = CreateCanonicalWriter(buffer))
-            CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
-        var canonical = buffer.WrittenMemory;
-        using var document = JsonDocument.Parse(canonical);
-        return document.RootElement.Clone();
+    // The owning writer remains the authority for validation, number semantics and ordering.
+    internal static void WriteCanonicalDefinition(IBufferWriter<byte> buffer, JsonElement definition)
+    {
+        ValidateDefinition(definition);
+        using var writer = CreateCanonicalWriter(buffer);
+        CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
+    }
+
+    internal static string GetCanonicalDefinitionKey(JsonElement definition)
+    {
+        using PooledByteBufferWriter buffer = new();
+        WriteCanonicalDefinition(buffer, definition);
+        return Encoding.UTF8.GetString(buffer.WrittenSpan);
+    }
+
+    static void ValidateDefinition(JsonElement definition)
+    {
+        if (definition.ValueKind != JsonValueKind.Object)
+            throw new ArgumentException("Canonical execution-definition content must be a JSON object.", nameof(definition));
+        ValidateDefinitionProperties(definition);
     }
 
     static byte[] GetNormalizedSemanticBytesCore(
         ExecutionIrSchemaVersion schemaVersion,
         ExecutionDefinitionKind kind,
-        JsonElement canonicalDefinition,
-        ImmutableArray<ExecutionDefinitionExtension> normalizedExtensions)
+        JsonElement definition,
+        ImmutableArray<ExecutionDefinitionExtension> normalizedExtensions,
+        bool definitionIsCanonical = false)
     {
-        ValidateDefinitionComponents(schemaVersion, kind, canonicalDefinition);
+        ArrayBufferWriter<byte> buffer = new();
+        using (var writer = CreateCanonicalWriter(buffer))
+            WriteNormalizedSemanticContent(writer, schemaVersion, kind, definition, normalizedExtensions, definitionIsCanonical);
+        return buffer.WrittenSpan.ToArray();
+    }
+
+    static void WriteNormalizedSemanticContent(
+        Utf8JsonWriter writer,
+        ExecutionIrSchemaVersion schemaVersion,
+        ExecutionDefinitionKind kind,
+        JsonElement definition,
+        ImmutableArray<ExecutionDefinitionExtension> normalizedExtensions,
+        bool definitionIsCanonical)
+    {
+        ValidateDefinitionComponents(schemaVersion, kind, definition);
         if (normalizedExtensions.IsDefault)
             throw new ArgumentException("Normalized execution extensions must be initialized.", nameof(normalizedExtensions));
 
-        var options = ExecutionDefinitionJsonSerializer.GetReadOnlyOptions();
-        ArrayBufferWriter<byte> buffer = new();
-        using (var writer = CreateCanonicalWriter(buffer))
+        // Only document construction supplies normalized content. Imported documents normalize
+        // and validate at their constructor boundary; component APIs never take this trusted path.
+        writer.WriteStartObject();
+        writer.WritePropertyName("definition");
+        if (definitionIsCanonical)
+            definition.WriteTo(writer);
+        else
+            CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
+        writer.WritePropertyName("extensions");
+        if (normalizedExtensions.IsEmpty)
         {
-            // Envelope keys are fixed and emitted in the same ordinal order as the general writer.
-            writer.WriteStartObject();
-            writer.WritePropertyName("definition");
-            CanonicalJsonWriter.WriteCanonicalSequence(writer, canonicalDefinition);
-            writer.WritePropertyName("extensions");
-            if (normalizedExtensions.IsEmpty)
-            {
-                writer.WriteStartArray();
-                writer.WriteEndArray();
-            }
-            else
-            {
-                var extensions = CreateSemanticExtensionsNode(normalizedExtensions, options);
-                writer.WriteRawValue(CanonicalJsonWriter.GetCanonicalSequenceBytes(
-                    extensions, options, CanonicalJsonNumberSemantics.ExactDecimalRational));
-            }
-            writer.WriteString("kind", kind.Value);
-            writer.WriteString("schemaVersion", schemaVersion.Value);
-            writer.WriteEndObject();
+            writer.WriteStartArray();
+            writer.WriteEndArray();
         }
-        return buffer.WrittenSpan.ToArray();
+        else
+        {
+            var options = ExecutionDefinitionJsonSerializer.GetReadOnlyOptions();
+            var extensions = CreateSemanticExtensionsNode(normalizedExtensions, options);
+            writer.WriteRawValue(CanonicalJsonWriter.GetCanonicalSequenceBytes(
+                extensions, options, CanonicalJsonNumberSemantics.ExactDecimalRational));
+        }
+        writer.WriteString("kind", kind.Value);
+        writer.WriteString("schemaVersion", schemaVersion.Value);
+        writer.WriteEndObject();
     }
 
     static Utf8JsonWriter CreateCanonicalWriter(IBufferWriter<byte> buffer) => new(buffer, new JsonWriterOptions
