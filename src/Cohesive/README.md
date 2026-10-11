@@ -147,47 +147,19 @@ type checks used by observation admission without manufacturing a one-field shap
 resolve only in the supplied graph. This validates a concrete type; field presence and nullability
 remain the caller's contract. Relation draft admission uses it for graph-owned enum literals.
 
-Nested object and structural validation retains exact-property precedence. On a case-insensitive
-fallback it builds one operation-local property index, preserving the first matching source
-property; no instance values enter shared caches. Unknown-property diagnostics lazily prepare
-case-insensitive name sets on the graph-bound plan node. Standalone checks use one shared weak
-declaration table. Metadata slots publish successful preparation once and retry failures.
-Allowed union discriminators,
-depth limits, values, and diagnostics remain operation-scoped. The existing structural
-field lookup uses ordinal identity and cannot replace this case-insensitive diagnostic index.
+Nested object and structural validation preserves exact-property precedence and uses case-insensitive
+fallback matching. Unknown-property diagnostics preserve declaration order. Named enums accept both
+member names and literal aliases; duplicate union discriminators select the first declared case.
+Nonstring primitive literals retain their representation-sensitive matching rules.
 
-Graph-bound array, object and named validation lazily binds reachable named definitions and child
-links once per exact graph and type object. Graph and root keys are weak; independently requested
-roots share prepared children. Distinct named references resolving the same declaration also share
-its metadata container within that graph. A per-graph preparation gate coordinates complete recursive
-closures,
-while warm readers bypass that gate. Failed preparation publishes no incomplete nodes. Preparation
-uses an iterative work queue; value validation still applies depth limits and builds fresh diagnostics.
-Unbound checks and scalar leaves retain direct dispatch. Nodes retain their original TypeRef, and identity
-checks reject root/child identity mismatches in Release as well as Debug. Each metadata container binds its exact owner and holds one private index reference: each current
-owner has one index kind. The first successful publication records its accessor type; subsequent
-requests with a different accessor fail with InvalidOperationException before any cast, even when
-the index result types coincide. Accessor constraints bind the owner, result type and factory.
-A zero-state typed token supplies the short getter form without boxing or writable slots. One shared
-getter checks owner identity and coordinates publication; no accessor or test receives a writable slot.
-Tests inspect the prepared reference without triggering preparation. Exact ownership remains a runtime check.
-Reading an indexless node's metadata does not execute a factory or throw.
-Field-name accessors constrain their owner
-types at compile time; enum and union paths share one hybrid lookup policy.
-`ObservationValidationPlan` is an internal interpretation of existing declarations, with no additional type IDs, wire format or public contract.
-Large string enums and string-discriminator unions lazily prepare ordinal membership/dispatch indexes
-on the graph-bound plan node, or in the same standalone declaration table. The first eight entries
-retain direct checks; only later matches or misses prepare an index. Named enum names and literal aliases are accepted, and duplicate union
-literals retain the first declared case. Other primitive discriminators retain their existing exact
-representation rules. Weak-key, successful-only preparation shares no instance values or results.
-The JSON reader checks early union cases directly. Only a late match or miss requests graph-owned
-dispatch metadata, independently of validation closure preparation. A concurrent declaration registry
-shares the same metadata and index with subsequent validation. Named enums skip members without a literal value
-when matching nonstring primitives.
-See `UnionReaderBenchmarks` for plain typed union collection decoding, and `LiteralValidationBenchmarks` for late-match, invalid-value and early-match measurements.
+Repeated validation shares immutable preparation within the exact graph and type declarations.
+Cache keys are weak, concurrent preparation is safe, and failed preparation can be retried. Instance
+values, allowed union discriminators, depth limits and diagnostics remain operation-scoped.
+JSON decoding shares prepared dispatch indexes with validation without preparing unrelated closures.
+These optimizations introduce no public type IDs or wire contracts and do not replace validation.
 
-See `NestedValidationBenchmarks` and `NamedValidationBenchmarks` for representative repeated validation,
-and the [performance overview](../../docs/performance/execution-preparation-allocations.md) for qualification.
+See the [performance overview](../../docs/performance/execution-preparation-allocations.md) for cache
+ownership, implementation invariants, benchmarks and qualification.
 
 ## Exact decimal text
 

@@ -114,10 +114,10 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         var metadata = new ObservationValidationMetadata(owner);
         var original = ObservationValidator.InlineEnumLiteral.Index.Get(metadata, owner);
         var sameType = Assert.Throws<InvalidOperationException>(() =>
-            new ValidationIndexAccessor<EnumTypeRef, HashSet<string>, OtherEnumIndex>().Get(metadata, owner));
+            new ObservationValidationMetadata.Accessor<EnumTypeRef, HashSet<string>, OtherEnumIndex>().Get(metadata, owner));
         Assert.Contains("requested accessor", sameType.Message);
         Assert.Throws<InvalidOperationException>(() =>
-            new ValidationIndexAccessor<EnumTypeRef, Dictionary<string, int>, OtherEnumDictionary>().Get(metadata, owner));
+            new ObservationValidationMetadata.Accessor<EnumTypeRef, Dictionary<string, int>, OtherEnumDictionary>().Get(metadata, owner));
         Assert.Same(original, ObservationValidator.InlineEnumLiteral.Index.Get(metadata, owner));
     }
 

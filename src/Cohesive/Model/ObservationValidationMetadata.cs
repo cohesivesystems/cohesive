@@ -28,7 +28,7 @@ internal sealed class ObservationValidationMetadata(object owner)
         return metadata;
     }
 
-    internal TIndex Get<TOwner, TIndex, TAccessor>(TOwner owner)
+    TIndex Get<TOwner, TIndex, TAccessor>(TOwner owner)
         where TOwner : class where TIndex : class
         where TAccessor : struct, IValidationIndexAccessor<TOwner, TIndex>
     {
@@ -60,18 +60,18 @@ internal sealed class ObservationValidationMetadata(object owner)
         if (accessorType != typeof(TAccessor))
             throw new InvalidOperationException($"Validation metadata was prepared by {accessorType}; requested accessor {typeof(TAccessor)} does not match.");
     }
+
+    // A zero-state token binds the generic pairing once, with no boxing, delegate or writable slot.
+    internal readonly struct Accessor<TOwner, TIndex, TAccessor>
+        where TOwner : class where TIndex : class
+        where TAccessor : struct, IValidationIndexAccessor<TOwner, TIndex>
+    {
+        internal TIndex Get(ObservationValidationMetadata metadata, TOwner owner) =>
+            metadata.Get<TOwner, TIndex, TAccessor>(owner);
+    }
 }
 
 internal interface IValidationIndexAccessor<TOwner, TIndex> where TOwner : class where TIndex : class
 {
     static abstract TIndex Create(TOwner owner);
-}
-
-// A zero-state token binds the generic pairing once, with no boxing, delegate or writable slot.
-internal readonly struct ValidationIndexAccessor<TOwner, TIndex, TAccessor>
-    where TOwner : class where TIndex : class
-    where TAccessor : struct, IValidationIndexAccessor<TOwner, TIndex>
-{
-    internal TIndex Get(ObservationValidationMetadata metadata, TOwner owner) =>
-        metadata.Get<TOwner, TIndex, TAccessor>(owner);
 }

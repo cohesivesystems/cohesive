@@ -782,7 +782,7 @@ public static class ObservationValidator
     // Internal accessors expose index identity to regression tests without adding public API.
     internal readonly struct InlineEnumLiteral : ILiteralAccessor<EnumTypeRef>, IValidationIndexAccessor<EnumTypeRef, HashSet<string>>
     {
-        internal static ValidationIndexAccessor<EnumTypeRef, HashSet<string>, InlineEnumLiteral> Index => default;
+        internal static ObservationValidationMetadata.Accessor<EnumTypeRef, HashSet<string>, InlineEnumLiteral> Index => default;
         public static bool TryGetText(in ObservationValue value, out string text) => TryGetString(value, out text);
         public static int Count(EnumTypeRef owner) => owner.Members.Length;
         public static bool CanIndex(EnumTypeRef owner) => true;
@@ -795,7 +795,7 @@ public static class ObservationValidator
     }
     internal readonly struct NamedEnumLiteral : ILiteralAccessor<TypeDefinition.Enum>, IValidationIndexAccessor<TypeDefinition.Enum, HashSet<string>>
     {
-        internal static ValidationIndexAccessor<TypeDefinition.Enum, HashSet<string>, NamedEnumLiteral> Index => default;
+        internal static ObservationValidationMetadata.Accessor<TypeDefinition.Enum, HashSet<string>, NamedEnumLiteral> Index => default;
         public static bool TryGetText(in ObservationValue value, out string text) => TryGetString(value, out text);
         public static int Count(TypeDefinition.Enum owner) => owner.Values.Length;
         public static bool CanIndex(TypeDefinition.Enum owner) => owner.Underlying == PrimitiveType.String;
@@ -820,7 +820,7 @@ public static class ObservationValidator
     }
     internal readonly struct UnionLiteral : ILiteralAccessor<TypeDefinition.Union>, IValidationIndexAccessor<TypeDefinition.Union, Dictionary<string, int>>
     {
-        internal static ValidationIndexAccessor<TypeDefinition.Union, Dictionary<string, int>, UnionLiteral> Index => default;
+        internal static ObservationValidationMetadata.Accessor<TypeDefinition.Union, Dictionary<string, int>, UnionLiteral> Index => default;
         public static bool TryGetText(in ObservationValue value, out string text)
         {
             text = value.String!;
@@ -1259,7 +1259,7 @@ public static class ObservationValidator
 
     readonly struct ObjectFieldNameAccessor : IFieldNameAccessor<ObjectTypeRef, ObjectFieldTypeDef>
     {
-        internal static ValidationIndexAccessor<ObjectTypeRef, HashSet<string>, ObjectFieldNameAccessor> Index => default;
+        internal static ObservationValidationMetadata.Accessor<ObjectTypeRef, HashSet<string>, ObjectFieldNameAccessor> Index => default;
         public static string GetName(ObjectFieldTypeDef definition) => definition.Name;
         public static HashSet<string> GetKnownNames(ObjectTypeRef owner, ObservationValidationPlan? plan) =>
             Index.Get(ObservationValidationMetadata.For(owner, plan), owner);
@@ -1269,7 +1269,7 @@ public static class ObservationValidator
 
     readonly struct StructuralFieldNameAccessor : IFieldNameAccessor<TypeDefinition.Structural, StructuralField>
     {
-        internal static ValidationIndexAccessor<TypeDefinition.Structural, HashSet<string>, StructuralFieldNameAccessor> Index => default;
+        internal static ObservationValidationMetadata.Accessor<TypeDefinition.Structural, HashSet<string>, StructuralFieldNameAccessor> Index => default;
         public static string GetName(StructuralField definition) => definition.Name.Value;
         public static HashSet<string> GetKnownNames(TypeDefinition.Structural owner, ObservationValidationPlan? plan) =>
             Index.Get(ObservationValidationMetadata.For(owner, plan), owner);

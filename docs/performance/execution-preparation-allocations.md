@@ -168,7 +168,10 @@ identity and publishes successfully under the metadata lock. Each current owner 
 so there is no slot-selection API or per-kind field list. Successful publication also records accessor
 identity, checked before casts on every read; a different accessor receives InvalidOperationException,
 including when both return HashSet<string>. A zero-state typed token binds generic arguments once
-and supplies short getter calls without boxing. Tests have non-preparing read-only inspection.
+and supplies short getter calls without boxing. Its nested helper is the sole callable entry point;
+the raw generic getter is private. Each current owner type has one accessor. If a second accessor is
+introduced for the same owner, the first successful preparation wins and the mismatch is detected at
+use, not at compilation; that extension requires an explicit ownership decision. Tests have non-preparing read-only inspection.
 
 There is no owner-to-factory switch; reading indexless metadata is safe. Slots publish successful
 preparation only and retry failures. Named reference nodes resolving the same declaration share that container
