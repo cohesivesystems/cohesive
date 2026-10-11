@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
+    <ProjectReference Include="../Cohesive.ExecutionKernel.TestFixtures/Cohesive.ExecutionKernel.TestFixtures.csproj" />
     <ProjectReference Include="../Cohesive.Api.Execution/Cohesive.Api.Execution.csproj" />
     <ProjectReference Include="..\Cohesive.Relations\Cohesive.Relations.csproj" />
     <ProjectReference Include="..\Cohesive.Relations.TestFixtures\Cohesive.Relations.TestFixtures.csproj" />

@@ -29,8 +29,10 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
         Assert.Equal(fixture.Plan.Definition.Input, link.Input);
         Assert.Equal(fixture.Plan.Definition.Outcome, link.Result);
         Assert.Equal(EntityTransitionReceiptReferences.ValueContract, link.ReceiptContract);
-        Assert.Throws<InvalidOperationException>(() => new ProcessTransitionOperationBinding(fixture.Plan,
+        var failure = Assert.Throws<ProcessTransitionBindingException>(() => new ProcessTransitionOperationBinding(fixture.Plan,
             new NonAtomicRepository(fixture.Repository), fixture.InteractionCatalog).CreateProcessDefinitionLink());
+        Assert.Equal("storage.processes.binding.receiptCapabilityMissing", Assert.Single(failure.Validation.Diagnostics).Code);
+        Assert.Equal("/binding/repository", failure.Validation.Diagnostics[0].Location);
     }
 
     [Theory]

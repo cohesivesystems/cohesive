@@ -1,3 +1,4 @@
+using Cohesive.Model.Serialization;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
@@ -81,6 +82,7 @@ public sealed class ProcessTransitionOperationBinding
     /// <param name="expectedConcurrencyTokenField">Optional required string input field containing the
     /// captured opaque storage token. Supported only for existing-subject transitions. Exact receipt replay
     /// precedes the current-state check; a fresh invocation fails when the subject changed.</param>
+    /// <param name="partitionKey">Optional trusted subject-read partition. Inherits fixed receipt placement and rejects an explicit mismatch.</param>
     public ProcessTransitionOperationBinding(
         CompiledTransitionPlan plan,
         IEntityRepository repository,
@@ -88,7 +90,8 @@ public sealed class ProcessTransitionOperationBinding
         Func<ProcessTransitionInvocation, InteractionEntityReference>? resolveSubject = null,
         Func<ProcessTransitionInvocation, TransitionEmissionIntent, int, InteractionTarget?>?
             createRequestTarget = null,
-        string? expectedConcurrencyTokenField = null)
+        string? expectedConcurrencyTokenField = null,
+        string? partitionKey = null)
     {
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         Repository = repository ?? throw new ArgumentNullException(nameof(repository));
@@ -105,8 +108,18 @@ public sealed class ProcessTransitionOperationBinding
                 || field.Nullability != FieldNullability.NonNullable)
                 throw new ArgumentException("A captured concurrency token requires an existing subject and a required non-null string input field.", nameof(expectedConcurrencyTokenField));
         }
+        if (partitionKey is not null) ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
+        var trustedPartition = repository.TransitionOperationCapabilities.PartitionKey;
+        if (partitionKey is not null && trustedPartition is not null && partitionKey != trustedPartition)
+            throw new ArgumentException("Subject-read partition differs from the repository receipt partition.", nameof(partitionKey));
+        PartitionKey = trustedPartition ?? partitionKey;
+        SubjectReadOptions = PartitionKey is null ? EntityReadOptions.Full : new(partitionKey: PartitionKey);
         ExpectedConcurrencyTokenField = expectedConcurrencyTokenField;
     }
+
+    /// <summary>Trusted subject-read partition; no partition is inferred from client input.</summary>
+    public string? PartitionKey { get; }
+    internal EntityReadOptions SubjectReadOptions { get; }
 
     /// <summary>Exact compiled Transition plan.</summary>
     public CompiledTransitionPlan Plan { get; }
@@ -123,17 +136,30 @@ public sealed class ProcessTransitionOperationBinding
 
     /// <summary>Attests the native receipt contract after checking this repository's declared capability.</summary>
     /// <returns>Exact domain input/output linking evidence plus the separate host receipt contract.</returns>
-    /// <exception cref="InvalidOperationException">The repository cannot atomically commit state and receipt,
+    /// <exception cref="ProcessTransitionBindingException">The repository cannot atomically commit state and receipt,
     /// or its entity shape does not match the Transition observation.</exception>
     /// <remarks>No repository read or write occurs. This checks provider-declared capability; provider
     /// conformance must independently qualify that claim.</remarks>
     public ProcessDefinitionLink CreateProcessDefinitionLink()
     {
-        if (!Repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt
-            || Plan.Definition.Observation != ValueContract.FromShape(Repository.EntityDefinition.Shape))
-            throw new InvalidOperationException("Receipt binding requires matching entity authority and atomic state/receipt support.");
+        var validation = ValidateDefinitionLink();
+        if (!validation.IsValid) throw new ProcessTransitionBindingException(validation);
         return new(Plan.DefinitionReference, ProcessDefinitionLinkKind.Transition, Plan.Definition.Input,
             Plan.Definition.Outcome, receiptContract: EntityTransitionReceiptReferences.ValueContract);
+    }
+
+    /// <summary>Checks native receipt capability and observation authority without performing IO.</summary>
+    /// <returns>Independent, coded diagnostics for each unsatisfied binding requirement.</returns>
+    DocumentValidationResult ValidateDefinitionLink()
+    {
+        var diagnostics = new List<DocumentValidationDiagnostic>();
+        if (!Repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt)
+            diagnostics.Add(new(ProcessTransitionBindingDiagnosticCodes.ReceiptCapabilityMissing, DiagnosticSeverity.Error,
+                "The repository must support atomic state and receipt commits.", "/binding/repository"));
+        if (Plan.Definition.Observation != ValueContract.FromShape(Repository.EntityDefinition.Shape))
+            diagnostics.Add(new(ProcessTransitionBindingDiagnosticCodes.ObservationMismatch, DiagnosticSeverity.Error,
+                "The plan observation contract must match the bound entity state contract.", "/binding/entity"));
+        return new([.. diagnostics]);
     }
 
     internal EntityConcurrencyToken? ResolveExpectedConcurrencyToken(ProcessTransitionInvocation invocation)
@@ -177,6 +203,56 @@ public sealed class ProcessTransitionOperationBinding
 public sealed class EntityTransitionProcessOperationAdapter : IProcessTransitionOperationAdapter
 {
     readonly Func<ProcessTransitionInvocation, ProcessTransitionOperationBinding?> resolveBinding;
+    readonly object subscriptionGate = new();
+    FailureSubscription[] failureSubscriptions = [];
+
+    /// <summary>Subscribes to private failures produced only by this adapter instance.</summary>
+    /// <param name="observer">Synchronous, thread-safe operator sink; receives private native details, never public response data.</param>
+    /// <returns>Idempotent subscription handle. Dispose to release the observer; a delivery already in flight may still invoke its callback.</returns>
+    /// <exception cref="ArgumentNullException">Observer is null.</exception>
+    /// <remarks>No history is retained. Concurrent operations may invoke observers concurrently. Each observer's
+    /// recoverable failure is isolated from the operation and other observers. Route payloads only to protected sinks.</remarks>
+    public IDisposable SubscribeTransitionFailures(Action<EntityTransitionFailureDiagnostic> observer)
+    {
+        ArgumentNullException.ThrowIfNull(observer);
+        var subscription = new FailureSubscription(this, observer);
+        lock (subscriptionGate) Volatile.Write(ref failureSubscriptions, [.. failureSubscriptions, subscription]);
+        return subscription;
+    }
+
+    void RecordFailure(OperationContext context, EntityTransitionOperationResult result)
+    {
+        var subscriptions = Volatile.Read(ref failureSubscriptions);
+        if (subscriptions.Length == 0) return;
+        var diagnostic = new EntityTransitionFailureDiagnostic(context.TraceContext, result);
+        foreach (var subscription in subscriptions) subscription.Deliver(diagnostic);
+    }
+
+    sealed class FailureSubscription(EntityTransitionProcessOperationAdapter owner,
+        Action<EntityTransitionFailureDiagnostic> observer) : IDisposable
+    {
+        Action<EntityTransitionFailureDiagnostic>? callback = observer;
+        EntityTransitionProcessOperationAdapter? source = owner;
+        public void Dispose()
+        {
+            Interlocked.Exchange(ref callback, null);
+            var current = Interlocked.Exchange(ref source, null);
+            if (current is null) return;
+            lock (current.subscriptionGate)
+                Volatile.Write(ref current.failureSubscriptions, [.. current.failureSubscriptions.Where(item => !ReferenceEquals(item, this))]);
+        }
+        internal void Deliver(EntityTransitionFailureDiagnostic diagnostic)
+        {
+            var target = Volatile.Read(ref callback);
+            if (target is null) return;
+            try { target(diagnostic); }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or AccessViolationException))
+            {
+                // Report only the count, never the private diagnostic or observer exception.
+                ExecutionTelemetry.RecordDiagnosticSubscriberFailure();
+            }
+        }
+    }
 
     /// <summary>Creates an adapter over an exact, caller-owned binding resolver.</summary>
     /// <param name="resolveBinding">
@@ -258,15 +334,15 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         var lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
         if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
         {
-            return Result(lookup);
+            return Result(context, lookup);
         }
 
         EntitySnapshot? snapshot;
         try
         {
             snapshot = await binding.Repository.TryGet(context, subject.EntityId.Value,
-                expectedConcurrencyToken is null ? EntityReadOptions.Full
-                    : new EntityReadOptions(expectedConcurrencyToken: expectedConcurrencyToken)).ConfigureAwait(false);
+                expectedConcurrencyToken is null ? binding.SubjectReadOptions
+                    : new EntityReadOptions(partitionKey: binding.PartitionKey, expectedConcurrencyToken: expectedConcurrencyToken)).ConfigureAwait(false);
         }
         catch (ObservationConcurrencyConflictException) when (expectedConcurrencyToken is not null)
         {
@@ -276,11 +352,11 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         if (snapshot is not null && expectedConcurrencyToken is { } expected && snapshot.ConcurrencyToken != expected)
             return await ChangedSubjectAsync(binding, context, request).ConfigureAwait(false);
 
-        static async ValueTask<ProcessOperationResult> ChangedSubjectAsync(
+        async ValueTask<ProcessOperationResult> ChangedSubjectAsync(
             ProcessTransitionOperationBinding binding, OperationContext context, EntityTransitionOperationRequest request)
         {
             var raced = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
-            return raced.Disposition != EntityTransitionOperationDisposition.NotFound ? Result(raced)
+            return raced.Disposition != EntityTransitionOperationDisposition.NotFound ? Result(context, raced)
                 : Failure(ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged,
                     "The authoritative subject changed after its concurrency token was captured.", "/invocation/input");
         }
@@ -292,7 +368,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
             if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
             {
-                return Result(lookup);
+                return Result(context, lookup);
             }
             return Failure(
                 ProcessTransitionOperationAdapterDiagnosticCodes.SubjectMissing,
@@ -305,7 +381,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
             if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
             {
-                return Result(lookup);
+                return Result(context, lookup);
             }
 
             // A replacement Process attempt has a fresh exact occurrence, but unique-subject creation is naturally
@@ -314,7 +390,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             lookup = await binding.Repository.TryGetCreationTransitionOperation(context, request).ConfigureAwait(false);
             if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
             {
-                return Result(lookup);
+                return Result(context, lookup);
             }
             return Failure(
                 ProcessTransitionOperationAdapterDiagnosticCodes.SubjectPresent,
@@ -391,17 +467,23 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
                 ? EntityTransitionSubjectCondition.MustBeAbsent
                 : EntityTransitionSubjectCondition.MustExist);
         var committed = await binding.Repository.CommitTransitionOperation(context, commit).ConfigureAwait(false);
-        return Result(committed);
+        return Result(context, committed);
     }
 
-    static ProcessOperationResult Result(EntityTransitionOperationResult operation) => operation.Receipt is { } receipt
-        ? receipt.Result.WithReceiptReference(EntityTransitionReceiptReferences.Project(receipt.Request.Reference))
-        : ProcessOperationResult.Failed(operation.Diagnostics.FirstOrDefault()
-            ?? new(
+    ProcessOperationResult Result(OperationContext context, EntityTransitionOperationResult operation)
+    {
+        if (operation.Receipt is { } receipt)
+            return receipt.Result.WithReceiptReference(EntityTransitionReceiptReferences.Project(receipt.Request.Reference));
+        RecordFailure(context, operation);
+        return ProcessOperationResult.Failed(operation.Diagnostics.FirstOrDefault() is { } diagnostic
+            ? new(diagnostic.Code, diagnostic.Severity,
+                "The entity operation could not be committed.", diagnostic.Location)
+            : new(
                 ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
                 DiagnosticSeverity.Error,
                 $"Entity Transition operation ended with '{operation.Disposition}' without receipt or diagnostic evidence.",
                 "/entityOperation"));
+    }
 
     static ProcessOperationResult Failure(string code, string message, string location) =>
         ProcessOperationResult.Failed(new(code, DiagnosticSeverity.Error, message, location));

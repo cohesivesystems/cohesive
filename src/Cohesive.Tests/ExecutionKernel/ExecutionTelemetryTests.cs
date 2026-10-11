@@ -22,6 +22,34 @@ public sealed class ExecutionTelemetryTests
     const string PrivatePayload = "private-execution-payload-ari-210";
 
     [Fact]
+    public async Task Subscriber_failure_counter_has_no_payload_and_does_not_enable_execution_telemetry()
+    {
+        // This collection disables parallelization: no unrelated process-wide listener or emitter can interfere.
+        using var listener = new MeterListener();
+        long failures = 0;
+        var tagCounts = new List<int>();
+        listener.InstrumentPublished = (instrument, observer) =>
+        {
+            if (instrument.Meter.Name == ExecutionTelemetry.MeterName
+                && instrument.Name == ExecutionTelemetry.DiagnosticSubscriberFailuresInstrumentName)
+                observer.EnableMeasurementEvents(instrument);
+        };
+        listener.SetMeasurementEventCallback<long>((_, count, tags, _) =>
+        {
+            tagCounts.Add(tags.Length);
+            failures += count;
+        });
+        listener.Start();
+        Assert.False(ExecutionTelemetry.IsEnabled);
+        var fixture = await EntityTransitionCapturedTokenTests.CreateFailureFixture();
+        using var broken = fixture.Adapter.SubscribeTransitionFailures(_ => throw new InvalidOperationException("private sink error"));
+        await fixture.Adapter.ExecuteAsync(fixture.Context, fixture.Invocation);
+        Assert.Equal(1, failures);
+        Assert.Equal(0, Assert.Single(tagCounts));
+        Assert.False(ExecutionTelemetry.IsEnabled);
+    }
+
+    [Fact]
     public void InvocationMetricsRejectUnsupportedDimensionsAndNegativeDuration()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => ExecutionTelemetry.RecordInvocation(

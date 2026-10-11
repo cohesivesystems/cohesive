@@ -184,6 +184,21 @@ public static class ExecutionTelemetry
         "{generation}",
         "Materialization generations observed in status.");
 
+    /// <summary>Failed diagnostic callbacks; this counter has no payload or dimensions.</summary>
+    public const string DiagnosticSubscriberFailuresInstrumentName = "cohesive.execution.diagnostic.subscriber.failures";
+    static readonly Counter<long>? DiagnosticSubscriberFailures = CreateCounter(
+        DiagnosticSubscriberFailuresInstrumentName, "{failure}", "Failed operator diagnostic callbacks.");
+
+    /// <summary>Records a failed operator callback without exposing its exception or diagnostic payload.</summary>
+    public static void RecordDiagnosticSubscriberFailure()
+    {
+        if (DiagnosticSubscriberFailures?.Enabled == true)
+        {
+            TagList tags = default;
+            Add(DiagnosticSubscriberFailures, 1, tags);
+        }
+    }
+
     /// <summary>Completed invocation count, independent of trace sampling.</summary>
     public const string InvocationsInstrumentName = "cohesive.execution.invocations";
     /// <summary>Completed invocation duration in seconds, independent of trace sampling.</summary>
@@ -210,7 +225,8 @@ public static class ExecutionTelemetry
         if (InvocationDuration?.Enabled == true) Record(InvocationDuration, duration.TotalSeconds, tags);
     }
 
-    /// <summary>Whether any execution activity or metric listener is currently enabled.</summary>
+    /// <summary>Whether general execution activity or metric instrumentation is enabled.</summary>
+    /// <remarks>The failure-only diagnostic subscriber counter does not enable general execution instrumentation.</remarks>
     public static bool IsEnabled => (Activities?.HasListeners() ?? false)
         || Invocations?.Enabled == true
         || InvocationDuration?.Enabled == true

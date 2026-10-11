@@ -169,3 +169,53 @@ independent of whether seeds are null, empty or populated. Omission keeps typed 
 legacy `Id` seed-import field. Serialized field names, including `JsonPropertyName`, are authoritative;
 a POCO lacking an explicitly configured field fails during typed preparation. Snapshot imports already
 carry canonical envelope identities and do not infer a POCO mapping.
+
+## Explicit creation versus upsert
+
+`IEntityRepository.Create(context, state, policy)` makes absence-fenced creation versus unconditional
+replacement explicit. `CreationCapabilities.Require(policy)` admits that guarantee at registration.
+PostgreSQL and memory support atomic absence; typed wrappers forward the capability and policy.
+`Upsert` remains the ordinary update primitive. A pre-read followed by upsert is not atomic creation.
+The typed ASP.NET `Create(endpoint, EntityCreationPolicy.IfAbsent, ...)` binding prepares the implied
+creation transition once and maps duplicate identities to sanitized 409s; it does not recheck capabilities
+on each request. Choose `ReplaceExisting` explicitly to retain the old upsert-backed API behavior.
+This is an authoring change: migrate former `CreateIfAbsent` and implicit `Create` calls to the policy form.
+
+## Shared receipt commit protocol
+
+`EntityTransitionCommitProtocol` owns exact replay, creation-intent replay and conditional-conflict diagnostics.
+Each store supplies one native atomic state/receipt attempt. The protocol tries that attempt first: success
+requires **zero external receipt lookups**. Only a conditional conflict triggers exact receipt resolution,
+followed by creation-intent lookup when needed. There is at most one native attempt and one lookup pass;
+exceptions and ambiguous acknowledgements propagate without retry. Conditional conflicts use consistent
+`/write/subjectCondition` or `/write/expectedConcurrencyToken` locations and preserve subject, fence and native
+provider status details for repository/operator callers; do not expose these native diagnostics directly to clients.
+The process adapter preserves code and location but projects a safe message without provider evidence.
+Before sanitizing it, the adapter delivers the original result and trace context to subscribers attached
+through `adapter.SubscribeTransitionFailures(Action<EntityTransitionFailureDiagnostic>)` or the same method
+on the built `HostedServiceProcess`. The returned `IDisposable` releases that observer. Subscriptions belong
+to that exact adapter/host instance: sharing a trace, repository or process does not share private failures.
+There is no global `DiagnosticListener`, automatic exporter, persistence, or replay. Callbacks run synchronously,
+may run concurrently for separate operations, and must route private identities/tokens/provider details only
+to protected sinks. Disposal prevents future delivery but a delivery already in flight may still invoke its callback. One failing
+observer cannot affect the operation or other observers. Each recoverable callback failure increments
+`cohesive.execution.diagnostic.subscriber.failures` on the existing `Cohesive.Execution` meter, with no tags,
+exception or private payload. Listening only to this counter does not enable general execution telemetry. Subscriber snapshots are read without acquiring the registration lock.
+Tests cover the counter, isolation, disposal, complete detail
+and exclusion from serialized portable failures. The fulfillment example consumes this typed API in its
+host-owned debug logger through `AddCohesiveTransitionFailureLogging(hostedProcess)` in `Cohesive.Host.Services`.
+The native host starts subscriptions and releases them on stop or disposal; an unstarted host never subscribes.
+Repeated registration of a process subscribes once per host, and disabled Debug logging skips argument construction.
+PostgreSQL and SQLite rely on their native unique receipt fences, with no receipt SELECT inside a successful
+commit. A unique violation rolls back the entity write before shared conflict resolution reads and validates
+retained evidence. Provider locks, transactions and encoding
+remain native. Creation replay retains the original attempt's evidence and compares candidate and result.
+
+`EntityTransitionOperationCapabilities.PartitionKey` optionally declares fixed trusted receipt placement.
+Process transition bindings inherit it and reject an explicit mismatch at construction. Dynamic repositories
+retain explicit host/context placement. Physical placement is not authorization.
+
+`EntityTransitionReceiptConformance` supplies concurrent replay, stale-fence and creation replacement/conflict
+cases used by memory, SQLite, PostgreSQL and the environment-gated Cosmos suite. Native corruption and rollback
+cases remain with their providers. See `TransitionReceiptValidationBenchmarks` for warm encoding cost; no cache
+bypasses validation of retained or externally modified evidence.

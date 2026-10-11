@@ -20,6 +20,8 @@ public static class OrderApi
             .Transition(OrderTransitions.Submit.Reference).Build<OrderSummary>();
         Details = orders.Query("Details").Route("GET", "/orders/{id:guid}/details")
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<OrderDetails>();
+        Availability = orders.Query("availability").Route("GET", "/orders/{id}/availability")
+            .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<ReservationAvailability[]>();
         Definition = orders.Build();
     }
 
@@ -31,6 +33,8 @@ public static class OrderApi
     public static ApiEndpoint<OrderSummary> Submit { get; }
     /// <summary>Queries order details through the canonical fulfillment relation.</summary>
     public static ApiEndpoint<OrderDetails> Details { get; }
+    /// <summary>Current joined reservation demand and inventory observations.</summary>
+    public static ApiEndpoint<ReservationAvailability[]> Availability { get; }
     /// <summary>The complete portable surface, suitable for other API projections.</summary>
     public static ApiDefinition Definition { get; }
 }

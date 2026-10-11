@@ -306,3 +306,43 @@ A failed public result retains native concurrency-conflict semantics only when t
 identifies the failed node as a Transition and the terminal attempt, activation, token and operation
 sequence agree with its retained failure evidence. A matching diagnostic on another node is not enough.
 This classification does not assert rollback of earlier mutations or authorize automatic retry.
+
+
+### Host a finite process with entity transitions and native queries
+
+`Service.Define(...).Operation("fulfill").Run(process, bindings => bindings
+.Transition(transition, repository).Query(query, handler)).Build(...)` prepares the exact
+linked process, transition adapter, hosted-query catalog and ephemeral service runtime at host setup. Supply
+an explicit service declaration, operation identity, authority, finite timeout and authorization. The optional `Run`
+interaction catalog is shared by transition associations; omission selects the empty catalog. This convenience
+owns composition only: canonical Process/Transition/Query documents remain the semantic authorities.
+Repositories must advertise atomic state/receipt support. Fixed receipt partitions flow into transition reads;
+conflicting explicit placement is rejected during binding construction. No durable worker, retry loop, tenant
+inference or provider options are introduced. The prepared result exposes the declaration and runtime for the
+existing HTTP binding, independently of endpoint authoring. See the Aspire fulfillment example.
+
+The ordinary declaration-only `Run(process)` remains unchanged. Its binding overload stays under the same
+service and operation authoring flow; there is no separate `Service.Host` entry point. Transition association
+uses `CreateProcessDefinitionLink` as its single capability/authority check. Its structured storage binding
+failure is projected to `ServiceBindingValidationException`, preserving separate capability and observation
+codes/locations (including `services.binding.observationMismatch`) through an explicit mapping of shared
+constants. Unknown native codes retain their exact identity instead of being rewritten by a naming convention.
+The hosting overload returns `ServiceProcessHostBuilder<TInput, TResult>`, which has association methods and
+`Build` but no `Run`; chaining another selection is a compile error. The original immutable operation builder
+can still produce independent branches, just like declaration-only authoring. No selection flag is retained.
+Pass `expectedConcurrencyTokenField: nameof(Input.Token)` for a captured storage fence, or
+attach a complete `ProcessTransitionOperationBinding` to retain custom subject, placement and emission policies.
+Core runtime tests exercise matching/stale tokens through both forms independently of the example.
+
+A built host exposes a typed, instance-scoped operator subscription:
+
+```csharp
+using var subscription = hosted.SubscribeTransitionFailures(failure =>
+    protectedLog.Write(failure.TraceContext, failure.Result.Diagnostics));
+```
+
+`protectedLog` is the application's chosen private operator sink. No process-wide discovery channel is
+registered. Hold the disposable for the host lifetime, then dispose it; callbacks must be thread-safe and
+may contain native identities and tokens. The fulfillment example uses its own debug logger and stops the
+subscription with the application. `ProcessTransitionBindingDiagnosticCodes` is the complete native admission
+catalog; tests require an explicit service mapping (or deliberate passthrough case) for every catalog constant.
