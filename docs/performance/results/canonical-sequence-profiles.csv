@@ -1,0 +1,17 @@
+Revision,Method,Shape,Mean,Error,Allocated
+baseline-881a6be7,Contiguous,Flat,12.451 μs,0.5171 μs,12040 B
+baseline-881a6be7,Streaming,Flat,12.375 μs,6.6326 μs,5672 B
+baseline-881a6be7,Contiguous,LargeToken,"3,410.336 μs",18.4906 μs,1049730 B
+baseline-881a6be7,Streaming,LargeToken,"3,370.779 μs",33.9107 μs,586 B
+baseline-881a6be7,Contiguous,Nested,6.609 μs,0.9866 μs,6264 B
+baseline-881a6be7,Streaming,Nested,6.602 μs,5.1252 μs,888 B
+baseline-881a6be7,Contiguous,Rows,"2,594.453 μs",38.8442 μs,1422829 B
+baseline-881a6be7,Streaming,Rows,"2,464.496 μs",70.6410 μs,721 B
+profile-383c177f,Contiguous,Flat,11.759 μs,0.3555 μs,12040 B
+profile-383c177f,Streaming,Flat,11.446 μs,2.6222 μs,5672 B
+profile-383c177f,Contiguous,LargeToken,"3,438.836 μs",110.6965 μs,1049735 B
+profile-383c177f,Streaming,LargeToken,"3,366.102 μs",79.1547 μs,588 B
+profile-383c177f,Contiguous,Nested,6.464 μs,0.1574 μs,6264 B
+profile-383c177f,Streaming,Nested,6.419 μs,0.1328 μs,888 B
+profile-383c177f,Contiguous,Rows,"2,641.788 μs",69.9720 μs,1422908 B
+profile-383c177f,Streaming,Rows,"2,516.617 μs",21.2981 μs,724 B

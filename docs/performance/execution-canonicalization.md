@@ -102,3 +102,12 @@ malformed surrogate values and keys, supplementary-character versus U+E000 order
 and strict-profile preservation. Ari adopts this public profile and removes its
 protocol canonical walk after publication; protocol bytes and hashes remain its
 compatibility boundary.
+
+The existing strict canonical-hash benchmark was run before and after this change
+on an Apple M5 Max, macOS 27.0.1, SDK 10.0.201 / runtime 10.0.5 arm64.
+[Compact results](results/canonical-sequence-profiles.csv) retain all eight cases.
+Flat contiguous hashing measured 12.451 → 11.759 μs and flat streaming
+12.375 → 11.446 μs, with unchanged 12,040 B / 5,672 B allocations.
+Nested and large-token cases retained comparable costs; the 4,096-row case
+measured about 2% slower. These short runs use one launch and three measured
+iterations, so small timing differences are not an end-to-end latency claim.
