@@ -78,3 +78,70 @@ Execution schema v4 subsequently removes repeated inline type trees at the sourc
 
 [Duplicate-property checks](duplicate-property-checks.md) subsequently remove successful warm
 scan allocations while preserving first-failure diagnostics and strict imported-document validation.
+
+## Shared lexical sequence profile
+
+`CanonicalJsonWriter.WriteCanonicalSequence(writer, element, profile)` supports
+`PreserveLexical`: exact numeric token spelling, stable repeated-key order, sequence
+arrays and ordinal UTF-16 key sorting. Escaping belongs to the caller's writer.
+Strict profiles retain normalization and duplicate rejection. Both representations
+use one structural walk; only storage access and scalar emission differ.
+
+`ComputeCanonicalSequenceSha256` uses the existing pooled incremental sink.
+Complete tokens flush periodically; a single large scalar can still grow the pooled
+working buffer. No digest, payload, authorization state or admission result is cached.
+`CanonicalJsonPropertyExclusions` prepares exact JSON Pointer object paths once,
+so hashes can omit self-identifiers during traversal instead of building/editing a
+node tree and serializing it again. Rules do not propagate into array elements.
+Omitted values are not visited or validated; fingerprint projection never replaces
+separate document admission.
+
+Property names are copied/unescaped once into object-owned pooled UTF-8 storage.
+Comparison uses a common byte prefix and the first differing scalar's UTF-16 units,
+so supplementary characters still sort before U+E000/U+FFFF. Successful sequence
+writing creates no property-name strings. Strict array-policy paths are formatted
+without an intermediate name string; required path strings and failure diagnostics
+remain. A one-byte gap gives empty keys distinct source offsets for stable ties.
+Both property entries and name/scratch buffers are cleared on return, including
+failure. Node entries retain their owned names and original storage width.
+
+[Compact results](results/canonical-sequence-profiles.csv) include strict and lexical
+before/after measurements plus direct-document versus node-projection workloads.
+Apple M5 Max, macOS 27.0.1, SDK 10.0.201 / runtime 10.0.5 arm64; ShortRun uses one
+launch, three warmups and three measured iterations. Hash inputs are already-parsed,
+borrowed documents; projection cases include serialization of a typed synthetic
+payload. They exclude source acquisition and product execution.
+
+| Lexical hash workload | alpha.136 CryptoStream allocations | Optimized pooled allocations |
+|---|---:|---:|
+| 128 flat fields | 10,641 B | 360 B |
+| 128 escaped names | 12,641 B | 360 B |
+| 4,096 rows | 5,689 B | 361 B |
+| One large escaped token | 1,574,156 B | 362 B |
+
+The 128-field projection allocates 37,506 B through a node tree versus 800 B
+through direct document serialization with exclusions (both use the current hash
+sink). It measured 63.8 versus 45.1 μs. Eliminating names has a CPU tradeoff:
+flat/row lexical hashing measured about 10–11% slower than the former CryptoStream
+path; escaped-name hashing about 30% slower. Large-token hashing was faster.
+Strict flat streaming allocations fall from 5,672 B to 520 B; its short-run time
+moves from 11.45 to 12.58 μs. These are not end-to-end latency claims.
+
+Warm-runtime median-of-seven allocation guards bound borrowed wide-name and row
+hashes at 1.5 KiB (360 B measured), and fresh parsed scalar-heavy hashes at 2 KiB
+(432 B measured). Tests protect numeric lexemes, duplicate ties including empty and
+escaped aliases, both encoders, invalid UTF-8, malformed surrogate keys/values,
+generated Unicode ordering, exact omissions, projection/admission distinction and
+concurrent reuse of immutable exclusion configuration. Timing thresholds are excluded
+from CI. Run the opt-in benchmarks with:
+
+```sh
+dotnet run --project eng/runtime-performance/canonical-hashes/CanonicalHashes.csproj -c Release -- --filter '*Lexical*Benchmarks*'
+```
+
+A source-backed Ari X12 004010 case compared against published alpha.136 in five
+isolated alternating process runs allocated a median 466.0 -> 443.6 MB cold and
+204.3 -> 186.2 MB repeated. Median elapsed times were 3.087 -> 3.091 seconds cold
+and 1.393 -> 1.302 seconds repeated, with variation. Both pinned X12 fingerprints
+were unchanged. This includes Ari's projection adoption; it does not attribute
+the entire saving to raw-name comparison or establish a stable timing gain.
