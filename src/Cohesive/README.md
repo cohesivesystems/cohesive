@@ -224,3 +224,13 @@ stable duplicate-key order. Both preserve arrays and sort keys by ordinal UTF-16
 The caller's encoder controls escaping. The lexical profile flushes complete tokens
 periodically; a single large token can still grow the writer buffer. Failures can
 leave partial output, so the caller owns disposal and transactional publication.
+
+Use `ComputeCanonicalSequenceSha256(element, profile, writerOptions)` to hash through
+Core's pooled incremental sink without retaining canonical output. Match `writerOptions`
+to the direct writer, including its encoder, to preserve exact hash bytes.
+
+`CanonicalJsonPropertyExclusions` prepares exact object-property JSON Pointer paths
+such as `/identity/contentHash` once. Pass it to sequence writing or hashing to omit
+those properties during traversal. Rules are ordinal, apply to repeated occurrences,
+and do not propagate into array elements. Omitted values are not validated: use this
+for an explicit fingerprint projection, alongside separate document admission.

@@ -73,8 +73,8 @@ public sealed class CanonicalJsonSequenceProfileTests(Xunit.Abstractions.ITestOu
     }
 
     [Theory]
-    [InlineData(false, 16_384)]
-    [InlineData(true, 32_768)]
+    [InlineData(false, 2_048)]
+    [InlineData(true, 2_048)]
     public void ScalarHeavyHashHasBoundedWorkingAllocations(bool escaped, long ceiling)
     {
         var raw = JsonSerializer.Serialize(Enumerable.Range(0, 64).Select(i => new
@@ -98,12 +98,7 @@ public sealed class CanonicalJsonSequenceProfileTests(Xunit.Abstractions.ITestOu
     static byte[] Hash(string raw)
     {
         using var document = JsonDocument.Parse(raw);
-        using var hash = SHA256.Create();
-        using var stream = new CryptoStream(Stream.Null, hash, CryptoStreamMode.Write);
-        using (var writer = new Utf8JsonWriter(stream))
-            CanonicalJsonWriter.WriteCanonicalSequence(writer, document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical);
-        stream.FlushFinalBlock();
-        return hash.Hash!;
+        return CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical);
     }
 
     static byte[] Write(JsonElement element, JsonWriterOptions options, bool reference)
@@ -117,7 +112,7 @@ public sealed class CanonicalJsonSequenceProfileTests(Xunit.Abstractions.ITestOu
         return stream.ToArray();
     }
 
-    static void WriteReference(Utf8JsonWriter writer, JsonElement element)
+    internal static void WriteReference(Utf8JsonWriter writer, JsonElement element)
     {
         if (element.ValueKind == JsonValueKind.Object)
         {
