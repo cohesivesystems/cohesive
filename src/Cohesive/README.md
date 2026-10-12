@@ -213,3 +213,14 @@ Imported documents compute from their own payload on first use; declared metadat
 extension validation remain fresh on every admission. Only the digest is retained. See
 [fingerprint reuse qualification](../../docs/performance/execution-definition-fingerprint-reuse.md)
 for concurrency, exact-byte equivalence, cold/warm evidence, and cache scope.
+
+## Canonical JSON sequences
+
+For immutable JSON tokens, `CanonicalJsonWriter.WriteCanonicalSequence(writer,
+root, profile)` streams into a caller-owned `Utf8JsonWriter`. Select
+`CanonicalJsonSequenceProfile.ExactDecimalRational` for normalized numbers and
+rejected duplicate keys, or `PreserveLexical` for unchanged numeric spellings and
+stable duplicate-key order. Both preserve arrays and sort keys by ordinal UTF-16.
+The caller's encoder controls escaping. The lexical profile flushes complete tokens
+periodically; a single large token can still grow the writer buffer. Failures can
+leave partial output, so the caller owns disposal and transactional publication.

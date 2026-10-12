@@ -78,3 +78,26 @@ Execution schema v4 subsequently removes repeated inline type trees at the sourc
 
 [Duplicate-property checks](duplicate-property-checks.md) subsequently remove successful warm
 scan allocations while preserving first-failure diagnostics and strict imported-document validation.
+
+## Shared lexical sequence profile
+
+`CanonicalJsonWriter.WriteCanonicalSequence(writer, element, profile)` also supports
+`PreserveLexical`: exact numeric token spelling, stable repeated-key order, sequence
+arrays and ordinal UTF-16 key sorting, with escaping controlled by the caller's
+writer. It uses the same structural walk as strict Core profiles, which retain
+normalization and duplicate rejection. A source ordinal breaks ties when sorting;
+that makes pooled property entries slightly larger. Already-ordered objects avoid
+sorting. Name reuse remains invocation-owned and pooled storage is cleared before
+return, including on failure. Complete tokens flush periodically for bounded
+pending output (one large token can still require a large buffer).
+
+The standalone first-hash fixture has 64 objects containing 512-character strings
+and decimal numbers. Runtime/pool preparation is warm, each hash parses a fresh
+JSON document, and the median of seven per-thread allocation samples is 5,440 B
+plain / 17,088 B escaped on macOS arm64, .NET 10. Fixed 16 KiB / 32 KiB ceilings
+protect working allocations. These are allocation checks, not timing benchmarks.
+Differential tests include duplicate order through sorting/flushes, caller encoders,
+malformed surrogate values and keys, supplementary-character versus U+E000 ordering,
+and strict-profile preservation. Ari adopts this public profile and removes its
+protocol canonical walk after publication; protocol bytes and hashes remain its
+compatibility boundary.

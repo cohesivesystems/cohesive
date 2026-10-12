@@ -29,6 +29,19 @@ public enum CanonicalJsonNumberSemantics
     ExactDecimalRational = 1
 }
 
+/// <summary>Canonical semantics for JSON whose arrays preserve sequence order.</summary>
+public enum CanonicalJsonSequenceProfile
+{
+    /// <summary>Normalize exact decimal rationals and reject repeated property names.</summary>
+    ExactDecimalRational = 0,
+
+    /// <summary>
+    /// Preserve numeric token spelling and the source order of repeated property names.
+    /// Distinct names still sort by ordinal UTF-16; string escaping belongs to the output writer.
+    /// </summary>
+    PreserveLexical = 1
+}
+
 /// <summary>Semantic ordering assigned to a canonical JSON array.</summary>
 public enum CanonicalJsonArrayOrderingKind
 {
@@ -345,10 +358,30 @@ public static class CanonicalJsonWriter
         Indented = false
     });
 
-    internal static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element)
+    internal static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element) =>
+        WriteCanonicalSequence(writer, element, CanonicalJsonSequenceProfile.ExactDecimalRational);
+
+    /// <summary>Streams caller-owned JSON using an explicit sequence profile.</summary>
+    /// <param name="writer">Borrowed output writer; its encoder controls escaping. It is not disposed.</param>
+    /// <param name="element">Borrowed immutable JSON; neither retained nor modified.</param>
+    /// <param name="profile">Numeric and repeated-property semantics; keys always use ordinal UTF-16 ordering.</param>
+    /// <remarks>
+    /// The lexical profile periodically flushes complete tokens to bound pending output independently of
+    /// document size. One large scalar can still require a correspondingly large writer buffer.
+    /// Failures can leave partial output; callers own transactionality and disposal.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="writer"/> is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="profile"/> is unsupported.</exception>
+    /// <exception cref="ArgumentException">The strict profile encounters repeated property names.</exception>
+    /// <exception cref="InvalidOperationException">JSON is undefined, disposed or has malformed surrogate escapes.</exception>
+    /// <exception cref="IOException">The caller's output stream rejects a write or flush.</exception>
+    public static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element, CanonicalJsonSequenceProfile profile)
     {
+        ArgumentNullException.ThrowIfNull(writer);
+        if (!Enum.IsDefined(profile)) throw new ArgumentOutOfRangeException(nameof(profile), profile, "Unsupported canonical JSON sequence profile.");
         using PropertyNames names = new();
-        WriteCanonicalValue<ElementValue, ElementItems>(writer, new(element), null, string.Empty, CanonicalJsonNumberSemantics.ExactDecimalRational, names);
+        WriteCanonicalValue<ElementValue, ElementItems>(writer, new(element), null, string.Empty,
+            CanonicalJsonNumberSemantics.ExactDecimalRational, names, profile == CanonicalJsonSequenceProfile.PreserveLexical);
     }
 
     // Semantic blocks can stream the same canonical profile into their existing digest writer.
@@ -367,11 +400,11 @@ public static class CanonicalJsonWriter
         JsonValueKind Kind { get; }
         int PropertyCount { get; }
         int ArrayCount { get; }
-        void CopyProperties(Span<KeyValuePair<string, T>> target, PropertyNames names);
+        void CopyProperties(Span<CanonicalProperty<T>> target, PropertyNames names);
         TItems Items();
         bool TryString(out string text);
         bool TryProperty(string name, out T value);
-        void WriteScalar(Utf8JsonWriter writer, CanonicalJsonNumberSemantics semantics);
+        void WriteScalar(Utf8JsonWriter writer, CanonicalJsonNumberSemantics semantics, bool preserveLexical);
     }
 
     interface ICanonicalItems<T> where T : struct
@@ -382,7 +415,7 @@ public static class CanonicalJsonWriter
 
     static void WriteCanonicalValue<T, TItems>(Utf8JsonWriter writer, T value,
         Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? orderingPolicy,
-        string path, CanonicalJsonNumberSemantics semantics, PropertyNames names)
+        string path, CanonicalJsonNumberSemantics semantics, PropertyNames names, bool preserveLexical = false)
         where T : struct, ICanonicalValue<T, TItems> where TItems : struct, ICanonicalItems<T>
     {
         if (value.Kind == JsonValueKind.Object)
@@ -391,33 +424,47 @@ public static class CanonicalJsonWriter
             var count = value.PropertyCount;
             if (count > 0)
             {
-                var properties = ArrayPool<KeyValuePair<string, T>>.Shared.Rent(count);
+                var properties = ArrayPool<CanonicalProperty<T>>.Shared.Rent(count);
                 try
                 {
                     value.CopyProperties(properties.AsSpan(0, count), names);
-                    properties.AsSpan(0, count).Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
+                    var ordered = true;
+                    for (var index = 1; index < count; index++)
+                    {
+                        if (StringComparer.Ordinal.Compare(properties[index - 1].Key, properties[index].Key) <= 0) continue;
+                        ordered = false;
+                        break;
+                    }
+                    if (!ordered)
+                        properties.AsSpan(0, count).Sort(static (left, right) =>
+                        {
+                            var compared = StringComparer.Ordinal.Compare(left.Key, right.Key);
+                            return compared != 0 ? compared : left.Ordinal.CompareTo(right.Ordinal);
+                        });
                     for (var index = 0; index < count; index++)
                     {
                         var property = properties[index];
-                        if (index > 0 && StringComparer.Ordinal.Equals(properties[index - 1].Key, property.Key))
+                        if (!preserveLexical && index > 0 && StringComparer.Ordinal.Equals(properties[index - 1].Key, property.Key))
                             throw new ArgumentException($"Duplicate JSON property '{property.Key}'.");
                         writer.WritePropertyName(property.Key);
                         WriteCanonicalValue<T, TItems>(writer, property.Value, orderingPolicy,
-                            orderingPolicy is null ? string.Empty : AppendPropertyPath(path, property.Key), semantics, names);
+                            orderingPolicy is null ? string.Empty : AppendPropertyPath(path, property.Key), semantics, names, preserveLexical);
                     }
                 }
                 finally
                 {
                     properties.AsSpan(0, count).Clear();
-                    ArrayPool<KeyValuePair<string, T>>.Shared.Return(properties);
+                    ArrayPool<CanonicalProperty<T>>.Shared.Return(properties);
                 }
             }
             writer.WriteEndObject();
+            FlushLexicalOutput(writer, preserveLexical);
             return;
         }
         if (value.Kind != JsonValueKind.Array)
         {
-            value.WriteScalar(writer, semantics);
+            value.WriteScalar(writer, semantics, preserveLexical);
+            FlushLexicalOutput(writer, preserveLexical);
             return;
         }
         var ordering = orderingPolicy is null ? CanonicalJsonArrayOrdering.Sequence : orderingPolicy(new(path));
@@ -427,7 +474,7 @@ public static class CanonicalJsonWriter
         if (ordering.Kind == CanonicalJsonArrayOrderingKind.Sequence)
         {
             while (items.MoveNext())
-                WriteCanonicalValue<T, TItems>(writer, items.Current, orderingPolicy, itemPath, semantics, names);
+                WriteCanonicalValue<T, TItems>(writer, items.Current, orderingPolicy, itemPath, semantics, names, preserveLexical);
         }
         else
         {
@@ -459,7 +506,7 @@ public static class CanonicalJsonWriter
                 }
                 ordered.AsSpan(0, count).Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
                 for (index = 0; index < count; index++)
-                    WriteCanonicalValue<T, TItems>(writer, ordered[index].Value, orderingPolicy, itemPath, semantics, names);
+                    WriteCanonicalValue<T, TItems>(writer, ordered[index].Value, orderingPolicy, itemPath, semantics, names, preserveLexical);
             }
             finally
             {
@@ -468,7 +515,15 @@ public static class CanonicalJsonWriter
             }
         }
         writer.WriteEndArray();
+        FlushLexicalOutput(writer, preserveLexical);
     }
+
+    static void FlushLexicalOutput(Utf8JsonWriter writer, bool preserveLexical)
+    {
+        if (preserveLexical && writer.BytesPending >= 4_096) writer.Flush();
+    }
+
+    readonly record struct CanonicalProperty<T>(string Key, T Value, int Ordinal);
 
     readonly struct ElementValue(JsonElement element) : ICanonicalValue<ElementValue, ElementItems>
     {
@@ -476,13 +531,14 @@ public static class CanonicalJsonWriter
         public int PropertyCount => element.GetPropertyCount();
         public int ArrayCount => element.GetArrayLength();
         public ElementItems Items() => new(element.EnumerateArray());
-        public void CopyProperties(Span<KeyValuePair<string, ElementValue>> target, PropertyNames names)
+        public void CopyProperties(Span<CanonicalProperty<ElementValue>> target, PropertyNames names)
         {
             var index = 0;
             foreach (var property in element.EnumerateObject())
             {
                 var name = target.Length > PropertyNames.Capacity ? property.Name : names.Get(property, target.Length, index);
-                target[index++] = new(name, new(property.Value));
+                target[index] = new(name, new(property.Value), index);
+                index++;
             }
         }
         public bool TryString(out string text)
@@ -496,11 +552,11 @@ public static class CanonicalJsonWriter
             value = new(child);
             return found;
         }
-        public void WriteScalar(Utf8JsonWriter writer, CanonicalJsonNumberSemantics semantics)
+        public void WriteScalar(Utf8JsonWriter writer, CanonicalJsonNumberSemantics semantics, bool preserveLexical)
         {
             if (element.ValueKind == JsonValueKind.Undefined)
                 throw new InvalidOperationException("Undefined JSON has no canonical encoding.");
-            if (element.ValueKind == JsonValueKind.Number)
+            if (!preserveLexical && element.ValueKind == JsonValueKind.Number)
                 WriteNumber(writer, element, semantics);
             else element.WriteTo(writer);
         }
@@ -520,10 +576,14 @@ public static class CanonicalJsonWriter
         public int PropertyCount => ((JsonObject)node!).Count;
         public int ArrayCount => ((JsonArray)node!).Count;
         public NodeItems Items() => new((JsonArray)node!, options);
-        public void CopyProperties(Span<KeyValuePair<string, NodeValue>> target, PropertyNames names)
+        public void CopyProperties(Span<CanonicalProperty<NodeValue>> target, PropertyNames names)
         {
             var index = 0;
-            foreach (var property in (JsonObject)node!) target[index++] = new(property.Key, new(property.Value, options));
+            foreach (var property in (JsonObject)node!)
+            {
+                target[index] = new(property.Key, new(property.Value, options), index);
+                index++;
+            }
         }
         public bool TryString(out string text)
         {
@@ -536,9 +596,10 @@ public static class CanonicalJsonWriter
             value = new(child, options);
             return found;
         }
-        public void WriteScalar(Utf8JsonWriter writer, CanonicalJsonNumberSemantics semantics)
+        public void WriteScalar(Utf8JsonWriter writer, CanonicalJsonNumberSemantics semantics, bool preserveLexical)
         {
             if (node is null) { writer.WriteNullValue(); return; }
+            if (preserveLexical) { node.WriteTo(writer, options); return; }
             var value = (JsonValue)node;
             if (value.TryGetValue<ObservationValue>(out var observation))
                 WriteCanonicalObservationValue(writer, observation);
