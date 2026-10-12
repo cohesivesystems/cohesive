@@ -85,8 +85,9 @@ scan allocations while preserving first-failure diagnostics and strict imported-
 `PreserveLexical`: exact numeric token spelling, stable repeated-key order, sequence
 arrays and ordinal UTF-16 key sorting, with escaping controlled by the caller's
 writer. It uses the same structural walk as strict Core profiles, which retain
-normalization and duplicate rejection. A source ordinal breaks ties when sorting;
-that makes pooled property entries slightly larger. Already-ordered objects avoid
+normalization and duplicate rejection. Only the JsonElement adapter carries a source ordinal for stable sort ties;
+JsonNode storage stays at its existing width. Root-selected profile specialization
+removes repeated profile checks from the token loop. Already-ordered objects avoid
 sorting. Name reuse remains invocation-owned and pooled storage is cleared before
 return, including on failure. Complete tokens flush periodically for bounded
 pending output (one large token can still require a large buffer).
