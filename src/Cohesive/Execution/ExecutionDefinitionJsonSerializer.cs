@@ -375,6 +375,7 @@ public static class ExecutionDefinitionJsonSerializer
     {
         var options = CreateOptions();
         options.PropertyNamingPolicy = null;
+        options.Converters.Add(new AnnotationMapJsonConverter());
         options.Converters.Insert(0, new DeclaredJsonValueConverterFactory());
         options.MakeReadOnly(populateMissingResolver: true);
         return options;

@@ -531,7 +531,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         JsonValueKind.Number when TryParseExactJsonDecimal(element.GetRawText(), out var dec) => FromDecimal(dec),
         JsonValueKind.Number when element.TryGetDouble(out var dbl) => FromDouble(dbl),
         JsonValueKind.Number => FromDouble(double.Parse(element.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture)),
-        JsonValueKind.Object => FromObject(ReadObject(element)),
+        JsonValueKind.Object => ReadObject(element),
         JsonValueKind.Array => FromImmutableArray(ReadArray(element)),
         _ => throw new InvalidOperationException($"Unsupported JsonValueKind '{element.ValueKind}'.")
     };
@@ -1729,12 +1729,32 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         }
     }
 
-    static IImmutableDictionary<string, ObservationValue> ReadObject(JsonElement element)
+    static ObservationValue ReadObject(JsonElement element)
     {
-        var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        var count = element.GetPropertyCount();
+        if (count == 0) return FromObject(EmptyObjectValues);
+        // Tiny objects cost less in the existing tree than a dictionary's buckets and entries.
+        if (count <= 8)
+        {
+            var small = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            foreach (var property in element.EnumerateObject())
+                small[property.Name] = FromJsonElement(property.Value);
+            return FromObject(small.ToImmutable());
+        }
+        var values = new Dictionary<string, ObservationValue>(count, StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
             values[property.Name] = FromJsonElement(property.Value);
-        return values.ToImmutable();
+        return FromOwnedObjectInOrdinalOrder(values);
+    }
+
+    // Called only with invocation-owned storage; the ordering helper copies before it is cleared.
+    static ObservationValue FromOwnedObjectInOrdinalOrder(Dictionary<string, ObservationValue> values)
+    {
+        if (values.Count == 0) return FromObject(EmptyObjectValues);
+        using var ordered = new OrderedObservationFields(values);
+        values.Clear();
+        foreach (var property in ordered) values.Add(property.Key, property.Value);
+        return FromOwnedObject(values);
     }
 
     static ImmutableArray<ObservationValue> ReadArray(JsonElement element)
