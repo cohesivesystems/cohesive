@@ -902,6 +902,28 @@ public static class ObservationValidator
         return value.Kind is not (ObservationValueKind.Object or ObservationValueKind.Array) || TryValidatePortableDescendants(value, maxDepth, ref diagnostics);
     }
 
+    struct PortableFieldValidator<TDiagnostics>(int maxDepth, TDiagnostics diagnostics) : IObservationFieldVisitor
+        where TDiagnostics : IValidationDiagnostics
+    {
+        internal TDiagnostics Diagnostics = diagnostics;
+        internal bool Valid = true;
+        public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+            where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+        {
+            try
+            {
+                while (fields.MoveNext())
+                {
+                    var field = fields.Current;
+                    if (TryValidatePortableField(field.Key, field.Value, maxDepth, ref Diagnostics)) continue;
+                    Valid = false;
+                    break;
+                }
+            }
+            finally { fields.Dispose(); }
+        }
+    }
+
     static bool TryValidatePortableDescendants<TDiagnostics>(
         in ObservationValue value,
         int maxDepth,
@@ -915,37 +937,16 @@ public static class ObservationValidator
 
             if (diagnostics.RequiresFailureDetails)
             {
-                foreach (var (name, child) in value.Fields.OrderBy(
-                             static field => field.Key,
-                             StringComparer.Ordinal))
-                {
-                    if (!TryValidatePortableField(name, child, maxDepth, ref diagnostics))
-                        return false;
-                }
-            }
-            else if (value.Fields is ImmutableDictionary<string, ObservationValue> immutableFields)
-            {
-                foreach (var (name, child) in immutableFields)
-                {
-                    if (!TryValidatePortableField(name, child, maxDepth, ref diagnostics))
-                        return false;
-                }
-            }
-            else if (value.Fields is ImmutableSortedDictionary<string, ObservationValue> sortedFields)
-            {
-                foreach (var (name, child) in sortedFields)
-                {
-                    if (!TryValidatePortableField(name, child, maxDepth, ref diagnostics))
-                        return false;
-                }
+                using var fields = new Serialization.OrderedObservationFields(value.Fields);
+                foreach (var (name, child) in fields)
+                    if (!TryValidatePortableField(name, child, maxDepth, ref diagnostics)) return false;
             }
             else
             {
-                foreach (var (name, child) in value.Fields)
-                {
-                    if (!TryValidatePortableField(name, child, maxDepth, ref diagnostics))
-                        return false;
-                }
+                var visitor = new PortableFieldValidator<TDiagnostics>(maxDepth, diagnostics);
+                ObservationFieldTraversal.Visit(value.Fields, ref visitor);
+                diagnostics = visitor.Diagnostics;
+                if (!visitor.Valid) return false;
             }
         }
         else if (value.Kind == ObservationValueKind.Array)

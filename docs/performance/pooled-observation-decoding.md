@@ -227,3 +227,48 @@ observation object acquisition, 9.3 MB to other JSON-element observation project
 annotation-map acquisition. Most object acquisition is downstream of hosted typed-result encoding.
 These samples include necessary owned values; the next investigation should examine repeated
 conversion at that boundary before introducing any reuse or changing serialization semantics.
+
+## Compact small-object observations
+
+JSON objects with one through eight properties use a privately owned sorted field vector instead
+of a sorted tree. Empty objects share empty storage; wider objects retain the existing owned
+dictionary. The vector has bounded linear key lookup, and its mutable array never escapes its
+owner. Names remain value-owned, rather than creating a global field-name cache or inventing a
+shape identity for arbitrary JSON. Deep source independence, ordinal enumeration, case-sensitive
+keys and last-property-wins token acquisition are unchanged.
+
+The existing shared field traversal recognizes this immutable storage and visits it without boxing.
+Canonical ordering borrows its already-sorted fields directly, including in streaming frames.
+Portable descendant validation uses that same traversal and ordering helper, removing its separate
+storage switches and successful diagnostic sorting through LINQ. Contextual validation remains fresh.
+
+Using the same opt-in projection benchmark, four-field acquisition allocates 376 bytes versus
+640 for the sorted-tree reference (the prior public hybrid path was 576). Eight fields allocate
+696 versus 1,120. The 128-object nested workload allocates 60,136 versus 97,360 bytes, and 4,096
+nested rows allocate 2,883,723 versus 4,358,329. Rows measure 2.20 versus 3.18 ms in this ShortRun;
+this is a projection microbenchmark, not an end-to-end latency claim. Wider storage is unchanged,
+including its previously reported 16-field CPU tradeoff. The
+[compact report](evidence/pooled-observation-decoding/compact-small-fields.csv) retains uncertainty.
+
+Fixed median-of-seven ceilings cover four fields, eight fields, and 128 nested four-field objects.
+The canonical hash guard also samples seven warm operations instead of relying on one pool rental:
+occasional shared-pool replenishment is distinct from per-operation temporary allocation growth.
+
+Five isolated alternating original X12 pairs compare the prior canonical-text package and the
+compact-field package with the same Ari source. Median allocations fall from 403,275,040 to
+395,798,064 bytes cold and 156,348,560 to 148,697,728 repeated (7.7 MB, 4.9% repeated reduction).
+Median time falls from 3,053 to 2,873 ms cold and 1,232 to 1,073 ms repeated; these are local
+short-run results, not CI timing thresholds. The
+[case samples](evidence/pooled-observation-decoding/ari-compact-fields.csv) retain every measurement.
+Full implementation qualification passes 5,624 Cohesive tests (33 existing skips) and 1,298 Ari
+tests (18 existing skips), with both X12 canonical hashes unchanged. Three subsequently added
+regressions also pass in the 81-test focused validator/projection run. They cover deterministic
+failure ordering on small/wide storage and zero warm allocation for nested portable validation.
+The Ari private version and adoption are removed after qualification, pending Core publication.
+
+The final sampled repeated trace replaces the earlier 18.5 MB object/tree bucket with about
+7.9 MB under compact field acquisition. Its largest remaining nearest-frame buckets are annotation
+map acquisition (9.8 MB), other element projection (8.5 MB), opaque protocol-value decoding
+(7.3 MB), protocol document deserialization (6.0 MB) and fingerprint text construction. These
+are approximate disjoint samples and include required owned results. Repeated opaque protocol
+parsing and fingerprint text materialization are the next lifetime/work-amplification candidates.

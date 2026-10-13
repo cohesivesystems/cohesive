@@ -285,20 +285,28 @@ public sealed class StrictDocumentJsonTests
 
         var value = new JsonDocumentValue(JsonSerializer.SerializeToElement(Enumerable.Range(0, 4096)
             .Select(i => new { z = i, a = "<>&🙂", nested = new { enabled = true, values = new[] { 3, 1, 2 } } })));
-        for (var warm = 0; warm < 4; warm++)
+        for (var warm = 0; warm < 20; warm++)
         {
             StrictDocumentJson.ComputeCanonicalSha256(value, options);
             StrictDocumentJson.GetCanonicalBytes(value, options);
         }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        var canonical = StrictDocumentJson.GetCanonicalBytes(value, options);
-        var contiguousAllocation = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        var streamed = StrictDocumentJson.ComputeCanonicalSha256(value, options);
-        var streamedAllocation = GC.GetAllocatedBytesForCurrentThread() - before;
+        var contiguousSamples = new long[7];
+        var streamedSamples = new long[7];
+        byte[] canonical = [], streamed = [];
+        for (var sample = 0; sample < 7; sample++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            canonical = StrictDocumentJson.GetCanonicalBytes(value, options);
+            contiguousSamples[sample] = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            streamed = StrictDocumentJson.ComputeCanonicalSha256(value, options);
+            streamedSamples[sample] = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Array.Sort(contiguousSamples);
+        Array.Sort(streamedSamples);
         Assert.Equal(SHA256.HashData(canonical), streamed);
-        Assert.InRange(contiguousAllocation, canonical.Length, canonical.Length + 1_024);
-        Assert.InRange(streamedAllocation, 0, 1_024);
+        Assert.InRange(contiguousSamples[3], canonical.Length, canonical.Length + 1_024);
+        Assert.InRange(streamedSamples[3], 0, 1_024);
     }
 
     [Fact]
