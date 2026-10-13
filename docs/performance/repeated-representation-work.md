@@ -96,7 +96,7 @@ Strict document admission now canonicalizes the already-parsed element directly.
 walk rejects duplicate names; only duplicate failures rerun the source-order scanner to
 preserve the first depth-first JSON Pointer diagnostic. Imported or persisted documents
 still receive fresh validation. Case-insensitive serializer contracts keep their existing
-compatibility path. Internal compact type rematerialization likewise uses canonical
+compatibility path and scan original input before node projection can erase duplicates. Internal compact type rematerialization likewise uses canonical
 validation once, replaying duplicate failures for precise diagnostics.
 
 A strict 128-field integer dictionary read falls from 51,168 B to 20,480 B. Both measured

@@ -224,6 +224,16 @@ public static class StrictDocumentJson
                     "$");
                 return false;
             }
+            // The compatibility node projection can erase duplicates; inspect the original input
+            // first only on this path. Strict element canonicalization checks names itself.
+            if (options.PropertyNameCaseInsensitive
+                && TryFindDuplicateProperty(parsed.RootElement, string.Empty, out var duplicate))
+            {
+                error = new(StrictDocumentJsonReadFailure.DuplicateProperty,
+                    $"{contractName} JSON cannot contain duplicate object properties.",
+                    string.IsNullOrEmpty(duplicate) ? "$" : duplicate);
+                return false;
+            }
             try
             {
                 if (!options.PropertyNameCaseInsensitive)
