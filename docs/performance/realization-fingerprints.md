@@ -88,3 +88,34 @@ Opt-in benchmarks keep report construction outside measurement and fingerprint n
 inside it. Report sizes are 1, 128 and 1,024 requirements; keys span stack and pooled storage.
 Run the identical benchmark file on parent and final source separately. Ari's existing protocol
 preparation harness uses matched source overlays restored after each run.
+
+## Reusing normalized proof sets
+
+`Proof` construction now preserves its existing immutable evidence, boundary and rule arrays
+when their identities are already strictly increasing in ordinal order. Empty and singleton
+sets also pass through. Unordered or duplicate inputs retain the prior `Distinct` plus ordinal
+sorting path; guarantees retain numeric sorting for multi-item inputs. Sequence keys, proof
+selection, diagnostics and fingerprints retain their existing formats and authority. This is
+local preparation reuse, with no cache, invocation sharing or new ownership contract.
+
+A fresh Release .NET 10/macOS comparison uses Ari commit `200b044` and alpha.138 release
+assemblies, replacing only `Cohesive.Relations.dll` for the candidate. Five alternating isolated
+processes each run the original X12 004010 workspace case twice with fresh repositories;
+only process-wide immutable preparation survives between cases. Medians:
+
+| Phase | Control bytes | Candidate bytes | Reduction |
+| --- | ---: | ---: | ---: |
+| Cold | 381,524,336 | 376,444,928 | 5,079,408 (1.3%) |
+| Repeated | 138,598,576 | 133,714,936 | 4,883,640 (3.5%) |
+
+[Allocation samples](evidence/realization-fingerprints/proof-normalization.csv) exclude timing:
+other qualification work overlapped some samples. Counts represent cumulative allocation,
+not retained memory or a suite latency claim. Compare variants within this run; its control
+is lower than the earlier Ari adoption report, and that artifact difference is not attributed.
+
+The public `Match` allocation guard covers 64 distinct expression capabilities, each with two
+native evidence entries. After four warm-ups it takes the median of seven synchronous reads,
+with inputs, output assertions and logging outside the allocation interval. Control allocates
+1,190,768 bytes and candidate 1,102,704 bytes; the 1,150,000-byte ceiling rejects the old binary.
+Existing compiler tests cover composition, duplicate evidence, reordered declarations, constraints
+and incompatible strategies; golden fingerprint tests preserve the canonical profile.
