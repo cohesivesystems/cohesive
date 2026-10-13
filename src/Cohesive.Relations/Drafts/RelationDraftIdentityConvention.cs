@@ -80,13 +80,11 @@ public static class RelationDraftIdentityConvention
             throw new ArgumentException("A projection-slot identifier is required.", nameof(slotId));
         ArgumentNullException.ThrowIfNull(value);
 
-        var options = RelationQueryJsonSerializer.CreateOptions();
-        var expressionNode = JsonSerializer.SerializeToNode(value, typeof(Expr), options)
-                             ?? throw new InvalidOperationException("Failed to materialize canonical candidate expression JSON.");
-        var expression = CanonicalJsonWriter.GetCanonicalBytes(
-            expressionNode,
-            options,
-            static _ => CanonicalJsonArrayOrdering.Sequence);
+        using var document = JsonSerializer.SerializeToDocument(value, typeof(Expr), RelationQueryJsonSerializer.ReadOnlyOptions);
+        if (document.RootElement.ValueKind == JsonValueKind.Null)
+            throw new InvalidOperationException("Failed to materialize canonical candidate expression JSON.");
+        var expression = CanonicalJsonWriter.GetCanonicalSequenceBytes(document.RootElement,
+            CanonicalJsonNumberSemantics.PortableObservation);
 
         ArrayBufferWriter<byte> canonical = new();
         Append(canonical, CandidateVersion);

@@ -8,6 +8,9 @@ namespace Cohesive.Relations.Serialization;
 /// </summary>
 public static class RelationshipCatalogJsonSerializer
 {
+    internal static JsonSerializerOptions ReadOnlyOptions { get; } = CreateOptions();
+    static RelationshipCatalogJsonSerializer() => ReadOnlyOptions.MakeReadOnly(populateMissingResolver: true);
+
     /// <summary>Creates strict serializer options for canonical relationship catalog JSON.</summary>
     /// <param name="indented">Whether serialized JSON should be indented.</param>
     /// <returns>Serializer options configured for the canonical wire contract.</returns>

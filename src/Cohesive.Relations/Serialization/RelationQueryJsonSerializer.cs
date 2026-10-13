@@ -8,6 +8,9 @@ namespace Cohesive.Relations.Serialization;
 /// </summary>
 public static class RelationQueryJsonSerializer
 {
+    internal static JsonSerializerOptions ReadOnlyOptions { get; } = CreateOptions();
+    static RelationQueryJsonSerializer() => ReadOnlyOptions.MakeReadOnly(populateMissingResolver: true);
+
     static readonly Lazy<JsonSerializerOptions> FingerprintOptions = new(static () =>
     {
         var options = CreateOptions();

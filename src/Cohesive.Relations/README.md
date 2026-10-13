@@ -17,7 +17,7 @@ admission remain independently validated. See [immutable execution preparation](
 Hosted typed handlers retain fresh portable-value admission while delegating CLR decoding to
 Core’s pooled UTF-8 boundary. See [qualification](../../docs/performance/hosted-value-projection.md).
 
-Realization fingerprints retain their existing binary profiles while streaming temporary output.
+Relation and realization fingerprints retain their existing binary profiles while streaming temporary output.
 See [performance qualification](../../docs/performance/realization-fingerprints.md).
 
 ## Install

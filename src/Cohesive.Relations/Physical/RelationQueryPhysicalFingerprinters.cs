@@ -1,3 +1,5 @@
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Globalization;
@@ -24,7 +26,7 @@ public static class RelationQuerySourcePlacementFingerprinter
     public static RelationQuerySourcePlacementFingerprint Compute(RelationQuerySourcePlacement placement)
     {
         ArgumentNullException.ThrowIfNull(placement);
-        PhysicalFingerprintWriter writer = new(Canonicalization);
+        using PhysicalFingerprintWriter writer = new(Canonicalization);
         writer.Append(placement.SchemaVersion);
         writer.AppendPlan(placement.Plan);
         writer.Append(placement.ConventionSetVersion);
@@ -109,7 +111,7 @@ public static class RelationQueryPhysicalPlanFingerprinter
     public static RelationQueryPhysicalPlanFingerprint Compute(CompiledRelationQueryPhysicalPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        PhysicalFingerprintWriter writer = new(Canonicalization);
+        using PhysicalFingerprintWriter writer = new(Canonicalization);
         writer.Append(plan.SchemaVersion);
         writer.AppendPlan(plan.Plan);
         writer.Append(plan.Realization.Algorithm);
@@ -186,41 +188,19 @@ public static class RelationQueryPhysicalPlanFingerprinter
     }
 }
 
-sealed class PhysicalFingerprintWriter
+sealed class PhysicalFingerprintWriter : IDisposable
 {
-    readonly ArrayBufferWriter<byte> buffer = new();
+    readonly Sha256BufferWriter buffer = new();
 
     public PhysicalFingerprintWriter(string canonicalization) => Append(canonicalization);
 
-    public void Append(string value)
-    {
-        var length = Encoding.UTF8.GetByteCount(value);
-        Append(length);
-        var destination = buffer.GetSpan(length);
-        Encoding.UTF8.GetBytes(value.AsSpan(), destination);
-        buffer.Advance(length);
-    }
+    public void Append(string value) => LengthPrefixedFingerprintEncoding.Append(buffer, value);
 
-    public void Append(int value)
-    {
-        var destination = buffer.GetSpan(sizeof(int));
-        BinaryPrimitives.WriteInt32BigEndian(destination, value);
-        buffer.Advance(sizeof(int));
-    }
+    public void Append(int value) => LengthPrefixedFingerprintEncoding.Append(buffer, value);
 
-    public void Append(long value)
-    {
-        var destination = buffer.GetSpan(sizeof(long));
-        BinaryPrimitives.WriteInt64BigEndian(destination, value);
-        buffer.Advance(sizeof(long));
-    }
+    public void Append(long value) => LengthPrefixedFingerprintEncoding.Append(buffer, value);
 
-    public void Append(bool value)
-    {
-        var destination = buffer.GetSpan(1);
-        destination[0] = value ? (byte)1 : (byte)0;
-        buffer.Advance(1);
-    }
+    public void Append(bool value) => LengthPrefixedFingerprintEncoding.Append(buffer, value);
 
     public void AppendOptional(string? value)
     {
@@ -317,7 +297,14 @@ sealed class PhysicalFingerprintWriter
         }
     }
 
-    public string Hash() => Convert.ToHexString(SHA256.HashData(buffer.WrittenSpan)).ToLowerInvariant();
+    // Each invocation completes this writer once; the caller disposes on success or failure.
+    public string Hash()
+    {
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        buffer.Complete(digest);
+        return Convert.ToHexStringLower(digest);
+    }
+    public void Dispose() => buffer.Dispose();
 
     void AppendCapability(RelationQueryCapability capability)
     {

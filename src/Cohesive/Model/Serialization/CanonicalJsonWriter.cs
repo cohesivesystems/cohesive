@@ -325,23 +325,29 @@ public static class CanonicalJsonWriter
     /// <exception cref="ArgumentException">An object contains duplicate properties.</exception>
     internal static byte[] GetCanonicalBytes(JsonElement element,
         Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering> getArrayOrdering,
-        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation)
+        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation,
+        CanonicalJsonPropertyExclusions? exclusions = null)
     {
         ArgumentNullException.ThrowIfNull(getArrayOrdering);
         if (!Enum.IsDefined(numberSemantics))
             throw new ArgumentOutOfRangeException(nameof(numberSemantics), numberSemantics, "Unsupported canonical JSON number semantics.");
         using PooledByteBufferWriter buffer = new();
         using (var writer = CreateElementWriter(buffer))
-            WriteCanonical(writer, element, getArrayOrdering, numberSemantics);
+            WriteCanonical(writer, element, getArrayOrdering, numberSemantics, exclusions);
         return buffer.WrittenSpan.ToArray();
     }
 
     // Typed strict documents use the same exact-number sequence profile as execution documents.
-    internal static byte[] GetCanonicalSequenceBytes(JsonElement element)
+    internal static byte[] GetCanonicalSequenceBytes(JsonElement element) =>
+        GetCanonicalSequenceBytes(element, CanonicalJsonNumberSemantics.ExactDecimalRational);
+
+    internal static byte[] GetCanonicalSequenceBytes(JsonElement element, CanonicalJsonNumberSemantics numberSemantics)
     {
+        if (!Enum.IsDefined(numberSemantics)) throw new ArgumentOutOfRangeException(nameof(numberSemantics));
         using PooledByteBufferWriter buffer = new();
         using (var writer = CreateElementWriter(buffer))
-            WriteCanonicalSequence(writer, element);
+            WriteCanonicalValue<ElementValue, ElementItems, ElementProperty, StrictProfile>(writer, new(element), null,
+                string.Empty, numberSemantics, null);
         return buffer.WrittenSpan.ToArray();
     }
 
@@ -412,7 +418,8 @@ public static class CanonicalJsonWriter
     /// <summary>Hashes canonical sequence output through the existing pooled incremental SHA-256 sink.</summary>
     /// <param name="element">Borrowed immutable JSON, not retained or modified.</param>
     /// <param name="profile">Numeric and repeated-property semantics.</param>
-    /// <param name="writerOptions">Escaping and writer validation policy, identical to direct writing.</param>
+    /// <param name="writerOptions">Required escaping and writer validation policy, identical to direct writing.
+    /// Pass an explicit encoder, or default for the standard JSON encoder.</param>
     /// <param name="exclusions">Exact object-property omissions, applied during the shared traversal.</param>
     /// <returns>A caller-owned 32-byte digest, without an algorithm or profile prefix.</returns>
     /// <remarks>Working output is pooled and cleared on failure and success. One large scalar can grow it.</remarks>
@@ -421,7 +428,7 @@ public static class CanonicalJsonWriter
     /// <exception cref="InvalidOperationException">JSON is undefined, disposed or contains malformed surrogate escapes.</exception>
     /// <exception cref="JsonException">Output exceeds the configured writer depth.</exception>
     public static byte[] ComputeCanonicalSequenceSha256(JsonElement element, CanonicalJsonSequenceProfile profile,
-        JsonWriterOptions writerOptions = default, CanonicalJsonPropertyExclusions? exclusions = null)
+        JsonWriterOptions writerOptions, CanonicalJsonPropertyExclusions? exclusions = null)
     {
         using Sha256BufferWriter output = new();
         using (var writer = new Utf8JsonWriter(output, writerOptions))
@@ -431,12 +438,44 @@ public static class CanonicalJsonWriter
         return digest;
     }
 
+    /// <summary>Hashes canonical JSON with structural set ordering, exact exclusions and an optional raw version prefix.</summary>
+    /// <param name="element">Borrowed immutable JSON.</param>
+    /// <param name="getArrayOrdering">Classifies arrays by escaped structural path.</param>
+    /// <param name="writerOptions">Required encoder and writer policy; use the same options as direct writing.</param>
+    /// <param name="numberSemantics">The existing numeric canonicalization contract.</param>
+    /// <param name="exclusions">Exact property omissions; excluded subtrees are not admission-validated.</param>
+    /// <param name="prefix">Raw bytes prepended to the canonical JSON in the hash, not interpreted as JSON.</param>
+    /// <returns>An owned 32-byte SHA-256 digest.</returns>
+    /// <remarks>Uses the shared walk and pooled hash sink. Inputs and validation results are not cached.</remarks>
+    /// <exception cref="ArgumentNullException">The ordering callback is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The numeric profile is unsupported.</exception>
+    /// <exception cref="ArgumentException">Properties or set keys repeat.</exception>
+    /// <exception cref="InvalidOperationException">A JSON value cannot be canonicalized.</exception>
+    public static byte[] ComputeCanonicalSequenceSha256(JsonElement element,
+        Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering> getArrayOrdering,
+        JsonWriterOptions writerOptions,
+        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation,
+        CanonicalJsonPropertyExclusions? exclusions = null, ReadOnlySpan<byte> prefix = default)
+    {
+        ArgumentNullException.ThrowIfNull(getArrayOrdering);
+        using Sha256BufferWriter output = new();
+        prefix.CopyTo(output.GetSpan(prefix.Length));
+        output.Advance(prefix.Length);
+        using (var writer = new Utf8JsonWriter(output, writerOptions))
+            WriteCanonical(writer, element, getArrayOrdering, numberSemantics, exclusions);
+        var digest = new byte[System.Security.Cryptography.SHA256.HashSizeInBytes];
+        output.Complete(digest);
+        return digest;
+    }
+
     // Semantic blocks can stream the same canonical profile into their existing digest writer.
     internal static void WriteCanonical(Utf8JsonWriter writer, JsonElement element,
         Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering> getArrayOrdering,
-        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation)
+        CanonicalJsonNumberSemantics numberSemantics = CanonicalJsonNumberSemantics.PortableObservation,
+        CanonicalJsonPropertyExclusions? exclusions = null)
     {
-        WriteCanonicalValue<ElementValue, ElementItems, ElementProperty, StrictProfile>(writer, new(element), getArrayOrdering, string.Empty, numberSemantics, null);
+        if (!Enum.IsDefined(numberSemantics)) throw new ArgumentOutOfRangeException(nameof(numberSemantics));
+        WriteCanonicalValue<ElementValue, ElementItems, ElementProperty, StrictProfile>(writer, new(element), getArrayOrdering, string.Empty, numberSemantics, exclusions?.Root);
     }
 
     // Both JSON representations use one structural walk. Adapters own only storage access and

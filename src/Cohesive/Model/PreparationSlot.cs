@@ -1,0 +1,23 @@
+namespace Cohesive.Model;
+
+// One owner-scoped preparation publishes only completed factories. Exceptions leave this same
+// slot retryable, so no removal can race with a later successful publication.
+internal sealed class PreparationSlot<TValue>
+{
+    TValue value = default!;
+    int prepared;
+    internal bool IsPrepared => Volatile.Read(ref prepared) != 0;
+    internal TValue Get<TContext>(TContext context, Func<TContext, TValue> factory)
+    {
+        if (IsPrepared) return value;
+        lock (this)
+        {
+            if (!IsPrepared)
+            {
+                value = factory(context);
+                Volatile.Write(ref prepared, 1);
+            }
+            return value;
+        }
+    }
+}

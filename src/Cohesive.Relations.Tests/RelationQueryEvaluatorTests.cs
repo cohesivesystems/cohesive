@@ -302,6 +302,27 @@ public sealed class RelationQueryEvaluatorTests
     }
 
     [Fact]
+    public async Task EvaluateAsync_RetriesFailedPreparationAndThenSharesSuccess()
+    {
+        var evaluation = CreateParameterizedQueryDocument().Evaluate(new("tests/retry-preparation"),
+            LoadCustomerRelationFixture.ShapeGraphDocuments, LoadCustomerRelationFixture.RelationshipCatalogDocument)
+            .Set(LoadCustomerRelationFixture.StatusParameterId, ObservationValue.FromString("Open")).Build();
+        var attempts = 0;
+        var evaluator = CreateEvaluator(evaluation,
+            loadRows: [Load("load-1", "customer-1", "Open", 12m)],
+            customerRows: [Customer("customer-1", "Acme", "Priority")],
+            afterPlacement: () => { if (++attempts == 1) throw new InvalidOperationException("transient preparation"); });
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await evaluator.EvaluateAsync(evaluation));
+        var recovered = await evaluator.EvaluateAsync(evaluation);
+        var reused = await evaluator.EvaluateAsync(evaluation);
+        Assert.True(recovered.IsSuccessful);
+        Assert.True(reused.IsSuccessful);
+        Assert.Equal(2, attempts);
+        Assert.Same(recovered.Compilation, reused.Compilation);
+        Assert.Same(recovered.Placement, reused.Placement);
+    }
+
+    [Fact]
     public async Task EvaluateAsync_ReusesPreparationForTheExactCompilationRequestWithoutRetainingParameters()
     {
         RelationQueryCompilationRequest compilation = new(

@@ -1,7 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Nodes;
+using System.Text.Encodings.Web;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Drafts;
 
@@ -27,6 +27,10 @@ namespace Cohesive.Relations.Serialization;
 /// </remarks>
 public static class RelationDraftFingerprinter
 {
+    static readonly byte[] Prefix = Encoding.UTF8.GetBytes(RelationDraftDocument.CurrentSchemaVersion + "\0");
+    static readonly CanonicalJsonPropertyExclusions Exclusions = new("/id");
+    static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
     /// <summary>Fingerprint algorithm identifier.</summary>
     public const string Algorithm = "sha256";
 
@@ -50,18 +54,13 @@ public static class RelationDraftFingerprinter
     {
         ArgumentNullException.ThrowIfNull(draft);
 
-        var canonicalDraft = GetCanonicalSemanticBytes(draft);
-        var version = Encoding.UTF8.GetBytes(RelationDraftDocument.CurrentSchemaVersion);
-        var content = new byte[version.Length + 1 + canonicalDraft.Length];
-        version.CopyTo(content, 0);
-        content[version.Length] = 0;
-        canonicalDraft.CopyTo(content, version.Length + 1);
-
-        var hash = SHA256.HashData(content);
+        using var document = ReadSemanticDraft(draft);
+        var hash = CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement,
+            RelationCanonicalJsonArrayOrderings.Draft, WriterOptions, exclusions: Exclusions, prefix: Prefix);
         return new(
             algorithm: Algorithm,
             canonicalization: Canonicalization,
-            value: Convert.ToHexString(hash).ToLowerInvariant());
+            value: Convert.ToHexStringLower(hash));
     }
 
     /// <summary>Gets the canonical JSON bytes used as semantic fingerprint input.</summary>
@@ -81,22 +80,24 @@ public static class RelationDraftFingerprinter
     internal static byte[] GetCanonicalSemanticBytes(RelationDraft draft)
     {
         ArgumentNullException.ThrowIfNull(draft);
-        var options = RelationDraftJsonSerializer.CreateOptions();
-        var node = JsonSerializer.SerializeToNode(draft, options) as JsonObject
-                   ?? throw new InvalidOperationException(
-                       "Failed to materialize canonical relation draft JSON as an object.");
+        using var document = ReadSemanticDraft(draft);
+        return CanonicalJsonWriter.GetCanonicalBytes(document.RootElement,
+            RelationCanonicalJsonArrayOrderings.Draft, exclusions: Exclusions);
+    }
 
-        var lifecycleIdProperty = options.PropertyNamingPolicy?.ConvertName(nameof(RelationDraft.Id))
-                                  ?? nameof(RelationDraft.Id);
-        if (!node.Remove(lifecycleIdProperty))
+    static JsonDocument ReadSemanticDraft(RelationDraft draft)
+    {
+        var document = JsonSerializer.SerializeToDocument(draft, RelationDraftJsonSerializer.ReadOnlyOptions);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
         {
-            throw new InvalidOperationException(
-                $"Canonical relation draft JSON does not contain lifecycle property '{lifecycleIdProperty}'.");
+            document.Dispose();
+            throw new InvalidOperationException("Failed to materialize canonical relation draft JSON as an object.");
         }
-
-        return CanonicalJsonWriter.GetCanonicalBytes(
-            node,
-            options,
-            RelationCanonicalJsonArrayOrderings.Draft);
+        if (!document.RootElement.TryGetProperty("id", out _))
+        {
+            document.Dispose();
+            throw new InvalidOperationException("Canonical relation draft JSON does not contain lifecycle property 'id'.");
+        }
+        return document;
     }
 }
