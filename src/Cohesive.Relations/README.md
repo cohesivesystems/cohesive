@@ -26,6 +26,12 @@ Hosted typed handlers retain fresh portable-value admission while delegating CLR
 Core’s pooled UTF-8 boundary. Typed row, nested-result and transition projections prepare
 plain JSON interpretation at binding construction; customized contracts retain JSON decoding. See [qualification](../../docs/performance/hosted-value-projection.md).
 
+`HostedQuery<TInput, TResult>.AsObservation()` binds handlers to admitted observation storage
+while retaining the original canonical contracts. Use captured `FieldPath` selectors for sparse reads
+and `ObservationValue.WithFields` for immutable batch updates; unchanged subtrees can be returned
+without CLR materialization. This does not turn a partial datasource projection into a complete value.
+See [schema-bound observation handlers](../../docs/performance/schema-bound-observation-handlers.md).
+
 Relation and realization fingerprints retain their existing binary profiles while streaming temporary output.
 See [performance qualification](../../docs/performance/realization-fingerprints.md).
 

@@ -246,3 +246,8 @@ bytes. See [repeated representation qualification](../../docs/performance/repeat
 already-admitted portable values. Conventional members, including standard read-only lists,
 are projected directly; a customized member retains its JSON contract without forcing the
 whole row through JSON. Results remain independent. Shape-qualified admission is separate.
+
+`ObservationValue.WithFields(assignments)` applies an ordered batch of field-only assignments
+without rebuilding the whole object for each edit. `Undefined` removes a field; unchanged
+subtrees retain their immutable storage. It does not replace Transition before-value evidence
+checks or establish a backend patch operation.

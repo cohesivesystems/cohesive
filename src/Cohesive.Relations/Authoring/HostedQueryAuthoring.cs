@@ -55,6 +55,17 @@ public sealed class HostedQuery<TInput, TResult>
     /// <summary>Portable singular-result contract projected from the canonical definition.</summary>
     public ValueContract ResultContract => Definition.Result;
 
+    /// <summary>Views the same canonical Query as an observation-to-observation runtime binding.</summary>
+    /// <returns>A runtime handle retaining this document, validation, identity, contracts and configuration.</returns>
+    /// <remarks>
+    /// The original CLR declarations remain the schema projection. Handlers registered through this view receive
+    /// admitted observation storage directly and can forward unchanged subtrees or read selected field paths.
+    /// No CLR input/result instance, JSON round trip, result cache or alternate definition is created. Input and
+    /// result admission, implementation affinity and execution semantics remain those of the canonical Query.
+    /// This view does not admit incomplete datasource projections as complete invocation values.
+    /// </remarks>
+    public HostedQuery<ObservationValue, ObservationValue> AsObservation() => new(Document, Validation);
+
     /// <summary>Exact semantic host implementation contract projected from the canonical definition.</summary>
     public HostedQueryImplementationReference Implementation => Definition.Implementation;
 
