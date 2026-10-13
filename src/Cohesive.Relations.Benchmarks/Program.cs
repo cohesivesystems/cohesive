@@ -5,6 +5,9 @@ if (args is ["--portable-field-concurrency", .. var fieldArgs])
 
 if (args is ["--hash-projection-allocations", .. var hashArgs])
     return Cohesive.Relations.Benchmarks.HashProjectionAllocationBenchmark.Run(hashArgs);
+if (args is ["--prepared-result-allocations", .. var resultArgs])
+    return Cohesive.Relations.Benchmarks.PreparedResultAllocationBenchmark.Run(resultArgs);
+
 var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 var discovered = false;
 foreach (var summary in summaries)

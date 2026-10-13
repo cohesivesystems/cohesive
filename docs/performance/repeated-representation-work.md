@@ -36,3 +36,23 @@ Run `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --hash
 Exact token-format, streaming allocation-ceiling, numeric-profile, exclusion and encoder
 regressions supplement existing fingerprint equivalence tests. Cache tests exercise
 concurrent failure recovery and evaluator preparation retry.
+
+## Prepared typed results
+
+Typed query rows, nested result carriers and transition outcomes prepare
+`ObservationMaterializer.PrepareJsonValue<T>()` when their binding is built. The existing
+Core converter engine interprets conventional CLR contracts directly. Plain JSON defaults
+remain separate from shape materialization's web defaults. Customized JSON attributes,
+required-member contracts, serializer callbacks and unsupported projections keep the
+compatibility path. Missing mutable properties preserve initializers and skip setters.
+
+A record row with two nested child records allocates 1,368 B through JSON and 128 B through
+prepared interpretation. Those 128 B are independent result objects and their array;
+no mutable output is cached. The test's one-child variant has a fixed 128 B median ceiling.
+Cold reflection and expression compilation are outside the warm measurement. Preparation
+is weakly keyed by CLR type and JSON contract, not tenant, authorization or parameter data.
+
+Run `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --prepared-result-allocations 32`.
+Differential tests cover casing, missing fields, numeric strings, overflow, wrong container
+kinds, null, mutable outputs, customized names, required members and base64 compatibility.
+Existing query/nested-result/transition admission remains in place before interpretation.

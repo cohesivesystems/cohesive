@@ -97,11 +97,12 @@ public sealed partial class RelationQueryExpressionAuthoring
         if (request.DefinitionDocument.Definition.Body.Parameters.Length != 1
             || request.DefinitionDocument.Definition.Body.Parameters[0].Id != parameter.Id)
             throw new ArgumentException("The typed row query requires exactly one invocation parameter.", nameof(parameter));
+        var materialize = ObservationMaterializer.PrepareJsonValue<TRow>();
         return new(request, parameter.Id, values =>
         {
             var typed = new TRow[values.Length];
             for (var index = 0; index < typed.Length; index++)
-                typed[index] = values[index].Deserialize<TRow>()!;
+                typed[index] = materialize(values[index])!;
             return result(typed);
         });
     }
