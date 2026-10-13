@@ -174,12 +174,28 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// <exception cref="ArgumentException">A path is empty.</exception>
     /// <exception cref="NotSupportedException">A path contains a non-field segment.</exception>
     /// <exception cref="InvalidOperationException">An assignment traverses a scalar or array.</exception>
-    public static ObservationValue FromFieldAssignments(IEnumerable<KeyValuePair<FieldPath, ObservationValue>> assignments)
+    public static ObservationValue FromFieldAssignments(IEnumerable<KeyValuePair<FieldPath, ObservationValue>> assignments) =>
+        EmptyObject.WithFields(assignments);
+
+    /// <summary>Applies field assignments to this object in one immutable update.</summary>
+    /// <param name="assignments">Field-only paths and values, applied in enumeration order; Undefined removes a field.</param>
+    /// <returns>The updated value, or this value when no assignments are supplied.</returns>
+    /// <remarks>
+    /// Equivalent to repeated WithField calls, while preparing each touched object once. Untouched immutable
+    /// subtrees retain their storage. No partial-document admission or durable patch protocol is implied.
+    /// </remarks>
+    /// <exception cref="ArgumentNullException">Assignments are null.</exception>
+    /// <exception cref="ArgumentException">An assignment path is empty.</exception>
+    /// <exception cref="NotSupportedException">A path contains a non-field segment.</exception>
+    /// <exception cref="InvalidOperationException">An assignment traverses a scalar or array.</exception>
+    public ObservationValue WithFields(IEnumerable<KeyValuePair<FieldPath, ObservationValue>> assignments)
     {
         ArgumentNullException.ThrowIfNull(assignments);
         using var enumerator = assignments.GetEnumerator();
-        if (!enumerator.MoveNext()) return EmptyObject;
-        var root = new AssignmentObject(EmptyObject);
+        if (!enumerator.MoveNext()) return this;
+        if (Kind is not (ObservationValueKind.Object or ObservationValueKind.Null or ObservationValueKind.Undefined))
+            throw new InvalidOperationException($"Value kind '{Kind}' cannot be updated as an object.");
+        var root = new AssignmentObject(this);
         do
         {
             var assignment = enumerator.Current;

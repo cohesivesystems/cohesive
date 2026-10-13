@@ -28,7 +28,7 @@ public static class HostedQueryValueAdapter
     static readonly JsonSerializerOptions JsonOptions = ExecutionDefinitionJsonSerializer.GetClrContractReadOnlyOptions();
 
     /// <summary>Validates an exact concrete invocation contract and decodes its CLR projection.</summary>
-    /// <returns>The typed input or a structured admission diagnostic.</returns>
+    /// <returns>The typed input or a structured admission diagnostic. ObservationValue retains its admitted storage.</returns>
     /// <exception cref="ArgumentNullException">The value or contract is null.</exception>
     public static Result<T, DocumentValidationDiagnostic> Decode<T>(PortableValue inputValue, ValueContract contract) where T : notnull
     {
@@ -54,6 +54,11 @@ public static class HostedQueryValueAdapter
             static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
         if (inputError is not null)
             return Result<T, DocumentValidationDiagnostic>.FromFailure(inputError);
+
+        // Observation bindings already have their canonical storage. Materializing that storage
+        // through the serializer would rebuild exactly the tree the handler is meant to retain.
+        if (typeof(T) == typeof(ObservationValue))
+            return Result<T, DocumentValidationDiagnostic>.FromSuccess((T)(object)inputValue.Value.Value);
 
         T input;
         try

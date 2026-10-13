@@ -50,4 +50,57 @@ public sealed class ObservationFieldAssignmentTests
         Array.Sort(samples);
         Assert.InRange(samples[3], 0, 40_000);
     }
+    [Fact]
+    public void ExistingBatchMatchesSequentialUpdatesAndSharesUntouchedSubtrees()
+    {
+        var source = ObservationValue.FromObject(new { Customer = new { Name = "before", Remove = 1 }, Untouched = new { Values = new[] { 1, 2 } } });
+        KeyValuePair<FieldPath, ObservationValue>[] assignments = [
+            new(Path("Customer", "Name"), ObservationValue.FromString("after")),
+            new(Path("Customer", "Remove"), ObservationValue.Undefined),
+            new(Path("Added"), ObservationValue.Null),
+            new(Path("Added", "Child"), ObservationValue.FromBool(true))];
+        var expected = source;
+        foreach (var assignment in assignments) expected = expected.WithField(assignment.Key, assignment.Value);
+        var actual = source.WithFields(assignments);
+        Assert.Equal(expected, actual);
+        Assert.Equal(expected.GetRawText(), actual.GetRawText());
+        Assert.Equal("before", source.GetProperty("Customer").GetProperty("Name").GetString());
+        Assert.Same(source.GetProperty("Untouched").Fields, actual.GetProperty("Untouched").Fields);
+        Assert.Same(source.Fields, source.WithFields([]).Fields);
+        Assert.Equal(ObservationValue.FromInt64(42), ObservationValue.FromInt64(42).WithFields([]));
+    }
+
+    [Fact]
+    public void BatchFailureLeavesTheOriginalValueUntouched()
+    {
+        var source = ObservationValue.FromObject(new { a = 42, b = "before" });
+        var before = source.GetRawText();
+        Assert.Throws<InvalidOperationException>(() => source.WithFields([
+            new(Path("b"), ObservationValue.FromString("after")), new(Path("a", "child"), ObservationValue.Null)]));
+        Assert.Equal(before, source.GetRawText());
+        Assert.Throws<InvalidOperationException>(() => ObservationValue.FromInt64(42).WithFields([new(Path("x"), ObservationValue.Null)]));
+    }
+
+    [Fact]
+    public void WideExistingBatchHasLinearWarmAllocationCeiling()
+    {
+        var initial = Enumerable.Range(0, 128).Select(i => new KeyValuePair<FieldPath, ObservationValue>(
+            Path($"field{i:D4}"), ObservationValue.FromInt64(i))).ToArray();
+        var source = ObservationValue.FromFieldAssignments(initial);
+        var updates = initial.Select(field => new KeyValuePair<FieldPath, ObservationValue>(field.Key, ObservationValue.FromInt64(42))).ToArray();
+        var expected = source;
+        foreach (var update in updates) expected = expected.WithField(update.Key, update.Value);
+        for (var i = 0; i < 8; i++) source.WithFields(updates);
+        var samples = new long[7];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var actual = source.WithFields(updates);
+            samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(expected, actual);
+        }
+        Array.Sort(samples);
+        Assert.InRange(samples[3], 0, 60_000);
+    }
+
 }
