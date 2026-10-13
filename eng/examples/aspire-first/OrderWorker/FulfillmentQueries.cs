@@ -71,7 +71,7 @@ public static class FulfillmentQueries
 /// <param name="Id">Order identity.</param>
 /// <param name="Status">Current lifecycle state.</param>
 /// <param name="Reservations">Joined reservations ordered by identity.</param>
-public sealed record OrderDetails(string Id, string Status, IReadOnlyList<ReservationSummary> Reservations);
+public sealed record OrderDetails(string Id, OrderStatus Status, IReadOnlyList<ReservationSummary> Reservations);
 
 /// <summary>One reservation and its current inventory availability, not an event-sourced snapshot.</summary>
 /// <param name="Id">Reservation identity.</param>

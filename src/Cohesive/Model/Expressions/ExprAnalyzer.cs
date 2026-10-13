@@ -950,6 +950,8 @@ public static class ExprAnalyzer
             if (expectedType is not null
                 && actualType is not null
                 && expectedType != actualType
+                && !(expectedType is EnumTypeRef expectedEnum && actualType is EnumTypeRef actualEnum
+                    && expectedEnum.Members.ToHashSet(StringComparer.Ordinal).SetEquals(actualEnum.Members))
                 && !constantCouldSatisfyExpectedType)
             {
                 Add(

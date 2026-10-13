@@ -89,3 +89,11 @@ Repeated registration subscribes once per native host. It logs full native diagn
 that level only for a protected operator sink because IDs and concurrency tokens may be present. Public
 process responses remain sanitized. Other hosts and process-wide diagnostic listeners cannot subscribe to
 these failures without a reference to this host or adapter instance.
+
+### Closed order contracts
+
+The order submission step now passes the closed `SubmitOrder.Submit` command to the subject selected by
+`input.OrderId`. It branches on `SubmissionOutcome.Submitted`; neither a duplicated command ID nor display
+text participates in the domain rule. `OrderStatus` has explicit `Draft` and `Submitted` wire members.
+The process revision is 2 because the referenced transition's input/outcome contracts changed. Existing
+revision-1 receipts are not reinterpreted as revision-2 evidence.

@@ -14,10 +14,10 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class FulfillmentProcessIntegrationTests
 {
     [PostgresTheory]
-    [InlineData("Draft", 5, 2, "Submitted", 3)]
-    [InlineData("Submitted", 5, 2, "Rejected", 5)]
-    [InlineData("Draft", 1, 2, "Rejected", 1)]
-    public async Task Canonical_process_commits_compensates_and_replays(string initialStatus, int stock, int quantity,
+    [InlineData(OrderStatus.Draft, 5, 2, "Submitted", 3)]
+    [InlineData(OrderStatus.Submitted, 5, 2, "Rejected", 5)]
+    [InlineData(OrderStatus.Draft, 1, 2, "Rejected", 1)]
+    public async Task Canonical_process_commits_compensates_and_replays(OrderStatus initialStatus, int stock, int quantity,
         string expectedStatus, int remaining)
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")!);
@@ -36,7 +36,7 @@ public sealed class FulfillmentProcessIntegrationTests
         {
             await orders.Upsert(context, new Order(orderId, FulfillmentDemo.LocalPartition, initialStatus));
             // Same ID in another partition must not confuse the trusted process read binding.
-            var foreign = await orders.Upsert(context, new Order(orderId, "other", "Draft"));
+            var foreign = await orders.Upsert(context, new Order(orderId, "other", OrderStatus.Draft));
             await inventory.Upsert(context, new InventoryItem(sku, FulfillmentDemo.LocalPartition, stock));
             var binding = FulfillmentProcessBindings.Bind(orders, inventory);
             var identity = new ProcessContinuationIdentity(new("test/" + orderId), new("attempt/1"));

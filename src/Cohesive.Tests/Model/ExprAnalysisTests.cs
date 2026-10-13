@@ -14,6 +14,20 @@ public sealed class ExprAnalysisTests
     static readonly ScalarTypeRef Int64Type = new(ScalarTypeKind.Int64);
     static readonly ValueBindingId LoadBinding = new("load");
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Enum_result_contract_compares_members_structurally(bool mismatch)
+    {
+        var actual = new EnumTypeRef("Lifecycle", ["ready", "done"]);
+        var expected = new EnumTypeRef("Lifecycle", mismatch ? ["ready", "other"] : ["done", "ready"]);
+        var result = Analyze(Expr.Field(LoadBinding, "Status"),
+            Scope(bindings: [new(LoadBinding, new(new ObjectTypeRef([new("Status", actual)])), ExprBindingAvailability.AlwaysPresent)]),
+            "enum", new(ExprResultCategory.Scalar, new(expected)));
+        Assert.Equal(!mismatch, result.IsValid);
+        if (mismatch) AssertDiagnostic(result, ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
+    }
+
     [Fact]
     public void Analyze_GuardsNarrowOnlyTheSelectedBranchAndRetainOptionalFieldContracts()
     {

@@ -64,7 +64,7 @@ public sealed partial class OrderStorageIntegrationTests
             try
             {
                 var fetched = await client.GetFromJsonAsync<OrderSummary>($"/orders/{createdOrder.Id}");
-                Assert.Equal("Draft", fetched!.Status);
+                Assert.Equal(OrderStatus.Draft, fetched!.Status);
                 Assert.Equal(createdOrder.Id, fetched.Id);
                 Assert.Equal(HttpStatusCode.NotFound,
                     (await client.GetAsync($"/orders/{Guid.NewGuid():D}")).StatusCode);
@@ -173,7 +173,17 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Equal(HttpStatusCode.Created, created.StatusCode);
             id = (await created.Content.ReadFromJsonAsync<OrderCreated>())!.Id;
             Assert.Equal($"/orders/{id}", created.Headers.Location!.OriginalString);
-            Assert.Equal("Draft", (await client.GetFromJsonAsync<OrderSummary>($"/orders/{id}"))!.Status);
+            // Domain identity is an opaque string, even though creation currently allocates UUID text.
+            var opaqueId = "order-" + Guid.NewGuid().ToString("N");
+            await using (var database = NpgsqlDataSource.Create(connection))
+            await using (var rename = database.CreateCommand("UPDATE public.cohesive_orders SET order_id=$1 WHERE order_id=$2"))
+            {
+                rename.Parameters.AddWithValue(opaqueId);
+                rename.Parameters.AddWithValue(id);
+                Assert.Equal(1, await rename.ExecuteNonQueryAsync());
+            }
+            id = opaqueId;
+            Assert.Equal(OrderStatus.Draft, (await client.GetFromJsonAsync<OrderSummary>($"/orders/{id}"))!.Status);
             Assert.Empty((await client.GetFromJsonAsync<OrderDetails>($"/orders/{id}/details"))!.Reservations);
             await using (var database = NpgsqlDataSource.Create(connection))
             await using (var seed = database.CreateCommand("INSERT INTO public.cohesive_inventory VALUES ($1, 'local', 5, 0)"))
@@ -185,7 +195,7 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Equal(HttpStatusCode.OK, fulfillment.StatusCode);
             Assert.Equal("Submitted", (await fulfillment.Content.ReadFromJsonAsync<FulfillmentResult>())!.Status);
             Assert.Null(Assert.Single((await client.GetFromJsonAsync<ReservationAvailability[]>($"/orders/{id}/availability"))!).ReservationId);
-            await AssertProblem(await client.PostAsync($"/orders/{id}/submit", null), "orders.submit.rejected");
+            await AssertProblem(await client.PostAsync($"/orders/{id}/submit", null), "orders.submit.NotDraft");
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{Guid.NewGuid():D}")).StatusCode);
         }
         finally

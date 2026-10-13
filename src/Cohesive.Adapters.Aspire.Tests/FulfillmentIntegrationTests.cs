@@ -36,7 +36,7 @@ public sealed partial class OrderStorageIntegrationTests
         try
         {
             await orders.Upsert(context, FulfillmentDemo.RegisterOrder(Guid.Parse(id)));
-            await orders.Upsert(context, new EntityWriteRequest(FulfillmentDomain.Orders.Definition.CreateState(id, new Order(id, "outside", "Private"), 1).Snapshot));
+            await orders.Upsert(context, new EntityWriteRequest(FulfillmentDomain.Orders.Definition.CreateState(id, new Order(id, "outside", OrderStatus.Submitted), 1).Snapshot));
             await orders.Upsert(context, new EntityWriteRequest(FulfillmentDomain.Orders.Definition.CreateState(outsideId, new Order(outsideId, "outside"), 1).Snapshot));
             var queryReader = persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
             IRelationQueryRowsReader nativeReader = new PostgresQueryRowsReader(queryReader.Artifact, runtime, maximumRows: 1000, maximumBytes: 1_000_000);
@@ -52,7 +52,7 @@ public sealed partial class OrderStorageIntegrationTests
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
             var empty = await client.GetFromJsonAsync<OrderDetails>($"/orders/{id}/details");
-            Assert.Equal("Draft", empty!.Status);
+            Assert.Equal(OrderStatus.Draft, empty!.Status);
             Assert.Empty(empty.Reservations);
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{outsideId}/details")).StatusCode);
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{Guid.NewGuid():D}/details")).StatusCode);

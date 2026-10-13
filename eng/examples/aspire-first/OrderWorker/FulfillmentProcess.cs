@@ -56,7 +56,7 @@ public static partial class FulfillmentProcess
 
     /// <summary>Generated portable sequence, including explicit domain compensation.</summary>
     public static Process<FulfillOrder, FulfillmentResult> Definition { get; } = Define(new(
-        new("fulfillment/submit"), new("1"), ProcessRecoveryPolicy.ContinueAttempt, Provenance));
+        new("fulfillment/submit"), new("2"), ProcessRecoveryPolicy.ContinueAttempt, Provenance));
 
     static async ProcessTask<FulfillmentResult> Run(ProcessContext process, FulfillOrder input)
     {
@@ -69,8 +69,8 @@ public static partial class FulfillmentProcess
         if (!reserved.Accepted)
             return new FulfillmentResult("Rejected", reserved.Reason);
         var submitted = await process.Transition<SubmitOrderResult>(OrderTransitions.Submit.Reference,
-            input.OrderId, new SubmitOrder(input.OrderId));
-        if (submitted.Accepted)
+            input.OrderId, SubmitOrder.Submit);
+        if (submitted.Outcome == SubmissionOutcome.Submitted)
             return new FulfillmentResult("Submitted", "Stock reserved and order submitted.");
         var released = await process.Transition<StockResult>(InventoryTransitions.Release.Reference, input.Sku, input);
         if (!released.Accepted)

@@ -1,3 +1,4 @@
+using AspireFirst;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
@@ -10,7 +11,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRequestOperationContext();
 builder.Services.AddSingleton<IHttpOperationContextEnricher, FulfillmentDemoIdentity>();
 builder.Services.AddCohesiveExceptionHandling();
-var connectionString = builder.Configuration.GetConnectionString(FulfillmentStorage.DatabaseName)
+var connectionString = builder.Configuration.GetConnectionString(FulfillmentResources.DatabaseName)
     ?? throw new InvalidOperationException("The native Aspire orders database reference is required.");
 await using var database = NpgsqlDataSource.Create(connectionString);
 var persistence = FulfillmentStorage.Bind(database);

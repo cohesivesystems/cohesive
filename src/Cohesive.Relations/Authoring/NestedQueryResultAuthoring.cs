@@ -152,7 +152,10 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
         ArgumentNullException.ThrowIfNull(parameter);
         if (!ReferenceEquals(parameter.Owner, author)) throw new ArgumentException("Foreign query parameter.", nameof(parameter));
         var rowShape = new QualifiedShapeId(new GraphId(id.Value + "/result-slots/v1"), new ShapeId("Row"));
-        var graph = new ShapeGraph(rowShape.GraphId, [new Shape(rowShape.ShapeId, [.. slots])]);
+        // Named enum slots retain their declaration in the standalone row graph.
+        var slotTypes = slots.Select(slot => slot.Type).OfType<NamedTypeRef>().Select(type => type.TypeId).ToHashSet();
+        var graph = new ShapeGraph(rowShape.GraphId, [new Shape(rowShape.ShapeId, [.. slots])],
+            [.. shape.Document.Graph.NamedTypes.Where(type => slotTypes.Contains(type.Id))]);
         var projected = author.Structural.Project(input!.Value, rowShape, [.. assignments]);
         var rows = author.Structural.Rows(projected.Node);
         var assembly = new NestedQueryResultAssembly(rows.Id, shape.Id, identity, [.. fields], [.. collections]);

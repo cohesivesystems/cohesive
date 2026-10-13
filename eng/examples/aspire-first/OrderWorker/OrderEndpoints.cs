@@ -25,17 +25,21 @@ public static class OrderEndpoints
                 )
                 .Get(OrderApi.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
                 .Transition(OrderApi.Submit, OrderTransitions.Submit)
-                    .Input(request => new SubmitOrder(request.RequiredEntityId))
+                    .Input(_ => SubmitOrder.Submit)
                     .OnApplied((order, outcome) => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
                     .OnRejected(outcome => TypedResults.Problem(statusCode: StatusCodes.Status409Conflict,
-                        title: "Order cannot be submitted", detail: outcome.Reason,
-                        extensions: new Dictionary<string, object?> { ["code"] = "orders.submit.rejected" }
+                        title: "Order cannot be submitted", detail: outcome.Outcome switch
+                        {
+                            SubmissionOutcome.NotDraft => "Order must be Draft to submit.",
+                            _ => throw new InvalidOperationException("Unexpected rejected submission outcome.")
+                        },
+                        extensions: new Dictionary<string, object?> { ["code"] = $"orders.submit.{Cohesive.Model.ObservationValue.FromObject(outcome.Outcome).GetRequiredString()}" }
                     )
                 )
         );
 
-        app.MapApiQuery(OrderApi.Availability, availability).FromRoute<Guid>("id", id => id.ToString("D")).OkOrNotFound();
-        app.MapApiQuery(OrderApi.Details, details).FromRoute<Guid>("id", id => id.ToString("D")).OkOrNotFound();
+        app.MapApiQuery(OrderApi.Availability, availability).FromRoute<string>("id", id => id).OkOrNotFound();
+        app.MapApiQuery(OrderApi.Details, details).FromRoute<string>("id", id => id).OkOrNotFound();
     }
 
 }
@@ -47,4 +51,4 @@ public sealed record OrderCreated(string Id);
 /// <summary>Public order identity and lifecycle state.</summary>
 /// <param name="Id">Order identity.</param>
 /// <param name="Status">Current lifecycle state.</param>
-public sealed record OrderSummary(string Id, string Status);
+public sealed record OrderSummary(string Id, OrderStatus Status);

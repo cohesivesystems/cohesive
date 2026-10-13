@@ -1284,6 +1284,13 @@ sealed class RelationQueryShapeResolver
         return new(shape: bindingShape);
     }
 
+    static TypeRef ExpandStringEnum(ShapeGraph graph, TypeRef type) =>
+        type is NamedTypeRef named && graph.TryGetType(named.TypeId, out var declaration)
+            && declaration is TypeDefinition.Enum { Underlying: PrimitiveType.String } enumeration
+            ? new EnumTypeRef(enumeration.Name ?? named.TypeId.Value,
+                [.. enumeration.Values.Select(value => value.Value ?? value.Name)])
+            : type;
+
     static Shape ExpandNamedStructuralFields(ShapeGraph graph, Shape shape) => new(
         shape.Id,
         [
@@ -1296,7 +1303,7 @@ sealed class RelationQueryShapeResolver
                         field.Type,
                         activeTypes: [],
                         depth: 0)
-                    : field.Type
+                    : ExpandStringEnum(graph, field.Type)
             })
         ],
         shape.Constraints,
@@ -1395,6 +1402,8 @@ sealed class RelationQueryShapeResolver
     {
         if (TryGetFieldContract(shape, target, out var contract))
         {
+            if (graphs.TryGetValue(shape.GraphId, out var graph) && contract.Type is { } type)
+                contract = new(ExpandStringEnum(graph, type), contract.Shape, contract.Cardinality, contract.Presence, contract.Nullability);
             expectation = new(GetResultCategory(shape.GraphId, contract), contract);
             return true;
         }

@@ -10,6 +10,11 @@ be present and non-null. Explicit `single` requires exactly one selected item, a
 invariant text without rounding. Named enum literals are checked in their owning graph. Implicit
 element traversal and undeclared conversions remain unsupported.
 
+Typed imports accept named and inline string enums only when their serialized member sets match.
+Nested result projections retain enum declarations in their row graph; enum fields remain closed
+contracts through compilation and result assembly. Explicit text operations may consume enum wire
+values, but an arbitrary string or a different member set does not satisfy an enum result contract.
+
 Canonical execution IR declares `IImmutableExecutionDefinition`, so repeated typed reads share
 document-owned immutable decoding. Integrity, canonical-wire, contextual semantics, and deployment
 admission remain independently validated. See [immutable execution preparation](../../docs/performance/immutable-execution-preparation.md).

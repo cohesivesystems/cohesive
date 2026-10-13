@@ -40,7 +40,7 @@ public static class OrdersApp
     {
         ArgumentNullException.ThrowIfNull(builder);
         var postgres = builder.AddPostgres("postgres").WithDataVolume();
-        var database = postgres.AddDatabase("orders");
+        var database = postgres.AddDatabase(FulfillmentResources.DatabaseName);
         var worker = builder.AddProject<Projects.OrderWorker>("worker")
             .WithHttpEndpoint(env: "ASPNETCORE_HTTP_PORTS")
             .WithReference(database).WaitFor(database);

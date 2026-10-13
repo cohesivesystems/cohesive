@@ -94,8 +94,12 @@ public sealed record NestedQueryResultAssembly(
         void RequireScalar(QueryResultFieldMapping mapping, TypeRef target)
         {
             if (!rowShape.TryGetField(mapping.Source.Segments[0].Segment!, out var source)
-                || source.Type is not ScalarTypeRef || !source.Type.Equals(target))
-                throw new ArgumentException("Nested result mappings require matching scalar field types.");
+                || !(source.Type is ScalarTypeRef && source.Type.Equals(target)
+                    || source.Type is NamedTypeRef named && source.Type.Equals(target)
+                        && resultGraph.TryGetType(named.TypeId, out var declared) && declared is TypeDefinition.Enum
+                    || source.Type is EnumTypeRef sourceEnum && target is EnumTypeRef targetEnum
+                        && sourceEnum.Members.ToHashSet(StringComparer.Ordinal).SetEquals(targetEnum.Members)))
+                throw new ArgumentException("Nested result mappings require matching scalar or closed enum field types.");
         }
     }
 
