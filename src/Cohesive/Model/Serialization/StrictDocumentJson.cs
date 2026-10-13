@@ -224,23 +224,39 @@ public static class StrictDocumentJson
                     "$");
                 return false;
             }
-            if (TryFindDuplicateProperty(parsed.RootElement, string.Empty, out var duplicateLocation))
+            // The compatibility node projection can erase duplicates; inspect the original input
+            // first only on this path. Strict element canonicalization checks names itself.
+            if (options.PropertyNameCaseInsensitive
+                && TryFindDuplicateProperty(parsed.RootElement, string.Empty, out var duplicate))
             {
-                error = new(
-                    StrictDocumentJsonReadFailure.DuplicateProperty,
+                error = new(StrictDocumentJsonReadFailure.DuplicateProperty,
                     $"{contractName} JSON cannot contain duplicate object properties.",
-                    string.IsNullOrEmpty(duplicateLocation) ? "$" : duplicateLocation);
+                    string.IsNullOrEmpty(duplicate) ? "$" : duplicate);
                 return false;
             }
-
             try
             {
-                var node = JsonNode.Parse(parsed.RootElement.GetRawText(), documentOptions: new JsonDocumentOptions { MaxDepth = options.MaxDepth })
-                    ?? throw new InvalidOperationException($"Failed to materialize {contractName} JSON.");
-                persistedBytes = GetCanonicalBytes(node, options);
+                if (!options.PropertyNameCaseInsensitive)
+                    persistedBytes = CanonicalJsonWriter.GetCanonicalSequenceBytes(parsed.RootElement);
+                else
+                {
+                    var node = JsonNode.Parse(parsed.RootElement.GetRawText(), documentOptions: new JsonDocumentOptions { MaxDepth = options.MaxDepth })
+                        ?? throw new InvalidOperationException($"Failed to materialize {contractName} JSON.");
+                    persistedBytes = GetCanonicalBytes(node, options);
+                }
             }
             catch (Exception exception) when (IsCanonicalWireFailure(exception))
             {
+                // Strict canonicalization already checks names. Only failures need the source-order
+                // scan that supplies the existing precise, depth-first duplicate diagnostic.
+                if (exception is ArgumentException
+                    && TryFindDuplicateProperty(parsed.RootElement, string.Empty, out var duplicateLocation))
+                {
+                    error = new(StrictDocumentJsonReadFailure.DuplicateProperty,
+                        $"{contractName} JSON cannot contain duplicate object properties.",
+                        string.IsNullOrEmpty(duplicateLocation) ? "$" : duplicateLocation);
+                    return false;
+                }
                 error = new(StrictDocumentJsonReadFailure.InvalidJson, exception.Message, "$");
                 return false;
             }

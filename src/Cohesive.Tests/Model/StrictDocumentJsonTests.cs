@@ -9,6 +9,36 @@ namespace Cohesive.Tests.Model;
 
 public sealed class StrictDocumentJsonTests
 {
+    [Theory]
+    [InlineData("{\"outer\":{\"inner\":1,\"inner\":2},\"outer\":3}", "/outer/inner")]
+    [InlineData("{\"z\":1,\"z\":2,\"a\":{\"b\":1,\"b\":2}}", "/z")]
+    public void AdmissionKeepsSourceOrderDuplicateFailureBeforeDeserialization(string json, string expected)
+    {
+        Assert.False(StrictDocumentJson.TryReadCanonicalObject<TestDocument>(json,
+            StrictDocumentJson.CreateOptions(), "test", out var value, out var error));
+        Assert.Null(value);
+        Assert.Equal(StrictDocumentJsonReadFailure.DuplicateProperty, error.Failure);
+        Assert.Equal(expected, error.Location);
+    }
+
+    [Theory]
+    [InlineData(false, """{"a":1,"a":2}""", "/a")]
+    [InlineData(true, """{"a":1,"a":2}""", "/a")]
+    [InlineData(false, """{"name":1,"na\u006de":2}""", "/name")]
+    [InlineData(true, """{"name":1,"na\u006de":2}""", "/name")]
+    [InlineData(false, """{"é":1,"\u00e9":2}""", "/é")]
+    [InlineData(true, """{"é":1,"\u00e9":2}""", "/é")]
+    public void AdmissionRejectsDecodedDuplicateNamesUnderBothCasePolicies(bool insensitive, string json, string expected)
+    {
+        var options = StrictDocumentJson.CreateOptions();
+        options.PropertyNameCaseInsensitive = insensitive;
+        Assert.False(StrictDocumentJson.TryReadCanonicalObject<Dictionary<string, int>>(json,
+            options, "test", out var value, out var error));
+        Assert.Null(value);
+        Assert.Equal(StrictDocumentJsonReadFailure.DuplicateProperty, error.Failure);
+        Assert.Equal(expected, error.Location);
+    }
+
     [Fact]
     public void TypedObjectApi_WritesAndReadsOneCanonicalExactDecimalWire()
     {

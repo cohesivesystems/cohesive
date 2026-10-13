@@ -11,6 +11,9 @@ if (args is ["--prepared-result-allocations", .. var resultArgs])
 if (args is ["--field-assignment-allocations", .. var assignmentArgs])
     return Cohesive.Relations.Benchmarks.FieldAssignmentAllocationBenchmark.Run(assignmentArgs);
 
+if (args is ["--strict-read-allocations", .. var strictArgs])
+    return Cohesive.Relations.Benchmarks.StrictReadAllocationBenchmark.Run(strictArgs);
+
 var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 var discovered = false;
 foreach (var summary in summaries)

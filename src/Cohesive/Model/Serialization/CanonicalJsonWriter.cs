@@ -318,6 +318,7 @@ public static class CanonicalJsonWriter
     /// <param name="element">Caller-owned JSON, borrowed only for this operation.</param>
     /// <param name="getArrayOrdering">Classifies arrays using the same escaped structural paths as the node writer.</param>
     /// <param name="numberSemantics">Numeric profile applied to JSON number tokens.</param>
+    /// <param name="exclusions">Exact omissions applied before canonical validation of each retained subtree.</param>
     /// <returns>Owned canonical UTF-8 bytes; the input is neither mutated nor retained.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="getArrayOrdering"/> is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="numberSemantics"/> is unsupported.</exception>
