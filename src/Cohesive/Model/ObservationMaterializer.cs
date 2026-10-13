@@ -107,6 +107,20 @@ public sealed class ObservationMaterializer<T>
 /// <summary>Creates compiled observation-to-CLR materializers.</summary>
 public static class ObservationMaterializer
 {
+    /// <summary>Prepares one CLR projection using the plain JSON contract of ObservationValue.Deserialize.</summary>
+    /// <typeparam name="T">CLR result contract.</typeparam>
+    /// <returns>A reusable thread-safe converter producing independent CLR results.</returns>
+    /// <remarks>
+    /// This interprets already-admitted portable values; it does not establish shape admission or cache results.
+    /// Conventional scalar, array and constructor projections are compiled once. Customized JSON contracts and
+    /// unsupported direct projections retain the existing JSON compatibility path. Casing and number policy
+    /// remain plain serializer defaults, independently of the shape materializer's web defaults.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">A CLR projection cannot be prepared.</exception>
+    public static Func<ObservationValue, T?> PrepareJsonValue<T>() =>
+        DefaultObservationValueConverterCache.GetStrict(typeof(T)) is Func<ObservationValue, T?> prepared
+            ? prepared : static value => value.Deserialize<T>();
+
     /// <summary>Creates a configurable materializer builder for an exact graph-scoped shape.</summary>
     /// <typeparam name="T">CLR target type.</typeparam>
     /// <param name="shape">Exact graph and shape accepted by the compiled materializer.</param>

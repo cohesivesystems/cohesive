@@ -241,3 +241,7 @@ Ordered canonical hashing can combine structural array ordering, exact property 
 version prefix in one traversal. Hash APIs require an explicit writer-options argument; choose the same
 encoder as the existing fingerprint contract. Relations preserves its relaxed escaping and versioned
 bytes. See [repeated representation qualification](../../docs/performance/repeated-representation-work.md).
+
+`ObservationMaterializer.PrepareJsonValue<T>()` prepares plain JSON interpretation for
+already-admitted portable values. It returns independent CLR results and retains custom
+serializer compatibility. Shape-qualified admission remains a separate responsibility.

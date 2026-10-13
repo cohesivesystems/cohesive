@@ -162,6 +162,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
             throw new ArgumentException("Nested typed query requires exactly the supplied invocation parameter.", nameof(parameter));
         var request = new RelationQueryCompilationRequest(RelationQueryDocument.FromDefinition(definition),
             [.. author.ShapeDocuments, ShapeGraphDocument.FromGraph(graph)], author.CreateRelationshipCatalogDocument());
+        var materialize = ObservationMaterializer.PrepareJsonValue<TResult>();
         built = true;
         return new(request, parameter.Id, values =>
         {
@@ -169,7 +170,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
             if (result.Kind == ObservationValueKind.Null) return null;
             if (!ObservationValidator.TryValidateAgainstShape(result, shape.Document.Graph.GetShape(shape.Id.ShapeId), out _, shape.Document.Graph))
                 throw new InvalidOperationException("Nested result violates its declared output shape.");
-            return result.Deserialize<TResult>();
+            return materialize(result);
         });
     }
 

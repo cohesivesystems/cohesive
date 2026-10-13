@@ -310,13 +310,14 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
         var compilation = transition.Compile();
         if (!compilation.IsSuccessful)
             throw new TransitionApiPreparationException(resolved.Name, compilation);
+        var materialize = ObservationMaterializer.PrepareJsonValue<TOutcome>();
         var binding = EntityApiOperationBinding.Transition(resolved!, compilation.Plan!,
             (context, _) => createInput(context),
             (context, snapshot) =>
             {
                 var decision = context.Decision ?? throw new InvalidOperationException("Transition decision is required.");
                 var value = decision.Outcome?.Value ?? throw new InvalidOperationException("Typed transition outcome is required.");
-                var outcome = value.Deserialize<TOutcome>() ?? throw new InvalidOperationException("Typed transition outcome cannot be null.");
+                var outcome = materialize(value) ?? throw new InvalidOperationException("Typed transition outcome cannot be null.");
                 return decision.Kind switch
                 {
                     TransitionDecisionKind.Applied or TransitionDecisionKind.NoChange => onApplied(owner.Read(snapshot), outcome),
