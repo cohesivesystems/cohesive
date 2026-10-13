@@ -1135,7 +1135,7 @@ public static class PortableExecutionValidator
             foreach (var enumValue in type.Values)
             {
                 if (enumValue is not null
-                    && PrimitiveTypeSemantics.MatchesLiteral(type.Underlying, enumValue.Value ?? enumValue.Name, value))
+                    && PrimitiveTypeSemantics.MatchesLiteral(type.Underlying, enumValue.SerializedValue, value))
                 {
                     return Compatibility.Compatible;
                 }

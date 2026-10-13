@@ -1260,9 +1260,7 @@ public sealed class RelationQueryClrAuthoringContext
             }
 
             if (expectedDefinition is TypeDefinition.Enum expectedEnum && actual is EnumTypeRef actualEnum)
-                return expectedEnum.Underlying == PrimitiveType.String
-                    && expectedEnum.Values.Select(value => value.Value ?? value.Name).ToHashSet(StringComparer.Ordinal)
-                        .SetEquals(actualEnum.Members);
+                return actualEnum.IsWireEquivalentTo(expectedEnum);
 
             return expectedDefinition is TypeDefinition.Structural expectedStructural
                    && actual is ObjectTypeRef actualObject
@@ -1279,9 +1277,7 @@ public sealed class RelationQueryClrAuthoringContext
             if (expected is EnumTypeRef expectedEnum
                 && actualGraph.TryGetType(actualNamedType.TypeId, out var enumDefinition)
                 && enumDefinition is TypeDefinition.Enum actualEnum)
-                return actualEnum.Underlying == PrimitiveType.String
-                    && actualEnum.Values.Select(value => value.Value ?? value.Name).ToHashSet(StringComparer.Ordinal)
-                        .SetEquals(expectedEnum.Members);
+                return expectedEnum.IsWireEquivalentTo(actualEnum);
             return expected is ObjectTypeRef expectedObject
                    && actualGraph.TryGetType(actualNamedType.TypeId, out var actualDefinition)
                    && actualDefinition is TypeDefinition.Structural actualStructural
@@ -1296,7 +1292,7 @@ public sealed class RelationQueryClrAuthoringContext
         return (expected, actual) switch
         {
             (EnumTypeRef expectedEnum, EnumTypeRef actualEnum) =>
-                expectedEnum.Members.ToHashSet(StringComparer.Ordinal).SetEquals(actualEnum.Members),
+                expectedEnum.IsWireEquivalentTo(actualEnum),
             (ScalarTypeRef expectedScalar, ScalarTypeRef actualScalar) => expectedScalar == actualScalar,
             (ObjectTypeRef expectedObject, ObjectTypeRef actualObject) =>
                 AreObjectFieldsCompatible(

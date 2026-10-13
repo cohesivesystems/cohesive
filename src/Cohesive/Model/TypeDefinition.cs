@@ -486,7 +486,12 @@ public sealed record StructuralField
 /// <param name="Value">Optional serialized value when it differs from <paramref name="Name"/>.</param>
 /// <param name="Label">Optional human-readable display label.</param>
 /// <param name="Description">Optional free-form description.</param>
-public sealed record EnumValue(string Name, string? Value = null, string? Label = null, string? Description = null);
+public sealed record EnumValue(string Name, string? Value = null, string? Label = null, string? Description = null)
+{
+    /// <summary>Canonical serialized member value, falling back to its declared name.</summary>
+    [JsonIgnore]
+    public string SerializedValue => Value ?? Name;
+}
 
 /// <summary>
 /// One union case definition.

@@ -68,8 +68,7 @@ public static partial class FulfillmentProcess
         var reserved = await process.Transition<StockResult>(InventoryTransitions.Reserve.Reference, input.Sku, input);
         if (!reserved.Accepted)
             return new FulfillmentResult("Rejected", reserved.Reason);
-        var submitted = await process.Transition<SubmitOrderResult>(OrderTransitions.Submit.Reference,
-            input.OrderId, SubmitOrder.Submit);
+        var submitted = await process.Transition(OrderTransitions.Submit, input.OrderId);
         if (submitted.Outcome == SubmissionOutcome.Submitted)
             return new FulfillmentResult("Submitted", "Stock reserved and order submitted.");
         var released = await process.Transition<StockResult>(InventoryTransitions.Release.Reference, input.Sku, input);

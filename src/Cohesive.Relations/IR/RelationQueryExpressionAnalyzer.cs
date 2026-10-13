@@ -1288,7 +1288,7 @@ sealed class RelationQueryShapeResolver
         type is NamedTypeRef named && graph.TryGetType(named.TypeId, out var declaration)
             && declaration is TypeDefinition.Enum { Underlying: PrimitiveType.String } enumeration
             ? new EnumTypeRef(enumeration.Name ?? named.TypeId.Value,
-                [.. enumeration.Values.Select(value => value.Value ?? value.Name)])
+                [.. enumeration.Values.Select(value => value.SerializedValue)])
             : type;
 
     static Shape ExpandNamedStructuralFields(ShapeGraph graph, Shape shape) => new(

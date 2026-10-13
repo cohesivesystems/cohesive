@@ -191,7 +191,7 @@ static class JsonTypeSemantics
         TypeDefinition.Enum enumeration => enumeration.Values.Any(enumValue =>
             PrimitiveTypeSemantics.MatchesLiteral(
                 enumeration.Underlying,
-                enumValue.Value ?? enumValue.Name,
+                enumValue.SerializedValue,
                 value)),
         TypeDefinition.Union union => MatchesUnionType(union, value, graph),
         _ => false

@@ -3,14 +3,6 @@ using System.Text.Json.Serialization;
 
 namespace AspireFirst.Orders;
 
-/// <summary>Submit the subject selected by the invocation binding; contains no competing subject ID.</summary>
-[JsonConverter(typeof(JsonStringEnumConverter<SubmitOrder>))]
-public enum SubmitOrder
-{
-    /// <summary>Submit the selected order.</summary>
-    [JsonStringEnumMemberName("Submit")] Submit
-}
-
 /// <summary>Closed submission outcomes, independent of transport messages and status codes.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter<SubmissionOutcome>))]
 public enum SubmissionOutcome
@@ -30,11 +22,11 @@ public sealed record SubmitOrderResult(OrderStatus Status, SubmissionOutcome Out
 public static class OrderTransitions
 {
     /// <summary>Only draft orders may be submitted; a rejected decision produces no commit.</summary>
-    public static Transition<Order, SubmitOrder, SubmitOrderResult> Submit { get; } = TransitionAuthoring.Create<Order, SubmitOrder, SubmitOrderResult>(FulfillmentDomain.Orders.Definition.Shape,
+    public static Transition<Order, Cohesive.Prelude.Unit, SubmitOrderResult> Submit { get; } = TransitionAuthoring.Create<Order, SubmitOrderResult>(FulfillmentDomain.Orders.Definition.Shape,
             id: new("example/order/submit"), revision: new("4"),
             transition => transition
-                .Requires((order, _) => order.Status == OrderStatus.Draft,
-                    (order, _) => new SubmitOrderResult(order.Status, SubmissionOutcome.NotDraft))
+                .Requires(order => order.Status == OrderStatus.Draft,
+                    order => new SubmitOrderResult(order.Status, SubmissionOutcome.NotDraft))
                 .Set(order => order.Status, OrderStatus.Submitted)
                 .Return(new SubmitOrderResult(OrderStatus.Submitted, SubmissionOutcome.Submitted)));
 }

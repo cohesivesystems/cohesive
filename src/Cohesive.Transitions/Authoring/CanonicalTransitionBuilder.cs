@@ -956,6 +956,28 @@ public sealed class TransitionBuilder<TEntity, TInput, TOutcome>
         return this;
     }
 
+    /// <summary>Adds a state-only admission rule without incidental input parameters.</summary>
+    /// <param name="predicate">Pure predicate over the selected subject.</param>
+    /// <param name="rejection">Pure rejection outcome derived from that subject.</param>
+    /// <param name="sourceFile">Compiler-supplied source file.</param>
+    /// <param name="sourceLine">Compiler-supplied source line.</param>
+    /// <param name="sourceMember">Compiler-supplied member.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">A selector is null.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">A selector is unsupported.</exception>
+    public TransitionBuilder<TEntity, TInput, TOutcome> Requires(
+        Expression<Func<TEntity, bool>> predicate, Expression<Func<TEntity, TOutcome>> rejection,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        ArgumentNullException.ThrowIfNull(rejection);
+        return Requires(
+            Expression.Lambda<Func<TEntity, TInput, bool>>(predicate.Body, predicate.Parameters[0], Expression.Parameter(typeof(TInput))),
+            Expression.Lambda<Func<TEntity, TInput, TOutcome>>(rejection.Body, rejection.Parameters[0], Expression.Parameter(typeof(TInput))),
+            sourceFile, sourceLine, sourceMember);
+    }
+
     /// <summary>Adds an admission rule with a deterministic authoring-order node identity.</summary>
     /// <remarks>Inserting or reordering implicit steps changes their identities. Explicit IDs remain available.</remarks>
     public TransitionBuilder<TEntity, TInput, TOutcome> Requires(

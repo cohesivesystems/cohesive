@@ -445,7 +445,7 @@ public sealed class TypeScriptShapeAstBuilder
             return new TsLiteralType(numeric);
         }
 
-        return new TsLiteralType(wireValue ?? value.Value ?? value.Name);
+        return new TsLiteralType(wireValue ?? value.SerializedValue);
     }
 
     TsStatement BuildEnumLabelMap(TypeDefinition.Enum @enum)
@@ -500,7 +500,7 @@ public sealed class TypeScriptShapeAstBuilder
             && bool.TryParse(value.Value, out var boolean))
             return new TsBooleanLiteralExpression(boolean);
 
-        return new TsStringLiteralExpression(wireValue ?? value.Value ?? value.Name);
+        return new TsStringLiteralExpression(wireValue ?? value.SerializedValue);
     }
 
     static string GetEnumObjectKey(TypeDefinition.Enum @enum, EnumValue value)
@@ -512,7 +512,7 @@ public sealed class TypeScriptShapeAstBuilder
             return numeric.ToString(CultureInfo.InvariantCulture);
         }
 
-        return wireValue ?? value.Value ?? value.Name;
+        return wireValue ?? value.SerializedValue;
     }
 
     static bool IsNumericEnum(TypeDefinition.Enum @enum) =>

@@ -16,6 +16,18 @@ namespace Cohesive.Tests.ExecutionKernel;
 public sealed class ProcessComputationAuthoringTests
 {
     [Fact]
+    public void No_input_transition_lowers_to_canonical_unit_and_exact_reference()
+    {
+        var generated = NoInputTransitionProcess.Define(Metadata());
+        Assert.True(generated.IsValid, Format(generated.Validation));
+        var invocation = Assert.Single(generated.Definition.Nodes.OfType<InvokeTransitionProcessNode>());
+        Assert.Equal(NoInputTransitionProcess.Complete.Reference, invocation.Transition);
+        var input = Assert.IsType<ConstantExpr>(invocation.Input);
+        Assert.Equal(ObservationValue.FromObject(Cohesive.Prelude.Unit.Value), input.Value);
+        Assert.True(NoInputTransitionProcess.Complete.Definition.Input.IsSatisfiedByConstant(input.Value));
+    }
+
+    [Fact]
     public void GeneratedDurableCutIsEquivalentToNativeCheckpointAuthoring()
     {
         var generated = GeneratedCheckpointProcess.Define(Metadata());
@@ -4146,5 +4158,20 @@ public static partial class GeneratedCheckpointProcess
         await process.DurableCut(id: new("cut"));
         await process.Succeed(input, id: new("complete"));
         return process.Unreachable<string>();
+    }
+}
+
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class NoInputTransitionProcess
+{
+    public sealed record State(string Id);
+    public static Transition<State, Cohesive.Prelude.Unit, string> Complete { get; } =
+        TransitionAuthoring.Create<State, string>(ObjectEntityDefinition.For<State>(new("test/no-input")).Shape,
+            new("test/no-input/complete"), new("1"), transition => transition.Return("done"));
+
+    static async ProcessTask<string> Run(ProcessContext process, string subject)
+    {
+        var result = await process.Transition(Complete, subject);
+        return result;
     }
 }

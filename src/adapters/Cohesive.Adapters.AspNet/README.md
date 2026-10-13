@@ -362,6 +362,25 @@ Applications choosing `Conflict<TDomain>` for domain rejection will have two 409
 explicit domain body and Problem Details for concurrency. Use the Problem Details `OnRejected` overload
 (as the order example does) for one HTTP error shape; distinguish conditions by their stable `code`.
 
+### Prepared rejection cases and no-input transitions
+
+For a closed outcome discriminator, classify every case at registration:
+
+```csharp
+.OnRejected(outcome => outcome.Code, codePrefix: "orders.submit", responses => responses
+    .Conflict(SubmitCode.NotDraft, title: "Cannot submit", detail: "Order must be draft.")
+    .NotRejected(SubmitCode.Submitted))
+```
+
+Missing, duplicate and undefined cases fail setup. This API projects domain rejections to the existing
+HTTP 409 Problem Details contract; it does not infer arbitrary HTTP status codes. Wire codes are prepared
+once through Core `SerializedEnum<T>.GetWireName`, using the authoring enum catalog. Request handling
+performs dictionary lookup, with no enum reflection or serialization. A transition incorrectly returning
+an explicitly non-rejected case as a rejection remains a contract violation.
+
+No-input transitions authored with `TransitionAuthoring.Create<TEntity, TOutcome>` use shared Unit;
+the binding supplies it automatically, so no `.Input(...)` callback is needed.
+
 ## Bind a typed read operation
 
 Use `app.MapApiQuery(endpoint, preparedRead).FromRoute<Guid>("id", id => id.ToString("D")).OkOrNotFound()`

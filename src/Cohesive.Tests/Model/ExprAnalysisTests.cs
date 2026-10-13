@@ -29,6 +29,29 @@ public sealed class ExprAnalysisTests
     }
 
     [Fact]
+    public void Inline_enum_can_be_explicitly_converted_to_text()
+    {
+        var type = new EnumTypeRef("Lifecycle", ["ready", "done"]);
+        var scope = Scope(bindings: [new(LoadBinding,
+            new(new ObjectTypeRef([new("Status", type)])), ExprBindingAvailability.AlwaysPresent)]);
+        var result = Analyze(Expr.Call("concat", Expr.Field(LoadBinding, "Status")), scope,
+            "enum-text", new(ExprResultCategory.Text, new(StringType)));
+        Assert.True(result.IsValid);
+        Assert.Equal(ExprResultCategory.Text, new ValueContract(type).GetResultCategory());
+    }
+
+    [Theory]
+    [InlineData("ready", true)]
+    [InlineData("other", false)]
+    public void Text_category_does_not_relax_enum_literal_membership(string literal, bool valid)
+    {
+        var result = Analyze(Expr.Const(literal), ExprScope.Empty, "enum-literal",
+            new(ExprResultCategory.Text, new(new EnumTypeRef("Lifecycle", ["ready", "done"]))));
+        Assert.Equal(valid, result.IsValid);
+        if (!valid) AssertDiagnostic(result, ExprAnalysisDiagnosticCodes.ResultTypeMismatch);
+    }
+
+    [Fact]
     public void Analyze_GuardsNarrowOnlyTheSelectedBranchAndRetainOptionalFieldContracts()
     {
         var scope = Scope(bindings:

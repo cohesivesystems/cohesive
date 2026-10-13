@@ -25,17 +25,10 @@ public static class OrderEndpoints
                 )
                 .Get(OrderApi.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
                 .Transition(OrderApi.Submit, OrderTransitions.Submit)
-                    .Input(_ => SubmitOrder.Submit)
                     .OnApplied((order, outcome) => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-                    .OnRejected(outcome => TypedResults.Problem(statusCode: StatusCodes.Status409Conflict,
-                        title: "Order cannot be submitted", detail: outcome.Outcome switch
-                        {
-                            SubmissionOutcome.NotDraft => "Order must be Draft to submit.",
-                            _ => throw new InvalidOperationException("Unexpected rejected submission outcome.")
-                        },
-                        extensions: new Dictionary<string, object?> { ["code"] = $"orders.submit.{Cohesive.Model.ObservationValue.FromObject(outcome.Outcome).GetRequiredString()}" }
-                    )
-                )
+                    .OnRejected(outcome => outcome.Outcome, codePrefix: "orders.submit", responses => responses
+                        .Conflict(SubmissionOutcome.NotDraft, title: "Order cannot be submitted", detail: "Order must be Draft to submit.")
+                        .NotRejected(SubmissionOutcome.Submitted))
         );
 
         app.MapApiQuery(OrderApi.Availability, availability).FromRoute<string>("id", id => id).OkOrNotFound();

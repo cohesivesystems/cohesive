@@ -249,6 +249,21 @@ public sealed class ProcessContext
         where TEntity : Entity =>
         throw SyntaxOnly();
 
+    /// <summary>Invokes a typed no-input transition on the selected subject.</summary>
+    /// <typeparam name="TEntity">Observed entity type.</typeparam>
+    /// <typeparam name="TOutcome">Transition outcome type.</typeparam>
+    /// <param name="transition">Exact no-input transition declaration.</param>
+    /// <param name="subject">Authoritative subject expression.</param>
+    /// <param name="id">Optional stable node identity.</param>
+    /// <param name="nextRole">Continuation role.</param>
+    /// <param name="outputRole">Outcome binding role.</param>
+    /// <returns>Syntax-only outcome awaitable; the producer supplies canonical Unit input.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if executed outside authoring.</exception>
+    public ProcessAwaitable<TOutcome> Transition<TEntity, TOutcome>(
+        Transition<TEntity, Cohesive.Prelude.Unit, TOutcome> transition, object subject,
+        ExecutionNodeId? id = null, string nextRole = "next", string outputRole = "result") where TEntity : notnull =>
+        throw SyntaxOnly();
+
     /// <summary>Declares an exact aggregate Transition whose outcome is not retained.</summary>
     /// <param name="transition">Exact Transition definition revision and fingerprint.</param>
     /// <param name="subject">Pure authoritative aggregate-subject expression.</param>

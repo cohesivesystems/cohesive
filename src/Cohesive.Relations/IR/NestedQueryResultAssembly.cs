@@ -98,7 +98,7 @@ public sealed record NestedQueryResultAssembly(
                     || source.Type is NamedTypeRef named && source.Type.Equals(target)
                         && resultGraph.TryGetType(named.TypeId, out var declared) && declared is TypeDefinition.Enum
                     || source.Type is EnumTypeRef sourceEnum && target is EnumTypeRef targetEnum
-                        && sourceEnum.Members.ToHashSet(StringComparer.Ordinal).SetEquals(targetEnum.Members)))
+                        && sourceEnum.IsWireEquivalentTo(targetEnum)))
                 throw new ArgumentException("Nested result mappings require matching scalar or closed enum field types.");
         }
     }

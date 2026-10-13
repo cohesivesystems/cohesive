@@ -122,3 +122,15 @@ semantic revision. Keep explicit IDs when external references or editing stabili
 Explicit IDs colliding with conventional ones still fail canonical validation. The metadata overload
 remains available for custom provenance, body identity and type/member mappings. These conveniences
 lower into the existing IR and do not change validation or execution.
+
+## Transitions without application input
+
+Use `TransitionAuthoring.Create<TEntity, TOutcome>(shape, id, revision, configure)` when an operation
+needs only its selected subject. This reuses `Cohesive.Prelude.Unit`; HTTP bindings supply it without an
+`.Input(...)` callback, and Process authoring supports `await process.Transition(transition, subject)`.
+State-only guards use `.Requires(state => ..., state => ...)` without unused input parameters.
+
+The portable input remains explicit: Unit is the existing singleton wire value `"()"`, lowered through
+the shared CLR mapper to a closed singleton value contract. Other strings and null do not satisfy it.
+There is no application action enum, implicit nullable input or changed Unit serializer. Exact transition
+identity, revision, validation and input admission still apply after serialization.
