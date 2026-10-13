@@ -166,6 +166,71 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     public bool TryGetField(FieldPath path, out ObservationValue value) =>
         TryGetFieldSegments(path.Segments.AsSpan(), out value);
 
+    /// <summary>Builds one owned object from field assignments without copying every intermediate object.</summary>
+    /// <param name="assignments">Invocation-owned field-only paths and values, applied in enumeration order.</param>
+    /// <returns>An immutable object with ordinal field enumeration.</returns>
+    /// <remarks>Equivalent to applying WithField repeatedly to EmptyObject, including overwrite and removal semantics.</remarks>
+    /// <exception cref="ArgumentNullException">Assignments are null.</exception>
+    /// <exception cref="ArgumentException">A path is empty.</exception>
+    /// <exception cref="NotSupportedException">A path contains a non-field segment.</exception>
+    /// <exception cref="InvalidOperationException">An assignment traverses a scalar or array.</exception>
+    public static ObservationValue FromFieldAssignments(IEnumerable<KeyValuePair<FieldPath, ObservationValue>> assignments)
+    {
+        ArgumentNullException.ThrowIfNull(assignments);
+        using var enumerator = assignments.GetEnumerator();
+        if (!enumerator.MoveNext()) return EmptyObject;
+        var root = new AssignmentObject(EmptyObject);
+        do
+        {
+            var assignment = enumerator.Current;
+            if (assignment.Key.Segments.IsDefaultOrEmpty) throw new ArgumentException("An object assignment requires a non-empty field path.", "path");
+            root.Set(assignment.Key, 0, assignment.Value);
+        } while (enumerator.MoveNext());
+        return root.Freeze();
+    }
+
+    sealed class AssignmentObject
+    {
+        readonly Dictionary<string, AssignmentField> fields = new(StringComparer.Ordinal);
+        internal AssignmentObject(ObservationValue initial)
+        {
+            if (initial.Fields is not null)
+                foreach (var field in initial.Fields) fields.Add(field.Key, new(field.Value));
+        }
+        internal void Set(FieldPath path, int index, ObservationValue value)
+        {
+            var segment = path.Segments[index];
+            if (segment.Kind != SegmentKind.Field || string.IsNullOrWhiteSpace(segment.Segment))
+                throw new NotSupportedException($"Observation value assignment does not support collection-element path '{path}'.");
+            var name = segment.Segment;
+            if (index == path.Segments.Length - 1)
+            {
+                if (value.Kind == ObservationValueKind.Undefined) fields.Remove(name);
+                else fields[name] = new(value);
+                return;
+            }
+            fields.TryGetValue(name, out var field);
+            var child = field.Children;
+            if (child is null)
+            {
+                if (field.Value.Kind is not (ObservationValueKind.Object or ObservationValueKind.Null or ObservationValueKind.Undefined))
+                    throw new InvalidOperationException($"Field path '{path}' cannot be assigned through value kind '{field.Value.Kind}'.");
+                child = new(field.Value);
+            }
+            child.Set(path, index + 1, value);
+            if (child.fields.Count == 0) fields.Remove(name);
+            else fields[name] = new(Undefined, child);
+        }
+        internal ObservationValue Freeze()
+        {
+            var owned = new Dictionary<string, ObservationValue>(fields.Count, StringComparer.Ordinal);
+            foreach (var field in fields)
+                owned.Add(field.Key, field.Value.Children is { } child ? child.Freeze() : field.Value.Value);
+            return FromOwnedObjectInOrdinalOrder(owned);
+        }
+        readonly record struct AssignmentField(ObservationValue Value, AssignmentObject? Children = null);
+    }
+
     /// <summary>Returns an object value with one direct or nested field assigned immutably.</summary>
     /// <param name="path">Non-empty canonical field-only path to assign.</param>
     /// <param name="value">

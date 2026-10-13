@@ -5,3 +5,9 @@ binary-tokens-512KiB,contiguous,1049086.5
 binary-tokens-512KiB,stream,224
 typed-nested-row,json,1368
 typed-nested-row,prepared,128
+fields-16,repeated-copy,14328
+fields-16,batch,3000
+fields-128,repeated-copy,681008
+fields-128,batch,28464
+fields-256,repeated-copy,2672688
+fields-256,batch,62800

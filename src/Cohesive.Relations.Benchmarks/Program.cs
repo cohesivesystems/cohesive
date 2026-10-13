@@ -8,6 +8,9 @@ if (args is ["--hash-projection-allocations", .. var hashArgs])
 if (args is ["--prepared-result-allocations", .. var resultArgs])
     return Cohesive.Relations.Benchmarks.PreparedResultAllocationBenchmark.Run(resultArgs);
 
+if (args is ["--field-assignment-allocations", .. var assignmentArgs])
+    return Cohesive.Relations.Benchmarks.FieldAssignmentAllocationBenchmark.Run(assignmentArgs);
+
 var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 var discovered = false;
 foreach (var summary in summaries)

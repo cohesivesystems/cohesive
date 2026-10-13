@@ -56,3 +56,36 @@ Run `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --prep
 Differential tests cover casing, missing fields, numeric strings, overflow, wrong container
 kinds, null, mutable outputs, customized names, required members and base64 compatibility.
 Existing query/nested-result/transition admission remains in place before interpretation.
+
+## One-pass native rows
+
+`ObservationValue.FromFieldAssignments` has the semantics of sequential `WithField`
+assignments to an empty object, but freezes each final object once. It preserves overwrite,
+removal, null expansion, empty ancestor pruning and field-only traversal failures.
+
+| Flat row fields | Repeated copy B/op | Batch B/op |
+| --- | ---: | ---: |
+| 16 | 14,328 | 3,000 |
+| 128 | 681,008 | 28,464 |
+| 256 | 2,672,688 | 62,800 |
+
+Run `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --field-assignment-allocations 32`.
+A 128-field median allocation ceiling protects the mechanism. This is row assembly,
+not database latency or a whole-reader allocation comparison.
+
+`PostgresQueryRowsReader` now uses the shared Npgsql executor for explicitly typed
+parameters, sequential decoding and scalar byte budgets. Its overflow limit is a bound
+Int32 parameter; compiled field and presence aliases establish projection order. Presence
+indices are prepared once, and observations are assembled with the Core batch API.
+The row bound is enforced before decoding an overflow row. Temporal values remain outside
+this reader's contract; existing temporal source-reader policy is unchanged.
+
+Byte bounds now count all retrieved scalars, including presence columns and values later
+omitted because a join is absent. This deliberately bounds actual provider retention.
+The shared executor temporarily buffers raw CLR rows before observation assembly, so
+row assembly savings do not establish a universal reader allocation reduction.
+
+Native PostgreSQL 17 integration qualifies ordered values, parameterized limits, row and
+byte overflow, cancellation, and the existing source-reader suite. Mock tests inspect
+command types and exact projection width. Outer-join absence remains distinct from SQL
+null; one-pass Core assignment tests cover null and undefined semantics.
