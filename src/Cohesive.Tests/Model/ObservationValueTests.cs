@@ -447,7 +447,8 @@ public sealed class ObservationValueTests
 
         var value = ObservationValue.FromJsonElement(document.RootElement);
 
-        Assert.IsType<ImmutableSortedDictionary<string, ObservationValue>>(value.Fields);
+        Assert.Equal(3, value.Fields!.Count);
+        Assert.Equal(["a", "m", "z"], value.Fields.Keys);
         Assert.Equal("""{"a":2,"m":3,"z":1}""", value.GetRawText());
     }
 

@@ -1,3 +1,4 @@
+using Cohesive.Model;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
@@ -50,7 +51,7 @@ public sealed record RelationQueryEvaluationFingerprint
 public static class RelationQueryEvaluationFingerprinter
 {
     static readonly JsonSerializerOptions CanonicalOptions = RelationQueryEvaluationJsonSerializer.CreateOptions();
-    static readonly ConditionalWeakTable<RelationQueryCompilationRequest, Lazy<byte[]>> CompilationCanonicalBytes = new();
+    static readonly WeakPreparationCache<RelationQueryCompilationRequest, byte[]> CompilationCanonicalBytes = new();
 
     static ReadOnlySpan<byte> ObjectStartAndCompilationProperty => "{\"compilation\":"u8;
     static ReadOnlySpan<byte> EvaluationProperty => ",\"evaluation\":"u8;
@@ -99,13 +100,8 @@ public static class RelationQueryEvaluationFingerprinter
     static void AppendCanonicalSegments(RelationQueryEvaluation evaluation, CanonicalSegmentAppender append)
     {
         append(ObjectStartAndCompilationProperty);
-        append(CompilationCanonicalBytes.GetValue(
-            evaluation.Compilation,
-            static compilation => new(
-                () => GetCanonicalBytes(
-                    compilation,
-                    RelationCanonicalJsonArrayOrderings.Compilation),
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value);
+        append(CompilationCanonicalBytes.Get(evaluation.Compilation,
+            static compilation => GetCanonicalBytes(compilation, RelationCanonicalJsonArrayOrderings.Compilation)));
         append(EvaluationProperty);
         append(GetCanonicalBytes(evaluation.Evaluation));
         append(ParametersProperty);
@@ -129,12 +125,12 @@ public static class RelationQueryEvaluationFingerprinter
         T value,
         Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? getArrayOrdering = null)
     {
-        var node = JsonSerializer.SerializeToNode(value, CanonicalOptions)
-            ?? throw new InvalidOperationException(
-                $"Failed to materialize canonical JSON for '{typeof(T).Name}'.");
+        using var document = JsonSerializer.SerializeToDocument(value, CanonicalOptions);
+        if (document.RootElement.ValueKind == JsonValueKind.Null)
+            throw new InvalidOperationException($"Failed to materialize canonical JSON for '{typeof(T).Name}'.");
         return getArrayOrdering is null
-            ? CanonicalJsonWriter.GetCanonicalSequenceBytes(node, CanonicalOptions)
-            : CanonicalJsonWriter.GetCanonicalBytes(node, CanonicalOptions, getArrayOrdering);
+            ? CanonicalJsonWriter.GetCanonicalSequenceBytes(document.RootElement, CanonicalJsonNumberSemantics.PortableObservation)
+            : CanonicalJsonWriter.GetCanonicalBytes(document.RootElement, getArrayOrdering);
     }
 
     delegate void CanonicalSegmentAppender(ReadOnlySpan<byte> value);

@@ -443,7 +443,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
         CancellationToken cancellationToken)
     {
         var activity = RelationQueryTelemetryRuntime.StartActivity(RelationQueryTelemetry.EvaluationActivityName);
-        var preparationCacheHit = preparations.TryGetValue(evaluation.Compilation, out _);
+        var preparationCacheHit = preparations.TryGetValue(evaluation.Compilation, out var entry) && entry.IsCompiled;
         var started = RelationQueryTelemetryRuntime.StartTimer();
         Exception? failure = null;
         RelationQueryEvaluationOutcome? outcome = null;
@@ -531,16 +531,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
         var pending = preparations.GetValue(
             evaluation.Compilation,
             request => new(this, request));
-        RelationQueryCompilationResult compilation;
-        try
-        {
-            compilation = pending.Compilation.Value;
-        }
-        catch
-        {
-            preparations.Remove(evaluation.Compilation);
-            throw;
-        }
+        var compilation = pending.Compilation;
 
         cancellationToken.ThrowIfCancellationRequested();
         if (!compilation.IsSuccessful)
@@ -565,16 +556,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
             }
         }
 
-        EvaluationPreparation preparation;
-        try
-        {
-            preparation = pending.Preparation.Value;
-        }
-        catch
-        {
-            preparations.Remove(evaluation.Compilation);
-            throw;
-        }
+        var preparation = pending.Preparation;
 
         cancellationToken.ThrowIfCancellationRequested();
         var realization = preparation.Realization!;
@@ -639,21 +621,15 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
         RelationQuerySourcePlacement? Placement = null,
         RelationQueryPhysicalPlanningResult? PhysicalPlanning = null);
 
-    sealed class PreparationCacheEntry
+    sealed class PreparationCacheEntry(RelationQueryEvaluator evaluator, RelationQueryCompilationRequest request)
     {
-        public PreparationCacheEntry(RelationQueryEvaluator evaluator, RelationQueryCompilationRequest request)
-        {
-            Compilation = new(
-                () => RelationQueryStaticCompiler.Compile(request),
-                LazyThreadSafetyMode.ExecutionAndPublication);
-            Preparation = new(
-                () => evaluator.Prepare(Compilation.Value),
-                LazyThreadSafetyMode.ExecutionAndPublication);
-        }
-
-        public Lazy<RelationQueryCompilationResult> Compilation { get; }
-
-        public Lazy<EvaluationPreparation> Preparation { get; }
+        readonly PreparationSlot<RelationQueryCompilationResult> compilation = new();
+        readonly PreparationSlot<EvaluationPreparation> preparation = new();
+        internal bool IsCompiled => compilation.IsPrepared;
+        public RelationQueryCompilationResult Compilation => compilation.Get(request,
+            static candidate => RelationQueryStaticCompiler.Compile(candidate));
+        public EvaluationPreparation Preparation => preparation.Get((evaluator, Compilation),
+            static context => context.evaluator.Prepare(context.Compilation));
     }
 
     static string TerminalPhase(RelationQueryEvaluationOutcome? outcome, Exception? failure)

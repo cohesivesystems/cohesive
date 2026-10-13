@@ -1,0 +1,15 @@
+Method,Shape,Mean,Error,Allocated
+SortedTree,Flat,"8,382.9 ns","2,220.63 ns",15520 B
+OwnedFields,Flat,"6,564.0 ns",245.41 ns,12088 B
+SortedTree,Large,"420,171.9 ns","11,742.24 ns",491680 B
+OwnedFields,Large,"345,439.6 ns","8,153.63 ns",416864 B
+SortedTree,Medium,717.1 ns,218.21 ns,2080 B
+OwnedFields,Medium,985.0 ns,50.85 ns,1680 B
+SortedTree,Nested,"28,221.5 ns",684.36 ns,97360 B
+OwnedFields,Nested,"22,367.6 ns","2,020.98 ns",60136 B
+SortedTree,Rows,"3,183,031.6 ns","366,586.94 ns",4358329 B
+OwnedFields,Rows,"2,201,972.2 ns","481,675.41 ns",2883723 B
+SortedTree,Small,315.0 ns,88.16 ns,1120 B
+OwnedFields,Small,296.3 ns,0.59 ns,696 B
+SortedTree,Tiny,144.4 ns,3.22 ns,640 B
+OwnedFields,Tiny,114.4 ns,6.89 ns,376 B

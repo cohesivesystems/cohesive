@@ -1,8 +1,8 @@
 using System.Collections.Immutable;
 using System.Globalization;
-using System.Text;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
+using Cohesive.Prelude;
 
 namespace Cohesive.Relations.Realization;
 
@@ -712,20 +712,30 @@ internal static class RelationQueryRealizationOrdering
 
     public static string SequenceKey(IEnumerable<string?> values)
     {
-        StringBuilder key = new();
-        foreach (var value in values)
+        Span<char> initial = stackalloc char[256];
+        Span<char> length = stackalloc char[10]; // Maximum nonnegative Int32 decimal length.
+        var key = new ValueStringBuilder(initial);
+        try
         {
-            if (value is null)
+            foreach (var value in values)
             {
-                key.Append("-1:");
-                continue;
-            }
+                if (value is null)
+                {
+                    key.Append("-1:");
+                    continue;
+                }
 
-            key.Append(value.Length.ToString(CultureInfo.InvariantCulture));
-            key.Append(':');
-            key.Append(value);
+                value.Length.TryFormat(length, out var written, provider: CultureInfo.InvariantCulture);
+                key.Append(length[..written]);
+                key.Append(':');
+                key.Append(value);
+            }
+            return key.ToString();
         }
-        return key.ToString();
+        finally
+        {
+            key.Dispose();
+        }
     }
 
     static string EnumKey(int value) => value.ToString("D4", CultureInfo.InvariantCulture);

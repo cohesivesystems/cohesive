@@ -1,0 +1,5 @@
+phase,activation_receipts,canonical_bytes,fingerprint_allocated_bytes
+cold,1,4100124,34985024
+cold,2,8842266,63914136
+repeated,1,4100132,15074712
+repeated,2,8842266,30345912

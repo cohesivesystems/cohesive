@@ -1,8 +1,10 @@
+using static Cohesive.Model.Serialization.LengthPrefixedFingerprintEncoding;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
+using Cohesive.Model;
 using Cohesive.Relations.Compilation;
 
 namespace Cohesive.Relations.Realization;
@@ -96,7 +98,7 @@ public static class RelationQueryRealizationFingerprinter
             normalizedDecisions,
             normalizedDiagnostics);
 
-        ArrayBufferWriter<byte> canonical = new();
+        using Sha256BufferWriter canonical = new();
         Append(canonical, Canonicalization);
         AppendPlan(canonical, plan);
         Append(canonical, (int)observability.OccurrenceProvenance);
@@ -107,11 +109,12 @@ public static class RelationQueryRealizationFingerprinter
         AppendDiagnostics(canonical, normalizedDiagnostics);
         Append(canonical, (int)status);
 
-        var hash = SHA256.HashData(canonical.WrittenSpan);
+        Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+        canonical.Complete(hash);
         return new(
             Algorithm,
             Canonicalization,
-            Convert.ToHexString(hash).ToLowerInvariant());
+            Convert.ToHexStringLower(hash));
     }
 
     internal static RelationQueryPlanComponentFingerprint ComputeRequirements(
@@ -125,19 +128,20 @@ public static class RelationQueryRealizationFingerprinter
             static requirement => requirement.Id.Value,
             nameof(requirements));
 
-        ArrayBufferWriter<byte> canonical = new();
+        using Sha256BufferWriter canonical = new();
         Append(canonical, RelationQueryRealizationRequirementSetFingerprinter.Canonicalization);
         AppendPlan(canonical, plan);
         Append(canonical, (int)observability.OccurrenceProvenance);
         AppendRequirements(canonical, normalized);
-        var hash = SHA256.HashData(canonical.WrittenSpan);
+        Span<byte> hash = stackalloc byte[SHA256.HashSizeInBytes];
+        canonical.Complete(hash);
         return new(
             RelationQueryRealizationRequirementSetFingerprinter.Algorithm,
             RelationQueryRealizationRequirementSetFingerprinter.Canonicalization,
-            Convert.ToHexString(hash).ToLowerInvariant());
+            Convert.ToHexStringLower(hash));
     }
 
-    static void AppendPlan(ArrayBufferWriter<byte> buffer, RelationQueryCompiledPlanReference plan)
+    static void AppendPlan(IBufferWriter<byte> buffer, RelationQueryCompiledPlanReference plan)
     {
         Append(buffer, plan.DefinitionSchemaVersion);
         Append(buffer, plan.CompilerProfile);
@@ -167,7 +171,7 @@ public static class RelationQueryRealizationFingerprinter
     }
 
     static void AppendRequirements(
-        ArrayBufferWriter<byte> buffer,
+        IBufferWriter<byte> buffer,
         ImmutableArray<RelationQueryRealizationRequirement> requirements)
     {
         Append(buffer, requirements.Length);
@@ -184,7 +188,7 @@ public static class RelationQueryRealizationFingerprinter
             foreach (var fact in requirement.StaticFacts.OrderBy(static fact => (int)fact.Kind))
             {
                 Append(buffer, (int)fact.Kind);
-                AppendInt64(buffer, fact.Value);
+                Append(buffer, fact.Value);
             }
 
             var uses = requirement.Uses
@@ -198,7 +202,7 @@ public static class RelationQueryRealizationFingerprinter
         }
     }
 
-    static void AppendOrigin(ArrayBufferWriter<byte> buffer, RelationQueryRealizationRequirementOrigin origin)
+    static void AppendOrigin(IBufferWriter<byte> buffer, RelationQueryRealizationRequirementOrigin origin)
     {
         AppendOptional(buffer, origin.Input?.Value);
         AppendOptional(buffer, origin.Node?.Value);
@@ -210,7 +214,7 @@ public static class RelationQueryRealizationFingerprinter
             AppendFieldPath(buffer, fieldPath);
     }
 
-    static void AppendUse(ArrayBufferWriter<byte> buffer, RelationQueryRealizationRequirementUse use)
+    static void AppendUse(IBufferWriter<byte> buffer, RelationQueryRealizationRequirementUse use)
     {
         AppendOutput(buffer, use.Output);
         Append(buffer, (int)use.Effect);
@@ -235,7 +239,7 @@ public static class RelationQueryRealizationFingerprinter
         }
     }
 
-    static void AppendOutput(ArrayBufferWriter<byte> buffer, RelationQueryRealizationOutputReference output)
+    static void AppendOutput(IBufferWriter<byte> buffer, RelationQueryRealizationOutputReference output)
     {
         Append(buffer, output.Id.Value);
         Append(buffer, (int)output.Kind);
@@ -254,7 +258,7 @@ public static class RelationQueryRealizationFingerprinter
     }
 
     static void AppendTarget(
-        ArrayBufferWriter<byte> buffer,
+        IBufferWriter<byte> buffer,
         RelationQueryTargetCapabilityProfile targetProfile,
         RelevantInputs relevant)
     {
@@ -279,7 +283,7 @@ public static class RelationQueryRealizationFingerprinter
     }
 
     static void AppendPolicy(
-        ArrayBufferWriter<byte> buffer,
+        IBufferWriter<byte> buffer,
         RelationQueryRealizationPolicy policy,
         RelevantInputs relevant,
         ImmutableArray<RelationQueryRealizationDiagnostic> diagnostics)
@@ -331,7 +335,7 @@ public static class RelationQueryRealizationFingerprinter
     }
 
     static void AppendDecisions(
-        ArrayBufferWriter<byte> buffer,
+        IBufferWriter<byte> buffer,
         ImmutableArray<RelationQueryRealizationDecision> decisions)
     {
         Append(buffer, decisions.Length);
@@ -376,7 +380,7 @@ public static class RelationQueryRealizationFingerprinter
     }
 
     static void AppendBoundaryValidations(
-        ArrayBufferWriter<byte> buffer,
+        IBufferWriter<byte> buffer,
         ImmutableArray<RelationQueryOperatingBoundaryValidation> validations)
     {
         var ordered = validations.OrderBy(static validation => validation.Boundary.Value, StringComparer.Ordinal).ToArray();
@@ -391,7 +395,7 @@ public static class RelationQueryRealizationFingerprinter
     }
 
     static void AppendDiagnostics(
-        ArrayBufferWriter<byte> buffer,
+        IBufferWriter<byte> buffer,
         ImmutableArray<RelationQueryRealizationDiagnostic> diagnostics)
     {
         Append(buffer, diagnostics.Length);
@@ -549,7 +553,7 @@ public static class RelationQueryRealizationFingerprinter
     }
 
     static void AppendCapabilities(
-        ArrayBufferWriter<byte> buffer,
+        IBufferWriter<byte> buffer,
         IEnumerable<RelationQueryCapability> capabilities)
     {
         var normalized = capabilities
@@ -561,7 +565,7 @@ public static class RelationQueryRealizationFingerprinter
             AppendCapability(buffer, capability);
     }
 
-    static void AppendCapability(ArrayBufferWriter<byte> buffer, RelationQueryCapability capability)
+    static void AppendCapability(IBufferWriter<byte> buffer, RelationQueryCapability capability)
     {
         switch (capability)
         {
@@ -604,7 +608,7 @@ public static class RelationQueryRealizationFingerprinter
     }
 
     static void AppendGuarantees(
-        ArrayBufferWriter<byte> buffer,
+        IBufferWriter<byte> buffer,
         IEnumerable<RelationQueryGuaranteeCapabilityKind> guarantees)
     {
         var normalized = guarantees.Distinct().OrderBy(static guarantee => (int)guarantee).ToArray();
@@ -613,7 +617,7 @@ public static class RelationQueryRealizationFingerprinter
             Append(buffer, (int)guarantee);
     }
 
-    static void AppendIds(ArrayBufferWriter<byte> buffer, IEnumerable<string> values)
+    static void AppendIds(IBufferWriter<byte> buffer, IEnumerable<string> values)
     {
         var normalized = values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
         Append(buffer, normalized.Length);
@@ -621,7 +625,7 @@ public static class RelationQueryRealizationFingerprinter
             Append(buffer, value);
     }
 
-    static void AppendFieldPath(ArrayBufferWriter<byte> buffer, FieldPath path)
+    static void AppendFieldPath(IBufferWriter<byte> buffer, FieldPath path)
     {
         Append(buffer, path.Segments.Length);
         foreach (var segment in path.Segments)
@@ -632,7 +636,7 @@ public static class RelationQueryRealizationFingerprinter
     }
 
     static void AppendFingerprint(
-        ArrayBufferWriter<byte> buffer,
+        IBufferWriter<byte> buffer,
         string algorithm,
         string canonicalization,
         string value)
@@ -684,16 +688,9 @@ public static class RelationQueryRealizationFingerprinter
         ];
     }
 
-    static void Append(ArrayBufferWriter<byte> buffer, string value)
-    {
-        var length = Encoding.UTF8.GetByteCount(value);
-        Append(buffer, length);
-        var destination = buffer.GetSpan(length);
-        Encoding.UTF8.GetBytes(value.AsSpan(), destination);
-        buffer.Advance(length);
-    }
 
-    static void AppendOptional(ArrayBufferWriter<byte> buffer, string? value)
+
+    static void AppendOptional(IBufferWriter<byte> buffer, string? value)
     {
         if (value is null)
         {
@@ -704,44 +701,29 @@ public static class RelationQueryRealizationFingerprinter
         Append(buffer, value);
     }
 
-    static void Append(ArrayBufferWriter<byte> buffer, bool value)
-    {
-        var destination = buffer.GetSpan(1);
-        destination[0] = value ? (byte)1 : (byte)0;
-        buffer.Advance(1);
-    }
 
-    static void Append(ArrayBufferWriter<byte> buffer, int value)
-    {
-        var destination = buffer.GetSpan(sizeof(int));
-        BinaryPrimitives.WriteInt32BigEndian(destination, value);
-        buffer.Advance(sizeof(int));
-    }
 
-    static void AppendNullableEnum(ArrayBufferWriter<byte> buffer, int? value) =>
+
+
+    static void AppendNullableEnum(IBufferWriter<byte> buffer, int? value) =>
         AppendNullableInt32(buffer, value);
 
-    static void AppendNullableInt32(ArrayBufferWriter<byte> buffer, int? value)
+    static void AppendNullableInt32(IBufferWriter<byte> buffer, int? value)
     {
         Append(buffer, value.HasValue);
         if (value is { } concrete)
             Append(buffer, concrete);
     }
 
-    static void AppendNullableInt64(ArrayBufferWriter<byte> buffer, long? value)
+    static void AppendNullableInt64(IBufferWriter<byte> buffer, long? value)
     {
         Append(buffer, value.HasValue);
         if (value is not { } concrete)
             return;
-        AppendInt64(buffer, concrete);
+        Append(buffer, concrete);
     }
 
-    static void AppendInt64(ArrayBufferWriter<byte> buffer, long value)
-    {
-        var destination = buffer.GetSpan(sizeof(long));
-        BinaryPrimitives.WriteInt64BigEndian(destination, value);
-        buffer.Advance(sizeof(long));
-    }
+
 
     sealed record RelevantInputs(
         ImmutableArray<RelationQueryTargetCapabilityEvidence> Evidence,

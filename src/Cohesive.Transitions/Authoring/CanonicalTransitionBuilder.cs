@@ -382,6 +382,60 @@ public class TransitionSequenceBuilder<TEntity, TInput, TOutcome>
             Context.Source(sourceFile, sourceLine, sourceMember, $"Owned-child removal '{id.Value}'"));
     }
 
+    /// <summary>Sets an entity field from a pure expression with identity <c>set/&lt;field-name&gt;</c>.</summary>
+    /// <remarks>Uses the canonical field name, independent of step order. Use explicit IDs for repeated updates to the same field, including different branches.</remarks>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Set<TValue>(
+        Expression<Func<TEntity, Field<TValue>>> field,
+        Expression<Func<TEntity, TInput, TValue>> value,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        ArgumentNullException.ThrowIfNull(value);
+        return AddNamedFieldSet(Context.FieldPath(field), Context.Translate(value), sourceFile, sourceLine, sourceMember);
+    }
+
+    /// <summary>Sets an entity field to a constant with identity <c>set/&lt;field-name&gt;</c>.</summary>
+    /// <remarks>Uses the canonical field name, independent of step order. Use explicit IDs for repeated updates to the same field.</remarks>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> Set<TValue>(
+        Expression<Func<TEntity, Field<TValue>>> field, TValue value,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        return AddNamedFieldSet(Context.FieldPath(field), Context.Constant(value), sourceFile, sourceLine, sourceMember);
+    }
+
+    /// <summary>Sets a nullable reference field to JSON null with identity <c>set/&lt;field-name&gt;</c>.</summary>
+    /// <remarks>This is a Set patch, distinct from Remove. The field's semantic contract must permit null.</remarks>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> SetNull<TValue>(
+        Expression<Func<TEntity, Field<TValue>>> field,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "") where TValue : class?
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        return AddNamedFieldSet(Context.FieldPath(field), Context.Constant(default(TValue)!), sourceFile, sourceLine, sourceMember);
+    }
+
+    /// <summary>Sets a nullable value field to JSON null with identity <c>set/&lt;field-name&gt;</c>.</summary>
+    /// <remarks>This is a Set patch, distinct from Remove. Nonnullable value fields cannot use this overload.</remarks>
+    public TransitionSequenceBuilder<TEntity, TInput, TOutcome> SetNull<TValue>(
+        Expression<Func<TEntity, Field<TValue?>>> field,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "") where TValue : struct
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        return AddNamedFieldSet(Context.FieldPath(field), Context.Constant(default(TValue?)), sourceFile, sourceLine, sourceMember);
+    }
+
+    TransitionSequenceBuilder<TEntity, TInput, TOutcome> AddNamedFieldSet(
+        FieldPath path, Expr value, string sourceFile, int sourceLine, string sourceMember)
+    {
+        var id = new ExecutionNodeId($"set/{path.Segments[0].Segment}");
+        return AddPatch(id, path, new SetTransitionPatch(value),
+            Context.Source(sourceFile, sourceLine, sourceMember, $"Set '{id.Value}'"));
+    }
+
     /// <summary>Adds a Set sparse patch produced by a restricted typed expression.</summary>
     /// <typeparam name="TValue">CLR value type of the target field.</typeparam>
     /// <param name="id">Stable update-node identity.</param>

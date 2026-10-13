@@ -1,0 +1,7 @@
+variant,source,phase,allocated_bytes,elapsed_ms
+baseline,x12-004010-204,cold,667748792,3369.341
+baseline,x12-004010-204,repeated,402089064,1365.038
+commit-checkpoint-only,x12-004010-204,cold,622169264,3263.007
+commit-checkpoint-only,x12-004010-204,repeated,356542024,1329.023
+all-storage-content,x12-004010-204,cold,561271936,3281.497
+all-storage-content,x12-004010-204,repeated,295424472,1327.435

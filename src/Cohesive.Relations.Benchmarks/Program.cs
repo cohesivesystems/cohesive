@@ -1,5 +1,19 @@
 using BenchmarkDotNet.Running;
 
+if (args is ["--portable-field-concurrency", .. var fieldArgs])
+    return Cohesive.Relations.Benchmarks.PortableFieldConcurrencyBenchmark.Run(fieldArgs);
+
+if (args is ["--hash-projection-allocations", .. var hashArgs])
+    return Cohesive.Relations.Benchmarks.HashProjectionAllocationBenchmark.Run(hashArgs);
+if (args is ["--prepared-result-allocations", .. var resultArgs])
+    return Cohesive.Relations.Benchmarks.PreparedResultAllocationBenchmark.Run(resultArgs);
+
+if (args is ["--field-assignment-allocations", .. var assignmentArgs])
+    return Cohesive.Relations.Benchmarks.FieldAssignmentAllocationBenchmark.Run(assignmentArgs);
+
+if (args is ["--strict-read-allocations", .. var strictArgs])
+    return Cohesive.Relations.Benchmarks.StrictReadAllocationBenchmark.Run(strictArgs);
+
 var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 var discovered = false;
 foreach (var summary in summaries)

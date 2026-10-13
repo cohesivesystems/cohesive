@@ -24,7 +24,7 @@ namespace Cohesive.Relations.Mapping;
 /// </remarks>
 public sealed class RelationDtoMapperCompiler
 {
-    readonly ConditionalWeakTable<CompiledRelationQueryPlan, ConcurrentDictionary<CacheKey, Lazy<object>>> cache = [];
+    readonly ConditionalWeakTable<CompiledRelationQueryPlan, ConcurrentDictionary<CacheKey, PreparationSlot<object>>> cache = [];
 
     /// <summary>Shared compiler whose cache does not extend the lifetime of compiled relation plans.</summary>
     public static RelationDtoMapperCompiler Default { get; } = new();
@@ -65,13 +65,9 @@ public sealed class RelationDtoMapperCompiler
 
         var key = new CacheKey(typeof(TOutput), ProfileFingerprint: profile.Fingerprint, OptionsFingerprint: options.Fingerprint);
         var planCache = cache.GetValue(plan, static _ => new());
-        var lazy = planCache.GetOrAdd(
-            key,
-            _ => new(
-                () => CompileMapper<TOutput>(plan, profile, options),
-                LazyThreadSafetyMode.ExecutionAndPublication
-            ));
-        return (RelationDtoMapperCompilationResult<TOutput>)lazy.Value;
+        var slot = planCache.GetOrAdd(key, static _ => new());
+        return (RelationDtoMapperCompilationResult<TOutput>)slot.Get((plan, profile, options),
+            static context => CompileMapper<TOutput>(context.plan, context.profile, context.options));
     }
 
     static RelationDtoMapperCompilationResult<TOutput> CompileMapper<TOutput>(

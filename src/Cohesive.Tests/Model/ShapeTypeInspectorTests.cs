@@ -1,7 +1,27 @@
+using System.Collections.Concurrent;
+using System.Reflection;
+
 namespace Cohesive.Tests.Model;
 
 public sealed class ShapeTypeInspectorTests
 {
+    [Fact]
+    public void PropertyNullabilityCoordinatesColdFirstUseAndPreservesNestedMetadata()
+    {
+        var read = typeof(ShapeTypeInspector).GetMethod("GetPropertyNullability", BindingFlags.Static | BindingFlags.NonPublic)!
+            .CreateDelegate<Func<PropertyInfo, NullabilityInfo>>();
+        var property = typeof(ColdNullableShape).GetProperty(nameof(ColdNullableShape.Values))!;
+        ConcurrentBag<NullabilityInfo> results = [];
+        Parallel.For(0, 64, _ => results.Add(read(property)));
+        var first = results.First();
+        Assert.All(results, result => Assert.Same(first, result));
+        Assert.Equal(NullabilityState.NotNull, first.ReadState);
+        Assert.Equal(NullabilityState.Nullable, Assert.Single(first.GenericTypeArguments).ReadState);
+        Assert.Same(first, read(property));
+    }
+
+    sealed record ColdNullableShape(IReadOnlyList<string?> Values);
+
     [Fact]
     public void ReadablePropertyMetadata_IsSafeAcrossConcurrentColdTypes()
     {

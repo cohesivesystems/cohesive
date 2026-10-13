@@ -4,3 +4,6 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Cohesive.Processes")]
 [assembly: InternalsVisibleTo("Cohesive.Relations")]
 [assembly: InternalsVisibleTo("Cohesive.Transitions")]
+
+[assembly: InternalsVisibleTo("Cohesive.Tests")]
+[assembly: InternalsVisibleTo("Cohesive.Relations.Benchmarks")]
