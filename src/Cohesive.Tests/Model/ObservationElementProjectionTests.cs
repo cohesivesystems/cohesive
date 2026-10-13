@@ -12,6 +12,9 @@ public sealed class ObservationElementProjectionTests(ITestOutputHelper output)
         ObservationValue value;
         using (var source = JsonDocument.Parse("""{"z":{"é":"text","A":1,"a":2},"a":[{"last":1,"last":3}],"empty":{}}"""))
             value = ObservationValue.FromJsonElement(source.RootElement);
+        Assert.Equal(new[] { "A", "a", "é" }, value.Fields!["z"].Fields!.Keys);
+        Assert.False(value.Fields["z"].Fields!.ContainsKey("missing"));
+        Assert.Same(value.Fields, ObservationValue.FromObject(value.Fields).Fields);
         Assert.Equal(1, value.Fields!["z"].Fields!["A"].GetInt64());
         Assert.Equal(2, value.Fields["z"].Fields!["a"].GetInt64());
         Assert.Equal(3, value.Fields["a"].Array[0].Fields!["last"].GetInt64());
@@ -32,8 +35,48 @@ public sealed class ObservationElementProjectionTests(ITestOutputHelper output)
     }
 
     [Theory]
+    [InlineData(2)]
+    [InlineData(16)]
+    public void PortableValidationPreservesCanonicalFailureOrdering(int fields)
+    {
+        var extra = string.Concat(Enumerable.Range(0, fields - 2).Select(i => $",\"field{i}\":0"));
+        using var document = JsonDocument.Parse("{\"zeta\":1e1000,\"alpha\":1e1000" + extra + "}");
+        var value = ObservationValue.FromJsonElement(document.RootElement);
+        var reference = ObservationValue.FromObject(System.Collections.Immutable.ImmutableSortedDictionary.CreateRange(
+            StringComparer.Ordinal, value.Fields!));
+        var type = new JsonTypeRef(JsonTypeKind.Object);
+        Assert.False(ObservationValidator.TryValidateAgainstType(reference, type, out var expected));
+        Assert.False(ObservationValidator.TryValidateAgainstType(value, type, out var actual));
+        Assert.Equal(expected, actual);
+        Assert.Contains("$.alpha", actual);
+    }
+
+    [Fact]
+    public void WarmNestedPortableValidationDoesNotBoxFieldEnumerators()
+    {
+        using var document = JsonSerializer.SerializeToDocument(Enumerable.Range(0, 128)
+            .Select(i => new { a = i, b = i + 1, c = i + 2, d = i + 3 }).ToArray());
+        var value = ObservationValue.FromJsonElement(document.RootElement);
+        var type = new JsonTypeRef(JsonTypeKind.Array);
+        for (var i = 0; i < 20; i++) ObservationValidator.TryValidateAgainstType(value, type, out _);
+        var samples = new long[7];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var valid = ObservationValidator.TryValidateAgainstType(value, type, out var error);
+            samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(valid, error);
+        }
+        Array.Sort(samples);
+        Assert.Equal(0, samples[3]);
+    }
+
+    [Theory]
+    [InlineData(1, 4, 400)]
+    [InlineData(1, 8, 720)]
     [InlineData(1, 128, 13_000)]
     [InlineData(16, 32, 60_000)]
+    [InlineData(128, 4, 65_000)]
     public void ProjectionHasFixedWarmAllocationCeiling(int objects, int fields, long ceiling)
     {
         object payload = objects == 1

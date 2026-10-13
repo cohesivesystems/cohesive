@@ -12,6 +12,7 @@ internal ref struct OrderedObservationFields
 {
     ImmutableSortedDictionary<string, ObservationValue>? sorted;
     OrdinalObservationFields? ordinal;
+    SmallObservationFields? small;
     ObservationFieldBuffer rental;
 
     internal OrderedObservationFields(IReadOnlyDictionary<string, ObservationValue>? fields, ArrayPool<KeyValuePair<string, ObservationValue>>? pool = null)
@@ -19,7 +20,8 @@ internal ref struct OrderedObservationFields
         rental = default;
         pool ??= ArrayPool<KeyValuePair<string, ObservationValue>>.Shared;
         ordinal = fields as OrdinalObservationFields;
-        if (ordinal is not null)
+        small = fields as SmallObservationFields;
+        if (ordinal is not null || small is not null)
         {
             sorted = null;
         }
@@ -35,7 +37,7 @@ internal ref struct OrderedObservationFields
         }
     }
 
-    public Enumerator GetEnumerator() => new(sorted, ordinal, rental.Buffer, rental.Count);
+    public Enumerator GetEnumerator() => new(sorted, ordinal, small, rental.Buffer, rental.Count);
 
     // Move the sole rental into an empty private streaming-stack slot.
     internal void MoveBufferTo(ref ObservationFieldBuffer target) => rental.MoveTo(ref target);
@@ -45,6 +47,7 @@ internal ref struct OrderedObservationFields
         rental.Dispose();
         sorted = null;
         ordinal = null;
+        small = null;
     }
 
     internal struct Enumerator : IDisposable
@@ -53,23 +56,25 @@ internal ref struct OrderedObservationFields
         readonly int count;
         readonly bool isSorted;
         readonly OrdinalObservationFields? ordinal;
+        readonly SmallObservationFields? small;
         OrdinalObservationFields.Enumerator ordinalEnumerator;
         ImmutableSortedDictionary<string, ObservationValue>.Enumerator sorted;
         int index;
 
         internal Enumerator(ImmutableSortedDictionary<string, ObservationValue>? fields,
-            OrdinalObservationFields? ordinal, KeyValuePair<string, ObservationValue>[]? buffer, int count)
+            OrdinalObservationFields? ordinal, SmallObservationFields? small, KeyValuePair<string, ObservationValue>[]? buffer, int count)
         {
             this.ordinal = ordinal;
+            this.small = small;
             ordinalEnumerator = ordinal is null ? default : ordinal.GetCanonicalEnumerator();
             this.buffer = buffer;
-            this.count = count;
+            this.count = small?.Count ?? count;
             isSorted = fields is not null;
             sorted = fields is null ? default : fields.GetEnumerator();
             index = -1;
         }
 
-        public KeyValuePair<string, ObservationValue> Current => ordinal is not null ? ordinalEnumerator.Current : isSorted ? sorted.Current : buffer![index];
+        public KeyValuePair<string, ObservationValue> Current => small is not null ? small.At(index) : ordinal is not null ? ordinalEnumerator.Current : isSorted ? sorted.Current : buffer![index];
         public bool MoveNext()
         {
             if (ordinal is null)

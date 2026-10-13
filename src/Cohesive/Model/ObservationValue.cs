@@ -259,7 +259,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         if (fields is null)
             return null;
-        if (fields is OrdinalObservationFields)
+        if (fields is OrdinalObservationFields or SmallObservationFields)
             return fields;
         if (fields.Count == 0)
             return EmptyObjectValues;
@@ -1733,14 +1733,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         var count = element.GetPropertyCount();
         if (count == 0) return FromObject(EmptyObjectValues);
-        // Tiny objects cost less in the existing tree than a dictionary's buckets and entries.
-        if (count <= 8)
-        {
-            var small = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
-            foreach (var property in element.EnumerateObject())
-                small[property.Name] = FromJsonElement(property.Value);
-            return FromObject(small.ToImmutable());
-        }
+        if (count <= 8) return FromObject(SmallObservationFields.Read(element, count));
         var values = new Dictionary<string, ObservationValue>(count, StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
             values[property.Name] = FromJsonElement(property.Value);
