@@ -18,6 +18,9 @@ namespace Cohesive.Configuration;
 /// </remarks>
 public static class ConfigurationParameterParser
 {
+    /// <summary>The display marker used in place of sensitive configuration values.</summary>
+    public const string RedactedValue = "<redacted>";
+
     /// <summary>
     /// Parses a typed configuration object from an existing <see cref="IConfiguration"/> graph.
     /// </summary>
@@ -101,10 +104,32 @@ public static class ConfigurationParameterParser
                 throw new ArgumentException($"Duplicate configuration key '{parameter.ConfigurationKey}'.", nameof(parameters));
             metadata[i] = new(parameter.PropertyName, parameter.Path, parameter.ConfigurationKey,
                 parameter.ConfigurationKey, parameter.CliName, parameter.CliShortName, parameter.Description,
-                [.. parameter.AllowedValues], parameter.Required, parameter.TimeUnit, parameter.ParameterType);
+                [.. parameter.AllowedValues], parameter.Required, parameter.TimeUnit, parameter.ParameterType, parameter.Sensitive);
         }
         return new System.Collections.ObjectModel.ReadOnlyDictionary<string, object?>(
             ParseValuesCore<object>(configuration, metadata, options: null));
+    }
+
+    /// <summary>Describes the configuration keys consumed for a declared parameter by the shared binder.</summary>
+    /// <param name="configuration">Effective raw configuration graph.</param>
+    /// <param name="parameter">Resolved parameter declaration.</param>
+    /// <returns>Consumed scalar or collection-element keys in binding order. Ignored whitespace values
+    /// and absent inputs are omitted. A comma-separated collection has one source key.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    public static IReadOnlyList<string> GetValueKeys(IConfiguration configuration, ConfigurationParameterDescriptor parameter)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(parameter);
+        if (IsStringCollectionType(parameter.ParameterType))
+        {
+            var section = configuration.GetSection(parameter.ConfigurationKey);
+            var children = section.GetChildren().ToArray();
+            if (children.Length > 0)
+                return [.. OrderCollectionChildren(children)
+                    .Where(child => !string.IsNullOrWhiteSpace(child.Value)).Select(child => child.Path)];
+            return ParseCommaSeparatedValues(section.Value).Length > 0 ? [parameter.ConfigurationKey] : [];
+        }
+        return string.IsNullOrWhiteSpace(configuration[parameter.ConfigurationKey]) ? [] : [parameter.ConfigurationKey];
     }
 
     static Dictionary<string, object?> ParseValuesCore<T>(
@@ -136,7 +161,7 @@ public static class ConfigurationParameterParser
 
                     foreach (var invalidValue in invalidValues)
                     {
-                        errors.Add($"Configuration value '{parameter.ConfigurationKey}' for '{parameter.Path}' must contain only values from [{string.Join(", ", parameter.AllowedValues)}], but included '{invalidValue}'.");
+                        errors.Add($"Configuration value '{parameter.ConfigurationKey}' for '{parameter.Path}' must contain only values from [{(parameter.Sensitive ? RedactedValue : string.Join(", ", parameter.AllowedValues))}], but included '{(parameter.Sensitive ? RedactedValue : invalidValue)}'.");
                     }
 
                     if (invalidValues.Length > 0)
@@ -158,7 +183,7 @@ public static class ConfigurationParameterParser
 
             if (parameter.AllowedValues.Length > 0 && !parameter.AllowedValues.Contains(rawValue, StringComparer.OrdinalIgnoreCase))
             {
-                errors.Add($"Configuration value '{parameter.ConfigurationKey}' for '{parameter.Path}' must be one of [{string.Join(", ", parameter.AllowedValues)}], but was '{rawValue}'.");
+                errors.Add($"Configuration value '{parameter.ConfigurationKey}' for '{parameter.Path}' must be one of [{(parameter.Sensitive ? RedactedValue : string.Join(", ", parameter.AllowedValues))}], but was '{(parameter.Sensitive ? RedactedValue : rawValue)}'.");
                 continue;
             }
 
@@ -260,7 +285,8 @@ public static class ConfigurationParameterParser
             AllowedValues: parameter.AllowedValues,
             Required: parameter.Required,
             TimeUnit: parameter.TimeUnit,
-            ParameterType: parameter.ParameterType))
+            ParameterType: parameter.ParameterType,
+            Sensitive: parameter.Sensitive))
         .ToArray();
 
     static Dictionary<string, string> BuildSwitchMappings<T>(ConfigurationParameterOptions<T>? options) =>
@@ -456,7 +482,8 @@ public static class ConfigurationParameterParser
                 AllowedValues: allowedValues,
                 Required: propertyOption?.Required ?? attribute?.Required ?? false,
                 TimeUnit: propertyOption?.TimeUnit ?? attribute?.GetTimeUnitOrNull(),
-                ParameterType: propertyType
+                ParameterType: propertyType,
+                Sensitive: propertyOption?.Sensitive ?? attribute?.Sensitive ?? false
                 )
             );
         }
@@ -850,6 +877,7 @@ public static class ConfigurationParameterParser
         ImmutableArray<string> AllowedValues,
         bool Required,
         ConfigurationTimeUnit? TimeUnit,
-        Type ParameterType
+        Type ParameterType,
+        bool Sensitive = false
         );
 }
