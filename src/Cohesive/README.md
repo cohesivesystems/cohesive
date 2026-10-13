@@ -243,5 +243,6 @@ encoder as the existing fingerprint contract. Relations preserves its relaxed es
 bytes. See [repeated representation qualification](../../docs/performance/repeated-representation-work.md).
 
 `ObservationMaterializer.PrepareJsonValue<T>()` prepares plain JSON interpretation for
-already-admitted portable values. It returns independent CLR results and retains custom
-serializer compatibility. Shape-qualified admission remains a separate responsibility.
+already-admitted portable values. Conventional members, including standard read-only lists,
+are projected directly; a customized member retains its JSON contract without forcing the
+whole row through JSON. Results remain independent. Shape-qualified admission is separate.
