@@ -122,3 +122,54 @@ Ari source-module qualification passes 852 engine tests with 18 skips. Twenty pr
 repository wrappers lack the newer IEntityRepository.IdentityField member; the exact failure set
 matches the unchanged baseline. There are no new failures. Both opt-in conversion and the now
 independent canonical-hash projects build successfully. Temporary source overlays are restored.
+
+## Bounded observation and annotation ownership
+
+JSON element projection keeps sorted immutable trees for objects with at most eight properties.
+Wider objects use the existing owned dictionary and scoped ordinal ordering, preserving case-sensitive
+keys, last-property-wins acquisition, ordinal enumeration, and independence from the source document.
+No additional cache or storage abstraction is introduced.
+
+`AnnotationMapJsonConverter` is an explicit opt-in for already-buffered messages. Core's internal
+CLR-contract options use it; general strict document options do not. Maps with at most 64 KiB of
+encoded JSON share one owned snapshot, including parser metadata. Retaining an individual annotation
+can therefore retain its whole small map. Larger maps retain independent value snapshots. All maps
+are parsed as complete values, so streaming callers must budget temporary memory for the whole map.
+Custom key/value/JSON converters and reference-handling policies retain ordinary serializer behavior.
+Empty maps return the shared immutable empty map with zero warm allocation.
+
+The opt-in BenchmarkDotNet ShortRun on .NET 10, macOS Arm64 measures retained results with inputs
+prepared outside the measurement. A 128-field object falls from 15,520 to 12,088 allocated bytes;
+a 4,096-field object falls from 491,680 to 416,864. Tiny collection-heavy inputs retain the tree
+representation. The 16-field case allocates less (2,080 to 1,680 bytes) but is slower in this short
+run (684 to 1,103 ns); this is an allocation/CPU tradeoff, not a universal throughput improvement.
+A 32-entry annotation map falls from 19,328 to 12,776 bytes. Timing uncertainty and read/write
+results are retained in the compact [object report](evidence/pooled-observation-decoding/json-element-ownership.csv)
+and [annotation report](evidence/pooled-observation-decoding/annotation-map-ownership.csv).
+
+Regression tests use median-of-seven fixed allocation ceilings after warmup and cover nested values,
+disposed sources, duplicate and escaped keys, nulls, custom converters, and reference metadata.
+Timing runs remain opt-in:
+
+```bash
+dotnet run -c Release --project eng/runtime-performance/value-conversion -- --filter '*JsonElementProjectionBenchmarks*' '*AnnotationMapBenchmarks*'
+```
+
+The original Ari X12 004010 repository-transition case was measured in five alternating isolated
+process pairs against published alpha.137 and a private package of this change, using the same Ari
+source. Median total allocations were 443,503,920 → 434,124,544 bytes cold and
+186,147,088 → 176,855,960 bytes repeated (5.0% lower repeated allocation). Median elapsed time
+was 3,233 → 3,210 ms cold and 1,304 → 1,274 ms repeated; these variable short samples establish
+allocation reduction rather than a durable latency claim. The
+[case samples](evidence/pooled-observation-decoding/ari-json-ownership.csv) retain all measurements.
+This is private-package qualification, not published-package adoption. Existing canonical spec hashes
+remain the acceptance criterion before adoption.
+
+Full qualification passed 5,614 Cohesive tests (33 existing skips) and 1,298 Ari tests
+(18 existing skips); both canonical X12 spec hashes matched alpha.137. Ari's temporary override
+was removed after measurement. A sampled repeated-case trace still attributes about 18.5 MB to
+JSON object acquisition (including retained strings and tiny tree nodes), 10.1 MB to annotation-map
+acquisition, and 13.6 MB to byte-array growth under canonical property writing. These are disjoint
+nearest-application-frame samples, not exact totals or proof that retained values can be eliminated.
+The next investigation should distinguish repeated typed projection from necessary retained results
+and examine canonical output buffer growth.

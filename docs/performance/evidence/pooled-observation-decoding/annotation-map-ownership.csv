@@ -1,0 +1,17 @@
+Method,Entries,Mean,Error,Allocated
+PerValue,0,40.43 ns,9.855 ns,80 B
+SharedMap,0,31.99 ns,2.047 ns,0 B
+PerValueWrite,0,30.47 ns,1.581 ns,32 B
+SharedMapWrite,0,43.84 ns,7.824 ns,32 B
+PerValue,1,487.42 ns,28.299 ns,848 B
+SharedMap,1,542.53 ns,11.063 ns,656 B
+PerValueWrite,1,137.76 ns,1.251 ns,264 B
+SharedMapWrite,1,125.76 ns,2.906 ns,112 B
+PerValue,8,"3,648.13 ns",363.063 ns,5376 B
+SharedMap,8,"3,377.17 ns",41.882 ns,3424 B
+PerValueWrite,8,792.95 ns,309.110 ns,824 B
+SharedMapWrite,8,743.75 ns,218.286 ns,672 B
+PerValue,32,"15,375.60 ns","4,125.043 ns",19328 B
+SharedMap,32,"14,109.26 ns","6,573.050 ns",12776 B
+PerValueWrite,32,"3,132.80 ns",334.426 ns,2784 B
+SharedMapWrite,32,"2,943.98 ns",273.578 ns,2632 B
