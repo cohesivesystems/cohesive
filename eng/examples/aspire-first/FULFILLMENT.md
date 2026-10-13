@@ -134,7 +134,8 @@ Some explicit declarations carry meaning:
 Aspire association selection sources now default to a deterministic reference containing the manifest,
 canonical node and native resource name. Explicit sources override it. This default attributes the
 selection only; it does not attest provider capabilities. `OrdersApp.Source` still attributes the
-example's explicit capability assertions.
+example's explicit capability assertions and resource/workload associations; the demo does not replace
+that real source with generated attribution.
 
 The next infrastructure step should project evidence from the PostgreSQL adapter's actual prepared
 contracts, particularly `PostgresRelationQueryTargetProfile` and its validated single-source, encoding,
