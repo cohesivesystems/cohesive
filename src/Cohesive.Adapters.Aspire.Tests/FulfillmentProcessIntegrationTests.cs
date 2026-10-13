@@ -1,3 +1,4 @@
+using Cohesive.Identity;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Api;
@@ -31,7 +32,7 @@ public sealed class FulfillmentProcessIntegrationTests
         var inventory = persistence.Repository(FulfillmentDomain.Inventory, transitionReceipts: receiptStorage);
         var orderId = Guid.NewGuid().ToString("D");
         var sku = "sku-" + Guid.NewGuid().ToString("N");
-        var context = FulfillmentDemoIdentity.Attach(OperationContext.Create());
+        var context = OperationContext.Create().WithIdentityContext(FulfillmentDemoIdentity.Context);
         try
         {
             await orders.Upsert(context, new Order(orderId, FulfillmentDemo.LocalPartition, initialStatus));

@@ -21,7 +21,7 @@ public static class InventoryTransitions
 {
     /// <summary>Checks stock and decrements it atomically with the operation receipt.</summary>
     public static Transition<InventoryItem, FulfillOrder, StockResult> Reserve { get; } =
-        TransitionAuthoring.Create<InventoryItem, FulfillOrder, StockResult>(FulfillmentDomain.Inventory.Definition.Shape,
+        FulfillmentDomain.Inventory.Transition<FulfillOrder, StockResult>(
             id: new("fulfillment/reserve"), revision: new("1"), transition => transition
                 .Requires((item, input) => item.Sku == input.Sku && input.Quantity > 0,
                     (_, _) => new StockResult(false, "Invalid reservation."))
@@ -32,7 +32,7 @@ public static class InventoryTransitions
 
     /// <summary>Compensates a previously accepted reservation in this process.</summary>
     public static Transition<InventoryItem, FulfillOrder, StockResult> Release { get; } =
-        TransitionAuthoring.Create<InventoryItem, FulfillOrder, StockResult>(FulfillmentDomain.Inventory.Definition.Shape,
+        FulfillmentDomain.Inventory.Transition<FulfillOrder, StockResult>(
             id: new("fulfillment/release"), revision: new("1"), transition => transition
                 .Requires((item, input) => item.Sku == input.Sku && input.Quantity > 0,
                     (_, _) => new StockResult(false, "Invalid release."))
@@ -45,22 +45,26 @@ public static class InventoryTransitions
 public static partial class FulfillmentProcess
 {
     /// <summary>Stable authoring provenance for the process and its hosted query.</summary>
-    public static ExecutionProvenance Provenance { get; } = new(new("aspire-first", "1"),
-        new("fulfillment/process"), DocumentOrigin.Generated);
+    public static ExecutionProvenance Provenance { get; } = new(new("aspire-first", "1"), new("fulfillment/process"), DocumentOrigin.Generated);
 
     // A native point read is an explicit hosted query; no SQL or repository call enters the Process IR.
     /// <summary>Explicit native inventory point-read contract.</summary>
-    public static HostedQuery<FulfillOrder, InventoryAvailability> Stock { get; } =
-        HostedQuery<FulfillOrder, InventoryAvailability>.Create(new("fulfillment/stock"), new("1"),
-            new("aspire-first.inventory-point-read", "1"), FulfillmentDomain.Inventory.Definition.Shape.Id.Value, Provenance);
+    public static HostedQuery<FulfillOrder, InventoryAvailability> StockPointRead { get; } =
+        HostedQuery<FulfillOrder, InventoryAvailability>.Create(
+            new("fulfillment/stock"),
+            new("1"),
+            new("aspire-first.inventory-point-read", "1"),
+            FulfillmentDomain.Inventory.Definition.Shape.Id.Value,
+            Provenance
+            );
 
     /// <summary>Generated portable sequence, including explicit domain compensation.</summary>
-    public static Process<FulfillOrder, FulfillmentResult> Definition { get; } = Define(new(
-        new("fulfillment/submit"), new("2"), ProcessRecoveryPolicy.ContinueAttempt, Provenance));
+    public static Process<FulfillOrder, FulfillmentResult> Definition { get; } =
+        Define(new(new("fulfillment/submit"), new("2"), ProcessRecoveryPolicy.ContinueAttempt, Provenance));
 
     static async ProcessTask<FulfillmentResult> Run(ProcessContext process, FulfillOrder input)
     {
-        var stock = await process.Query(Stock, input);
+        var stock = await process.Query(StockPointRead, input);
         if (!stock.Exists)
             return new FulfillmentResult("Rejected", "Inventory does not exist.");
         // The query is advisory. A retry may observe less stock after its own prior reservation;

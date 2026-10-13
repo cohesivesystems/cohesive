@@ -41,6 +41,7 @@ public static class FulfillmentStorage
         .Column(reservation => reservation.Sku, "sku")
         .Column(reservation => reservation.Quantity, "quantity")
         .Build();
+
     /// <summary>Complete physical field mapping; schema lifecycle is explicit in schema.sql.</summary>
     public static PostgresEntityRepositoryMapping Orders { get; } = PostgresEntityRepositoryMapping.For(FulfillmentDomain.Orders)
         .Table("public", "cohesive_orders")

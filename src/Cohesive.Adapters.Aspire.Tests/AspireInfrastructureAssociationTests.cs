@@ -27,6 +27,25 @@ public sealed class AspireInfrastructureAssociationTests
             builder, OrdersApp.Definition, new("test/association"), new("development"), configure);
 
     [Fact]
+    public void Omitted_selection_sources_are_deterministic_and_match_explicit_convention()
+    {
+        var builder = Builder();
+        var database = builder.AddContainer("storage", "postgres", "17");
+        var worker = builder.AddExecutable("worker", "dotnet", ".", "--info");
+        var inferred = Attach(builder, a => a.Resource(OrdersApp.Store, database, Storage, new("aspire/test"))
+            .Workload(OrdersApp.Worker, worker, Process));
+        var explicitSources = Attach(builder, a => a.Resource(OrdersApp.Store, database, Storage, new("aspire/test"),
+                [SourceReference.Create("aspire-native-association-v1", "test/association/resources/orders/storage")])
+            .Workload(OrdersApp.Worker, worker, Process,
+                [SourceReference.Create("aspire-native-association-v1", "test/association/workloads/orders/worker")]));
+        Assert.True(inferred.Deployment.IsComplete);
+        Assert.Equal(explicitSources.Deployment.Manifest.Fingerprint, inferred.Deployment.Manifest.Fingerprint);
+        Assert.Throws<ArgumentException>(() => Attach(builder,
+            a => a.Resource(OrdersApp.Store, database, Storage, new("aspire/test"), [])));
+        using var app = builder.Build();
+    }
+
+    [Fact]
     public void Runnable_example_uses_generated_project_metadata_and_existing_native_database()
     {
         var builder = Builder();

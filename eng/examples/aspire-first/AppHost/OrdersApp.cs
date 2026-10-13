@@ -18,6 +18,7 @@ public static class OrdersApp
     public static InfrastructureCapabilityId RelationalStorage { get; } = new("example/relational-storage");
     /// <summary>Required application execution capability.</summary>
     public static InfrastructureCapabilityId ApplicationExecution { get; } = new("example/application-execution");
+
     static readonly SourceReference Source = SourceReference.Create("example", "aspire-first/orders/v1");
 
     /// <summary>Canonical requirements, independent of native Aspire resource names and provider options.</summary>
@@ -57,6 +58,7 @@ public static class OrdersApp
                     realization: CapabilityRealizationKind.Native,
                     sourceReferences: [Source])
             ]);
+
         // Declare the .NET project as the implementation of application execution.
         var dotnetProjectImplementation = WorkloadImplementation(
             id: new("example/dotnet-project"),
@@ -76,7 +78,8 @@ public static class OrdersApp
             id: new("example/orders/local"),
             variant: new("development"),
             associations => associations
-                .Resource(Store, database, postgresImplementation, new("aspire/example/orders"), [Source])
-                .Workload(Worker, worker, dotnetProjectImplementation, [Source]));
+                .Resource(Store, database, postgresImplementation, new("aspire/example/orders"))
+                .Workload(Worker, worker, dotnetProjectImplementation)
+            );
     }
 }

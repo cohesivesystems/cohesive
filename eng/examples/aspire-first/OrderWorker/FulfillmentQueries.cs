@@ -19,6 +19,7 @@ public static class FulfillmentQueries
 
     /// <summary>Canonical query shared by native and composed registrations.</summary>
     public static RelationQuery<string, ReservationAvailability[]> ReservationAvailability { get; }
+
     /// <summary>Closed logical view available as an optional physical subplan boundary.</summary>
     public static QueryNodeId ReservationDemandProjection { get; }
 
@@ -26,7 +27,6 @@ public static class FulfillmentQueries
     {
         var query = RelationQuery.Expression();
         var orderId = query.Parameter<string>("orderId");
-
         var orders = OrdersById(query, orderId);
         var reservations = orders.TraverseInverse(FulfillmentDomain.ReservationOrder);
         var inventory = reservations.Traverse(FulfillmentDomain.ReservationItem);
@@ -60,10 +60,8 @@ public static class FulfillmentQueries
         return (definition, demand.Node.Id);
     }
 
-    static RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(
-        RelationQueryExpressionAuthoring query, RelationQueryExpressionParameter<string> orderId) =>
-        query.Source(FulfillmentDomain.Orders)
-            .Where(order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
+    static RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(RelationQueryExpressionAuthoring query, RelationQueryExpressionParameter<string> orderId) =>
+        query.Source(FulfillmentDomain.Orders).Where(order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
 
 }
 

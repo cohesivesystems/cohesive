@@ -13,6 +13,23 @@ public sealed class DomainEntityCompositionTests
     public sealed record Row { public string ParentId { get; init; } = ""; public string? ChildId { get; init; } }
 
     [Fact]
+    public void Entity_transition_extension_preserves_shape_and_canonical_definition()
+    {
+        var entity = new DomainModelBuilder().Entity<Parent>("parent");
+        Action<TransitionBuilder<Parent, Cohesive.Prelude.Unit, string>> configure = transition => transition.Return("unchanged");
+        var attached = entity.Transition<string>(new("test/no-input"), new("1"), configure,
+            sourceFile: "test.cs", sourceLine: 10, sourceMember: "Declare");
+        var direct = TransitionAuthoring.Create<Parent, string>(entity.Definition.Shape,
+            new("test/no-input"), new("1"), configure, sourceFile: "test.cs", sourceLine: 10, sourceMember: "Declare");
+        Assert.True(attached.IsValid);
+        Assert.Equal(direct.Reference, attached.Reference);
+        Action<TransitionBuilder<Parent, string, string>> withInput = transition => transition.Return("accepted");
+        var typed = entity.Transition<string, string>(new("test/input"), new("1"), withInput);
+        Assert.True(typed.IsValid);
+        Assert.NotNull(typed.Compile().Plan);
+    }
+
+    [Fact]
     public void Separate_relationship_is_captured_when_traversed_and_reuses_entity_graphs()
     {
         var domain = new DomainModelBuilder();

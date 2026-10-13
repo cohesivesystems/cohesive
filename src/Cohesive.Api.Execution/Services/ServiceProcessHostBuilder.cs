@@ -112,7 +112,7 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
     /// <param name="authorization">Invocation-time admission and resource authorization.</param>
     /// <returns>The service document and its prepared native runtime.</returns>
     /// <exception cref="ServiceBindingValidationException">The exact process or realization is invalid.</exception>
-    public HostedServiceProcess Build(string authority,
+    public HostedServiceProcess<TInput, TResult> Build(string authority,
         TimeSpan timeout, IServiceInvocationAuthorization authorization)
     {
         ArgumentNullException.ThrowIfNull(authorization);
@@ -123,12 +123,12 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
         var adapter = new EntityTransitionProcessOperationAdapter(invocation => deployed.GetValueOrDefault(invocation.Definition));
         var host = new RegisteredAsyncProcessReferenceHost(new ProcessRelationHandlerCatalog(queries), adapter.ExecuteAsync);
         return new(declaration, new ServiceRuntime(declaration,
-            [new ServiceEphemeralProcessBinding(operationId, plan, authority, (_, _) => host)], authorization), adapter);
+            [new ServiceEphemeralProcessBinding(operationId, plan, authority, (_, _) => host)], authorization), adapter, operationId, process);
     }
 }
 
 /// <summary>Canonical service declaration and its host-lifetime native realization.</summary>
-public sealed class HostedServiceProcess
+public class HostedServiceProcess
 {
     readonly EntityTransitionProcessOperationAdapter adapter;
     internal HostedServiceProcess(ExecutionDefinitionDocument declaration, ServiceRuntime runtime,
@@ -149,4 +149,20 @@ public sealed class HostedServiceProcess
     /// <remarks>No replay/history, global listener or automatic export. Observer failures do not affect operations or other observers.</remarks>
     public IDisposable SubscribeTransitionFailures(Action<EntityTransitionFailureDiagnostic> observer) =>
         adapter.SubscribeTransitionFailures(observer);
+}
+
+/// <summary>Prepared service retaining its exact typed process and operation for transport binding.</summary>
+/// <typeparam name="TInput">Canonical process input.</typeparam>
+/// <typeparam name="TResult">Canonical process output.</typeparam>
+public sealed class HostedServiceProcess<TInput, TResult> : HostedServiceProcess
+{
+    internal HostedServiceProcess(ExecutionDefinitionDocument declaration, ServiceRuntime runtime,
+        EntityTransitionProcessOperationAdapter adapter, string operationId, Process<TInput, TResult> process)
+        : base(declaration, runtime, adapter)
+    { OperationId = operationId; Process = process; }
+
+    /// <summary>Operation selected during host preparation.</summary>
+    public string OperationId { get; }
+    /// <summary>Exact process used to compile the runtime.</summary>
+    public Process<TInput, TResult> Process { get; }
 }

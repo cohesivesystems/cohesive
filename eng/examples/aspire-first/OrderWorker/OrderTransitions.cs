@@ -22,11 +22,12 @@ public sealed record SubmitOrderResult(OrderStatus Status, SubmissionOutcome Out
 public static class OrderTransitions
 {
     /// <summary>Only draft orders may be submitted; a rejected decision produces no commit.</summary>
-    public static Transition<Order, Cohesive.Prelude.Unit, SubmitOrderResult> Submit { get; } = TransitionAuthoring.Create<Order, SubmitOrderResult>(FulfillmentDomain.Orders.Definition.Shape,
+    public static Transition<Order, Cohesive.Prelude.Unit, SubmitOrderResult> Submit { get; } =
+        FulfillmentDomain.Orders.Transition<SubmitOrderResult>(
             id: new("example/order/submit"), revision: new("4"),
             transition => transition
-                .Requires(order => order.Status == OrderStatus.Draft,
-                    order => new SubmitOrderResult(order.Status, SubmissionOutcome.NotDraft))
+                .Requires(order => order.Status == OrderStatus.Draft, order => new SubmitOrderResult(order.Status, SubmissionOutcome.NotDraft))
                 .Set(order => order.Status, OrderStatus.Submitted)
-                .Return(new SubmitOrderResult(OrderStatus.Submitted, SubmissionOutcome.Submitted)));
+                .Return(new SubmitOrderResult(OrderStatus.Submitted, SubmissionOutcome.Submitted))
+            );
 }

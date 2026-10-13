@@ -410,3 +410,9 @@ failed preparation leaves the builder unchanged without rollback.
 Host-owned logging lives in [Cohesive.Host](../../Cohesive.Host/README.md#private-process-failure-logging).
 Use `AddCohesiveTransitionFailureLogging(process)` from `Cohesive.Host.Services` before building the
 native host. It is independent of ASP.NET routing and works in background workers too.
+
+For an explicitly fixed local/test identity, `services.AddFixedRequestIdentity(identity)` registers the
+request-context enricher. The caller supplies all actors, scopes and grants; the adapter neither authenticates
+nor invents permissions. The registration is scoped to the service collection and replaces request identity,
+so it must not stand in for per-user authentication. Continue to register and use request OperationContext
+middleware normally.

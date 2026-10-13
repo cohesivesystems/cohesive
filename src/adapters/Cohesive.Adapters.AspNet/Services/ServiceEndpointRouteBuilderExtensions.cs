@@ -260,6 +260,27 @@ public static class ServiceEndpointRouteBuilderExtensions
         MapProcess<TCommand, ExecutionControlResult>(endpoints, declaration, resolveRuntime, operationId, route,
             (runtime, context, request) => runtime.ControlAsync(context, operationId, request), authorizationPolicyResolver, scopePolicies);
 
+    /// <summary>Maps an already prepared typed service process without repeating its canonical operation.</summary>
+    /// <typeparam name="TInput">Canonical process input.</typeparam>
+    /// <typeparam name="TOutput">Canonical process output.</typeparam>
+    /// <param name="endpoints">Endpoint route builder.</param>
+    /// <param name="hosted">Caller-owned prepared service; this method does not construct or start a host.</param>
+    /// <param name="http">Explicit transport route and request binding.</param>
+    /// <param name="authorizationPolicyResolver">Optional native authorization policy resolver.</param>
+    /// <param name="scopePolicies">Optional transport scope policies.</param>
+    /// <returns>The mapped endpoint with canonical metadata.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="ArgumentException">The HTTP binding does not match the canonical process.</exception>
+    public static RouteHandlerBuilder MapServiceEphemeralProcess<TInput, TOutput>(this IEndpointRouteBuilder endpoints,
+        HostedServiceProcess<TInput, TOutput> hosted, HttpBinding http,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
+    {
+        ArgumentNullException.ThrowIfNull(hosted);
+        return endpoints.MapServiceEphemeralProcess(hosted.Declaration, _ => hosted.Runtime,
+            hosted.OperationId, hosted.Process, http, authorizationPolicyResolver, scopePolicies);
+    }
+
     /// <summary>Maps a terminal ephemeral Process operation using its inferred typed input and output.</summary>
     /// <remarks>Registration resolves no host. Successful completion returns the public Process output, never
     /// internal host evidence. Failures report possible prior effects without exposing receipts or private values.

@@ -15,16 +15,17 @@ public static class FulfillmentProcessBindings
     /// <param name="inventory">Local inventory authority with atomic receipt support.</param>
     /// <exception cref="InvalidOperationException">Compilation or required persistence capability is invalid.</exception>
     /// <returns>The single prepared service declaration and runtime.</returns>
-    public static HostedServiceProcess Bind(IEntityRepository<Order> orders, IEntityRepository<InventoryItem> inventory)
+    public static HostedServiceProcess<FulfillOrder, FulfillmentResult> Bind(IEntityRepository<Order> orders, IEntityRepository<InventoryItem> inventory)
     {
         var readOptions = new EntityReadOptions(partitionKey: inventory.TransitionOperationCapabilities.PartitionKey
             ?? throw new InvalidOperationException("The demo requires a fixed receipt partition."));
+
         return Service.Define(new("fulfillment"), new("1"), FulfillmentProcess.Provenance)
             .Operation("fulfill").Run(FulfillmentProcess.Definition, bindings => bindings
             .Transition(InventoryTransitions.Reserve, inventory)
             .Transition(InventoryTransitions.Release, inventory)
             .Transition(OrderTransitions.Submit, orders)
-            .Query(FulfillmentProcess.Stock, async (context, _, input) =>
+            .Query(FulfillmentProcess.StockPointRead, async (context, _, input) =>
             {
                 var item = await inventory.TryGetEntity(context, input.Sku, readOptions);
                 return new InventoryAvailability(item is not null, item?.Available ?? 0);

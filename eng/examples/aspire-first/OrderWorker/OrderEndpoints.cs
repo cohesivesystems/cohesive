@@ -13,8 +13,11 @@ public static class OrderEndpoints
     /// <param name="details">Prepared canonical reader for the canonical joined query.</param>
     /// <param name="availability">Prepared reservation availability reader.</param>
     /// <param name="orders">Caller-owned order repository.</param>
-    public static void Map(WebApplication app, IEntityRepository<Order> orders, IRelationQueryReader<string, OrderDetails?> details,
-        IRelationQueryReader<string, ReservationAvailability[]> availability)
+    public static void Map(WebApplication app,
+        IEntityRepository<Order> orders,
+        IRelationQueryReader<string, OrderDetails?> details,
+        IRelationQueryReader<string, ReservationAvailability[]> availability
+        )
     {
         app.MapEntityApi<Order>(FulfillmentDomain.Orders.Definition, orders, partition: FulfillmentDemo.LocalPartition,
             endpoints => endpoints

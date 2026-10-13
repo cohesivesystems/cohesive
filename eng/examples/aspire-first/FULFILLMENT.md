@@ -97,3 +97,49 @@ the subject selected by `input.OrderId`. It branches on `SubmissionOutcome.Submi
 text participates in the domain rule. `OrderStatus` has explicit `Draft` and `Submitted` wire members.
 The process revision is 2 because the referenced transition's input/outcome contracts changed. Existing
 revision-1 receipts are not reinterpreted as revision-2 evidence.
+
+### Authoring and binding boundaries
+
+Start transitions at their entity: `FulfillmentDomain.Orders.Transition<SubmitOrderResult>(...)`
+uses the exact declared order shape and the shared Unit input contract. Payload-bearing transitions use
+`Inventory.Transition<FulfillOrder, StockResult>(...)`. Both delegate to `TransitionAuthoring`; they do
+not introduce a second transition model or compile on invocation.
+
+`Service.Define(...).Operation(...).Run(...).Build(...)` retains its typed process and selected operation.
+`app.MapServiceEphemeralProcess(fulfillment, http: ...)` projects those retained contracts; callers do not
+repeat the operation ID, process, declaration and runtime. The declaration-plus-deferred-resolver overload
+remains appropriate when a host intentionally postpones preparation.
+
+`AddFixedRequestIdentity(FulfillmentDemoIdentity.Context)` supplies reusable request-context plumbing.
+The example still owns its synthetic actor, local scope and grants. This is not authentication and must
+not be used as a substitute for authenticated per-user identities.
+
+Some explicit declarations carry meaning:
+
+- `FulfillmentStorage.Bind` places the full model in one database. `BindInventory` places only inventory
+  in the remote database for composed execution. Sharing the mapping objects avoids schema duplication;
+  registering all entities in the remote database would falsely describe its authority.
+- `ReservationDemandProjection` identifies the optional closed prefix used by composed availability
+  execution. Details currently has no composed placement, so it needs no corresponding cut. The cut is
+  placement advice, not a second query. A future named-subplan authoring seam should retain it with its
+  exact query rather than infer it from node order or CLR result types.
+- `StockPointRead` is a native hosted observation. Its binding performs `TryGetEntity` for one SKU in
+  the receipt partition. Its name documents that implementation; the hosted-query IR currently declares
+  observation semantics, not a portable keyed-read operator. Removing the declaration would hide a
+  process dependency. The subsequent reserve transition remains the authority on stock availability.
+- `Provenance` attributes generated process/query/service artifacts to their producer and source. It is
+  not runtime configuration. Convention-derived provenance can reduce authoring, but must still be
+  materialized in those artifacts rather than dropped.
+
+Aspire association selection sources now default to a deterministic reference containing the manifest,
+canonical node and native resource name. Explicit sources override it. This default attributes the
+selection only; it does not attest provider capabilities. `OrdersApp.Source` still attributes the
+example's explicit capability assertions.
+
+The next infrastructure step should project evidence from the PostgreSQL adapter's actual prepared
+contracts, particularly `PostgresRelationQueryTargetProfile` and its validated single-source, encoding,
+ordering and completeness boundaries. Do not replace these with a blanket joins capability: composed
+execution across databases does not gain a global snapshot. Conditional writes, partition selection and
+receipt support likewise depend on the configured repository/binding. Domain-derived requirements and
+this evidence must meet through the infrastructure compiler; the current example-level capability IDs
+are still explicit assertions, not that completed derivation chain.

@@ -50,7 +50,7 @@ public sealed class AspireInfrastructureAssociation
             new($"{id.Value}/facilities"), new($"{id.Value}/profile"), Target, variant,
             [InfrastructureDefinitionDocument.CurrentSchemaVersion], deployment =>
             {
-                associations = new(application, deployment);
+                associations = new(application, deployment, id);
                 try { configure(associations); }
                 finally { associations.Freeze(); }
             });
@@ -62,15 +62,17 @@ public sealed class AspireInfrastructureAssociation
 public sealed class AspireInfrastructureAssociationBuilder
 {
     readonly IDistributedApplicationBuilder application;
+    readonly InfrastructureTargetDeploymentManifestId manifestId;
     readonly InfrastructureTargetDeploymentManifestBuilder deployment;
     readonly Dictionary<InfrastructureNodeId, IResource> resources = [];
     readonly HashSet<IResource> existing;
     bool frozen;
 
     internal AspireInfrastructureAssociationBuilder(IDistributedApplicationBuilder application,
-        InfrastructureTargetDeploymentManifestBuilder deployment)
+        InfrastructureTargetDeploymentManifestBuilder deployment, InfrastructureTargetDeploymentManifestId manifestId)
     {
         this.application = application;
+        this.manifestId = manifestId;
         this.deployment = deployment;
         existing = new(application.Resources, ReferenceEqualityComparer.Instance);
     }
@@ -95,7 +97,7 @@ public sealed class AspireInfrastructureAssociationBuilder
     /// <param name="native">Existing native builder; its resource is retained by reference.</param>
     /// <param name="implementation">Explicit resource implementation evidence.</param>
     /// <param name="authority">Lifecycle owner; native ownership is unchanged.</param>
-    /// <param name="sources">Attributable selection evidence.</param>
+    /// <param name="sources">Attributable selection evidence; omitted sources use a stable native association reference.</param>
     /// <param name="sourceFile">Compiler-provided authoring file.</param>
     /// <param name="sourceLine">Compiler-provided authoring line.</param>
     /// <param name="sourceMember">Compiler-provided authoring member.</param>
@@ -105,13 +107,13 @@ public sealed class AspireInfrastructureAssociationBuilder
     /// <exception cref="InvalidOperationException">Authoring has completed.</exception>
     public AspireInfrastructureAssociationBuilder Resource<T>(InfrastructureNodeId node, IResourceBuilder<T> native,
         InfrastructureTargetImplementation implementation, InfrastructureLifecycleAuthorityId authority,
-        ImmutableArray<SourceReference> sources,
+        ImmutableArray<SourceReference> sources = default,
         [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0, [CallerMemberName] string sourceMember = "") where T : IResource
     {
         ArgumentNullException.ThrowIfNull(native);
         Validate(node, native.Resource);
         deployment.ResourceUsing(node, implementation, new($"aspire/resource/{native.Resource.Name}"), authority,
-            sources, sourceFile, sourceLine, sourceMember);
+            Sources(sources, node, native.Resource), sourceFile, sourceLine, sourceMember);
         resources.Add(node, native.Resource);
         return this;
     }
@@ -121,7 +123,7 @@ public sealed class AspireInfrastructureAssociationBuilder
     /// <param name="node">Canonical workload identity.</param>
     /// <param name="native">Existing native builder; this method does not start it or add references.</param>
     /// <param name="implementation">Explicit workload implementation evidence.</param>
-    /// <param name="sources">Attributable selection evidence.</param>
+    /// <param name="sources">Attributable selection evidence; omitted sources use a stable native association reference.</param>
     /// <param name="sourceFile">Compiler-provided authoring file.</param>
     /// <param name="sourceLine">Compiler-provided authoring line.</param>
     /// <param name="sourceMember">Compiler-provided authoring member.</param>
@@ -130,16 +132,21 @@ public sealed class AspireInfrastructureAssociationBuilder
     /// <exception cref="ArgumentException">Kind, canonical placement, model membership or identity is invalid.</exception>
     /// <exception cref="InvalidOperationException">Authoring has completed.</exception>
     public AspireInfrastructureAssociationBuilder Workload<T>(InfrastructureNodeId node, IResourceBuilder<T> native,
-        InfrastructureTargetImplementation implementation, ImmutableArray<SourceReference> sources,
+        InfrastructureTargetImplementation implementation, ImmutableArray<SourceReference> sources = default,
         [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0, [CallerMemberName] string sourceMember = "") where T : IResource
     {
         ArgumentNullException.ThrowIfNull(native);
         Validate(node, native.Resource);
-        deployment.WorkloadUsing(node, implementation, new($"aspire/resource/{native.Resource.Name}"), sources,
+        deployment.WorkloadUsing(node, implementation, new($"aspire/resource/{native.Resource.Name}"), Sources(sources, node, native.Resource),
             sourceFile, sourceLine, sourceMember);
         resources.Add(node, native.Resource);
         return this;
     }
+
+    ImmutableArray<SourceReference> Sources(ImmutableArray<SourceReference> sources, InfrastructureNodeId node, IResource resource) =>
+        sources.IsDefault
+            ? [SourceReference.Create("aspire-native-association-v1", $"{manifestId.Value}/{node.Value}/{resource.Name}")]
+            : sources;
 
     internal void Freeze() => frozen = true;
     internal ImmutableDictionary<InfrastructureNodeId, IResource> Snapshot()

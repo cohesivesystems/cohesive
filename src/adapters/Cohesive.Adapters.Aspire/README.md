@@ -71,3 +71,9 @@ directory and verify metadata/Infra identity preservation and rejection before r
 
 `ProjectPath` is now nullable: source consumers must handle the native-association case. Existing
 path-bearing JSON remains readable; path-free documents require a consumer supporting this contract.
+
+Native association `Resource` and `Workload` calls may omit selection sources. The default is a portable
+`aspire-native-association-v1` reference derived from the manifest ID, canonical node and native resource
+name; explicit sources retain precedence and an explicitly empty set remains invalid. Caller file/line
+attribution is separate. This convention attributes native selection only: capability evidence remains an
+explicit adapter/configuration assertion and does not become live readiness evidence.
