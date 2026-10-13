@@ -385,3 +385,9 @@ not the default value of a struct. Request-typed `ApiEndpoint<TInput, TResult>` 
 the existing HTTP query binder. Body requests remain outside this query convenience.
 `BuildBody` and `BuildQuery` validate a prospective request/response/HTTP declaration before publishing it;
 failed preparation leaves the builder unchanged without rollback.
+
+## Private process failure logging
+
+Host-owned logging lives in [Cohesive.Host](../../Cohesive.Host/README.md#private-process-failure-logging).
+Use `AddCohesiveTransitionFailureLogging(process)` from `Cohesive.Host.Services` before building the
+native host. It is independent of ASP.NET routing and works in background workers too.

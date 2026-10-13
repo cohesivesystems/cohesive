@@ -31,6 +31,15 @@ public interface IServiceInvocationAuthorization
     ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceOperation operation, EntitySnapshot snapshot);
 }
 
+/// <summary>Stable diagnostics shared by direct and process-hosted entity bindings.</summary>
+public static class ServiceBindingDiagnosticCodes
+{
+    /// <summary>The transition observation differs from entity authority.</summary>
+    public const string ObservationMismatch = "services.binding.observationMismatch";
+    /// <summary>The native repository cannot commit entity state and receipt atomically.</summary>
+    public const string ReceiptCapabilityMissing = "services.binding.receiptCapabilityMissing";
+}
+
 /// <summary>Structured declaration/binding diagnostics retained for human and agent inspection.</summary>
 public sealed class ServiceBindingValidationException : ArgumentException
 {
@@ -70,7 +79,7 @@ public sealed class ServiceTransitionBinding : ServiceBinding
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         EntityBinding = new(entity, repository);
         if (plan.Definition.Observation != ValueContract.FromShape(entity.Shape))
-            throw ServiceBindingValidationException.Error("services.binding.observationMismatch",
+            throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.ObservationMismatch,
                 "The plan observation contract must match the bound entity state contract.", "/binding/entity");
 
     }

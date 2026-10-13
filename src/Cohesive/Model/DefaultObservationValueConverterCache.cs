@@ -299,7 +299,7 @@ static class DefaultObservationValueConverterCache
                 Expression.Constant(propertyName),
                 ConverterConstant(propertyType, converter),
                 Expression.Constant(hasExplicitDefault),
-                Expression.Constant(explicitDefault),
+                Expression.Constant(explicitDefault, typeof(object)),
                 Expression.Constant(strict));
 
         static ConstantExpression ConverterConstant(Type targetType, Delegate converter) =>

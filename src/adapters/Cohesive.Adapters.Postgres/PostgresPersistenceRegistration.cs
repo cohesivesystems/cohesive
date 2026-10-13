@@ -45,17 +45,19 @@ public sealed partial class PostgresPersistenceRegistration
     /// <param name="entity">Exact entity handle registered on this persistence binding.</param>
     /// <param name="selectEntityId">Optional explicit typed-write identity selector; otherwise compiled from the registered canonical identity field at setup.</param>
     /// <param name="selectVersion">Optional typed-write semantic version selector; otherwise existing Version/zero conventions apply.</param>
+    /// <param name="transitionReceipts">Optional schema-validated receipt storage bound to this same native data source.</param>
     /// <returns>A repository using the registered mapping and caller-owned native data source.</returns>
     /// <exception cref="ArgumentNullException">Entity is null.</exception>
     /// <exception cref="InvalidOperationException">The exact entity definition has not been registered, or its identity cannot be mapped to one readable property.</exception>
     public IEntityRepository<T> Repository<T>(DomainEntity<T> entity,
-        Func<T, string>? selectEntityId = null, Func<T, long>? selectVersion = null) where T : notnull
+        Func<T, string>? selectEntityId = null, Func<T, long>? selectVersion = null,
+        PostgresTransitionReceiptStorage? transitionReceipts = null) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(entity);
         if (!tables.TryGetValue(entity.Definition.StateShape.QualifiedId, out var attachment)
             || !ReferenceEquals(attachment.Entity, entity.Definition))
             throw new InvalidOperationException("Register this exact entity before creating its repository.");
-        return new TypedEntityRepository<T>(new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping),
+        return new TypedEntityRepository<T>(new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping, transitionReceipts),
             selectEntityId, selectVersion);
     }
 

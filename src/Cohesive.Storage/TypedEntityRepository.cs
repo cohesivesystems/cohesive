@@ -22,6 +22,12 @@ public sealed class TypedEntityRepository<TEntity>(
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
 
+    /// <inheritdoc />
+    public EntityCreationCapabilities CreationCapabilities => repository.CreationCapabilities;
+    /// <inheritdoc />
+    public Task<EntitySnapshot> Create(OperationContext context, EntityObservationSnapshot entity, EntityCreationPolicy policy) =>
+        repository.Create(context, entity, policy);
+
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;
 
@@ -132,6 +138,12 @@ public sealed class TypedEntityOutboxRepository<TEntity>(
 
     /// <summary>Gets the entity definition.</summary>
     public EntityDefinition EntityDefinition => repository.EntityDefinition;
+
+    /// <inheritdoc />
+    public EntityCreationCapabilities CreationCapabilities => repository.CreationCapabilities;
+    /// <inheritdoc />
+    public Task<EntitySnapshot> Create(OperationContext context, EntityObservationSnapshot entity, EntityCreationPolicy policy) =>
+        repository.Create(context, entity, policy);
 
     /// <summary>Gets the entity type.</summary>
     public string EntityType => repository.EntityType;

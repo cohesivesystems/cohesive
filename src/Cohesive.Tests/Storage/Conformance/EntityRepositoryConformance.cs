@@ -8,7 +8,7 @@ using Cohesive.Transitions.Execution;
 namespace Cohesive.Tests.Storage.Conformance;
 
 // Linked into the separate SQLite test assembly: one set of assertions, no test framework in production packages.
-public enum RepositoryProbe { ScalarRoundTrip, CasFence, OrderedPartialBatch, AtomicBatch, DirectOutbox, OperationReceipt }
+public enum RepositoryProbe { ScalarRoundTrip, CasFence, OrderedPartialBatch, AtomicBatch, DirectOutbox, OperationReceipt, ReceiptRace, ReceiptStaleFence, CreationReceipt, CreationSubjectConflict }
 
 public static class EntityRepositoryConformance
 {
@@ -24,6 +24,10 @@ public static class EntityRepositoryConformance
         RepositoryProbe.AtomicBatch => AtomicBatch(repository),
         RepositoryProbe.DirectOutbox => DirectOutbox(Assert.IsAssignableFrom<IEntityOutboxRepository>(repository)),
         RepositoryProbe.OperationReceipt => OperationReceipt(repository),
+        RepositoryProbe.ReceiptRace => EntityTransitionReceiptConformance.ConcurrentReplay(repository),
+        RepositoryProbe.ReceiptStaleFence => EntityTransitionReceiptConformance.StaleFence(repository),
+        RepositoryProbe.CreationSubjectConflict => EntityTransitionReceiptConformance.Creation(repository, existingSubject: true),
+        RepositoryProbe.CreationReceipt => EntityTransitionReceiptConformance.Creation(repository),
         _ => throw new ArgumentOutOfRangeException(nameof(probe))
     };
 

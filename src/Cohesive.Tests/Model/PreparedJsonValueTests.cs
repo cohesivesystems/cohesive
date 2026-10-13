@@ -11,6 +11,20 @@ public sealed class PreparedJsonValueTests
     public sealed record Customized([property: JsonPropertyName("n")] int Number);
     public sealed class RequiredRow { public required string Name { get; init; } }
 
+    public sealed record OptionalValueDefaults(bool Accepted = false, int Attempts = 3);
+
+    [Theory]
+    [InlineData("{}", false, 3)]
+    [InlineData("{\"Accepted\":true,\"Attempts\":7}", true, 7)]
+    public void Optional_value_type_constructor_defaults_prepare_and_decode(string json, bool accepted, int attempts)
+    {
+        var value = ObservationValue.FromObject(System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json));
+        var convert = ObservationMaterializer.PrepareJsonValue<OptionalValueDefaults>();
+        var expected = new OptionalValueDefaults(accepted, attempts);
+        Assert.Equal(expected, convert(value));
+        Assert.Equal(expected, value.Deserialize<OptionalValueDefaults>());
+    }
+
     [Theory]
     [InlineData("{\"Number\":7,\"Name\":\"row\",\"Items\":[{\"Value\":3}]}")]
     [InlineData("{\"number\":7,\"name\":\"ignored\",\"items\":[{\"value\":3}]}")]

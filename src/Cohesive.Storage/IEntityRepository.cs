@@ -40,6 +40,22 @@ public interface IEntityRepository
     /// </summary>
     Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null);
 
+    /// <summary>Native creation guarantees to check at registration.</summary>
+    EntityCreationCapabilities CreationCapabilities => EntityCreationCapabilities.ReplacementOnly;
+
+    /// <summary>Creates one observation according to an explicit existing-state policy.</summary>
+    /// <param name="context">Invocation context and cancellation.</param>
+    /// <param name="entity">Complete initial observation; no existing concurrency token is accepted.</param>
+    /// <param name="policy">Atomic absence or unconditional replacement.</param>
+    /// <returns>The newly committed snapshot.</returns>
+    /// <exception cref="NotSupportedException">This repository lacks atomic creation.</exception>
+    /// <exception cref="ObservationConcurrencyConflictException">The subject already exists.</exception>
+    Task<EntitySnapshot> Create(OperationContext context, EntityObservationSnapshot entity, EntityCreationPolicy policy)
+    {
+        EntityCreationCapabilities.ReplacementOnly.Require(policy);
+        return Upsert(context, new(entity));
+    }
+
     /// <summary>
     /// Upserts one observation snapshot.
     /// </summary>

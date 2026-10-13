@@ -1374,3 +1374,48 @@ WarmupCount=3
 | WarmInvoke               | True         | 22.840 μs |   0.6118 μs |  0.0335 μs | 10.0098 | 0.8545 |  81.87 KB |
 
 The final warm observations are 2.629 us / 16.89 KB disabled and 22.840 us / 81.87 KB enabled, compared with frozen-profile trace-only 2.620 us / 16.88 KB and 22.945 us / 81.86 KB. Short-job confidence intervals do not establish timing equivalence. The additional timestamp field adds a small retained per-invocation cost; metric recording without listeners has a separate zero-allocation regression. Existing startup/provider/export exclusions apply.
+
+
+## Receipt read integrity boundary (2026-10-07)
+
+Command: `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*TransitionReceiptValidationBenchmarks*' --job short --warmupCount 3 --iterationCount 3`.
+Apple M5 Max, macOS 27.0.1, .NET 10.0.5 arm64, SDK 10.0.201. Warm frozen serializer metadata;
+one canonical process receipt per operation. PayloadBytes is the fixture binary field size, not total wire size.
+The baseline hashes and deserializes (including constructor fingerprint validation); full validation also
+re-encodes and compares canonical bytes, as retained receipt readers do. SQL/network and provider envelope
+checks are excluded. This is a cost characterization, not a before/after optimization or end-to-end claim.
+
+| Binary field | Hash + decode | Full validation | Allocations: baseline / full |
+|---|---:|---:|---:|
+| 32 B | 221.7 µs | 223.2 µs | 137.35 / 226.11 KiB |
+| 16 KiB | 227.4 µs | 486.8 µs | 358.82 / 802.21 KiB |
+
+Three measurement iterations yield wide timing confidence intervals; do not infer a small speed difference.
+The allocation increase is material and scales with payload. Integrity checks remain in place; a future
+optimization must prove canonical/fingerprint equivalence and corruption rejection. No unbounded receipt
+cache or trust bypass was introduced. Benchmark source remains runnable for longer measurements.
+
+
+## Native receipt commit read amplification (2026-10-07)
+
+`PostgresRepositoryConformanceTests.Fresh_native_commits_remove_the_external_receipt_round_trip` is a
+reproducible native measurement and deterministic command-count regression. Set
+`COHESIVE_POSTGRES_TEST_CONNECTION_STRING` to a disposable PostgreSQL database and run that filtered Release
+test with `--logger 'console;verbosity=detailed'`. It uses an isolated schema, two warm-up pairs, then 30
+alternating pairs of fresh existing-entity commits. State seeding, decision preparation and schema admission
+are outside the timer. The former preflight is reconstructed by an explicit receipt lookup before the same
+native commit, isolating its extra work. Npgsql completion logging counts actual receipt SELECT commands.
+
+On local PostgreSQL 17 (Docker, loopback), M5 Max/.NET 10.0.5, the intermediate implementation measured **2.934 ms** per
+former-preflight commit versus **2.648 ms** write-first. Receipt SELECTs deterministically changed **2 → 1**
+(the remaining query was the in-transaction existence fence). The subsequent implementation removes that
+fence read as well and resolves native unique violations after rollback. The same native command-count test
+now asserts **1 → 0** receipt SELECTs (optional external lookup versus no lookup); the timings above describe
+the intermediate implementation, not a measurement of the final change. Timing has no pass/fail threshold
+and is not a production latency claim. Shared protocol unit tests independently require zero external receipt reads on
+success and no retry/read after an ambiguous failure. Creation uses the same success path; native conformance
+checks its presence fence and replacement replay. Cosmos is not live-qualified by these measurements.
+
+Receipt decoding remains costly as characterized above. The SQL commit path performs no receipt read inside
+its transaction; a retained receipt is decoded once during conflict resolution after rollback.
+Integrity validation and canonical fingerprint semantics are unchanged.

@@ -9,7 +9,8 @@ public sealed record SubmitOrder(string OrderId);
 /// <summary>Domain outcome of an order submission attempt.</summary>
 /// <param name="Status">Order lifecycle state reported by the decision.</param>
 /// <param name="Reason">Explanation of the submission result.</param>
-public sealed record SubmitOrderResult(string Status, string Reason);
+/// <param name="Accepted">Whether submission succeeded; processes must not branch on display text.</param>
+public sealed record SubmitOrderResult(string Status, string Reason, bool Accepted = false);
 
 /// <summary>POCO-authored order lifecycle; preparation belongs to application binding.</summary>
 public static class OrderTransitions
@@ -22,5 +23,5 @@ public static class OrderTransitions
                     (order, _) => new SubmitOrderResult(order.Status, "Order identity does not match."))
                 .Requires((order, _) => order.Status == "Draft", (order, _) => new SubmitOrderResult(order.Status, "Order must be Draft to submit."))
                 .Set(order => order.Status, "Submitted")
-                .Return(new SubmitOrderResult("Submitted", "Order submitted.")));
+                .Return(new SubmitOrderResult("Submitted", "Order submitted.", true)));
 }
