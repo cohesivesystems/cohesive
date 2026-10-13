@@ -2,12 +2,14 @@ using System.Collections;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
+using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Realization;
+using Xunit.Abstractions;
 
 namespace Cohesive.Relations.Tests;
 
-public sealed class RealizationAllocationTests
+public sealed class RealizationAllocationTests(ITestOutputHelper output)
 {
     [Fact]
     public void SequenceKeysRetainLengthPrefixesAndEnumerateOnce()
@@ -52,6 +54,43 @@ public sealed class RealizationAllocationTests
         var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.Equal(expected, actual);
         Assert.True(allocated < 16 * 1024, $"Fingerprint allocated {allocated} bytes for a large scalar.");
+    }
+
+    [Fact]
+    public void WarmNativeRealizationHasBoundedProofPreparationAllocations()
+    {
+        var plan = new RelationQueryCompiledPlanReference("compiler/test", "schema/v1",
+            new("sha256", "definition/v1", "definition"), new("sha256", "shapes/v1", "shapes"), null,
+            new("sha256", "demand/v1", "demand"), [new("input/test")]);
+        var requirements = Enumerable.Range(0, 64).Select(i =>
+            new RelationQueryRealizationRequirement(new($"requirement/{i:D4}"),
+                new ExpressionRelationQueryCapability(new($"expression/{i:D4}"), ExprCapabilityRequirementKind.Operation))).ToImmutableArray();
+        var profile = new RelationQueryTargetCapabilityProfile(new("target/test"), new("target/test/v1"),
+            [plan.DefinitionSchemaVersion], [plan.CompilerProfile],
+            requirements.SelectMany((requirement, i) => new[]
+            {
+                new RelationQueryTargetCapabilityEvidence(new($"evidence/{i:D4}/a"), requirement.Capability),
+                new RelationQueryTargetCapabilityEvidence(new($"evidence/{i:D4}/b"), requirement.Capability)
+            }).ToImmutableArray());
+        var policy = new RelationQueryRealizationPolicy(new("policy/test"), "conventions/v1");
+        var expected = RelationQueryRealizationCompiler.Match(plan, requirements, profile, policy);
+        Assert.True(expected.IsRealizable);
+        Assert.Equal(64, expected.Decisions.Length);
+        Assert.All(expected.Decisions, decision => Assert.Equal(2,
+            Assert.IsType<NativeRelationQueryRealizationDecision>(decision).CapabilityEvidence.Length));
+        for (var i = 0; i < 4; i++) RelationQueryRealizationCompiler.Match(plan, requirements, profile, policy);
+        var samples = new long[7];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var actual = RelationQueryRealizationCompiler.Match(plan, requirements, profile, policy);
+            samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(expected.Fingerprint, actual.Fingerprint);
+        }
+        Array.Sort(samples);
+        var median = samples[samples.Length / 2];
+        output.WriteLine($"Warm 64-requirement realization: {median} bytes (median of seven).");
+        Assert.True(median < 1_150_000, $"Realization allocated {median} bytes.");
     }
 
     static string PreviousKey(IEnumerable<string?> values)
