@@ -297,8 +297,8 @@ public sealed class StrictDocumentJsonTests
         var streamed = StrictDocumentJson.ComputeCanonicalSha256(value, options);
         var streamedAllocation = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.Equal(SHA256.HashData(canonical), streamed);
-        Assert.True(contiguousAllocation - streamedAllocation > canonical.Length,
-            $"Canonical output {canonical.Length} bytes; contiguous allocated {contiguousAllocation}, streamed {streamedAllocation}.");
+        Assert.InRange(contiguousAllocation, canonical.Length, canonical.Length + 1_024);
+        Assert.InRange(streamedAllocation, 0, 1_024);
     }
 
     [Fact]

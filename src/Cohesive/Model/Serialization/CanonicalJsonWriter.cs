@@ -330,7 +330,7 @@ public static class CanonicalJsonWriter
         ArgumentNullException.ThrowIfNull(getArrayOrdering);
         if (!Enum.IsDefined(numberSemantics))
             throw new ArgumentOutOfRangeException(nameof(numberSemantics), numberSemantics, "Unsupported canonical JSON number semantics.");
-        ArrayBufferWriter<byte> buffer = new();
+        using PooledByteBufferWriter buffer = new();
         using (var writer = CreateElementWriter(buffer))
             WriteCanonical(writer, element, getArrayOrdering, numberSemantics);
         return buffer.WrittenSpan.ToArray();
@@ -339,7 +339,7 @@ public static class CanonicalJsonWriter
     // Typed strict documents use the same exact-number sequence profile as execution documents.
     internal static byte[] GetCanonicalSequenceBytes(JsonElement element)
     {
-        ArrayBufferWriter<byte> buffer = new();
+        using PooledByteBufferWriter buffer = new();
         using (var writer = CreateElementWriter(buffer))
             WriteCanonicalSequence(writer, element);
         return buffer.WrittenSpan.ToArray();
@@ -348,6 +348,25 @@ public static class CanonicalJsonWriter
     internal static byte[] ComputeCanonicalSequenceSha256(JsonElement element) =>
         ComputeCanonicalSequenceSha256(element, CanonicalJsonSequenceProfile.ExactDecimalRational,
             new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+
+    /// <summary>Returns owned canonical text using the shared sequence traversal and pooled temporary UTF-8 output.</summary>
+    /// <param name="element">Borrowed immutable JSON; neither modified nor retained.</param>
+    /// <param name="profile">Numeric and repeated-property semantics; keys use ordinal UTF-16 ordering.</param>
+    /// <param name="writerOptions">Escaping and validation policy, identical to direct sequence writing.</param>
+    /// <param name="exclusions">Reusable exact property omissions, applied during the shared traversal.</param>
+    /// <returns>Caller-owned canonical JSON text, independent of pooled output storage.</returns>
+    /// <remarks>Temporary capacity grows with output size and is cleared when returned to the shared pool.</remarks>
+    /// <exception cref="ArgumentOutOfRangeException">The profile is unsupported.</exception>
+    /// <exception cref="ArgumentException">The strict profile encounters repeated property names.</exception>
+    /// <exception cref="InvalidOperationException">JSON is undefined, disposed or has malformed surrogate escapes.</exception>
+    public static string GetCanonicalSequenceText(JsonElement element, CanonicalJsonSequenceProfile profile,
+        JsonWriterOptions writerOptions = default, CanonicalJsonPropertyExclusions? exclusions = null)
+    {
+        using PooledByteBufferWriter output = new();
+        using (var writer = new Utf8JsonWriter(output, writerOptions))
+            WriteCanonicalSequence(writer, element, profile, exclusions);
+        return Encoding.UTF8.GetString(output.WrittenSpan);
+    }
 
     static Utf8JsonWriter CreateElementWriter(IBufferWriter<byte> output) => new(output, new JsonWriterOptions
     {
@@ -818,7 +837,7 @@ public static class CanonicalJsonWriter
         Func<CanonicalJsonArrayPath, CanonicalJsonArrayOrdering>? getArrayOrdering,
         CanonicalJsonNumberSemantics numberSemantics)
     {
-        ArrayBufferWriter<byte> buffer = new();
+        using PooledByteBufferWriter buffer = new();
         using (Utf8JsonWriter writer = new(buffer, new JsonWriterOptions
         {
             Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,

@@ -1,0 +1,7 @@
+Method,Rows,Mean,Error,Allocated
+GrowingArray,1,325.8 ns,137.61 ns,552 B
+PooledOutput,1,323.5 ns,43.45 ns,272 B
+GrowingArray,128,"40,960.8 ns","96,083.54 ns",41273 B
+PooledOutput,128,"37,708.7 ns","4,659.50 ns",10456 B
+GrowingArray,4096,"1,263,083.4 ns","70,229.73 ns",1446367 B
+PooledOutput,4096,"1,210,448.8 ns","19,716.78 ns",335773 B
