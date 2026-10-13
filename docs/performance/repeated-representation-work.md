@@ -109,3 +109,11 @@ Duplicate failure tests include nested escaped paths, decoded equal names and co
 source/canonical ordering. Existing execution-definition and strict wire tests retain
 external admission, malformed input and typed-wire equality coverage. Envelope admission
 and public component validation scans remain where their independent diagnostics require them.
+
+## Qualification
+
+The complete dependent stack passes 5,667 Release tests with 22 infrastructure skips.
+A disposable PostgreSQL 17 instance enables native and existing provider tests locally.
+Benchmark harnesses are opt-in and are not added to the unit-suite timing boundary.
+The optional native regression runs when COHESIVE_POSTGRES_TEST_CONNECTION_STRING is set.
+Existing CI workflow configuration is unchanged.
