@@ -30,11 +30,14 @@ public sealed class ExecutionPreparationReuseTests
         var document = Create(new MutablePayload(["original"]));
         BlockingPayload.Entered.Reset();
         BlockingPayload.Release.Reset();
-        var first = Task.Run(() => document.GetDefinition<BlockingPayload>());
+        // Both operations must start independently of thread-pool starvation caused by unrelated tests.
+        var first = Task.Factory.StartNew(() => document.GetDefinition<BlockingPayload>(),
+            CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         try
         {
             Assert.True(BlockingPayload.Entered.Wait(TimeSpan.FromSeconds(5)));
-            var second = Task.Run(() => document.GetDefinition<IndependentPayload>());
+            var second = Task.Factory.StartNew(() => document.GetDefinition<IndependentPayload>(),
+                CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
             var result = await second.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal("original", result.Values[0]);
             Assert.False(first.IsCompleted);
