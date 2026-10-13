@@ -320,6 +320,12 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
     readonly IRelationRequirementGapPolicy requirementGapPolicy;
     readonly ConditionalWeakTable<RelationQueryCompilationRequest, PreparationCacheEntry> preparations = new();
 
+    // Static compilation depends only on the exact immutable request, so evaluators that differ only in placement,
+    // source readers or policy share it. Sharing the plan instance also lets an interpreter's per-plan realization
+    // cache apply across evaluators. Placement and physical planning remain evaluator-scoped.
+    static readonly ConditionalWeakTable<RelationQueryCompilationRequest, PreparationSlot<RelationQueryCompilationResult>>
+        SharedCompilations = new();
+
     /// <summary>
     /// Creates a convention-configured evaluator for relations whose only input is a supplied root set.
     /// </summary>
@@ -364,7 +370,9 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
     /// <summary>Creates a canonical evaluator over explicit placement policy and source readers.</summary>
     /// <remarks>
     /// Static compilation, realization, placement, and physical planning are weakly cached for the lifetime of an
-    /// exact <see cref="RelationQueryCompilationRequest"/> instance. <paramref name="createPlacement"/> must
+    /// exact <see cref="RelationQueryCompilationRequest"/> instance. Static compilation is shared by every evaluator
+    /// over that request, so an interpreter's per-plan realization is shared too; placement and physical planning
+    /// remain scoped to this evaluator. <paramref name="createPlacement"/> must
     /// therefore be deterministic for a compiled plan and return an immutable reusable placement. Runtime inputs,
     /// source reads, execution, and interpretation are never cached. A preparation exception removes the entry so a
     /// later evaluation may retry.
@@ -623,7 +631,8 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
 
     sealed class PreparationCacheEntry(RelationQueryEvaluator evaluator, RelationQueryCompilationRequest request)
     {
-        readonly PreparationSlot<RelationQueryCompilationResult> compilation = new();
+        readonly PreparationSlot<RelationQueryCompilationResult> compilation =
+            SharedCompilations.GetValue(request, static _ => new());
         readonly PreparationSlot<EvaluationPreparation> preparation = new();
         internal bool IsCompiled => compilation.IsPrepared;
         public RelationQueryCompilationResult Compilation => compilation.Get(request,

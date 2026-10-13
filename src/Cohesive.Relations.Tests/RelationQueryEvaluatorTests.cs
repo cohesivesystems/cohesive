@@ -323,6 +323,38 @@ public sealed class RelationQueryEvaluatorTests
     }
 
     [Fact]
+    public async Task EvaluateAsync_SharesRequestScopedCompilationAndRealizationAcrossEvaluators()
+    {
+        // Hosts commonly create one evaluator per tenant placement over a shared immutable request.
+        RelationQueryCompilationRequest compilation = new(
+            CreateParameterizedQueryDocument(),
+            LoadCustomerRelationFixture.ShapeGraphDocuments,
+            LoadCustomerRelationFixture.RelationshipCatalogDocument);
+        RelationQueryEvaluation Evaluation(string id) => compilation
+            .Evaluate(new($"tests/query/{id}"))
+            .Set(LoadCustomerRelationFixture.StatusParameterId, ObservationValue.FromString("Open"))
+            .Build();
+        var first = Evaluation("first");
+        var second = Evaluation("second");
+        var placements = 0;
+        RelationQueryEvaluator Create() => CreateEvaluator(
+            first,
+            loadRows: [Load("load-1", "customer-1", "Open", 12m)],
+            customerRows: [Customer("customer-1", "Acme", "Priority")],
+            afterPlacement: () => placements++);
+
+        var firstOutcome = await Create().EvaluateAsync(first);
+        var secondOutcome = await Create().EvaluateAsync(second);
+
+        Assert.Same(firstOutcome.Compilation, secondOutcome.Compilation);
+        Assert.Same(firstOutcome.Realization, secondOutcome.Realization);
+        Assert.Equal(2, placements);
+        Assert.NotSame(firstOutcome.Placement, secondOutcome.Placement);
+        Assert.NotSame(firstOutcome.PhysicalPlanning, secondOutcome.PhysicalPlanning);
+        Assert.True(firstOutcome.IsSuccessful && secondOutcome.IsSuccessful);
+    }
+
+    [Fact]
     public async Task EvaluateAsync_ReusesPreparationForTheExactCompilationRequestWithoutRetainingParameters()
     {
         RelationQueryCompilationRequest compilation = new(
