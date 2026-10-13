@@ -260,6 +260,23 @@ public static class ServiceEndpointRouteBuilderExtensions
         MapProcess<TCommand, ExecutionControlResult>(endpoints, declaration, resolveRuntime, operationId, route,
             (runtime, context, request) => runtime.ControlAsync(context, operationId, request), authorizationPolicyResolver, scopePolicies);
 
+    /// <summary>Maps a typed service process with its input type as the JSON request body.</summary>
+    /// <typeparam name="TInput">Canonical process input and request body.</typeparam>
+    /// <typeparam name="TOutput">Canonical process output.</typeparam>
+    /// <param name="endpoints">Endpoint route builder.</param>
+    /// <param name="hosted">Caller-owned prepared service.</param>
+    /// <param name="route">HTTP route template.</param>
+    /// <param name="method">HTTP method; defaults to POST.</param>
+    /// <param name="authorizationPolicyResolver">Optional native authorization policy resolver.</param>
+    /// <param name="scopePolicies">Optional transport scope policies.</param>
+    /// <returns>The mapped endpoint with canonical metadata.</returns>
+    public static RouteHandlerBuilder MapServiceEphemeralProcess<TInput, TOutput>(this IEndpointRouteBuilder endpoints,
+        HostedServiceProcess<TInput, TOutput> hosted, string route, string method = "POST",
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null,
+        IReadOnlyList<ApiScopePolicy>? scopePolicies = null) =>
+        endpoints.MapServiceEphemeralProcess(hosted, new HttpBinding(method, route, [], new(typeof(TInput))),
+            authorizationPolicyResolver, scopePolicies);
+
     /// <summary>Maps an already prepared typed service process without repeating its canonical operation.</summary>
     /// <typeparam name="TInput">Canonical process input.</typeparam>
     /// <typeparam name="TOutput">Canonical process output.</typeparam>

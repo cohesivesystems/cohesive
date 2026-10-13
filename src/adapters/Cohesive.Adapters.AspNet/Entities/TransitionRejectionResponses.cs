@@ -51,7 +51,9 @@ public sealed class TransitionRejectionResponses<TCode> where TCode : struct, En
         return code =>
         {
             if (!prepared.TryGetValue(code, out var response) || response.Problem is not { } problem)
-                throw new InvalidOperationException("Transition returned an outcome declared not to be a rejection.");
+                return TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError,
+                    title: "Invalid transition outcome", detail: "The transition produced an inconsistent rejection outcome.",
+                    extensions: new Dictionary<string, object?> { ["code"] = "cohesive.transitions.rejection_mapping_invalid" });
             return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: problem.Title,
                 detail: problem.Detail, extensions: new Dictionary<string, object?> { ["code"] = response.Code });
         };

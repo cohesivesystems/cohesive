@@ -490,7 +490,8 @@ Order identity is an opaque string throughout the entity, query parameters, rout
 UUID text is only the server's allocation choice; existing `order-123` identities also work through Get,
 Details, Availability and Submit without normalization. Submission has no application input;
 HTTP and Process invocation select the entity once. Its portable `Unit` contract retains the existing
-wire value `"()"`, rather than introducing a domain command enum. Inventory adjustment contracts remain unchanged.
+wire value `"()"`, rather than introducing a domain command enum. This is an explicit no-input
+authoring contract; existing default Unit inference is unchanged. Inventory adjustment contracts remain unchanged.
 
 `OrderStatus` and `SubmissionOutcome` lower into closed enum contracts with explicit serialized names.
 The shared Core wire-equivalence helper deliberately ignores enum names and member ordering while

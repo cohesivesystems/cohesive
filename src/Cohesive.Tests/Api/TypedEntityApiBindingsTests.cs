@@ -34,6 +34,38 @@ public sealed class TypedEntityApiBindingsTests
             .Set(state => state.Status, "Submitted").Return(new ClosedOutcome(SubmitCode.Applied)));
 
     [Fact]
+    public async Task Non_rejection_outcome_rejected_by_transition_returns_safe_problem_over_http()
+    {
+        var invalid = TransitionAuthoring.Create<Order, ClosedOutcome>(Entity.Shape, new("typed/invalid-rejection"), new("1"),
+            transition => transition.Requires(state => state.Status == "Never", state => new ClosedOutcome(SubmitCode.Applied))
+                .Return(new ClosedOutcome(SubmitCode.Applied)));
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddRequestOperationContext();
+        await using var app = builder.Build();
+        app.UseRequestOperationContext();
+        var repository = new InMemoryEntityOutboxRepository(Entity, partitionKeyFieldName: "Partition");
+        app.MapEntityApi<Order>(Entity, repository, "local", bindings => bindings
+            .Create("Create", "/orders", EntityCreationPolicy.IfAbsent, partition => new Order("one", partition, "Draft"),
+                state => state.Id, state => TypedResults.Created("/orders/one", state))
+            .Transition("Submit", "/orders/{id}/submit", invalid)
+            .OnApplied((state, outcome) => TypedResults.Ok(state))
+            .OnRejected(outcome => outcome.Code, "orders.submit", responses => responses
+                .Conflict(SubmitCode.NotDraft, "Cannot submit", "Order must be draft.").NotRejected(SubmitCode.Applied)));
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsync("/orders", null)).StatusCode);
+        var rejected = await client.PostAsync("/orders/one/submit", null);
+        Assert.Equal(HttpStatusCode.InternalServerError, rejected.StatusCode);
+        Assert.Equal("application/problem+json", rejected.Content.Headers.ContentType!.MediaType);
+        var body = await rejected.Content.ReadAsStringAsync();
+        Assert.Contains("cohesive.transitions.rejection_mapping_invalid", body);
+        Assert.DoesNotContain("Applied", body);
+        Assert.DoesNotContain("InvalidOperationException", body);
+        await app.StopAsync();
+    }
+
+    [Fact]
     public void No_input_authoring_retains_exact_unit_contract_after_serialization()
     {
         var bytes = Cohesive.Execution.ExecutionDefinitionJsonSerializer.GetCanonicalBytes(NoInputSubmit.Document);

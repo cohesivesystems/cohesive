@@ -43,22 +43,27 @@ public static class RequestIdentityContextServiceCollectionExtensions
     /// <summary>
     /// Adds request identity context enrichment.
     /// </summary>
+    /// <param name="services">Host-owned service collection.</param>
+    /// <param name="configure">Optional request scope selection settings.</param>
+    /// <returns>The same service collection.</returns>
+    /// <exception cref="InvalidOperationException">A fixed request identity is already registered.</exception>
     public static IServiceCollection AddRequestIdentityContext(
         this IServiceCollection services,
         Action<RequestIdentityContextOptions>? configure = null
         )
-        {
-            ArgumentNullException.ThrowIfNull(services);
-            if (configure is not null)
-                services.Configure(configure);
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        OperationContextApplicationBuilderExtensions.RequireNoFixedIdentity(services);
+        if (configure is not null)
+            services.Configure(configure);
 
-            services.TryAddEnumerable(ServiceDescriptor.Singleton<IApiStructuredResourceIdParser, ScopedProcessInstanceIdStructuredResourceIdParser>());
-            services.TryAddEnumerable(ServiceDescriptor.Singleton<IApiScopeResourceSelectionResolver, StructuredResourceIdApiScopeResourceSelectionResolver>());
-            services.TryAddEnumerable(ServiceDescriptor.Scoped<IHttpOperationContextEnricher, RequestIdentityContextEnricher>());
-            services.TryAddEnumerable(ServiceDescriptor.Scoped<IHttpOperationContextEnricher, ApiScopePolicyEnforcementEnricher>());
-            return services;
-        }
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IApiStructuredResourceIdParser, ScopedProcessInstanceIdStructuredResourceIdParser>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IApiScopeResourceSelectionResolver, StructuredResourceIdApiScopeResourceSelectionResolver>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IHttpOperationContextEnricher, RequestIdentityContextEnricher>());
+        services.TryAddEnumerable(ServiceDescriptor.Scoped<IHttpOperationContextEnricher, ApiScopePolicyEnforcementEnricher>());
+        return services;
     }
+}
 
 sealed class RequestIdentityContextEnricher(
     IOptions<RequestIdentityContextOptions> options,

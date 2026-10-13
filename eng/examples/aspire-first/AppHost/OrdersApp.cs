@@ -78,8 +78,8 @@ public static class OrdersApp
             id: new("example/orders/local"),
             variant: new("development"),
             associations => associations
-                .Resource(Store, database, postgresImplementation, new("aspire/example/orders"))
-                .Workload(Worker, worker, dotnetProjectImplementation)
+                .Resource(Store, database, postgresImplementation, new("aspire/example/orders"), [Source])
+                .Workload(Worker, worker, dotnetProjectImplementation, [Source])
             );
     }
 }

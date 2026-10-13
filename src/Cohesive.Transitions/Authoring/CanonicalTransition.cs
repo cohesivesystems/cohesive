@@ -159,7 +159,9 @@ public static class TransitionAuthoring
     /// <param name="sourceMember">Compiler-supplied member.</param>
     /// <returns>A canonical transition with the singleton Unit input contract.</returns>
     /// <remarks>Unit retains its existing portable wire value "()". No new domain enum or optional payload
-    /// convention is introduced. Typed HTTP and Process bindings supply Unit automatically.</remarks>
+    /// convention is introduced. Only this no-input overload opts into the singleton contract; default CLR
+    /// mapping and payload-bearing Unit declarations retain their existing contracts. Typed HTTP and Process
+    /// bindings supply Unit automatically.</remarks>
     /// <exception cref="ArgumentException">Shape or metadata is invalid.</exception>
     /// <exception cref="ArgumentNullException">Shape or configure is null.</exception>
     /// <exception cref="TransitionExpressionTranslationException">Authoring is outside the portable subset.</exception>
@@ -168,7 +170,13 @@ public static class TransitionAuthoring
         Action<TransitionBuilder<TEntity, Cohesive.Prelude.Unit, TOutcome>> configure,
         [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
         [CallerMemberName] string sourceMember = "") where TEntity : notnull =>
-        Create<TEntity, Cohesive.Prelude.Unit, TOutcome>(entityShape, id, revision, configure, sourceFile, sourceLine, sourceMember);
+        Create(entityShape, new TransitionAuthoringMetadata(id, revision, new($"{id.Value}/body"),
+                new(new(Producer), new(id.Value), DocumentOrigin.Generated)),
+            configure, sourceFile, sourceLine, sourceMember,
+            typeRefMapper: new DefaultClrTypeRefMapper(new Dictionary<Type, TypeRef>
+            {
+                [typeof(Cohesive.Prelude.Unit)] = new EnumTypeRef("Unit", [Cohesive.Prelude.Unit.Value.ToString()])
+            }));
 
     /// <summary>Authors a transition with conventional body identity and generated producer provenance.</summary>
     /// <remarks>The caller owns stable definition and revision identities. Node defaults depend on authoring

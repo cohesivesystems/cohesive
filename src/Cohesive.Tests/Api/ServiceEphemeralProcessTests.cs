@@ -39,8 +39,8 @@ public sealed class ServiceEphemeralProcessTests
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(Context());
         await using var app = builder.Build();
-        app.MapServiceEphemeralProcess(hosted, new("POST", "/echo", [], new(typeof(string))),
-            (_, requirement) => requirement.Id);
+        app.MapServiceEphemeralProcess(hosted, route: "/echo",
+            authorizationPolicyResolver: (_, requirement) => requirement.Id);
         var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
         var http = new DefaultHttpContext { RequestServices = app.Services, TraceIdentifier = "typed/1" };
         var body = Encoding.UTF8.GetBytes("\"hello\"");
