@@ -89,3 +89,23 @@ Native PostgreSQL 17 integration qualifies ordered values, parameterized limits,
 byte overflow, cancellation, and the existing source-reader suite. Mock tests inspect
 command types and exact projection width. Outer-join absence remains distinct from SQL
 null; one-pass Core assignment tests cover null and undefined semantics.
+
+## Strict admission without duplicate success work
+
+Strict document admission now canonicalizes the already-parsed element directly. That
+walk rejects duplicate names; only duplicate failures rerun the source-order scanner to
+preserve the first depth-first JSON Pointer diagnostic. Imported or persisted documents
+still receive fresh validation. Case-insensitive serializer contracts keep their existing
+compatibility path. Internal compact type rematerialization likewise uses canonical
+validation once, replaying duplicate failures for precise diagnostics.
+
+A strict 128-field integer dictionary read falls from 51,168 B to 20,480 B. Both measured
+paths include parsing, typed deserialization, canonical evidence and comparison. The
+former-success-path harness reproduces the removed scanner and node materialization for
+valid input only; failure behavior belongs to regression tests, not that benchmark oracle.
+
+Run `dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --strict-read-allocations 32`.
+Duplicate failure tests include nested escaped paths, decoded equal names and conflicting
+source/canonical ordering. Existing execution-definition and strict wire tests retain
+external admission, malformed input and typed-wire equality coverage. Envelope admission
+and public component validation scans remain where their independent diagnostics require them.

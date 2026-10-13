@@ -11,3 +11,5 @@ fields-128,repeated-copy,681008
 fields-128,batch,28464
 fields-256,repeated-copy,2672688
 fields-256,batch,62800
+strict-document-128,former-success-path,51168
+strict-document-128,current,20480

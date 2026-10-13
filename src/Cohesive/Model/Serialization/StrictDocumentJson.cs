@@ -224,23 +224,29 @@ public static class StrictDocumentJson
                     "$");
                 return false;
             }
-            if (TryFindDuplicateProperty(parsed.RootElement, string.Empty, out var duplicateLocation))
-            {
-                error = new(
-                    StrictDocumentJsonReadFailure.DuplicateProperty,
-                    $"{contractName} JSON cannot contain duplicate object properties.",
-                    string.IsNullOrEmpty(duplicateLocation) ? "$" : duplicateLocation);
-                return false;
-            }
-
             try
             {
-                var node = JsonNode.Parse(parsed.RootElement.GetRawText(), documentOptions: new JsonDocumentOptions { MaxDepth = options.MaxDepth })
-                    ?? throw new InvalidOperationException($"Failed to materialize {contractName} JSON.");
-                persistedBytes = GetCanonicalBytes(node, options);
+                if (!options.PropertyNameCaseInsensitive)
+                    persistedBytes = CanonicalJsonWriter.GetCanonicalSequenceBytes(parsed.RootElement);
+                else
+                {
+                    var node = JsonNode.Parse(parsed.RootElement.GetRawText(), documentOptions: new JsonDocumentOptions { MaxDepth = options.MaxDepth })
+                        ?? throw new InvalidOperationException($"Failed to materialize {contractName} JSON.");
+                    persistedBytes = GetCanonicalBytes(node, options);
+                }
             }
             catch (Exception exception) when (IsCanonicalWireFailure(exception))
             {
+                // Strict canonicalization already checks names. Only failures need the source-order
+                // scan that supplies the existing precise, depth-first duplicate diagnostic.
+                if (exception is ArgumentException
+                    && TryFindDuplicateProperty(parsed.RootElement, string.Empty, out var duplicateLocation))
+                {
+                    error = new(StrictDocumentJsonReadFailure.DuplicateProperty,
+                        $"{contractName} JSON cannot contain duplicate object properties.",
+                        string.IsNullOrEmpty(duplicateLocation) ? "$" : duplicateLocation);
+                    return false;
+                }
                 error = new(StrictDocumentJsonReadFailure.InvalidJson, exception.Message, "$");
                 return false;
             }

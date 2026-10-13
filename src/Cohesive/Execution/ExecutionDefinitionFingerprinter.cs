@@ -163,7 +163,17 @@ public static class ExecutionDefinitionFingerprinter
     {
         ValidateDefinition(definition);
         using var writer = CreateCanonicalWriter(buffer);
-        CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
+        try
+        {
+            CanonicalJsonWriter.WriteCanonicalSequence(writer, definition);
+        }
+        catch (ArgumentException)
+        {
+            // The canonical walk rejects duplicates itself. Replay only a failure to preserve the
+            // original precise source-order diagnostic without scanning every rematerialized type.
+            ValidateDefinitionProperties(definition);
+            throw;
+        }
     }
 
     internal static string GetCanonicalDefinitionKey(JsonElement definition)
@@ -177,7 +187,6 @@ public static class ExecutionDefinitionFingerprinter
     {
         if (definition.ValueKind != JsonValueKind.Object)
             throw new ArgumentException("Canonical execution-definition content must be a JSON object.", nameof(definition));
-        ValidateDefinitionProperties(definition);
     }
 
     static byte[] GetNormalizedSemanticBytesCore(

@@ -9,6 +9,18 @@ namespace Cohesive.Tests.Model;
 
 public sealed class StrictDocumentJsonTests
 {
+    [Theory]
+    [InlineData("{\"outer\":{\"inner\":1,\"inner\":2},\"outer\":3}", "/outer/inner")]
+    [InlineData("{\"z\":1,\"z\":2,\"a\":{\"b\":1,\"b\":2}}", "/z")]
+    public void AdmissionKeepsSourceOrderDuplicateFailureBeforeDeserialization(string json, string expected)
+    {
+        Assert.False(StrictDocumentJson.TryReadCanonicalObject<TestDocument>(json,
+            StrictDocumentJson.CreateOptions(), "test", out var value, out var error));
+        Assert.Null(value);
+        Assert.Equal(StrictDocumentJsonReadFailure.DuplicateProperty, error.Failure);
+        Assert.Equal(expected, error.Location);
+    }
+
     [Fact]
     public void TypedObjectApi_WritesAndReadsOneCanonicalExactDecimalWire()
     {
