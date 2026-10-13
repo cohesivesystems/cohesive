@@ -3,7 +3,8 @@ using Cohesive.Adapters.Aspire;
 using Cohesive.Infra;
 using Cohesive.Infra.Realization;
 using Cohesive.Model;
-using static Cohesive.Infra.InfrastructureTargetImplementation;
+using AspireFirst.Orders;
+using Cohesive.Adapters.Postgres.Infra;
 
 namespace AspireFirst;
 
@@ -14,21 +15,22 @@ public static class OrdersApp
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
     public static InfrastructureNodeId Worker { get; } = new("workloads/orders");
-    /// <summary>Required relational persistence capability.</summary>
-    public static InfrastructureCapabilityId RelationalStorage { get; } = new("example/relational-storage");
+    /// <summary>Required single-statement snapshot for the exact Order Details query.</summary>
+    public static InfrastructureCapabilityId OrderDetailsSnapshot { get; } = PostgresInfrastructure.QuerySnapshot(FulfillmentQueries.OrderDetails.CompilationRequest);
     /// <summary>Required application execution capability.</summary>
-    public static InfrastructureCapabilityId ApplicationExecution { get; } = new("example/application-execution");
+    public static InfrastructureCapabilityId ApplicationExecution { get; } = AspireInfrastructure.DotNetProjectExecution;
 
     static readonly SourceReference Source = SourceReference.Create("example", "aspire-first/orders/v1");
 
     /// <summary>Canonical requirements, independent of native Aspire resource names and provider options.</summary>
     public static InfrastructureAuthoringResult Definition { get; } = Infrastructure.Define(
         id: new("example/orders"),
-        revision: new("1"),
+        revision: new("2"),
         bindingProfileId: new("example/orders/bindings"),
         infra =>
         {
-            infra.Resource(Store).Persistent().Requires(RelationalStorage);
+            infra.Resource(Store).Persistent().Requires(OrderDetailsSnapshot)
+                .Requires(PostgresInfrastructure.QuerySnapshot(FulfillmentQueries.ReservationAvailability.CompilationRequest));
             infra.Workload(Worker).Requires(ApplicationExecution).RequiresReady(Store);
         });
 
@@ -47,29 +49,10 @@ public static class OrdersApp
             .WithReference(database).WaitFor(database);
         _ = builder.AddContainer("native-only", "redis", "7.4");
 
-        // Declare PostgreSQL as the implementation of relational storage.
-        var postgresImplementation = ResourceImplementation(
-            id: new("example/postgres"),
-            evidence:
-            [
-                new InfrastructureCapabilityEvidence(
-                    id: new("example/postgres/relational"),
-                    capability: RelationalStorage,
-                    realization: CapabilityRealizationKind.Native,
-                    sourceReferences: [Source])
-            ]);
-
-        // Declare the .NET project as the implementation of application execution.
-        var dotnetProjectImplementation = WorkloadImplementation(
-            id: new("example/dotnet-project"),
-            evidence:
-            [
-                new InfrastructureCapabilityEvidence(
-                    id: new("example/dotnet/execution"),
-                    capability: ApplicationExecution,
-                    realization: CapabilityRealizationKind.Native,
-                    sourceReferences: [Source])
-            ]);
+        // Compile the same canonical queries and physical bindings used by the worker; no database IO.
+        var postgresImplementation = PostgresInfrastructure.QueryImplementation(new("example/postgres"),
+            FulfillmentStorage.Bindings.Prepare(FulfillmentQueries.OrderDetails.CompilationRequest),
+            FulfillmentStorage.Bindings.Prepare(FulfillmentQueries.ReservationAvailability.CompilationRequest));
 
         // Associate existing Aspire resources with the canonical requirements and implementations.
         return AspireInfrastructureAssociation.Attach(
@@ -79,7 +62,7 @@ public static class OrdersApp
             variant: new("development"),
             associations => associations
                 .Resource(Store, database, postgresImplementation, new("aspire/example/orders"), [Source])
-                .Workload(Worker, worker, dotnetProjectImplementation, [Source])
+                .Workload(Worker, worker, sources: [Source])
             );
     }
 }

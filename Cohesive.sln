@@ -206,6 +206,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "AppHost", "eng\examples\asp
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrderWorker", "eng\examples\aspire-first\OrderWorker\OrderWorker.csproj", "{397A3D5B-8F57-4AAF-B7B4-9C6654234B2D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Postgres.Infra", "src\adapters\Cohesive.Adapters.Postgres.Infra\Cohesive.Adapters.Postgres.Infra.csproj", "{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1344,6 +1346,18 @@ Global
 		{397A3D5B-8F57-4AAF-B7B4-9C6654234B2D}.Release|x64.Build.0 = Release|Any CPU
 		{397A3D5B-8F57-4AAF-B7B4-9C6654234B2D}.Release|x86.ActiveCfg = Release|Any CPU
 		{397A3D5B-8F57-4AAF-B7B4-9C6654234B2D}.Release|x86.Build.0 = Release|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Debug|x64.Build.0 = Debug|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Debug|x86.Build.0 = Debug|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Release|x64.ActiveCfg = Release|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Release|x64.Build.0 = Release|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Release|x86.ActiveCfg = Release|Any CPU
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1411,5 +1425,6 @@ Global
 		{CB5309FE-B147-B47F-CE5D-AC7BE1E38AE2} = {B36A84DF-456D-A817-6EDD-3EC3E7F6E11F}
 		{5B6CA203-159E-4974-AF66-658457E57141} = {CB5309FE-B147-B47F-CE5D-AC7BE1E38AE2}
 		{397A3D5B-8F57-4AAF-B7B4-9C6654234B2D} = {CB5309FE-B147-B47F-CE5D-AC7BE1E38AE2}
+		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0} = {3E9C3776-17C9-28DE-3735-A8B9F121C183}
 	EndGlobalSection
 EndGlobal

@@ -6,12 +6,13 @@ waits and volume configuration in native Aspire. It adds no second deployment in
 
 ## Read the flow
 
-1. `AppHost/OrdersApp.cs` declares two canonical nodes: order storage requires relational
-   persistence; the order application requires application execution and storage readiness.
+1. `AppHost/OrdersApp.cs` declares two canonical nodes: storage requires a single-statement snapshot
+   for each exact fulfillment query; the application requires .NET project execution and storage readiness.
 2. `Configure` creates the ordinary native AppHost: `AddPostgres().WithDataVolume()`,
    `AddDatabase`, `AddProject<Projects.OrderWorker>`, `WithReference` and `WaitFor`.
 3. `AspireInfrastructureAssociation.Attach` associates those **same** database/project
-   objects with the canonical nodes and explicit implementation evidence. Native names
+   objects with the canonical nodes. PostgreSQL evidence comes from prepared queries over
+   `FulfillmentStorage.Bindings`; project execution comes from native Aspire metadata. Native names
    supply physical identities; there is no repeated physical-name table. The PostgreSQL
    server, its password parameter and an illustrative Redis container remain Aspire-only.
 4. The existing target-deployment compiler matches requirements against evidence and

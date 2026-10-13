@@ -12,10 +12,7 @@ public static class FulfillmentStorage
     /// <exception cref="ArgumentNullException">Database is null.</exception>
     /// <exception cref="ArgumentException">An entity attachment or runtime binding is invalid.</exception>
     public static PostgresPersistenceRegistration Bind(NpgsqlDataSource database) =>
-        new PostgresPersistenceRegistration(new(new(FulfillmentResources.DatabaseName), database, "aspire-first/apphost"))
-            .Entity(FulfillmentDomain.Orders, Orders)
-            .Entity(FulfillmentDomain.Reservations, Reservations)
-            .Entity(FulfillmentDomain.Inventory, Inventory);
+        Bindings.Bind(new(new(FulfillmentResources.DatabaseName), database, "aspire-first/apphost"));
 
     /// <summary>Attaches only inventory to the separate remote database.</summary>
     /// <param name="database">Caller-owned inventory data source.</param>
@@ -49,5 +46,11 @@ public static class FulfillmentStorage
         .Partition(order => order.Partition, "partition_key")
         .Column(order => order.Status, "status")
         .Build();
+
+    /// <summary>One offline mapping authority shared by AppHost evidence and worker registration.</summary>
+    public static PostgresPersistenceBindings Bindings { get; } = new PostgresPersistenceBindings(new(FulfillmentResources.DatabaseName))
+        .Entity(FulfillmentDomain.Orders, Orders)
+        .Entity(FulfillmentDomain.Reservations, Reservations)
+        .Entity(FulfillmentDomain.Inventory, Inventory);
 
 }
