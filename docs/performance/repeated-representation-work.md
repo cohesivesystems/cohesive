@@ -43,12 +43,15 @@ Typed query rows, nested result carriers and transition outcomes prepare
 `ObservationMaterializer.PrepareJsonValue<T>()` when their binding is built. The existing
 Core converter engine interprets conventional CLR contracts directly. Plain JSON defaults
 remain separate from shape materialization's web defaults. Customized JSON attributes,
-required-member contracts, serializer callbacks and unsupported projections keep the
-compatibility path. Missing mutable properties preserve initializers and skip setters.
+required-member contracts and serializer callbacks keep the owning object's compatibility
+path. Customized or unsupported member types use a member-local compatibility projection;
+standard list interfaces project directly. Missing mutable properties preserve initializers
+and skip setters. Boxed value-type constructor defaults are typed explicitly as `object`
+in the prepared expression, preventing registration-time expression type mismatches.
 
 A record row with two nested child records allocates 1,368 B through JSON and 128 B through
 prepared interpretation. Those 128 B are independent result objects and their array;
-no mutable output is cached. The test's one-child variant has a fixed 128 B median ceiling.
+no mutable output is cached. The test's one-child variant has a 192 B median ceiling, leaving headroom above the 128 B owned result.
 Cold reflection and expression compilation are outside the warm measurement. Preparation
 is weakly keyed by CLR type and JSON contract, not tenant, authorization or parameter data.
 
@@ -117,3 +120,11 @@ A disposable PostgreSQL 17 instance enables native and existing provider tests l
 Benchmark harnesses are opt-in and are not added to the unit-suite timing boundary.
 The optional native regression runs when COHESIVE_POSTGRES_TEST_CONNECTION_STRING is set.
 Existing CI workflow configuration is unchanged.
+
+A mixed row with a 64 KiB immutable string, enum, read-only child list, base64 bytes and an
+observation member previously made the whole type fall back to JSON. With member-local
+compatibility it allocates 1,104 B rather than 132,728 B (median of seven warm synchronous
+reads, Release .NET 10/macOS). Mutable lists and byte arrays remain independent; the string
+can be shared. The 4 KiB regression ceiling rejects the alpha.138 binary. This is a typed-row
+microbenchmark, not a measured reduction of Ari's Process case. New differential cases
+cover value-type/nullable constructor defaults, `init` members and mixed-member failures.

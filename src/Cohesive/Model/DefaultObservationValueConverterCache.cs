@@ -59,6 +59,10 @@ static class DefaultObservationValueConverterCache
             {
                 var value = Expression.Parameter(typeof(ObservationValue), "value");
                 var body = BuildExpression(targetType, value);
+                // Keep a customized or unsupported member on its JSON contract without
+                // forcing its otherwise conventional parent through a full JSON round trip.
+                if (body is null && strict && !targetType.IsPointer && !targetType.IsByRefLike && !targetType.IsByRef)
+                    body = Expression.Call(GetGenericMethod(nameof(DeserializeStrict)).MakeGenericMethod(targetType), value);
                 if (body is null)
                 {
                     converters[targetType] = null;
@@ -155,6 +159,22 @@ static class DefaultObservationValueConverterCache
                 return elementConverter is null ? null : StrictContainer(targetType, value,
                     Expression.Call(ReadArrayMethod.MakeGenericMethod(elementType), value,
                         ConverterConstant(elementType, elementConverter)), ObservationValueKind.Array);
+            }
+
+            if (strict && targetType.IsGenericType && !HasJsonContractCustomization(targetType))
+            {
+                var definition = targetType.GetGenericTypeDefinition();
+                if (definition == typeof(List<>) || definition == typeof(IReadOnlyList<>)
+                    || definition == typeof(IReadOnlyCollection<>) || definition == typeof(IList<>)
+                    || definition == typeof(ICollection<>) || definition == typeof(IEnumerable<>))
+                {
+                    var element = targetType.GetGenericArguments()[0];
+                    var converter = Build(element);
+                    if (converter is not null)
+                        return StrictContainer(targetType, value, Expression.Convert(
+                            Expression.Call(GetGenericMethod(nameof(ReadList)).MakeGenericMethod(element),
+                                value, ConverterConstant(element, converter)), targetType), ObservationValueKind.Array);
+                }
             }
 
             return BuildConventionalObject(targetType, value);
@@ -354,6 +374,15 @@ static class DefaultObservationValueConverterCache
                 result[index] = converter(items[index]);
             }
 
+            return result;
+        }
+
+        static List<TElement>? ReadList<TElement>(ObservationValue value, Func<ObservationValue, TElement> converter)
+        {
+            if (value.Kind == ObservationValueKind.Null) return null;
+            var items = value.EnumerateArray();
+            var result = new List<TElement>(items.Length);
+            for (var index = 0; index < items.Length; index++) result.Add(converter(items[index]));
             return result;
         }
 
