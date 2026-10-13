@@ -228,6 +228,8 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
         this.endpoint = endpoint;
         this.declaration = declaration;
         this.transition = transition;
+        if (typeof(TInput) == typeof(Cohesive.Prelude.Unit))
+            input = static _ => default!;
         owner.BeginTransition();
     }
 
@@ -302,6 +304,27 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
                 throw new InvalidOperationException("A domain rejection must return HTTP 409.");
             return result;
         });
+    }
+
+    /// <summary>Registers an exhaustive, prepared Problem Details mapping for closed domain outcomes.</summary>
+    /// <typeparam name="TCode">Closed outcome discriminator enum.</typeparam>
+    /// <param name="selectCode">Selects the domain outcome code; retained for each rejected decision.</param>
+    /// <param name="codePrefix">Stable API namespace prefixed to the canonical enum wire name.</param>
+    /// <param name="configure">Classifies every enum member at registration.</param>
+    /// <returns>The completed parent session.</returns>
+    /// <exception cref="ArgumentNullException">A callback is null.</exception>
+    /// <exception cref="ArgumentException">Classification is incomplete/invalid or the endpoint lacks Problem Details conflict support.</exception>
+    /// <exception cref="InvalidOperationException">Success/input handling is missing or the session is complete.</exception>
+    /// <exception cref="TransitionApiPreparationException">Transition compilation fails.</exception>
+    public TypedEntityApiBindings<TEntity> OnRejected<TCode>(Func<TOutcome, TCode> selectCode,
+        string codePrefix, Action<TransitionRejectionResponses<TCode>> configure) where TCode : struct, Enum
+    {
+        ArgumentNullException.ThrowIfNull(selectCode);
+        ArgumentNullException.ThrowIfNull(configure);
+        var responses = new TransitionRejectionResponses<TCode>();
+        configure(responses);
+        var respond = responses.Build(codePrefix);
+        return Complete<ProblemDetails>(outcome => respond(selectCode(outcome)));
     }
 
     /// <summary>Prepares and registers the transition using the selected conflict contract.</summary>

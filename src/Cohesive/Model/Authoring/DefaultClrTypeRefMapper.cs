@@ -79,6 +79,9 @@ public sealed class DefaultClrTypeRefMapper : IClrTypeRefMapper
         if (TryMapScalarTypeKind(unwrapped, out var scalarKind))
             return new ScalarTypeRef(scalarKind);
 
+        if (unwrapped == typeof(Cohesive.Prelude.Unit))
+            return new EnumTypeRef("Unit", [Cohesive.Prelude.Unit.UnitString]);
+
         if (unwrapped.IsEnum)
             return MapEnum(unwrapped);
 

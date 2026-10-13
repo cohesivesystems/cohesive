@@ -1259,6 +1259,9 @@ public sealed class RelationQueryClrAuthoringContext
                     comparedNamedTypes);
             }
 
+            if (expectedDefinition is TypeDefinition.Enum expectedEnum && actual is EnumTypeRef actualEnum)
+                return actualEnum.IsWireEquivalentTo(expectedEnum);
+
             return expectedDefinition is TypeDefinition.Structural expectedStructural
                    && actual is ObjectTypeRef actualObject
                    && AreStructuralFieldsCompatible(
@@ -1271,6 +1274,10 @@ public sealed class RelationQueryClrAuthoringContext
 
         if (actual is NamedTypeRef actualNamedType)
         {
+            if (expected is EnumTypeRef expectedEnum
+                && actualGraph.TryGetType(actualNamedType.TypeId, out var enumDefinition)
+                && enumDefinition is TypeDefinition.Enum actualEnum)
+                return expectedEnum.IsWireEquivalentTo(actualEnum);
             return expected is ObjectTypeRef expectedObject
                    && actualGraph.TryGetType(actualNamedType.TypeId, out var actualDefinition)
                    && actualDefinition is TypeDefinition.Structural actualStructural
@@ -1284,6 +1291,8 @@ public sealed class RelationQueryClrAuthoringContext
 
         return (expected, actual) switch
         {
+            (EnumTypeRef expectedEnum, EnumTypeRef actualEnum) =>
+                expectedEnum.IsWireEquivalentTo(actualEnum),
             (ScalarTypeRef expectedScalar, ScalarTypeRef actualScalar) => expectedScalar == actualScalar,
             (ObjectTypeRef expectedObject, ObjectTypeRef actualObject) =>
                 AreObjectFieldsCompatible(

@@ -21,6 +21,72 @@ public sealed class TypedEntityApiBindingsTests
             .Requires((state, input) => state.Id == input.Id && state.Status == "Draft", (state, _) => new Outcome(state.Status))
             .Set(state => state.Status, "Submitted").Return(new Outcome("Submitted")));
 
+    [System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<SubmitCode>))]
+    public enum SubmitCode
+    {
+        Applied,
+        [System.Text.Json.Serialization.JsonStringEnumMemberName("not-draft")] NotDraft
+    }
+    public sealed record ClosedOutcome(SubmitCode Code);
+    static readonly Transition<Order, Cohesive.Prelude.Unit, ClosedOutcome> NoInputSubmit =
+        TransitionAuthoring.Create<Order, ClosedOutcome>(Entity.Shape, new("typed/no-input"), new("1"), transition => transition
+            .Requires(state => state.Status == "Draft", state => new ClosedOutcome(SubmitCode.NotDraft))
+            .Set(state => state.Status, "Submitted").Return(new ClosedOutcome(SubmitCode.Applied)));
+
+    [Fact]
+    public void No_input_authoring_retains_exact_unit_contract_after_serialization()
+    {
+        var bytes = Cohesive.Execution.ExecutionDefinitionJsonSerializer.GetCanonicalBytes(NoInputSubmit.Document);
+        var validation = Cohesive.Transitions.IR.TransitionDefinitionDocuments.TryDeserialize(
+            System.Text.Encoding.UTF8.GetString(bytes), out var document, out var definition);
+        Assert.True(validation.IsValid);
+        Assert.Equal(NoInputSubmit.Reference.Fingerprint, document!.Metadata.Fingerprint);
+        Assert.True(Cohesive.Transitions.Compilation.TransitionStaticCompiler.Compile(document).IsSuccessful);
+        Assert.True(definition!.Input.IsSatisfiedByConstant(Cohesive.Model.ObservationValue.FromObject(Cohesive.Prelude.Unit.Value)));
+        Assert.False(definition.Input.IsSatisfiedByConstant(Cohesive.Model.ObservationValue.FromString("unexpected payload")));
+        Assert.False(definition.Input.IsSatisfiedByConstant(Cohesive.Model.ObservationValue.Null));
+    }
+
+    [Fact]
+    public async Task No_input_transition_and_prepared_rejection_mapping_execute_over_http()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddRequestOperationContext();
+        await using var app = builder.Build();
+        app.UseRequestOperationContext();
+        var repository = new InMemoryEntityOutboxRepository(Entity, partitionKeyFieldName: "Partition");
+        app.MapEntityApi<Order>(Entity, repository, "local", bindings => bindings
+            .Create("Create", "/orders", EntityCreationPolicy.IfAbsent, partition => new Order("one", partition, "Draft"),
+                state => state.Id, state => TypedResults.Created("/orders/one", state))
+            .Transition("Submit", "/orders/{id}/submit", NoInputSubmit)
+            .OnApplied((state, outcome) => TypedResults.Ok(state))
+            .OnRejected(outcome => outcome.Code, "orders.submit", responses => responses
+                .Conflict(SubmitCode.NotDraft, "Cannot submit", "Order must be draft.").NotRejected(SubmitCode.Applied)));
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+        Assert.Equal(HttpStatusCode.Created, (await client.PostAsync("/orders", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync("/orders/one/submit", null)).StatusCode);
+        var rejected = await client.PostAsync("/orders/one/submit", null);
+        Assert.Equal(HttpStatusCode.Conflict, rejected.StatusCode);
+        Assert.Contains("orders.submit.not-draft", await rejected.Content.ReadAsStringAsync());
+        await app.StopAsync();
+    }
+
+    [Fact]
+    public void Missing_outcome_mapping_fails_during_registration()
+    {
+        var repository = new InMemoryEntityOutboxRepository(Entity, partitionKeyFieldName: "Partition");
+        var pending = new TypedEntityApiBindings<Order>(Entity, repository, "local")
+            .Transition("Submit", "/orders/{id}/submit", NoInputSubmit)
+            .OnApplied((state, outcome) => TypedResults.Ok(state));
+        Assert.Throws<ArgumentException>(() => pending.OnRejected(outcome => outcome.Code, "orders.submit",
+            responses => responses.NotRejected(SubmitCode.Applied)));
+        // Failed classification does not complete/mutate the binding; the corrected mapping can be registered.
+        pending.OnRejected(outcome => outcome.Code, "orders.submit", responses => responses
+            .Conflict(SubmitCode.NotDraft, "Cannot submit", "Order must be draft.").NotRejected(SubmitCode.Applied));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -73,8 +73,12 @@ submitted order. Creation retries create distinct orders; this example does not 
 `OrderTransitions.Submit` uses conventional node IDs and provenance, keeping only the contract ID
 and revision explicit. Inserting or reordering implicit steps changes their IDs; explicit IDs remain
 available when editing stability is required. It declares the POCO-authored `Draft → Submitted` rule. `OrderEndpoints`
-constructs `SubmitOrder(OrderId)` from the route and receives canonical `SubmitOrderResult(Status, Reason, Accepted)`
-outcomes. The transition validates that the command targets the loaded order. It
+selects the subject from the route. `TransitionAuthoring.Create<Order, SubmitOrderResult>` declares no
+application input; HTTP and Process bindings supply the shared `Unit` value automatically.
+There is no duplicate subject ID to compare. The transition returns `SubmitOrderResult(Status, Outcome)`
+using closed `OrderStatus` and `SubmissionOutcome` wire contracts. API policy maps `NotDraft` to HTTP 409
+and prepares `orders.submit.NotDraft` from its serialized outcome once during registration. Every outcome
+must be classified as a conflict or non-rejection; a newly added unmapped outcome fails setup. Display text is not domain authority. It
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with a `TransitionApiPreparationException` retaining structured compiler diagnostics. No global compilation cache or per-request compilation is added.
@@ -90,7 +94,7 @@ Combined declaration/binding is also supported by the same shared surface; `Prog
 The transition binding loads the order, evaluates the rule, and commits with the captured PostgreSQL concurrency
 token. Repeated submission returns 409 without a write; a stale concurrent write also returns 409 rather
 than retrying the domain decision. Both cases use `application/problem+json`: domain rejection has
-code `orders.submit.rejected`, while a lost conditional commit has the shared code
+code `orders.submit.NotDraft`, while a lost conditional commit has the shared code
 `services.concurrency.conflict` and a trace ID. The transition binding returns its concurrency result
 directly; `AddCohesiveExceptionHandling` plus native `UseExceptionHandler` provide the same sanitized
 fallback for storage conflicts outside that binding. Neither exposes backend identities or tokens.
@@ -479,3 +483,25 @@ running-program availability wiring and CQRS/event-sourcing guarantees are separ
 
 The running program also maps `/orders/{id}/availability` through `ReservationAvailabilityQueryBindings.BindNative`
 and `/fulfillment` through the canonical ephemeral Process. The former preserves the outer-join row with absent reservation fields when an order has no demand. Cross-database placement remains an alternate tested binding, not the default running configuration.
+
+### Domain contract boundary
+
+Order identity is an opaque string throughout the entity, query parameters, routes and process subject.
+UUID text is only the server's allocation choice; existing `order-123` identities also work through Get,
+Details, Availability and Submit without normalization. Submission has no application input;
+HTTP and Process invocation select the entity once. Its portable `Unit` contract retains the existing
+wire value `"()"`, rather than introducing a domain command enum. Inventory adjustment contracts remain unchanged.
+
+`OrderStatus` and `SubmissionOutcome` lower into closed enum contracts with explicit serialized names.
+The shared Core wire-equivalence helper deliberately ignores enum names and member ordering while
+requiring exactly the same ordinal wire values; nominal equality and fingerprints remain distinct.
+Relations uses that helper for named/inline string-enum contracts, retains enum
+row declarations, and rejects mismatched member sets. The domain revision is 2, submission transition
+revision is 4, and fulfillment process revision is 2. These are changed contracts, not a migration of
+existing process receipts. Existing PostgreSQL state remains text (`Draft`/`Submitted`), with native
+round-trip tests. Rejected submission now has problem code `orders.submit.NotDraft`.
+
+`FulfillmentResources.cs` is the single source for native connection names, linked into AppHost and the
+worker. It declares topology names, not domain semantics. SQL remains explicit in this batch: schema
+projection, requirement-derived infrastructure admission, an inspectable system artifact and selecting
+composed placement in the running host are subsequent work. No shared snapshot is implied across databases.

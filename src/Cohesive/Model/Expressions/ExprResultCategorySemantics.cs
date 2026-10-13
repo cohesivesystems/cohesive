@@ -44,7 +44,9 @@ internal static class ExprResultCategorySemantics
                 ExprResultCategory.Temporal,
             ScalarTypeRef => ExprResultCategory.Scalar,
             QuantityTypeRef => ExprResultCategory.Numeric,
-            EnumTypeRef or EntityReferenceTypeRef => ExprResultCategory.Scalar,
+            // Inline enum members are closed string values; exact membership remains a type constraint.
+            EnumTypeRef => ExprResultCategory.Text,
+            EntityReferenceTypeRef => ExprResultCategory.Scalar,
             JsonTypeRef { Kind: JsonTypeKind.Boolean } => ExprResultCategory.Boolean,
             JsonTypeRef { Kind: JsonTypeKind.Array } => ExprResultCategory.Collection,
             JsonTypeRef { Kind: JsonTypeKind.Object } => ExprResultCategory.Object,

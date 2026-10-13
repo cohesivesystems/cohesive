@@ -346,3 +346,9 @@ registered. Hold the disposable for the host lifetime, then dispose it; callback
 may contain native identities and tokens. The fulfillment example uses its own debug logger and stops the
 subscription with the application. `ProcessTransitionBindingDiagnosticCodes` is the complete native admission
 catalog; tests require an explicit service mapping (or deliberate passthrough case) for every catalog constant.
+
+Process host preparation returns `HostedServiceProcess<TInput, TResult>`, retaining the selected operation
+and exact typed process alongside the declaration/runtime. ASP.NET can map the prepared value with
+`app.MapServiceEphemeralProcess(hosted, http: ...)`. Preparation remains explicit and host-scoped; the
+existing declaration plus deferred resolver overload is available for lazy runtime construction. The
+non-generic base remains the host-scoped diagnostic subscription contract.

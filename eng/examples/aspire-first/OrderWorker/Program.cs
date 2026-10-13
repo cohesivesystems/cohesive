@@ -1,3 +1,4 @@
+using AspireFirst;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
@@ -8,9 +9,9 @@ using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddRequestOperationContext();
-builder.Services.AddSingleton<IHttpOperationContextEnricher, FulfillmentDemoIdentity>();
+builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
 builder.Services.AddCohesiveExceptionHandling();
-var connectionString = builder.Configuration.GetConnectionString(FulfillmentStorage.DatabaseName)
+var connectionString = builder.Configuration.GetConnectionString(FulfillmentResources.DatabaseName)
     ?? throw new InvalidOperationException("The native Aspire orders database reference is required.");
 await using var database = NpgsqlDataSource.Create(connectionString);
 var persistence = FulfillmentStorage.Bind(database);
@@ -35,10 +36,11 @@ var availability = ReservationAvailabilityQueryBindings.BindNative(persistence);
 var fulfillment = FulfillmentProcessBindings.Bind(orders, inventory);
 // Explicit opt-in: private native failure details belong only in protected operator logs.
 builder.Services.AddCohesiveTransitionFailureLogging(fulfillment);
+
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
 OrderEndpoints.Map(app, orders, details, availability);
-app.MapServiceEphemeralProcess(fulfillment.Declaration, _ => fulfillment.Runtime, "fulfill",
-    FulfillmentProcess.Definition, new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
+app.MapServiceEphemeralProcess(fulfillment,
+    http: new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
 app.Run();

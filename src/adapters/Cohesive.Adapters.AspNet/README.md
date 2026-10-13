@@ -362,6 +362,25 @@ Applications choosing `Conflict<TDomain>` for domain rejection will have two 409
 explicit domain body and Problem Details for concurrency. Use the Problem Details `OnRejected` overload
 (as the order example does) for one HTTP error shape; distinguish conditions by their stable `code`.
 
+### Prepared rejection cases and no-input transitions
+
+For a closed outcome discriminator, classify every case at registration:
+
+```csharp
+.OnRejected(outcome => outcome.Code, codePrefix: "orders.submit", responses => responses
+    .Conflict(SubmitCode.NotDraft, title: "Cannot submit", detail: "Order must be draft.")
+    .NotRejected(SubmitCode.Submitted))
+```
+
+Missing, duplicate and undefined cases fail setup. This API projects domain rejections to the existing
+HTTP 409 Problem Details contract; it does not infer arbitrary HTTP status codes. Wire codes are prepared
+once through Core `SerializedEnum<T>.GetWireName`, using the authoring enum catalog. Request handling
+performs dictionary lookup, with no enum reflection or serialization. A transition incorrectly returning
+an explicitly non-rejected case as a rejection remains a contract violation.
+
+No-input transitions authored with `TransitionAuthoring.Create<TEntity, TOutcome>` use shared Unit;
+the binding supplies it automatically, so no `.Input(...)` callback is needed.
+
 ## Bind a typed read operation
 
 Use `app.MapApiQuery(endpoint, preparedRead).FromRoute<Guid>("id", id => id.ToString("D")).OkOrNotFound()`
@@ -391,3 +410,9 @@ failed preparation leaves the builder unchanged without rollback.
 Host-owned logging lives in [Cohesive.Host](../../Cohesive.Host/README.md#private-process-failure-logging).
 Use `AddCohesiveTransitionFailureLogging(process)` from `Cohesive.Host.Services` before building the
 native host. It is independent of ASP.NET routing and works in background workers too.
+
+For an explicitly fixed local/test identity, `services.AddFixedRequestIdentity(identity)` registers the
+request-context enricher. The caller supplies all actors, scopes and grants; the adapter neither authenticates
+nor invents permissions. The registration is scoped to the service collection and replaces request identity,
+so it must not stand in for per-user authentication. Continue to register and use request OperationContext
+middleware normally.

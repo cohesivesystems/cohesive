@@ -119,7 +119,7 @@ public sealed class NestedResultTests
         Assert.Null(typeof(NestedQueryResultBuilder<OrderHeader>).GetMethod("From"));
     }
 
-    public sealed record OrderHeader(string Id, string Status, IReadOnlyList<ReservationHeader> Reservations);
+    public sealed record OrderHeader(string Id, OrderStatus Status, IReadOnlyList<ReservationHeader> Reservations);
     public sealed record ReservationHeader(string Id);
 
     static ObservationValue Row(string? child, string parent = "order", string status = "Draft", int quantity = 2)

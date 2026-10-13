@@ -3,11 +3,70 @@ using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
+using Cohesive.Relations.IR;
 
 namespace Cohesive.Relations.Tests;
 
 public sealed class RelationQueryClrAuthoringContextTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Imported_inline_enum_requires_exact_serialized_members(bool mismatch)
+    {
+        var graphId = new GraphId("imported/enum");
+        var id = new QualifiedShapeId(graphId, new ShapeId("root"));
+        var document = ShapeGraphDocument.FromGraph(new ShapeGraph(graphId,
+            [new Shape(id.ShapeId, [new FieldDefinition(new("Status"),
+                new EnumTypeRef("Lifecycle", mismatch ? ["ready", "other"] : ["ready", "done"]))])]));
+        var context = new RelationQueryClrAuthoringContext();
+        if (mismatch)
+            Assert.Throws<InvalidOperationException>(() => context.Shape<ImportedLifecycleRoot>(document, id));
+        else
+            Assert.NotNull(context.Shape<ImportedLifecycleRoot>(document, id));
+    }
+
+    [Fact]
+    public void Nested_result_preserves_closed_enum_declaration_and_wire_value()
+    {
+        var author = RelationQuery.Expression();
+        var id = author.Parameter<string>("id");
+        var source = author.Source(author.Clr.Shape<LifecycleRow>()).Where(row => row.Id == id.Value);
+        var result = author.SingleOrDefault<LifecycleResult>().From(source, source, row => row.Id)
+            .Identity(row => row.Id)
+            .Field(row => row.Status, source, row => row.Status)
+            .Collection(row => row.Items, source, row => row.Id, child => child.Identity(item => item.Id))
+            .Build(new("test/nested-enum"), new("Nested enum"), id);
+        var request = result.CompilationRequest;
+        Assert.True(Cohesive.Relations.Compilation.RelationQueryStaticCompiler.Compile(request).IsSuccessful);
+        var definition = (QueryDefinition)request.DefinitionDocument.Definition;
+        var assembly = definition.Assembly!;
+        var row = ObservationValue.FromObject(new Dictionary<string, string>
+        {
+            [assembly.Identity.ToString()] = "one",
+            [assembly.Collections[0].Identity.ToString()] = "one",
+            [assembly.Fields.Single(field => field.Target.ToString() == "Status").Source.ToString()] = "done"
+        });
+        var assembled = result.AssembleResult([row])!;
+        Assert.Equal("one", assembled.Id);
+        Assert.Equal(Lifecycle.Done, assembled.Status);
+        Assert.Equal("one", Assert.Single(assembled.Items).Id);
+        Assert.Contains(request.ShapeDocuments.SelectMany(document => document.Graph.NamedTypes),
+            type => type is TypeDefinition.Enum enumeration && enumeration.Values.Any(value => value.Value == "done"));
+    }
+
+    public sealed record LifecycleRow(string Id, Lifecycle Status);
+    public sealed record LifecycleResult(string Id, Lifecycle Status, IReadOnlyList<LifecycleItem> Items);
+    public sealed record LifecycleItem(string Id);
+
+    [JsonConverter(typeof(JsonStringEnumConverter<Lifecycle>))]
+    public enum Lifecycle
+    {
+        [JsonStringEnumMemberName("ready")] Ready,
+        [JsonStringEnumMemberName("done")] Done
+    }
+    public sealed record ImportedLifecycleRoot(Lifecycle Status);
+
     [Fact]
     public void ConventionRegistration_UsesOneDeterministicMetadataSnapshotForIdsTypesAndNestedPaths()
     {

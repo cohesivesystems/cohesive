@@ -5058,9 +5058,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             var transition = Argument(awaited.Invocation, "transition");
             var subject = Argument(awaited.Invocation, "subject");
             var input = Argument(awaited.Invocation, "input");
-            if (transition is null || subject is null || input is null
+            var noInput = transition?.Parameter?.Type is INamedTypeSymbol { TypeArguments.Length: 3 } typed
+                && IsTypedCanonicalTransitionHandle(typed)
+                && typed.TypeArguments[1].ToDisplayString() == "Cohesive.Prelude.Unit";
+            var inputValue = $"__builder.Constant<global::Cohesive.Prelude.Unit>(global::Cohesive.Prelude.Unit.Value, {SourceArguments(awaited.Source, method.Name)})";
+            if (transition is null || subject is null || (input is null && !noInput)
                 || !TryEmitValue(subject.Value, subject.Value.Type!, awaited.Source, out var subjectValue)
-                || !TryEmitValue(input.Value, input.Value.Type!, awaited.Source, out var inputValue))
+                || (input is not null && !TryEmitValue(input.Value, input.Value.Type!, awaited.Source, out inputValue)))
             {
                 return StatementFailure(awaited.Syntax, "Transition requires an exact definition, portable subject, and portable input");
             }

@@ -12,13 +12,13 @@ public static class OrderApi
         Create = orders.Command("Create")
             .Route("POST", "/orders").Build<OrderCreated>(ApiResultKind.Created);
         Get = orders.Query("Get")
-            .Route("GET", "/orders/{id:guid}").RouteParameter<string>("id")
+            .Route("GET", "/orders/{id}").RouteParameter<string>("id")
             .Result(ApiResultKind.NotFound).Build<OrderSummary>();
         Submit = orders.Command("Submit")
             .Route("POST", "/orders/{id}/submit").RouteParameter<string>("id")
             .Result<ProblemDetails>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound)
             .Transition(OrderTransitions.Submit.Reference).Build<OrderSummary>();
-        Details = orders.Query("Details").Route("GET", "/orders/{id:guid}/details")
+        Details = orders.Query("Details").Route("GET", "/orders/{id}/details")
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<OrderDetails>();
         Availability = orders.Query("availability").Route("GET", "/orders/{id}/availability")
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<ReservationAvailability[]>();

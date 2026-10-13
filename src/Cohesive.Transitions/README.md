@@ -165,3 +165,9 @@ both exact endpoint documents, imported automatically by forward and inverse tra
 remain valid; conflicting session registrations fail closed. A traversal retains
 the separately declared relationship in its authoring catalog. Entity handles contain no runtime state,
 persistence or workflow. See the [runnable fulfillment example](../../eng/examples/aspire-first/README.md).
+
+Domain entity handles expose `entity.Transition<TInput, TOutcome>(id, revision, configure)` and
+`entity.Transition<TOutcome>(...)` for Unit-input operations. These delegate to `TransitionAuthoring.Create`
+with the entity's exact declared shape and caller attribution; no parallel model or invocation-time
+compilation is introduced. Instance methods retain the entity type without repeating it as a method
+argument; generic extension receivers cannot partially infer explicit method type arguments here.

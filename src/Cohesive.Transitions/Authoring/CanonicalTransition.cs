@@ -147,6 +147,29 @@ public static class TransitionAuthoring
     /// <summary>Stable producer identity for the canonical C# Transition frontend.</summary>
     public const string Producer = "cohesive.transitions.csharp/v1";
 
+    /// <summary>Authors a transition requiring no invocation payload, using the shared Unit contract.</summary>
+    /// <typeparam name="TEntity">Observed entity type.</typeparam>
+    /// <typeparam name="TOutcome">Decision outcome type.</typeparam>
+    /// <param name="entityShape">Canonical entity observation shape.</param>
+    /// <param name="id">Stable transition identity.</param>
+    /// <param name="revision">Exact semantic revision.</param>
+    /// <param name="configure">Finite authoring callback; Unit contains no application data.</param>
+    /// <param name="sourceFile">Compiler-supplied source file.</param>
+    /// <param name="sourceLine">Compiler-supplied source line.</param>
+    /// <param name="sourceMember">Compiler-supplied member.</param>
+    /// <returns>A canonical transition with the singleton Unit input contract.</returns>
+    /// <remarks>Unit retains its existing portable wire value "()". No new domain enum or optional payload
+    /// convention is introduced. Typed HTTP and Process bindings supply Unit automatically.</remarks>
+    /// <exception cref="ArgumentException">Shape or metadata is invalid.</exception>
+    /// <exception cref="ArgumentNullException">Shape or configure is null.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">Authoring is outside the portable subset.</exception>
+    public static Transition<TEntity, Cohesive.Prelude.Unit, TOutcome> Create<TEntity, TOutcome>(
+        Shape entityShape, ExecutionDefinitionId id, ExecutionRevisionId revision,
+        Action<TransitionBuilder<TEntity, Cohesive.Prelude.Unit, TOutcome>> configure,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "") where TEntity : notnull =>
+        Create<TEntity, Cohesive.Prelude.Unit, TOutcome>(entityShape, id, revision, configure, sourceFile, sourceLine, sourceMember);
+
     /// <summary>Authors a transition with conventional body identity and generated producer provenance.</summary>
     /// <remarks>The caller owns stable definition and revision identities. Node defaults depend on authoring
     /// order, never source paths or line numbers. Use the metadata overload for explicit provenance/body IDs.</remarks>

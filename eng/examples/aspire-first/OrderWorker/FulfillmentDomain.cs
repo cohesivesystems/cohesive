@@ -14,7 +14,7 @@ public static class FulfillmentDomain
     public const string PartitionField = "partition";
     static FulfillmentDomain()
     {
-        var domain = new DomainModelBuilder().Version("1");
+        var domain = new DomainModelBuilder().Version("2");
         Orders = domain.Entity<Order>("example/order");
         Inventory = domain.Entity<InventoryItem>("example/inventory");
         Reservations = domain.Entity<Reservation>("example/reservation");
@@ -66,4 +66,14 @@ public sealed record Reservation(
 public sealed record Order(
     [property: JsonPropertyName(FulfillmentDomain.OrderIdField)] string Id,
     [property: JsonPropertyName(FulfillmentDomain.PartitionField)] string Partition,
-    [property: JsonPropertyName("status")] string Status = "Draft");
+    [property: JsonPropertyName("status")] OrderStatus Status = OrderStatus.Draft);
+
+/// <summary>Closed lifecycle contract; serialized names are durable domain values.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<OrderStatus>))]
+public enum OrderStatus
+{
+    /// <summary>Order may be submitted.</summary>
+    [JsonStringEnumMemberName("Draft")] Draft,
+    /// <summary>Order has been submitted.</summary>
+    [JsonStringEnumMemberName("Submitted")] Submitted
+}

@@ -26,6 +26,36 @@ public sealed class ServiceEphemeralProcessTests
     static readonly ValueContract Text = new(new ScalarTypeRef(ScalarTypeKind.String));
 
     [Fact]
+    public async Task Prepared_typed_host_maps_its_exact_process_and_operation()
+    {
+        var process = ProcessAuthoring.Create<string, string>(
+            new(new("typed-echo"), new("1"), new("return"), ProcessRecoveryPolicy.ContinueAttempt, Provenance),
+            builder => builder.Return(new("return"), builder.Input.Value));
+        var hosted = Service.Define(new("notes"), new("1"), Provenance)
+            .Require(new("notes.read")).Operation("echo").Run(process, _ => { })
+            .Build("notes", TimeSpan.FromSeconds(2), new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        Assert.Same(process, hosted.Process);
+        Assert.Equal("echo", hosted.OperationId);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(Context());
+        await using var app = builder.Build();
+        app.MapServiceEphemeralProcess(hosted, new("POST", "/echo", [], new(typeof(string))),
+            (_, requirement) => requirement.Id);
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).OfType<RouteEndpoint>().Single();
+        var http = new DefaultHttpContext { RequestServices = app.Services, TraceIdentifier = "typed/1" };
+        var body = Encoding.UTF8.GetBytes("\"hello\"");
+        http.Request.Method = "POST";
+        http.Request.ContentType = "application/json";
+        http.Request.ContentLength = body.Length;
+        http.Request.Body = new MemoryStream(body);
+        http.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(http);
+        Assert.Equal(200, http.Response.StatusCode);
+        http.Response.Body.Position = 0;
+        Assert.Equal("\"hello\"", await new StreamReader(http.Response.Body).ReadToEndAsync());
+    }
+
+    [Fact]
     public void FluentPolicyIsByteEquivalentToDirectIrAndRoundTrips()
     {
         var plan = Plan();

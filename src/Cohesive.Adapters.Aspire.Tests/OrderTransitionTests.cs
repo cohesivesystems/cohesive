@@ -9,24 +9,23 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class OrderTransitionTests
 {
     [Theory]
-    [InlineData("Draft", "order-1", TransitionDecisionKind.Applied, "Order submitted.")]
-    [InlineData("Submitted", "order-1", TransitionDecisionKind.AdmissionRejected, "Order must be Draft to submit.")]
-    [InlineData("Draft", "other-order", TransitionDecisionKind.AdmissionRejected, "Order identity does not match.")]
-    public void Submission_requires_draft_and_preserves_input(string status, string target, TransitionDecisionKind expected, string reason)
+    [InlineData(OrderStatus.Draft, TransitionDecisionKind.Applied, SubmissionOutcome.Submitted)]
+    [InlineData(OrderStatus.Submitted, TransitionDecisionKind.AdmissionRejected, SubmissionOutcome.NotDraft)]
+    public void Submission_requires_draft_and_preserves_input(OrderStatus status, TransitionDecisionKind expected, SubmissionOutcome outcomeKind)
     {
         var compilation = OrderTransitions.Submit.Compile();
         Assert.True(compilation.IsSuccessful, string.Join("; ", compilation.Validation.Diagnostics));
         var plan = compilation.Plan!;
         var order = new Order("order-1", FulfillmentDemo.LocalPartition, status);
         var decision = TransitionReferenceInterpreter.DecideFullState(plan, new("test/submit"),
-            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new SubmitOrder(target))),
+            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(Cohesive.Prelude.Unit.Value)),
             PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(order)));
         Assert.Equal(expected, decision.Kind);
         var outcome = decision.Outcome!.Value!.Value;
-        Assert.Equal(expected == TransitionDecisionKind.Applied ? "Submitted" : status,
+        Assert.Equal(expected == TransitionDecisionKind.Applied ? "Submitted" : status.ToString(),
             outcome.GetProperty("Status").GetRequiredString());
-        Assert.Equal(reason,
-            outcome.GetProperty("Reason").GetRequiredString());
+        Assert.Equal(outcomeKind.ToString(),
+            outcome.GetProperty("Outcome").GetRequiredString());
         Assert.Equal(status, order.Status);
         Assert.Equal(expected == TransitionDecisionKind.Applied, decision.GuaranteeDemands.CommitRequired);
     }

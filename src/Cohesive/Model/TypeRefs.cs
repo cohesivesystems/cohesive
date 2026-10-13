@@ -311,6 +311,41 @@ public sealed record EnumTypeRef : TypeRef
     /// </summary>
     public ImmutableArray<string> Members { get; init; }
 
+    /// <summary>Tests structural wire compatibility without allocating a set.</summary>
+    /// <param name="other">Other closed string enum.</param>
+    /// <returns>True when both admit exactly the same ordinal wire values.</returns>
+    /// <remarks>Names, order and duplicate declarations do not affect wire compatibility. This deliberately
+    /// differs from nominal/document equality: Lifecycle and Phase may be wire-compatible while retaining
+    /// different identities and fingerprints. Intended for contract admission, not identity comparison.</remarks>
+    public bool IsWireEquivalentTo(EnumTypeRef? other) => other is not null
+        && ContainsAll(Members.AsSpan(), other.Members.AsSpan())
+        && ContainsAll(other.Members.AsSpan(), Members.AsSpan());
+
+    /// <summary>Tests wire compatibility against a named string enum.</summary>
+    /// <param name="other">Named enum; non-string underlying types are incompatible.</param>
+    /// <returns>True for exactly the same ordinal serialized values, ignoring names and ordering.</returns>
+    public bool IsWireEquivalentTo(TypeDefinition.Enum? other)
+    {
+        if (other is null || other.Underlying != PrimitiveType.String) return false;
+        foreach (var member in Members)
+        {
+            var found = false;
+            foreach (var value in other.Values)
+                if (string.Equals(member, value.SerializedValue, StringComparison.Ordinal)) { found = true; break; }
+            if (!found) return false;
+        }
+        foreach (var value in other.Values)
+            if (!Members.AsSpan().Contains(value.SerializedValue)) return false;
+        return true;
+    }
+
+    static bool ContainsAll(ReadOnlySpan<string> values, ReadOnlySpan<string> candidates)
+    {
+        foreach (var value in values)
+            if (!candidates.Contains(value)) return false;
+        return true;
+    }
+
     /// <summary>
     /// Compares enum type references using value semantics for members.
     /// </summary>

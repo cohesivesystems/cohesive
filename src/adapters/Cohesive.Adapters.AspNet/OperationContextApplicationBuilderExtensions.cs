@@ -18,6 +18,29 @@ public static class OperationContextApplicationBuilderExtensions
 {
     static readonly object RequestOperationContextKey = new();
 
+    /// <summary>Attaches one explicitly supplied identity to every request in this host.</summary>
+    /// <param name="services">Host-owned service collection.</param>
+    /// <param name="identity">Immutable identity and grants selected by the caller.</param>
+    /// <returns>The same collection.</returns>
+    /// <remarks>This is not authentication. Intended for explicit local/test hosts or a trusted fixed
+    /// service identity. It replaces the context identity, so do not combine it with per-user authentication.
+    /// No actor, tenant, grant, or permissive default is invented by this registration.</remarks>
+    /// <exception cref="ArgumentNullException">Services or identity is null.</exception>
+    public static IServiceCollection AddFixedRequestIdentity(this IServiceCollection services,
+        Cohesive.Identity.IdentityContext identity)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(identity);
+        services.AddSingleton<IHttpOperationContextEnricher>(new FixedIdentityEnricher(identity));
+        return services;
+    }
+
+    sealed class FixedIdentityEnricher(Cohesive.Identity.IdentityContext identity) : IHttpOperationContextEnricher
+    {
+        public ValueTask<OperationContext> EnrichAsync(HttpContext httpContext, OperationContext context) =>
+            ValueTask.FromResult(Cohesive.Identity.OperationContextIdentityExtensions.WithIdentityContext(context, identity));
+    }
+
     /// <summary>
     /// Registers request-scoped <see cref="OperationContext"/> access for ASP.NET Core.
     /// </summary>

@@ -29,8 +29,7 @@ public sealed class ComposedPreparationTests
             failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition);
         var policy = new PostgresRelationQueryComposedPolicy(
             ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000, scope);
-        var error = Record.Exception(() => orders.QueryComposed(FulfillmentQueries.ReservationAvailability,
-            FulfillmentQueries.ReservationDemandProjection, remote, policy));
+        var error = Record.Exception(() => orders.QueryComposed(FulfillmentQueries.ReservationAvailability, FulfillmentQueries.ReservationDemandProjection, remote, policy));
         var preparation = Assert.IsType<RelationQueryPreparationException>(error);
         Assert.Equal(failure switch {
             "missing-mapping" => "postgres.composed.remoteMappingMissing",

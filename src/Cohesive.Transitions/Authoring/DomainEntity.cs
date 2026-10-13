@@ -1,3 +1,6 @@
+using System.Runtime.CompilerServices;
+using Cohesive.Execution;
+using Cohesive.Prelude;
 using Cohesive.Model.Serialization;
 using System.Linq.Expressions;
 using Cohesive.Relations.Authoring;
@@ -20,6 +23,49 @@ public sealed class DomainEntity<T> where T : notnull
 
     /// <summary>Canonical entity definition shared by transition and storage bindings.</summary>
     public EntityDefinition Definition { get; }
+
+    /// <summary>Authors a transition with a typed invocation payload.</summary>
+    /// <typeparam name="TInput">Invocation payload.</typeparam>
+    /// <typeparam name="TOutcome">Decision outcome.</typeparam>
+    /// <param name="id">Stable transition identity.</param>
+    /// <param name="revision">Exact semantic revision.</param>
+    /// <param name="configure">Finite callback lowered to canonical IR; not retained.</param>
+    /// <param name="sourceFile">Compiler-supplied attribution file.</param>
+    /// <param name="sourceLine">Compiler-supplied attribution line.</param>
+    /// <param name="sourceMember">Compiler-supplied attribution member.</param>
+    /// <returns>A transition using the entity's exact declared shape.</returns>
+    /// <exception cref="ArgumentNullException">Callback is null.</exception>
+    /// <exception cref="ArgumentException">Metadata or shape is invalid.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">Expressions are not portable.</exception>
+    public Transition<T, TInput, TOutcome> Transition<TInput, TOutcome>(
+        ExecutionDefinitionId id, ExecutionRevisionId revision,
+        Action<TransitionBuilder<T, TInput, TOutcome>> configure,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
+        return TransitionAuthoring.Create(Definition.Shape, id, revision, configure,
+            sourceFile, sourceLine, sourceMember);
+    }
+
+    /// <summary>Authors a transition with the shared no-payload Unit contract.</summary>
+    /// <typeparam name="TOutcome">Decision outcome.</typeparam>
+    /// <param name="id">Stable transition identity.</param>
+    /// <param name="revision">Exact semantic revision.</param>
+    /// <param name="configure">Finite callback lowered to canonical IR; not retained.</param>
+    /// <param name="sourceFile">Compiler-supplied attribution file.</param>
+    /// <param name="sourceLine">Compiler-supplied attribution line.</param>
+    /// <param name="sourceMember">Compiler-supplied attribution member.</param>
+    /// <returns>A transition using the entity's exact declared shape.</returns>
+    /// <exception cref="ArgumentNullException">Callback is null.</exception>
+    /// <exception cref="ArgumentException">Metadata or shape is invalid.</exception>
+    /// <exception cref="TransitionExpressionTranslationException">Expressions are not portable.</exception>
+    public Transition<T, Unit, TOutcome> Transition<TOutcome>(
+        ExecutionDefinitionId id, ExecutionRevisionId revision,
+        Action<TransitionBuilder<T, Unit, TOutcome>> configure,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "") =>
+        TransitionAuthoring.Create(Definition.Shape,
+            id, revision, configure, sourceFile, sourceLine, sourceMember);
 
     /// <summary>Declares a reference to another entity's observation identity.</summary>
     /// <param name="reference">Direct string-valued member containing the target identity.</param>
