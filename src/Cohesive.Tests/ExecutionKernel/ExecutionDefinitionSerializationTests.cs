@@ -27,6 +27,9 @@ public sealed class ExecutionDefinitionSerializationTests
             Visit(json.RootElement);
             var document = DocumentFromJson(json.RootElement);
             Assert.Equal(NodeReference(document, json.RootElement), ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
+            Assert.Equal(ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(
+                document.Metadata.SchemaVersion, document.Kind, json.RootElement, document.Extensions),
+                ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document));
             Assert.Equal(document.Metadata.Fingerprint, ExecutionDefinitionFingerprinter.Compute(document));
         }
         Assert.Equal(Enum.GetValues<JsonValueKind>().Where(kind => kind != JsonValueKind.Undefined).Order(), coveredKinds.Order());

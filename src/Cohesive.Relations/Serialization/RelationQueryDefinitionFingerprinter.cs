@@ -1,4 +1,6 @@
 using System.Security.Cryptography;
+using System.Text.Encodings.Web;
+using Cohesive.Model;
 using System.Text;
 using System.Text.Json;
 using Cohesive.Model.Serialization;
@@ -21,6 +23,7 @@ namespace Cohesive.Relations.Serialization;
 /// </remarks>
 public static class RelationQueryDefinitionFingerprinter
 {
+    static readonly byte[] VersionPrefix = Encoding.UTF8.GetBytes(RelationQueryDocument.CurrentSchemaVersion + "\0");
     /// <summary>Fingerprint algorithm identifier.</summary>
     public const string Algorithm = "sha256";
 
@@ -44,29 +47,31 @@ public static class RelationQueryDefinitionFingerprinter
     {
         ArgumentNullException.ThrowIfNull(definition);
 
-        var canonicalDefinition = GetCanonicalDefinitionBytes(definition);
-        var version = Encoding.UTF8.GetBytes(RelationQueryDocument.CurrentSchemaVersion);
-        var content = new byte[version.Length + 1 + canonicalDefinition.Length];
-        version.CopyTo(content, 0);
-        content[version.Length] = 0;
-        canonicalDefinition.CopyTo(content, version.Length + 1);
-
-        var hash = SHA256.HashData(content);
+        var element = SerializeDefinition(definition);
+        using Sha256BufferWriter hash = new();
+        VersionPrefix.CopyTo(hash.GetSpan(VersionPrefix.Length));
+        hash.Advance(VersionPrefix.Length);
+        using (var writer = new Utf8JsonWriter(hash, new JsonWriterOptions
+        {
+            Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            Indented = false
+        }))
+            CanonicalJsonWriter.WriteCanonical(writer, element, RelationCanonicalJsonArrayOrderings.Definition);
+        Span<byte> digest = stackalloc byte[SHA256.HashSizeInBytes];
+        hash.Complete(digest);
         return new(
             algorithm: Algorithm,
             canonicalization: Canonicalization,
-            value: Convert.ToHexString(hash).ToLowerInvariant());
+            value: Convert.ToHexStringLower(digest));
     }
 
-    internal static byte[] GetCanonicalDefinitionBytes(RelationQueryDefinition definition)
-    {
-        var options = RelationQueryJsonSerializer.CreateOptions();
-        var node = JsonSerializer.SerializeToNode(definition, options)
-                   ?? throw new InvalidOperationException("Failed to materialize canonical relation/query definition JSON.");
+    internal static byte[] GetCanonicalDefinitionBytes(RelationQueryDefinition definition) =>
+        CanonicalJsonWriter.GetCanonicalBytes(SerializeDefinition(definition), RelationCanonicalJsonArrayOrderings.Definition);
 
-        return CanonicalJsonWriter.GetCanonicalBytes(
-            node,
-            options,
-            RelationCanonicalJsonArrayOrderings.Definition);
+    static JsonElement SerializeDefinition(RelationQueryDefinition definition)
+    {
+        var element = JsonSerializer.SerializeToElement(definition, RelationQueryJsonSerializer.GetReadOnlyOptions());
+        return element.ValueKind == JsonValueKind.Object ? element
+            : throw new InvalidOperationException("Failed to materialize canonical relation/query definition JSON.");
     }
 }

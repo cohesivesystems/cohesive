@@ -1,0 +1,5 @@
+variant,source,phase,allocated_bytes,elapsed_ms
+streaming-hash-parent,x12-004010-204,cold,561122968,3182.403
+streaming-hash-parent,x12-004010-204,repeated,295370664,1254.522
+direct-projection,x12-004010-204,cold,519217616,3237.575
+direct-projection,x12-004010-204,repeated,253818680,1272.774

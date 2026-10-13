@@ -27,7 +27,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
 {
     static readonly Lazy<JsonSerializerOptions> DeclaredJsonOptions = new(() =>
     {
-        var options = new JsonSerializerOptions();
+        var options = new JsonSerializerOptions { AllowDuplicateProperties = false };
         options.Converters.Add(new DeclaredJsonValueConverterFactory());
         options.MakeReadOnly(populateMissingResolver: true);
         return options;
@@ -166,6 +166,71 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     public bool TryGetField(FieldPath path, out ObservationValue value) =>
         TryGetFieldSegments(path.Segments.AsSpan(), out value);
 
+    /// <summary>Builds one owned object from field assignments without copying every intermediate object.</summary>
+    /// <param name="assignments">Invocation-owned field-only paths and values, applied in enumeration order.</param>
+    /// <returns>An immutable object with ordinal field enumeration.</returns>
+    /// <remarks>Equivalent to applying WithField repeatedly to EmptyObject, including overwrite and removal semantics.</remarks>
+    /// <exception cref="ArgumentNullException">Assignments are null.</exception>
+    /// <exception cref="ArgumentException">A path is empty.</exception>
+    /// <exception cref="NotSupportedException">A path contains a non-field segment.</exception>
+    /// <exception cref="InvalidOperationException">An assignment traverses a scalar or array.</exception>
+    public static ObservationValue FromFieldAssignments(IEnumerable<KeyValuePair<FieldPath, ObservationValue>> assignments)
+    {
+        ArgumentNullException.ThrowIfNull(assignments);
+        using var enumerator = assignments.GetEnumerator();
+        if (!enumerator.MoveNext()) return EmptyObject;
+        var root = new AssignmentObject(EmptyObject);
+        do
+        {
+            var assignment = enumerator.Current;
+            if (assignment.Key.Segments.IsDefaultOrEmpty) throw new ArgumentException("An object assignment requires a non-empty field path.", "path");
+            root.Set(assignment.Key, 0, assignment.Value);
+        } while (enumerator.MoveNext());
+        return root.Freeze();
+    }
+
+    sealed class AssignmentObject
+    {
+        readonly Dictionary<string, AssignmentField> fields = new(StringComparer.Ordinal);
+        internal AssignmentObject(ObservationValue initial)
+        {
+            if (initial.Fields is not null)
+                foreach (var field in initial.Fields) fields.Add(field.Key, new(field.Value));
+        }
+        internal void Set(FieldPath path, int index, ObservationValue value)
+        {
+            var segment = path.Segments[index];
+            if (segment.Kind != SegmentKind.Field || string.IsNullOrWhiteSpace(segment.Segment))
+                throw new NotSupportedException($"Observation value assignment does not support collection-element path '{path}'.");
+            var name = segment.Segment;
+            if (index == path.Segments.Length - 1)
+            {
+                if (value.Kind == ObservationValueKind.Undefined) fields.Remove(name);
+                else fields[name] = new(value);
+                return;
+            }
+            fields.TryGetValue(name, out var field);
+            var child = field.Children;
+            if (child is null)
+            {
+                if (field.Value.Kind is not (ObservationValueKind.Object or ObservationValueKind.Null or ObservationValueKind.Undefined))
+                    throw new InvalidOperationException($"Field path '{path}' cannot be assigned through value kind '{field.Value.Kind}'.");
+                child = new(field.Value);
+            }
+            child.Set(path, index + 1, value);
+            if (child.fields.Count == 0) fields.Remove(name);
+            else fields[name] = new(Undefined, child);
+        }
+        internal ObservationValue Freeze()
+        {
+            var owned = new Dictionary<string, ObservationValue>(fields.Count, StringComparer.Ordinal);
+            foreach (var field in fields)
+                owned.Add(field.Key, field.Value.Children is { } child ? child.Freeze() : field.Value.Value);
+            return FromOwnedObjectInOrdinalOrder(owned);
+        }
+        readonly record struct AssignmentField(ObservationValue Value, AssignmentObject? Children = null);
+    }
+
     /// <summary>Returns an object value with one direct or nested field assigned immutably.</summary>
     /// <param name="path">Non-empty canonical field-only path to assign.</param>
     /// <param name="value">
@@ -259,7 +324,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         if (fields is null)
             return null;
-        if (fields is OrdinalObservationFields)
+        if (fields is OrdinalObservationFields or SmallObservationFields)
             return fields;
         if (fields.Count == 0)
             return EmptyObjectValues;
@@ -531,7 +596,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         JsonValueKind.Number when TryParseExactJsonDecimal(element.GetRawText(), out var dec) => FromDecimal(dec),
         JsonValueKind.Number when element.TryGetDouble(out var dbl) => FromDouble(dbl),
         JsonValueKind.Number => FromDouble(double.Parse(element.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture)),
-        JsonValueKind.Object => FromObject(ReadObject(element)),
+        JsonValueKind.Object => ReadObject(element),
         JsonValueKind.Array => FromImmutableArray(ReadArray(element)),
         _ => throw new InvalidOperationException($"Unsupported JsonValueKind '{element.ValueKind}'.")
     };
@@ -604,7 +669,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// <returns>The recursively projected portable observation value.</returns>
     /// <exception cref="NotSupportedException"></exception>
     /// <exception cref="InvalidOperationException"></exception>
-    /// <exception cref="JsonException"></exception>
+    /// <exception cref="JsonException">Declared JSON conversion produces malformed JSON, including duplicate object properties.</exception>
     public static ObservationValue FromObject(object? value)
     {
         HashSet<object>? visited = null;
@@ -801,7 +866,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             return false;
         }
 
-        observed = FromJsonNode(JsonSerializer.SerializeToNode(value, type, DeclaredJsonOptions.Value));
+        observed = ProjectDeclaredJsonValue(value, type);
         return true;
     }
 
@@ -844,8 +909,8 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         var type = value.GetType();
         if (type.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is not null)
         {
-            var node = JsonSerializer.SerializeToNode(value, type, DeclaredJsonOptions.Value);
-            if (node is JsonValue jsonValue && jsonValue.TryGetValue<string>(out var converted) && !string.IsNullOrWhiteSpace(converted))
+            var projected = ProjectDeclaredJsonValue(value, type);
+            if (projected.Kind == ObservationValueKind.String && projected.String is { } converted && !string.IsNullOrWhiteSpace(converted))
             {
                 key = converted;
                 return true;
@@ -913,9 +978,17 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             return Null;
 
         if (ShouldProjectWithDeclaredJsonType(property.PropertyType))
-            return FromJsonNode(JsonSerializer.SerializeToNode(value, property.PropertyType, DeclaredJsonOptions.Value));
+            return ProjectDeclaredJsonValue(value, property.PropertyType);
 
         return FromObjectCore(value, ref visited);
+    }
+
+    static ObservationValue ProjectDeclaredJsonValue(object value, Type declaredType)
+    {
+        using var document = JsonSerializer.SerializeToDocument(value, declaredType, DeclaredJsonOptions.Value);
+        // The declared serializer rejects duplicate properties while parsing converter output.
+        // Public token projection keeps its established last-property-wins behavior.
+        return FromJsonElement(document.RootElement);
     }
 
     static bool ShouldProjectWithDeclaredJsonType(Type type)
@@ -1520,10 +1593,22 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// <summary>
     /// Deserializes this value into a CLR type using JSON conversion.
     /// </summary>
-    /// <exception cref="JsonException"></exception>
-    /// <exception cref="NotSupportedException"></exception>
-    public T? Deserialize<T>(JsonSerializerOptions? options = null, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw) =>
-        JsonSerializer.Deserialize<T>(GetRawText(bytesEncoding), options);
+    /// <param name="options">CLR deserialization options; observation JSON encoding retains its plain-value contract.</param>
+    /// <param name="bytesEncoding">Encoding for binary values, including nested values.</param>
+    /// <returns>The typed value, owning any retained JSON storage after temporary pooled bytes are returned.</returns>
+    /// <exception cref="JsonException">JSON cannot be converted to the requested CLR contract.</exception>
+    /// <exception cref="NotSupportedException">The requested CLR contract is unsupported by its serializer.</exception>
+    /// <exception cref="InvalidOperationException">A value has no JSON representation under the selected binary encoding.</exception>
+    public T? Deserialize<T>(JsonSerializerOptions? options = null, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw)
+    {
+        using PooledByteBufferWriter buffer = new();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            WriteTo(writer, bytesEncoding);
+            writer.Flush();
+        }
+        return JsonSerializer.Deserialize<T>(buffer.WrittenSpan, options);
+    }
 
     /// <summary>
     /// Writes this value as JSON using the provided writer.
@@ -1709,12 +1794,25 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         }
     }
 
-    static IImmutableDictionary<string, ObservationValue> ReadObject(JsonElement element)
+    static ObservationValue ReadObject(JsonElement element)
     {
-        var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+        var count = element.GetPropertyCount();
+        if (count == 0) return FromObject(EmptyObjectValues);
+        if (count <= 8) return FromObject(SmallObservationFields.Read(element, count));
+        var values = new Dictionary<string, ObservationValue>(count, StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
             values[property.Name] = FromJsonElement(property.Value);
-        return values.ToImmutable();
+        return FromOwnedObjectInOrdinalOrder(values);
+    }
+
+    // Called only with invocation-owned storage; the ordering helper copies before it is cleared.
+    static ObservationValue FromOwnedObjectInOrdinalOrder(Dictionary<string, ObservationValue> values)
+    {
+        if (values.Count == 0) return FromObject(EmptyObjectValues);
+        using var ordered = new OrderedObservationFields(values);
+        values.Clear();
+        foreach (var property in ordered) values.Add(property.Key, property.Value);
+        return FromOwnedObject(values);
     }
 
     static ImmutableArray<ObservationValue> ReadArray(JsonElement element)

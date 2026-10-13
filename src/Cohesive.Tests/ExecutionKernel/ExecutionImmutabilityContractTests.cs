@@ -26,6 +26,14 @@ public sealed class ExecutionImmutabilityContractTests
     }
 
     [Fact]
+    public void SharedDefaultTypeContractsExposeNoMutableState()
+    {
+        var errors = new List<string>();
+        Inspect(typeof(TypeRef), nameof(TypeRef), new(), errors);
+        Assert.True(errors.Count == 0, string.Join("\n", errors));
+    }
+
+    [Fact]
     public void AuditRejectsMutableConsumerShapes()
     {
         var errors = new List<string>();

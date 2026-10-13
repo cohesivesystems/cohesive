@@ -1,3 +1,4 @@
+using System.Text.Encodings.Web;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -19,6 +20,9 @@ namespace Cohesive.Relations.Serialization;
 /// </remarks>
 public static class RelationshipCatalogFingerprinter
 {
+    static readonly byte[] Prefix = Encoding.UTF8.GetBytes(RelationshipCatalogDocument.CurrentSchemaVersion + "\0");
+    static readonly JsonWriterOptions WriterOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+
     /// <summary>Fingerprint algorithm identifier.</summary>
     public const string Algorithm = "sha256";
 
@@ -42,31 +46,15 @@ public static class RelationshipCatalogFingerprinter
     {
         ArgumentNullException.ThrowIfNull(catalog);
 
-        var canonicalCatalog = GetCanonicalCatalogBytes(catalog);
-        var version = Encoding.UTF8.GetBytes(RelationshipCatalogDocument.CurrentSchemaVersion);
-        var content = new byte[version.Length + 1 + canonicalCatalog.Length];
-        version.CopyTo(content, 0);
-        content[version.Length] = 0;
-        canonicalCatalog.CopyTo(content, version.Length + 1);
-
-        var hash = SHA256.HashData(content);
+        using var document = JsonSerializer.SerializeToDocument(catalog, RelationshipCatalogJsonSerializer.ReadOnlyOptions);
+        if (document.RootElement.ValueKind == JsonValueKind.Null)
+            throw new InvalidOperationException("Failed to materialize canonical relationship catalog JSON.");
+        var hash = CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement,
+            RelationCanonicalJsonArrayOrderings.RelationshipCatalog, WriterOptions, prefix: Prefix);
         return new(
             algorithm: Algorithm,
             canonicalization: Canonicalization,
-            value: Convert.ToHexString(hash).ToLowerInvariant());
+            value: Convert.ToHexStringLower(hash));
     }
 
-    static byte[] GetCanonicalCatalogBytes(RelationshipCatalog catalog)
-    {
-        ArgumentNullException.ThrowIfNull(catalog);
-        var options = RelationshipCatalogJsonSerializer.CreateOptions();
-        var node = JsonSerializer.SerializeToNode(catalog, options)
-                   ?? throw new InvalidOperationException(
-                       "Failed to materialize canonical relationship catalog JSON.");
-
-        return CanonicalJsonWriter.GetCanonicalBytes(
-            node,
-            options,
-            RelationCanonicalJsonArrayOrderings.RelationshipCatalog);
-    }
 }

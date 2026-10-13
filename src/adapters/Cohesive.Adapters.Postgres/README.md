@@ -200,3 +200,9 @@ The shared Storage receipt protocol resolves replay only after a conditional nat
 transaction and conditional SQL writes. Fixed receipt partition evidence is inherited by process bindings.
 Receipt validation intentionally retains canonical reserialization and hashing: the warm cost is measured in
 `src/Cohesive.Relations.Benchmarks/RESULTS.md`, separately from SQL and network latency.
+
+`PostgresQueryRowsReader` executes a prepared unpaged row artifact through the shared
+Npgsql executor. Parameters and the overflow limit have explicit provider types; results
+use sequential decoding and one-pass immutable row assembly. Its byte budget counts all
+retrieved scalar values, including presence columns and suppressed fields. Raw rows are
+bounded and invocation-owned. See [qualification](../../../docs/performance/repeated-representation-work.md).

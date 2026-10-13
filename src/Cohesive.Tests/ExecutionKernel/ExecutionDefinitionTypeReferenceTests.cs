@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using System.Collections;
+using System.Reflection;
 using System.Text.Json.Nodes;
 using System.Text.Json;
 using Cohesive.Execution;
@@ -33,6 +36,121 @@ public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITe
         var second = Create(new TypeMap(new() { ["a"] = number, ["z"] = text }));
         Assert.Equal(first.Definition.GetRawText(), second.Definition.GetRawText());
         Assert.Equal(first.Metadata.Fingerprint, second.Metadata.Fingerprint);
+    }
+
+    [Fact]
+    public void EqualScalarInstancesReusePreparationWithoutConflatingFormats()
+    {
+        var values = Enumerable.Range(0, 512).Select(_ => (TypeRef)new ScalarTypeRef(ScalarTypeKind.String)).ToArray();
+        var shared = new Types([.. Enumerable.Repeat(values[0], values.Length)]);
+        var distinct = new Types(values);
+        for (var iteration = 0; iteration < 16; iteration++)
+        {
+            _ = Create(shared);
+            _ = Create(distinct);
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var sharedDocument = Create(shared);
+        var sharedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var distinctDocument = Create(distinct);
+        var distinctBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"512 scalar uses: shared {sharedBytes} B, distinct equal instances {distinctBytes} B.");
+        Assert.Equal(sharedDocument.Definition.GetRawText(), distinctDocument.Definition.GetRawText());
+        Assert.Equal(sharedDocument.Metadata.Fingerprint, distinctDocument.Metadata.Fingerprint);
+        // New identities require dictionary slots, but must not each create a JSON entry/tree.
+        Assert.InRange(distinctBytes - sharedBytes, 0, 100_000);
+        var formatted = Create(new Types([new ScalarTypeRef(ScalarTypeKind.String),
+            new ScalarTypeRef(ScalarTypeKind.String, PrimitiveFormat.Uuid)]));
+        Assert.Equal(2, formatted.Definition.GetProperty("$types").GetArrayLength());
+    }
+
+    [Fact]
+    public void ParentPreparationAvoidsProvisionalOwnedCanonicalDocuments()
+    {
+        var type = new ObjectTypeRef([.. Enumerable.Range(0, 128).Select(index =>
+            new ObjectFieldTypeDef($"field{index}", new ScalarTypeRef(ScalarTypeKind.String)))]);
+        var declaration = new Types([type, type]);
+        for (var i = 0; i < 16; i++) _ = Create(declaration);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var document = Create(declaration);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"128-field parent preparation: {allocated} B.");
+        Assert.Equal(2, document.Definition.GetProperty("$types").GetArrayLength());
+        Assert.InRange(allocated, 1, 340_000);
+    }
+
+    [Fact]
+    public void DuplicateParentCandidatesAvoidOwnedCanonicalTextKeys()
+    {
+        var fields = new ObjectTypeRef([.. Enumerable.Range(0, 128).Select(index =>
+            new ObjectFieldTypeDef($"field{index}", new ScalarTypeRef(ScalarTypeKind.String)))]).Fields;
+        var declaration = new Types([.. Enumerable.Range(0, 64).Select(_ => (TypeRef)new ObjectTypeRef(fields))]);
+        for (var i = 0; i < 16; i++) _ = Create(declaration);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var document = Create(declaration);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine($"64 duplicate parents: {allocated} B.");
+        Assert.Equal(2, document.Definition.GetProperty("$types").GetArrayLength());
+        var decoded = document.GetDefinition<Types>();
+        Assert.All(decoded.Values, value => Assert.Same(decoded.Values[0], value));
+        Assert.InRange(allocated, 1, 2_200_000);
+    }
+
+    [Fact]
+    public void ParentKeysDeduplicateCanonicalNumericAnnotationsAndKeepFinalChildNumbers()
+    {
+        var firstAnnotation = JsonSerializer.Deserialize<AnnotationValue>("{\"z\":1.0000,\"a\":[0,2]}")!;
+        var secondAnnotation = JsonSerializer.Deserialize<AnnotationValue>("{\"a\":[0.0,2e0],\"z\":1e0}")!;
+        var first = new ObjectTypeRef([new("value", new ScalarTypeRef(ScalarTypeKind.String),
+            annotations: ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty.Add(new("evidence"), firstAnnotation))]);
+        var second = new ObjectTypeRef([new("value", new ScalarTypeRef(ScalarTypeKind.String),
+            annotations: ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty.Add(new("evidence"), secondAnnotation))]);
+        var document = Create(new Types([first, second, new ScalarTypeRef(ScalarTypeKind.Bool)]));
+        // Bool sorts ahead of String, forcing the parent to use a final child index different
+        // from its provisional one. Numeric annotation values are ordinary data, not references.
+        Assert.Equal(3, document.Definition.GetProperty("$types").GetArrayLength());
+        var decoded = document.GetDefinition<Types>();
+        Assert.Same(decoded.Values[0], decoded.Values[1]);
+        var field = Assert.Single(Assert.IsType<ObjectTypeRef>(decoded.Values[0]).Fields);
+        Assert.Equal(ScalarTypeKind.String, Assert.IsType<ScalarTypeRef>(field.Type).Kind);
+        Assert.Equal("{\"a\":[0,2],\"z\":1}", field.Annotations[new("evidence")].Value.GetRawText());
+        Assert.Equal(document.Definition.GetRawText(), Create(decoded).Definition.GetRawText());
+    }
+
+    [Theory]
+    [InlineData(12)]
+    [InlineData(128)]
+    public void ParentReferenceReplayPreservesDigitWidthChangesAndAnnotationNumbers(int count)
+    {
+        var annotation = JsonSerializer.Deserialize<AnnotationValue>(
+            """{"elementType":0,"type":128,"text":"é \"quoted\"","values":[0,9,10,99,100]}""")!;
+        var annotations = ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty.Add(new("evidence"), annotation);
+        var fields = Enumerable.Range(0, count).Select(index => new ObjectFieldTypeDef(
+            $"field{index:D3}", new ArrayTypeRef(new EnumTypeRef($"enum{count - index:D3}", ["one", "two"])),
+            annotations: annotations)).ToImmutableArray();
+        var parent = new ObjectTypeRef(fields);
+        var marker = new ScalarTypeRef(ScalarTypeKind.Bool);
+        var first = Create(new TypeMap(new() { ["parent"] = parent, ["marker"] = marker,
+            ["duplicate"] = new ObjectTypeRef(fields) }));
+        var second = Create(new TypeMap(new() { ["marker"] = marker, ["duplicate"] = new ObjectTypeRef(fields),
+            ["parent"] = parent }));
+        Assert.Equal(first.Definition.GetRawText(), second.Definition.GetRawText());
+        var decoded = first.GetDefinition<TypeMap>();
+        Assert.Same(decoded.Values["parent"], decoded.Values["duplicate"]);
+        var decodedFields = Assert.IsType<ObjectTypeRef>(decoded.Values["parent"]).Fields;
+        for (var index = 0; index < count; index++)
+        {
+            var array = Assert.IsType<ArrayTypeRef>(decodedFields[index].Type);
+            Assert.Equal($"enum{count - index:D3}", Assert.IsType<EnumTypeRef>(array.ElementType).Name);
+            Assert.Equal(annotation.Value.GetProperty("text").GetString(),
+                decodedFields[index].Annotations[new("evidence")].Value.GetProperty("text").GetString());
+            Assert.Equal(128, decodedFields[index].Annotations[new("evidence")].Value.GetProperty("type").GetInt32());
+            Assert.Equal(new[] { 0, 9, 10, 99, 100 }, decodedFields[index].Annotations[new("evidence")]
+                .Value.GetProperty("values").EnumerateArray().Select(value => value.GetInt32()));
+        }
+        Assert.Equal(first.Definition.GetRawText(), Create(decoded).Definition.GetRawText());
+        Assert.Equal(first.Metadata.Fingerprint, Create(decoded).Metadata.Fingerprint);
     }
 
     [Theory]
@@ -130,6 +248,40 @@ public sealed class ExecutionDefinitionTypeReferenceTests(Xunit.Abstractions.ITe
     public void AuthoredReservedTablePropertyIsRejected()
     {
         Assert.Throws<JsonException>(() => Create(new Reserved([])));
+    }
+
+    [Fact]
+    public void ReplayRejectsCorruptTokenBytesAndSerializationRestoresTraversalStacks()
+    {
+        var owner = typeof(ExecutionDefinitionDocument).Assembly.GetType("Cohesive.Execution.ExecutionDefinitionTypes")!;
+        var poolType = owner.GetNestedType("TypePool", BindingFlags.NonPublic)!;
+        var pool = Activator.CreateInstance(poolType, nonPublic: true)!;
+        using var codec = (IDisposable)owner.GetMethod("Rent", BindingFlags.NonPublic | BindingFlags.Static)!.Invoke(null, [pool])!;
+        var options = (JsonSerializerOptions)codec.GetType().GetProperty("Options", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(codec)!;
+        var intern = poolType.GetMethod("Intern", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var cyclic = new ArrayTypeRef(new ScalarTypeRef(ScalarTypeKind.String));
+        typeof(ArrayTypeRef).GetProperty(nameof(ArrayTypeRef.ElementType))!.SetValue(cyclic, cyclic);
+        Assert.IsType<JsonException>(Assert.Throws<TargetInvocationException>(() => intern.Invoke(pool, [cyclic, options])).InnerException);
+        foreach (var name in new[] { "capturing", "childDepths" })
+        {
+            var stack = poolType.GetField(name, BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(pool)!;
+            Assert.Equal(0, stack.GetType().GetProperty("Count")!.GetValue(stack));
+        }
+        var parent = new ArrayTypeRef(new ScalarTypeRef(ScalarTypeKind.String));
+        var index = (int)intern.Invoke(pool, [parent, options])!;
+        var entries = (IList)poolType.GetProperty("Entries", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(pool)!;
+        poolType.GetField("orderedIndices", BindingFlags.NonPublic | BindingFlags.Instance)!.SetValue(pool, Enumerable.Range(0, entries.Count).ToArray());
+        var payloads = (IList)poolType.GetField("payloads", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(pool)!;
+        var references = (IList)poolType.GetField("references", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(pool)!;
+        var token = ((IList)references[index]!)[0]!;
+        var offset = (int)token.GetType().GetProperty("Offset")!.GetValue(token)!;
+        var bytes = (byte[])payloads[index]!;
+        var original = bytes[offset];
+        bytes[offset] = (byte)'9';
+        var remap = poolType.GetMethod("Remap", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Contains("does not match", Assert.IsType<JsonException>(Assert.Throws<TargetInvocationException>(() => remap.Invoke(pool, [index])).InnerException).Message);
+        bytes[offset] = original;
+        Assert.Equal(0, ((JsonElement)remap.Invoke(pool, [index])!).GetProperty("elementType").GetInt32());
     }
 
     public sealed record Payload(string Text, TypeRef[] Values);

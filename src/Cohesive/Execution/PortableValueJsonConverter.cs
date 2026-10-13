@@ -268,10 +268,13 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
                 writer.WriteStartObject();
                 var fields = value.Fields
                     ?? throw new JsonException("An object observation requires a property collection.");
-                foreach (var field in fields.OrderBy(static pair => pair.Key, StringComparer.Ordinal))
+                using (var ordered = new OrderedObservationFields(fields))
                 {
-                    writer.WritePropertyName(field.Key);
-                    WriteObservation(writer, field.Value);
+                    foreach (var field in ordered)
+                    {
+                        writer.WritePropertyName(field.Key);
+                        WriteObservation(writer, field.Value);
+                    }
                 }
                 writer.WriteEndObject();
                 break;

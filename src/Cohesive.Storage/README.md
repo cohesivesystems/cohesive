@@ -8,6 +8,10 @@ requested atomicity. `UpsertBatch(context, entities, atomicity)` maps ordinary r
 single writes, then invokes one native batch. Per-candidate concurrency tokens use the canonical
 `EntityBatchWriteRequest` overload. Unsupported atomicity is rejected instead of silently using independent writes.
 
+Durable Process fingerprints retain their `sha256-v1` canonical profile while streaming canonical
+output into the core hash sink. Complete checkpoints and receipt history are still hashed; persisted
+admission and exact-retry checks remain mandatory. See [qualification](../../docs/performance/strict-document-hashes.md).
+
 ## Install
 
 ```bash

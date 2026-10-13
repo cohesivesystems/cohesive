@@ -11,14 +11,16 @@ namespace Cohesive.Adapters.Postgres;
 
 internal readonly record struct PostgresNpgsqlParameter(
     object Value,
-    PostgresRelationQueryScalarType ScalarType,
+    PostgresRelationQueryScalarType? ScalarType,
     bool IsArray);
 
 internal sealed record PostgresNpgsqlCommand(
     string Text,
     ImmutableArray<PostgresNpgsqlParameter> Parameters,
     ImmutableArray<PostgresRelationQueryScalarType> ResultTypes,
-    long MaximumResultBytes);
+    long MaximumResultBytes,
+    int? MaximumRows = null,
+    bool PermitTemporalValues = true);
 
 internal sealed record PostgresNpgsqlCommandResult(
     ImmutableArray<ImmutableArray<object?>> Rows);
@@ -81,18 +83,27 @@ internal static class PostgresNpgsqlExecution
                 sourceCommand.MaximumResultBytes,
                 "A PostgreSQL command result byte bound must be positive.");
         }
-        if (sourceCommand.Parameters.Any(static parameter => IsTemporal(parameter.ScalarType))
-            || sourceCommand.ResultTypes.Any(IsTemporal))
-        {
-            RequireExactTemporalSwitch();
-        }
+        if (sourceCommand.MaximumRows is <= 0) throw new ArgumentOutOfRangeException(nameof(sourceCommand));
+        var temporalMetadata = sourceCommand.ResultTypes.Any(IsTemporal);
+        var temporalValues = temporalMetadata;
         foreach (var parameter in sourceCommand.Parameters)
         {
+            if (parameter.ScalarType is not { } type || !IsTemporal(type)) continue;
+            temporalMetadata = true;
+            temporalValues |= parameter.Value is not DBNull;
+        }
+        if (temporalValues && !sourceCommand.PermitTemporalValues)
+            throw new NotSupportedException("This command does not admit temporal values.");
+        if (temporalValues || (temporalMetadata && sourceCommand.PermitTemporalValues)) RequireExactTemporalSwitch();
+        foreach (var parameter in sourceCommand.Parameters)
+        {
+            if (parameter.ScalarType is null && (parameter.Value is not DBNull || parameter.IsArray))
+                throw new ArgumentException("An untyped PostgreSQL parameter must be a scalar SQL null.", nameof(sourceCommand));
             command.Parameters.Add(new NpgsqlParameter
             {
-                NpgsqlDbType = PostgresRelationQueryScalarCatalog.ToNpgsqlDbType(
-                    parameter.ScalarType,
-                    parameter.IsArray),
+                NpgsqlDbType = parameter.ScalarType is { } type
+                    ? PostgresRelationQueryScalarCatalog.ToNpgsqlDbType(type, parameter.IsArray)
+                    : NpgsqlDbType.Unknown,
                 Value = parameter.Value
             });
         }
@@ -110,6 +121,8 @@ internal static class PostgresNpgsqlExecution
         var rows = ImmutableArray.CreateBuilder<ImmutableArray<object?>>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
+            if (sourceCommand.MaximumRows is { } maximumRows && rows.Count == maximumRows)
+                throw new InvalidOperationException("Native query exceeded its complete-result row bound.");
             var row = ImmutableArray.CreateBuilder<object?>(sourceCommand.ResultTypes.Length);
             for (var ordinal = 0; ordinal < sourceCommand.ResultTypes.Length; ordinal++)
             {

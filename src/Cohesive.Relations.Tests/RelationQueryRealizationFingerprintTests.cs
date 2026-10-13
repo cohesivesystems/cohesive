@@ -10,6 +10,15 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationQueryRealizationFingerprintTests
 {
     [Fact]
+    public void Compute_RetainsExistingBinaryProfileGoldenDigests()
+    {
+        var report = BuildReport(CreateInputs(metadata: "golden"));
+        Assert.Equal("05be34ff4e5488ff0291c75e82443c786675d304fc0b451c0bbcf7eac5a1f0a9", RelationQueryRealizationFingerprinter.Compute(report).Value);
+        Assert.Equal("21b7f43ed52ef99fe5bc61754582295695ff00e977f2c98e75b94c27c4bd0e2e", RelationQueryRealizationRequirementSetFingerprinter.Compute(
+            report.Plan, report.Observability, report.Requirements).Value);
+    }
+
+    [Fact]
     public void TargetProfileSemanticEquality_IgnoresDescriptionsAndDetectsContractChanges()
     {
         var first = CreateInputs(metadata: "first").TargetProfile;

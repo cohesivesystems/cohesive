@@ -58,8 +58,7 @@ public static class HostedQueryValueAdapter
         T input;
         try
         {
-            var element = JsonSerializer.SerializeToElement(inputValue.Value.Value, JsonOptions);
-            input = element.Deserialize<T>(JsonOptions)
+            input = inputValue.Value.Value.Deserialize<T>(JsonOptions)
                 ?? throw new JsonException("The concrete invocation decoded as null.");
         }
         catch (Exception exception) when (IsConversionFailure(exception))

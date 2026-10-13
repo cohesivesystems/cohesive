@@ -82,6 +82,14 @@ public sealed class ConfigurationParameterOptionBuilder(Action<Func<Configuratio
         return this;
     }
 
+    /// <summary>Marks parameter values as sensitive for explanations and diagnostics.</summary>
+    /// <returns>The current builder.</returns>
+    public ConfigurationParameterOptionBuilder AsSensitive()
+    {
+        update(option => option with { Sensitive = true });
+        return this;
+    }
+
     /// <summary>
     /// Marks the parameter as required or optional.
     /// </summary>

@@ -45,6 +45,18 @@ It can be persisted, validated, generated into another host language, or interpr
 The package does not define Relations, Transitions, Processes, APIs, presentation, storage, or provider behavior.
 Those blocks depend on these shared semantic contracts.
 
+Strict portable-document consumers can use `StrictDocumentJson.ComputeCanonicalSha256(value, options)`
+to hash the same bytes as `GetCanonicalBytes` without retaining canonical output. It returns a raw
+SHA-256 digest; the consuming block owns its fingerprint profile and prefix. See the
+[qualification and operating boundary](../../docs/performance/strict-document-hashes.md).
+
+Declared converter/polymorphic values project directly into owned observations without a mutable
+JSON tree. See [typed projection qualification](../../docs/performance/hosted-value-projection.md).
+`ObservationValue.Deserialize<T>` uses pooled UTF-8 storage; results own retained JSON data.
+`CanonicalJsonWriter.GetCanonicalSequenceText` returns owned text using the same explicit profile, encoder and exclusions as streaming canonical output.
+`AnnotationMapJsonConverter` optionally shares owned backing for annotation maps up to 64 KiB of encoded JSON; use it for buffered messages and budget for parsing the complete map (including parser metadata).
+See [decoding contracts and allocation budgets](../../docs/performance/pooled-observation-decoding.md).
+
 ## Observations and snapshots
 
 An `Observation` describes an immutable shaped value. Entity identity and version remain explicit rather than being
@@ -139,6 +151,8 @@ text. Explicit serializer customizations retain their chosen conversion contract
 can opt into `PortableValueJsonConverter.TaggedObservationValues`, which reuses the PortableValue node encoding to
 preserve byte, temporal, numeric, and undefined kinds. Opting in changes the wire format and requires a versioned profile;
 ordinary observation JSON remains unchanged. Entity receipts use the explicit `EntityStorageJson` profile in Storage.
+Portable validation preserves deterministic diagnostics and writers preserve ordinal field encoding;
+see [field-ordering qualification](../../docs/performance/portable-observation-field-ordering.md).
 
 ## Type-level value admission
 
@@ -147,6 +161,20 @@ type checks used by observation admission without manufacturing a one-field shap
 resolve only in the supplied graph. This validates a concrete type; field presence and nullability
 remain the caller's contract. Relation draft admission uses it for graph-owned enum literals.
 
+Nested object and structural validation preserves exact-property precedence and uses case-insensitive
+fallback matching. Unknown-property diagnostics preserve declaration order. Named enums accept both
+member names and literal aliases; duplicate union discriminators select the first declared case.
+Nonstring primitive literals retain their representation-sensitive matching rules.
+
+Repeated validation shares immutable preparation within the exact graph and type declarations.
+Cache keys are weak, concurrent preparation is safe, and failed preparation can be retried. Instance
+values, allowed union discriminators, depth limits and diagnostics remain operation-scoped.
+JSON decoding shares prepared dispatch indexes with validation without preparing unrelated closures.
+These optimizations introduce no public type IDs or wire contracts and do not replace validation.
+
+See the [performance overview](../../docs/performance/execution-preparation-allocations.md) for cache
+ownership, implementation invariants, benchmarks and qualification.
+
 ## Exact decimal text
 
 `ObservationValue.TryParseExactDecimal(text, out value)` validates signed invariant decimal text
@@ -154,10 +182,11 @@ without rounding. It shares bounded coefficient parsing with JSON-number acquisi
 alone permits exponent notation. The expression evaluator delegates to this helper. The existing
 `TryGetDecimal` convenience coercion keeps its broader BCL syntax and rounding behavior.
 
-Execution-document normalization and fingerprinting traverse immutable JSON directly; see
-[canonicalization performance](../../docs/performance/execution-canonicalization.md) for ownership,
-exact-byte regression coverage, allocation measurements and remaining costs.
-
+The [execution preparation allocation overview](../../docs/performance/execution-preparation-allocations.md)
+describes current immutable type reuse, guarded compact reference replay, canonical-byte interning,
+shared node/element canonical traversal, and retryable weak metadata preparation. It links the final
+qualification reports. Execution normalization, type ordering and fingerprints share one canonical
+JSON authority; pooled buffers never escape their operation. Imported documents retain strict validation.
 
 ### Concurrent JSON profile metadata preparation
 
@@ -186,3 +215,33 @@ Imported documents compute from their own payload on first use; declared metadat
 extension validation remain fresh on every admission. Only the digest is retained. See
 [fingerprint reuse qualification](../../docs/performance/execution-definition-fingerprint-reuse.md)
 for concurrency, exact-byte equivalence, cold/warm evidence, and cache scope.
+
+## Canonical JSON sequences
+
+For immutable JSON tokens, `CanonicalJsonWriter.WriteCanonicalSequence(writer,
+root, profile)` streams into a caller-owned `Utf8JsonWriter`. Select
+`CanonicalJsonSequenceProfile.ExactDecimalRational` for normalized numbers and
+rejected duplicate keys, or `PreserveLexical` for unchanged numeric spellings and
+stable duplicate-key order. Both preserve arrays and sort keys by ordinal UTF-16.
+The caller's encoder controls escaping. The lexical profile flushes complete tokens
+periodically; a single large token can still grow the writer buffer. Failures can
+leave partial output, so the caller owns disposal and transactional publication.
+
+Use `ComputeCanonicalSequenceSha256(element, profile, writerOptions)` to hash through
+Core's pooled incremental sink without retaining canonical output. Match `writerOptions`
+to the direct writer, including its encoder, to preserve exact hash bytes.
+
+`CanonicalJsonPropertyExclusions` prepares exact object-property JSON Pointer paths
+such as `/identity/contentHash` once. Pass it to sequence writing or hashing to omit
+those properties during traversal. Rules are ordinal, apply to repeated occurrences,
+and do not propagate into array elements. Omitted values are not validated: use this
+for an explicit fingerprint projection, alongside separate document admission.
+
+Ordered canonical hashing can combine structural array ordering, exact property exclusions and a raw
+version prefix in one traversal. Hash APIs require an explicit writer-options argument; choose the same
+encoder as the existing fingerprint contract. Relations preserves its relaxed escaping and versioned
+bytes. See [repeated representation qualification](../../docs/performance/repeated-representation-work.md).
+
+`ObservationMaterializer.PrepareJsonValue<T>()` prepares plain JSON interpretation for
+already-admitted portable values. It returns independent CLR results and retains custom
+serializer compatibility. Shape-qualified admission remains a separate responsibility.

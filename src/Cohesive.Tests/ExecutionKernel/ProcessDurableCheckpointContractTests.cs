@@ -14,6 +14,26 @@ namespace Cohesive.Tests.ExecutionKernel;
 public sealed class ProcessDurableCheckpointContractTests
 {
     [Fact]
+    public void StreamingCommitAndCheckpointHashesPreserveSha256V1Bytes()
+    {
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var options = ProcessDurableCheckpointJsonSerializer.CreateOptions();
+        var commit = new ProcessDurableCommit(new("commit/streaming"), new("1"),
+            "worker/test", new("1"), checkpoint, [], checkpoint.UpdatedAtUtc);
+        var content = new
+        {
+            commit.Id, commit.ExpectedRevision, commit.Owner, commit.Fence,
+            commit.Checkpoint, commit.LocalMutations, commit.ObservedAtUtc
+        };
+        var expected = "sha256-v1:" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            StrictDocumentJson.GetCanonicalBytes(content, options)));
+        Assert.Equal(expected, commit.Fingerprint.Value);
+        var checkpointExpected = "sha256-v1:" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            ProcessDurableCheckpointJsonSerializer.GetCanonicalBytes(checkpoint)));
+        Assert.Equal(checkpointExpected, ProcessDurableCommitFingerprinter.ComputeCheckpoint(checkpoint).Value);
+    }
+
+    [Fact]
     public void DurableTraceProjection_MatchesReferenceSemanticsAndRetainsCommitEvidence()
     {
         var fixture = ProcessDurabilityTestFixture.Create();

@@ -14,6 +14,13 @@ Canonical execution IR declares `IImmutableExecutionDefinition`, so repeated typ
 document-owned immutable decoding. Integrity, canonical-wire, contextual semantics, and deployment
 admission remain independently validated. See [immutable execution preparation](../../docs/performance/immutable-execution-preparation.md).
 
+Hosted typed handlers retain fresh portable-value admission while delegating CLR decoding to
+Core’s pooled UTF-8 boundary. Typed row, nested-result and transition projections prepare
+plain JSON interpretation at binding construction; customized contracts retain JSON decoding. See [qualification](../../docs/performance/hosted-value-projection.md).
+
+Relation and realization fingerprints retain their existing binary profiles while streaming temporary output.
+See [performance qualification](../../docs/performance/realization-fingerprints.md).
+
 ## Install
 
 ```bash

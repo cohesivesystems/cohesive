@@ -21,7 +21,7 @@ namespace Cohesive.Relations.Execution;
 /// </remarks>
 public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
 {
-    readonly ConditionalWeakTable<CompiledRelationQueryPlan, Lazy<RelationQueryRealizationReport>> realizations = new();
+    readonly WeakPreparationCache<CompiledRelationQueryPlan, RelationQueryRealizationReport> realizations = new();
 
     /// <summary>
     /// Shared stateless interpreter configured with <see cref="DefaultTemporalCapabilities"/>.
@@ -98,11 +98,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
     public RelationQueryRealizationReport Realize(CompiledRelationQueryPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        return realizations.GetValue(
-            plan,
-            candidate => new(
-                () => CompileRealization(candidate),
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        return realizations.Get(plan, candidate => CompileRealization(candidate));
     }
 
     RelationQueryRealizationReport CompileRealization(CompiledRelationQueryPlan plan) =>

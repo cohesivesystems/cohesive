@@ -1,4 +1,5 @@
 using System.CommandLine;
+using System.Collections.Immutable;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -55,6 +56,26 @@ public class CliCommandContext : ICancellationTokenContext, IServiceProvider
             serviceProvider: source.serviceProvider
             )
     {
+        ConfigurationProvenance = source.ConfigurationProvenance;
+        BoundParameterValues = source.BoundParameterValues;
+    }
+
+    /// <summary>Gets immutable, redaction-safe explanations of effective parameter values and winning sources.</summary>
+    /// <remarks>Populated by CLI invocation; manually constructed contexts have no provenance.</remarks>
+    public ImmutableArray<CliParameterProvenance> ConfigurationProvenance { get; internal set; } = [];
+
+    internal IReadOnlyDictionary<string, object?> BoundParameterValues { get; set; } =
+        ImmutableDictionary<string, object?>.Empty;
+
+    /// <summary>Writes effective configuration and its sources to the invocation output.</summary>
+    public void WriteConfigurationExplanation()
+    {
+        foreach (var parameter in ConfigurationProvenance)
+        {
+            var origins = string.Join(", ", parameter.Origins.Select(origin =>
+                $"{origin.Key}: {origin.Kind} ({origin.Source})"));
+            Io.WriteLine($"{parameter.CliName} = {parameter.Value ?? "<absent>"} [{origins}]");
+        }
     }
 
     /// <summary>
@@ -178,7 +199,11 @@ public class CliCommandContext<TConfiguration> : CliCommandContext, ICliTypedCom
             ParseResult,
             CancellationToken,
             Io,
-            serviceProvider: sp);
+            serviceProvider: sp)
+        {
+            ConfigurationProvenance = ConfigurationProvenance,
+            BoundParameterValues = BoundParameterValues
+        };
 
     object ICliTypedCommandContext.Configuration => Configuration!;
 

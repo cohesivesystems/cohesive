@@ -1,5 +1,4 @@
 using System.Collections;
-using System.Collections.Concurrent;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json.Serialization;
@@ -12,13 +11,17 @@ namespace Cohesive.Model;
 /// </summary>
 static class DefaultObservationValueConverterCache
 {
-    static readonly ConcurrentDictionary<Type, ConverterEntry> Converters = [];
+    static readonly WeakPreparationCache<Type, ConverterEntry> Converters = new();
+    static readonly WeakPreparationCache<Type, ConverterEntry> StrictConverters = new();
 
     public static Delegate? Get(Type targetType) =>
-        Converters.GetOrAdd(
+        Converters.Get(
             targetType,
             static currentType => new(new ConverterBuilder().Build(currentType)))
         .Converter;
+
+    internal static Delegate? GetStrict(Type targetType) => StrictConverters.Get(targetType,
+        static type => new(new ConverterBuilder(strict: true).Build(type))).Converter;
 
     sealed record ConverterEntry(Delegate? Converter);
 
@@ -28,7 +31,7 @@ static class DefaultObservationValueConverterCache
             ? value.Bytes.ToArray()
             : value.Deserialize<byte[]>(ObservationMaterializerDefaults.SerializerOptions);
 
-    sealed class ConverterBuilder
+    sealed class ConverterBuilder(bool strict = false)
     {
         static readonly MethodInfo ReadArrayMethod = GetGenericMethod(nameof(ReadArray));
         static readonly MethodInfo ReadNullableMethod = GetGenericMethod(nameof(ReadNullable));
@@ -75,20 +78,14 @@ static class DefaultObservationValueConverterCache
 
         Expression? BuildExpression(Type targetType, Expression value)
         {
-            if (targetType == typeof(ObservationValue))
-            {
-                return value;
-            }
+            if (targetType == typeof(ObservationValue)) return strict ? null : value;
 
             if (targetType == typeof(string))
             {
                 return CallConverter(value, nameof(ReadString));
             }
 
-            if (targetType == typeof(byte[]))
-            {
-                return CallConverter(value, nameof(ReadBytes));
-            }
+            if (targetType == typeof(byte[])) return strict ? null : CallConverter(value, nameof(ReadBytes));
 
             if (targetType == typeof(bool))
             {
@@ -155,12 +152,9 @@ static class DefaultObservationValueConverterCache
             {
                 var elementType = targetType.GetElementType()!;
                 var elementConverter = Build(elementType);
-                return elementConverter is null
-                    ? null
-                    : Expression.Call(
-                        ReadArrayMethod.MakeGenericMethod(elementType),
-                        value,
-                        ConverterConstant(elementType, elementConverter));
+                return elementConverter is null ? null : StrictContainer(targetType, value,
+                    Expression.Call(ReadArrayMethod.MakeGenericMethod(elementType), value,
+                        ConverterConstant(elementType, elementConverter)), ObservationValueKind.Array);
             }
 
             return BuildConventionalObject(targetType, value);
@@ -174,16 +168,52 @@ static class DefaultObservationValueConverterCache
                 || targetType.IsPointer
                 || targetType.IsByRefLike
                 || typeof(IEnumerable).IsAssignableFrom(targetType)
-                || HasJsonContractCustomization(targetType))
+                || HasJsonContractCustomization(targetType)
+                || (strict && (typeof(IJsonOnDeserializing).IsAssignableFrom(targetType)
+                    || typeof(IJsonOnDeserialized).IsAssignableFrom(targetType))))
             {
                 return null;
             }
 
             var properties = ShapeTypeInspector.GetReadableProperties(targetType);
             if (properties.Length == 0
-                || properties.Any(HasJsonContractCustomization))
+                || properties.Any(HasJsonContractCustomization)
+                || (strict && properties.Any(static property => property.CustomAttributes.Any(attribute =>
+                    attribute.AttributeType.FullName == "System.Runtime.CompilerServices.RequiredMemberAttribute"))))
             {
                 return null;
+            }
+
+            // Plain JSON prefers a public parameterless constructor and public setters.
+            // Keep customized and write-only contracts on the serializer compatibility path.
+            if (strict && targetType.GetConstructor(Type.EmptyTypes) is { } emptyConstructor)
+            {
+                if (targetType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Any(static property => property.GetMethod is null && property.SetMethod?.IsPublic == true)) return null;
+                var instance = Expression.Variable(targetType, "instance");
+                var statements = new List<Expression>
+                {
+                    Expression.Call(RequireObjectMethod, value),
+                    Expression.Assign(instance, Expression.New(emptyConstructor))
+                };
+                foreach (var property in properties.OrderBy(static property => property.Name, StringComparer.Ordinal))
+                {
+                    if (property.SetMethod?.IsPublic != true) continue;
+                    var converter = Build(property.PropertyType);
+                    if (converter is null) return null;
+                    // An absent property must keep its constructor/initializer value and skip its setter.
+                    var fields = Expression.Property(value, nameof(ObservationValue.Fields));
+                    var present = Expression.Call(fields, typeof(IReadOnlyDictionary<string, ObservationValue>)
+                        .GetMethod(nameof(IReadOnlyDictionary<string, ObservationValue>.ContainsKey))!, Expression.Constant(property.Name));
+                    statements.Add(Expression.IfThen(present, Expression.Assign(Expression.Property(instance, property),
+                        ReadProperty(value, property.Name, property.PropertyType, converter, false, null))));
+                }
+                statements.Add(instance);
+                Expression mutableProjection = Expression.Block([instance], statements);
+                var result = targetType.IsValueType ? mutableProjection : Expression.Condition(
+                    Expression.Equal(Expression.Property(value, nameof(ObservationValue.Kind)),
+                        Expression.Constant(ObservationValueKind.Null)), Expression.Default(targetType), mutableProjection);
+                return StrictContainer(targetType, value, result, ObservationValueKind.Object);
             }
 
             var byProperty = properties.ToDictionary(
@@ -242,10 +272,21 @@ static class DefaultObservationValueConverterCache
                     Expression.Default(targetType),
                     materialize);
             }
-            return materialize;
+            return StrictContainer(targetType, value, materialize, ObservationValueKind.Object);
         }
 
-        static MethodCallExpression ReadProperty(
+        Expression StrictContainer(Type target, Expression value, Expression direct, ObservationValueKind expected)
+        {
+            if (!strict) return direct;
+            var kind = Expression.Property(value, nameof(ObservationValue.Kind));
+            Expression matches = Expression.Equal(kind, Expression.Constant(expected));
+            if (!target.IsValueType) matches = Expression.OrElse(matches,
+                Expression.Equal(kind, Expression.Constant(ObservationValueKind.Null)));
+            return Expression.Condition(matches, direct,
+                Expression.Call(GetGenericMethod(nameof(DeserializeStrict)).MakeGenericMethod(target), value));
+        }
+
+        MethodCallExpression ReadProperty(
             Expression value,
             string propertyName,
             Type propertyType,
@@ -258,7 +299,8 @@ static class DefaultObservationValueConverterCache
                 Expression.Constant(propertyName),
                 ConverterConstant(propertyType, converter),
                 Expression.Constant(hasExplicitDefault),
-                Expression.Constant(explicitDefault));
+                Expression.Constant(explicitDefault),
+                Expression.Constant(strict));
 
         static ConstantExpression ConverterConstant(Type targetType, Delegate converter) =>
             Expression.Constant(converter, ConverterType(targetType));
@@ -266,8 +308,23 @@ static class DefaultObservationValueConverterCache
         static Type ConverterType(Type targetType) =>
             typeof(Func<,>).MakeGenericType(typeof(ObservationValue), targetType);
 
-        static MethodCallExpression CallConverter(Expression value, string methodName) =>
-            Expression.Call(typeof(ConverterBuilder), methodName, typeArguments: null, value);
+        Expression CallConverter(Expression value, string methodName)
+        {
+            var direct = Expression.Call(typeof(ConverterBuilder), methodName, typeArguments: null, value);
+            if (!strict || direct.Type is not { } target
+                || (target != typeof(int) && target != typeof(long) && target != typeof(double) && target != typeof(decimal)))
+                return direct;
+            var kind = Expression.Property(value, nameof(ObservationValue.Kind));
+            var stringValue = Expression.Equal(kind, Expression.Constant(ObservationValueKind.String));
+            var invalidDouble = Expression.AndAlso(
+                Expression.Equal(kind, Expression.Constant(ObservationValueKind.Double)),
+                Expression.Not(Expression.Call(typeof(double), nameof(double.IsFinite), null,
+                    Expression.Property(value, nameof(ObservationValue.Double)))));
+            var fallback = Expression.Call(GetGenericMethod(nameof(DeserializeStrict)).MakeGenericMethod(target), value);
+            return Expression.Condition(Expression.OrElse(stringValue, invalidDouble), fallback, direct);
+        }
+
+        static T DeserializeStrict<T>(ObservationValue value) => value.Deserialize<T>()!;
 
         static bool HasJsonContractCustomization(MemberInfo member) =>
             member.GetCustomAttributes(inherit: true).Any(static attribute =>
@@ -305,9 +362,12 @@ static class DefaultObservationValueConverterCache
             string propertyName,
             Func<ObservationValue, TProperty> converter,
             bool hasExplicitDefault,
-            object? explicitDefault)
+            object? explicitDefault, bool caseSensitive)
         {
-            if (!TryGetPropertyIgnoreCase(value.Fields!, propertyName, out var propertyValue))
+            var present = caseSensitive
+                ? value.Fields!.TryGetValue(propertyName, out var propertyValue)
+                : TryGetPropertyIgnoreCase(value.Fields!, propertyName, out propertyValue);
+            if (!present)
             {
                 if (!hasExplicitDefault || explicitDefault is null)
                 {

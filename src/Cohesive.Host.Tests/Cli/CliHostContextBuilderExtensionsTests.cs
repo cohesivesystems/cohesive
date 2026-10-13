@@ -42,6 +42,9 @@ public sealed class CliHostContextBuilderExtensionsTests
         Assert.NotNull(host);
         Assert.Equal("ds_shipments_v3", capturedContext!.Configuration.Dataset);
         Assert.Equal("host", capturedContext.Stage);
+        var datasetProvenance = capturedContext.ConfigurationProvenance.Single(parameter => parameter.ConfigurationKey == "dataset");
+        Assert.Equal("ds_shipments_v3", datasetProvenance.Value);
+        Assert.Equal(CliConfigurationSourceKind.CommandLine, Assert.Single(datasetProvenance.Origins).Kind);
         Assert.Equal("dep-001", capturedDependency!.Id);
         Assert.Same(host.Services, capturedServices);
         Assert.NotSame(capturedContext, capturedServices);

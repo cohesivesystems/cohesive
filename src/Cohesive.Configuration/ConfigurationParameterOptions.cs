@@ -15,6 +15,7 @@ namespace Cohesive.Configuration;
 /// <param name="AllowedValues">Optional set of allowed raw values.</param>
 /// <param name="Required">Optional required flag override.</param>
 /// <param name="TimeUnit">Optional <see cref="TimeSpan"/> unit override.</param>
+/// <param name="Sensitive">Optional flag suppressing values in explanations and diagnostics.</param>
 public sealed record ConfigurationParameterOption(
     string PropertyName,
     FieldPath Path,
@@ -24,7 +25,8 @@ public sealed record ConfigurationParameterOption(
     string? Description = null,
     string[]? AllowedValues = null,
     bool? Required = null,
-    ConfigurationTimeUnit? TimeUnit = null
+    ConfigurationTimeUnit? TimeUnit = null,
+    bool? Sensitive = null
     );
 
 
@@ -41,6 +43,7 @@ public sealed record ConfigurationParameterOption(
 /// <param name="Required">Resolved required flag.</param>
 /// <param name="TimeUnit">Resolved <see cref="TimeSpan"/> unit, if any.</param>
 /// <param name="ParameterType">CLR type bound for the parameter.</param>
+/// <param name="Sensitive">Whether values must be redacted from explanations and diagnostics.</param>
 public sealed record ConfigurationParameterDescriptor(
     string PropertyName,
     FieldPath Path,
@@ -51,7 +54,8 @@ public sealed record ConfigurationParameterDescriptor(
     IReadOnlyList<string> AllowedValues,
     bool Required,
     ConfigurationTimeUnit? TimeUnit,
-    Type ParameterType
+    Type ParameterType,
+    bool Sensitive = false
     );
 
 /// <summary>

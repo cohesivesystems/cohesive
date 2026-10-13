@@ -47,6 +47,21 @@ ordered patches produce a candidate observation, and invariants check that candi
 mutates the record. [POCO authoring and execution](POCO_AUTHORING.md) covers materialization, names, value-object
 contracts, and the supported subset.
 
+## Entity field updates
+
+For a declarative `Entity<T>` field, both `Set(entity => entity.Status, "ready")`
+and `Set(entity => entity.Status, (_, input) => input.Status)` use the entity-field
+selector overload. Their step identity is `set/Status`, independent of authoring
+order. `SetNull(entity => entity.OptionalValue)` produces a Set patch containing
+JSON null; it does not remove the field. Nullable value types are checked by the
+method's generic constraints; reference fields must also permit null in their
+semantic contract. Use `Remove` when absence is intended.
+
+Updating the same field more than once, including in different branches, requires
+explicit step IDs. Duplicate field-named IDs produce ordinary duplicate-node
+validation diagnostics. Explicit-ID overloads remain available for every update.
+POCO short constant updates retain their documented authoring-order identities.
+
 ## Candidate state and composition
 
 `TransitionStateProjector.ApplyToEntity` prepares a validated entity candidate from a canonical

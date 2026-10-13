@@ -17,6 +17,93 @@ namespace Cohesive.Tests.Postgres;
 
 public sealed class PostgresRelationQueryCompilerTests
 {
+    [NativePostgresFact]
+    public async Task LocalPostgres_NativeRowsPreserveValuesAndEnforceBounds()
+    {
+        await using var source = Npgsql.NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);
+        var schema = "native_rows_" + Guid.NewGuid().ToString("N");
+        try
+        {
+            await using (var setup = source.CreateCommand($"CREATE SCHEMA {schema}; CREATE TABLE {schema}.loads (load_id text COLLATE \"C\" PRIMARY KEY, status text COLLATE \"C\", amount numeric); INSERT INTO {schema}.loads VALUES ('a','ready',1.25),('b','ready',2.50),('c','other',3.75)"))
+                await setup.ExecuteNonQueryAsync();
+            var fixture = CreateRowsAndAggregatesFixture(includePaging: false, schema: schema);
+            var compiled = Compile(fixture.Plan, fixture.Realization, fixture.Placement.Placement, fixture.Storage);
+            Assert.True(compiled.IsSuccessful, Format(compiled.Diagnostics));
+            var artifact = Assert.Single(compiled.Artifacts, static candidate => candidate.Branch.Kind == RelationQueryNativeResultKind.QueryRows);
+            var runtime = new PostgresNpgsqlRuntimeBinding(artifact.StorageBinding.Database, source, "tests/native/v1");
+            var parameter = Assert.Single(artifact.Parameters);
+            var parameters = new Dictionary<QueryParameterId, ObservationValue> { [parameter.Parameter] = ObservationValue.FromString("ready") };
+            var rows = await new PostgresQueryRowsReader(artifact, runtime, 2, 1024).ReadAsync(parameters);
+            Assert.Equal(2, rows.Length);
+            var id = artifact.ResultFields.Single(field => field.Field.Path.ToString() == "id").Field.Path;
+            Assert.True(rows[0].TryGetField(id, out var first));
+            Assert.Equal("a", first.String);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => new PostgresQueryRowsReader(artifact, runtime, 1, 1024).ReadAsync(parameters));
+            await Assert.ThrowsAsync<PostgresNpgsqlResultByteLimitExceededException>(() => new PostgresQueryRowsReader(artifact, runtime, 2, 1).ReadAsync(parameters));
+            using var cancelled = new CancellationTokenSource();
+            cancelled.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => new PostgresQueryRowsReader(artifact, runtime, 2, 1024).ReadAsync(parameters, cancelled.Token));
+        }
+        finally
+        {
+            await using var cleanup = source.CreateCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    sealed class NativePostgresFactAttribute : FactAttribute
+    {
+        public NativePostgresFactAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")))
+                Skip = "Set COHESIVE_POSTGRES_TEST_CONNECTION_STRING to a disposable database.";
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task NativeRowsUseSharedTypedCommandAndEnforceCompleteRowBound(bool overflow)
+    {
+        var fixture = CreateRowsAndAggregatesFixture(includePaging: false);
+        var compiled = Compile(fixture.Plan, fixture.Realization, fixture.Placement.Placement, fixture.Storage);
+        Assert.True(compiled.IsSuccessful, Format(compiled.Diagnostics));
+        var artifact = Assert.Single(compiled.Artifacts, static candidate => candidate.Branch.Kind == RelationQueryNativeResultKind.QueryRows);
+        await using var source = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=tests;Username=tests;Password=tests");
+        var runtime = new PostgresNpgsqlRuntimeBinding(artifact.StorageBinding.Database, source, "tests/query-rows/v1");
+        var nativeValues = artifact.ResultFields.Select(field =>
+        {
+            Assert.True(PostgresRelationQueryScalarCatalog.TryFromSemanticType(field.ValueContract.Type, out var type));
+            return type == PostgresRelationQueryScalarType.Numeric ? (object?)12.5m : "load-1";
+        }).Concat(artifact.PresenceBindings.Select(static _ => (object?)true)).ToImmutableArray();
+        PostgresNpgsqlCommand? command = null;
+        var reader = new PostgresQueryRowsReader(artifact, runtime, maximumRows: 1, maximumBytes: 1024,
+            (value, token) =>
+            {
+                token.ThrowIfCancellationRequested();
+                command = value;
+                return ValueTask.FromResult(new PostgresNpgsqlCommandResult(overflow ? [nativeValues, nativeValues] : [nativeValues]));
+            });
+        var parameter = Assert.Single(artifact.Parameters);
+        var parameters = new Dictionary<QueryParameterId, ObservationValue> { [parameter.Parameter] = ObservationValue.FromString("ready") };
+        if (overflow)
+            await Assert.ThrowsAsync<InvalidOperationException>(() => reader.ReadAsync(parameters));
+        else
+        {
+            var row = Assert.Single(await reader.ReadAsync(parameters));
+            foreach (var field in artifact.ResultFields)
+                Assert.True(row.TryGetField(field.Field.Path, out _));
+        }
+        Assert.NotNull(command);
+        Assert.Equal(PostgresRelationQueryScalarType.Text, command.Parameters[parameter.Position - 1].ScalarType);
+        Assert.Equal(PostgresRelationQueryScalarType.Int32, command.Parameters[^1].ScalarType);
+        Assert.Equal(2, command.Parameters[^1].Value);
+        Assert.EndsWith("LIMIT $" + command.Parameters.Length, command.Text);
+        Assert.Equal(1, command.MaximumRows);
+        Assert.False(command.PermitTemporalValues);
+        Assert.Equal(artifact.ResultFields.Length + artifact.PresenceBindings.Length, command.ResultTypes.Length);
+    }
+
     static readonly PostgresRelationQueryTextSemantics OrdinalText = new(
         "C",
         PostgresRelationQueryTextEqualitySemantics.Ordinal);
@@ -1466,7 +1553,8 @@ public sealed class PostgresRelationQueryCompilerTests
         int offset = 5,
         bool aggregateCountOnly = false,
         bool includePaging = true,
-        bool useFrameworkIdentitySelector = false)
+        bool useFrameworkIdentitySelector = false,
+        string schema = "transport")
     {
         var author = RelationQuery.Expression();
         var loadShape = author.Clr.Shape<QueryLoad>();
@@ -1548,7 +1636,7 @@ public sealed class PostgresRelationQueryCompilerTests
                 table =>
                 {
                     var configured = table
-                        .Schema("transport")
+                        .Schema(schema)
                         .ColumnsExplicitly()
                         .Column(load => load.Status, "status", OrdinalTextOptions);
                     if (!aggregateCountOnly)

@@ -27,10 +27,37 @@ internal sealed class OrdinalObservationFields(ObservationLayout layout, Immutab
         field = (uint)ordinal < (uint)values.Length ? values[ordinal] : default;
         return field.Kind != ObservationValueKind.Undefined;
     }
-    public IEnumerator<KeyValuePair<string, ObservationValue>> GetEnumerator()
-    {
-        for (var ordinal = 0; ordinal < values.Length; ordinal++)
-            if (TryGetField(ordinal, out var field)) yield return new(layout.FieldIdentities[ordinal], field);
-    }
+    public Enumerator GetEnumerator() => new(this);
+    internal Enumerator GetCanonicalEnumerator() => new(this, true);
+    IEnumerator<KeyValuePair<string, ObservationValue>> IEnumerable<KeyValuePair<string, ObservationValue>>.GetEnumerator() => GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    public struct Enumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+    {
+        readonly OrdinalObservationFields fields;
+        readonly bool canonical;
+        int ordinal;
+        public Enumerator(OrdinalObservationFields fields) : this(fields, false) { }
+        internal Enumerator(OrdinalObservationFields fields, bool canonical)
+        {
+            this.fields = fields;
+            this.canonical = canonical;
+            ordinal = -1;
+            Current = default;
+        }
+        public KeyValuePair<string, ObservationValue> Current { get; private set; }
+        object IEnumerator.Current => Current;
+        public bool MoveNext()
+        {
+            while (++ordinal < fields.Layout.Count)
+                if (fields.TryGetField(canonical ? fields.Layout.CanonicalJsonOrdinals[ordinal] : ordinal, out var field))
+                {
+                    Current = new(fields.Layout.FieldIdentities[canonical ? fields.Layout.CanonicalJsonOrdinals[ordinal] : ordinal], field);
+                    return true;
+                }
+            return false;
+        }
+        public void Dispose() { }
+        public void Reset() => throw new NotSupportedException();
+    }
 }

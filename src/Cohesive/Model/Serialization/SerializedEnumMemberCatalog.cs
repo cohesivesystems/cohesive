@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json.Serialization;
 
@@ -12,6 +13,8 @@ internal enum SerializedEnumMemberCatalogFailure
 
 internal sealed class SerializedEnumMemberCatalog
 {
+    static readonly WeakPreparationCache<Type, Discovery> StrictDiscoveries = new();
+    static readonly WeakPreparationCache<Type, Discovery> FallbackDiscoveries = new();
     readonly IReadOnlyDictionary<string, string> clrToWire;
     readonly IReadOnlyDictionary<string, string> wireToClr;
 
@@ -21,9 +24,10 @@ internal sealed class SerializedEnumMemberCatalog
     {
         this.clrToWire = clrToWire;
         this.wireToClr = wireToClr;
+        WireMembers = [.. clrToWire.Values];
     }
 
-    public IReadOnlyList<string> WireMembers => [.. clrToWire.Values];
+    public ImmutableArray<string> WireMembers { get; }
 
     public bool TryGetClrName(string wireName, out string clrName) =>
         TryTranslate(wireToClr, wireName, out clrName);
@@ -44,21 +48,35 @@ internal sealed class SerializedEnumMemberCatalog
             throw new ArgumentException($"Type '{enumType}' is not an enum.", nameof(enumType));
         }
 
+        var strict = StrictDiscoveries.Get(enumType, Discover);
+        var prepared = useClrNamesForUnsupportedConverter && strict.Failure == SerializedEnumMemberCatalogFailure.UnsupportedConverter
+            ? FallbackDiscoveries.Get(enumType, static type => DiscoverMembers(type, false)) : strict;
+        catalog = prepared.Catalog;
+        failure = prepared.Failure;
+        unsupportedConverter = prepared.Converter;
+        return catalog is not null;
+    }
+
+    readonly record struct Discovery(SerializedEnumMemberCatalog? Catalog,
+        SerializedEnumMemberCatalogFailure Failure, Type? Converter);
+
+    static Discovery Discover(Type enumType)
+    {
         var converterAttribute = enumType.GetCustomAttribute<JsonConverterAttribute>(inherit: true);
         var converter = converterAttribute?.ConverterType;
         var useJsonMemberNames = converterAttribute is not null
                                  && converter is not null
                                  && IsStandardStringEnumConverter(converter);
-        if (converterAttribute is not null
-            && !useJsonMemberNames
-            && !useClrNamesForUnsupportedConverter)
+        if (converterAttribute is not null && !useJsonMemberNames)
         {
-            catalog = null;
-            failure = SerializedEnumMemberCatalogFailure.UnsupportedConverter;
-            unsupportedConverter = converter;
-            return false;
+            return new(null, SerializedEnumMemberCatalogFailure.UnsupportedConverter, converter);
         }
 
+        return DiscoverMembers(enumType, useJsonMemberNames);
+    }
+
+    static Discovery DiscoverMembers(Type enumType, bool useJsonMemberNames)
+    {
         Dictionary<string, string> clrToWire = new(StringComparer.Ordinal);
         Dictionary<string, string> wireToClr = new(StringComparer.Ordinal);
         foreach (var clrName in Enum.GetNames(enumType))
@@ -69,18 +87,12 @@ internal sealed class SerializedEnumMemberCatalog
                 : clrName;
             if (!wireToClr.TryAdd(wireName, clrName))
             {
-                catalog = null;
-                failure = SerializedEnumMemberCatalogFailure.AmbiguousWireMember;
-                unsupportedConverter = null;
-                return false;
+                return new(null, SerializedEnumMemberCatalogFailure.AmbiguousWireMember, null);
             }
             clrToWire.Add(clrName, wireName);
         }
 
-        catalog = new(clrToWire, wireToClr);
-        failure = SerializedEnumMemberCatalogFailure.None;
-        unsupportedConverter = null;
-        return true;
+        return new(new(clrToWire, wireToClr), SerializedEnumMemberCatalogFailure.None, null);
     }
 
     static bool TryTranslate(

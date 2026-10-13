@@ -1182,10 +1182,10 @@ public static class RelationQueryRealizationCompiler
             ImmutableArray<RelationQueryCompositionRuleId> rules,
             ImmutableArray<RelationQueryGuaranteeCapabilityKind> guarantees)
         {
-            Evidence = [.. evidence.Distinct().OrderBy(static item => item.Value, StringComparer.Ordinal)];
-            Boundaries = [.. boundaries.Distinct().OrderBy(static item => item.Value, StringComparer.Ordinal)];
-            Rules = [.. rules.Distinct().OrderBy(static item => item.Value, StringComparer.Ordinal)];
-            Guarantees = [.. guarantees.Distinct().OrderBy(static item => (int)item)];
+            Evidence = Normalize(evidence, static item => item.Value);
+            Boundaries = Normalize(boundaries, static item => item.Value);
+            Rules = Normalize(rules, static item => item.Value);
+            Guarantees = guarantees.Length <= 1 ? guarantees : [.. guarantees.Distinct().OrderBy(static item => (int)item)];
             Key = RelationQueryRealizationOrdering.SequenceKey(
             [
                 RelationQueryRealizationOrdering.SequenceKey(Evidence.Select(static item => item.Value)),
@@ -1194,6 +1194,22 @@ public static class RelationQueryRealizationCompiler
                 RelationQueryRealizationOrdering.SequenceKey(Guarantees.Select(static item =>
                     ((int)item).ToString("D4", System.Globalization.CultureInfo.InvariantCulture)))
             ]);
+        }
+
+        // Merged proofs often pass their existing sorted sets back through construction.
+        // Retain that immutable storage instead of building hash sets and sorting it again.
+        static ImmutableArray<T> Normalize<T>(ImmutableArray<T> values, Func<T, string> key)
+        {
+            if (values.Length <= 1) return values;
+            var previous = key(values[0]);
+            for (var i = 1; i < values.Length; i++)
+            {
+                var current = key(values[i]);
+                if (StringComparer.Ordinal.Compare(previous, current) >= 0)
+                    return [.. values.Distinct().OrderBy(key, StringComparer.Ordinal)];
+                previous = current;
+            }
+            return values;
         }
 
         public ImmutableArray<RelationQueryTargetCapabilityEvidenceId> Evidence { get; }
