@@ -173,3 +173,57 @@ acquisition, and 13.6 MB to byte-array growth under canonical property writing. 
 nearest-application-frame samples, not exact totals or proof that retained values can be eliminated.
 The next investigation should distinguish repeated typed projection from necessary retained results
 and examine canonical output buffer growth.
+
+## Pooled temporary canonical output
+
+The three canonical byte-returning paths now use Core's existing `PooledByteBufferWriter` for
+invocation-scoped temporary output. They still copy once into the required caller-owned result;
+no returned byte array borrows pooled memory. Writer disposal precedes buffer disposal, and rented
+storage is cleared on success and failure. Streaming hashes already use their own pooled sink.
+
+An isolated benchmark runs the same exact-number traversal and encoder against either a growing
+array or the pooled writer. Allocations fall from 552 to 272 bytes for one row, 41,273 to 10,456
+for 128 rows, and 1,446,367 to 335,773 for 4,096 rows. ShortRun timing is comparable (the largest
+case 1.263 to 1.210 ms), with uncertainty retained in the
+[compact report](evidence/pooled-observation-decoding/canonical-output-buffer.csv).
+Results include the returned payload. Tests cover both node and element output ownership and use
+fixed warm ceilings of payload length plus 1 KiB; the streaming hash ceiling is independently 1 KiB.
+Existing differential, failure and concurrent canonical tests remain in force.
+
+The public `GetCanonicalSequenceText` entry point applies the same profile, encoder and exclusions
+directly to pooled output before allocating its owned UTF-16 string. Ari's protocol conformance
+serializer can use it instead of a MemoryStream. This is a reusable Core output capability;
+Ari retains protocol serialization policy. No temporary adapter or alternate canonical walk is needed.
+Malformed value and property-name escapes still fail, and temporary storage is disposed on failure.
+
+```bash
+dotnet run -c Release --project src/Cohesive.Relations.Benchmarks -- --filter '*CanonicalOutputBufferBenchmarks*'
+```
+
+The isolated lexical text benchmark includes the owned UTF-16 result and explicit default encoder.
+MemoryStream output versus pooled text allocates 1,016 → 392 bytes for one row,
+59,354 → 25,577 for 128 rows, and 1,877,607 → 827,229 for 4,096 rows. The one-row timing is
+similar but slightly slower in the short sample (371 → 384 ns); the largest case measures
+1.327 → 1.282 ms. The [text report](evidence/pooled-observation-decoding/canonical-text-buffer.csv)
+retains uncertainty. Run with `--filter '*CanonicalTextBufferBenchmarks*'` in the same project.
+Final Core qualification passes 5,621 tests with 33 existing skips. The local Ari text adoption
+passes 1,298 tests with 18 existing skips, with both canonical X12 hashes unchanged. Regenerating
+the Ari acceptance report changes only its Cohesive.Protocols source-provenance pin.
+
+Five isolated alternating X12 process pairs compare the #420 ownership package with this Core
+change plus the Ari text adoption. Median allocations fall from 434,235,280 to 403,181,816 bytes
+cold and 176,796,800 to 156,308,984 repeated (20.5 MB, 11.6% repeated reduction). Median elapsed
+time is 3,068 → 3,094 ms cold and 1,252 → 1,315 ms repeated: the repeated sample is slightly
+slower, so this establishes an allocation win, not an end-to-end latency win. All
+[original-case samples](evidence/pooled-observation-decoding/ari-canonical-text.csv) are retained.
+These results include a private Core package and a locally tested two-line Ari adoption. The
+adoption is dependency-ordered after Core merge/publication; private feed/version overrides are
+removed after qualification. Byte-output pooling alone saves about 0.2 MB repeated; most of the
+case gain requires moving Ari's protocol canonical text output off MemoryStream.
+
+The final sampled repeated-case trace no longer puts canonical property-writing byte-array growth
+among its largest buckets. Disjoint nearest application frames instead attribute about 18.5 MB to
+observation object acquisition, 9.3 MB to other JSON-element observation projection, and 8.6 MB to
+annotation-map acquisition. Most object acquisition is downstream of hosted typed-result encoding.
+These samples include necessary owned values; the next investigation should examine repeated
+conversion at that boundary before introducing any reuse or changing serialization semantics.

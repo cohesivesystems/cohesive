@@ -1,0 +1,7 @@
+Method,Rows,Mean,Error,Allocated
+StreamText,1,371.0 ns,54.61 ns,1016 B
+PooledText,1,384.0 ns,75.95 ns,392 B
+StreamText,128,"39,127.6 ns","3,013.89 ns",59354 B
+PooledText,128,"37,839.2 ns","1,169.48 ns",25577 B
+StreamText,4096,"1,327,310.1 ns","162,907.73 ns",1877607 B
+PooledText,4096,"1,281,691.9 ns","47,786.38 ns",827229 B
