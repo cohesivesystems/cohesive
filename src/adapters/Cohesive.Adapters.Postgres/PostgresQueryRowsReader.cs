@@ -1,3 +1,5 @@
+using System.Globalization;
+using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Transactions;
 using Cohesive.Model;
@@ -6,7 +8,6 @@ using Cohesive.Relations.Execution;
 using Cohesive.Relations.Realization;
 using Cohesive.Relations.Compilation;
 using Npgsql;
-using NpgsqlTypes;
 
 namespace Cohesive.Adapters.Postgres;
 
@@ -21,18 +22,28 @@ public sealed class PostgresQueryRowsReader : IRelationQueryRowsReader
     readonly int maximumRows;
     readonly long maximumBytes;
     readonly PostgresRelationQueryScalarType[] scalarTypes;
+    readonly PostgresRelationQueryScalarType?[] parameterTypes;
+    readonly ImmutableArray<PostgresRelationQueryScalarType> resultTypes;
+    readonly string projection;
+    readonly int[][] presenceOrdinals;
+    readonly PostgresNpgsqlCommandExecutor executeCommand;
 
     /// <summary>Prepares a bounded reader for an unpaged query-row artifact and its exact database binding.</summary>
     /// <param name="artifact">Validated native artifact prepared by the PostgreSQL compiler.</param>
     /// <param name="runtime">Explicit database affinity and caller-owned data source.</param>
     /// <param name="maximumRows">Complete-result bound, between one and Int32.MaxValue minus one.</param>
-    /// <param name="maximumBytes">Positive decoded scalar-value byte budget; excludes object overhead.</param>
+    /// <param name="maximumBytes">Positive budget for all retrieved scalar values, including presence columns; excludes object overhead.</param>
     /// <exception cref="ArgumentNullException">Artifact or runtime is null.</exception>
     /// <exception cref="ArgumentException">Database affinity differs, scalar decoding is unsupported, or the artifact is not an unpaged query-row branch.</exception>
     /// <exception cref="NotSupportedException">A result field requires temporal policy.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A result bound is not positive, or the row bound cannot accommodate an overflow row.</exception>
     public PostgresQueryRowsReader(PostgresRelationQueryCompiledArtifact artifact, PostgresNpgsqlRuntimeBinding runtime,
         int maximumRows, long maximumBytes)
+        : this(artifact, runtime, maximumRows, maximumBytes,
+            (command, token) => PostgresNpgsqlExecution.ExecuteAsync(runtime.DataSource, command, token)) { }
+
+    internal PostgresQueryRowsReader(PostgresRelationQueryCompiledArtifact artifact, PostgresNpgsqlRuntimeBinding runtime,
+        int maximumRows, long maximumBytes, PostgresNpgsqlCommandExecutor executeCommand)
     {
         ArgumentNullException.ThrowIfNull(artifact);
         ArgumentNullException.ThrowIfNull(runtime);
@@ -52,6 +63,19 @@ public sealed class PostgresQueryRowsReader : IRelationQueryRowsReader
                 ? scalar : throw new ArgumentException("A result field has no exact PostgreSQL scalar decoder.", nameof(artifact))).ToArray();
         if (scalarTypes.Any(PostgresNpgsqlExecution.IsTemporal))
             throw new NotSupportedException("This native row reader does not admit temporal fields; use the source reader with explicit temporal policy.");
+        this.executeCommand = executeCommand ?? throw new ArgumentNullException(nameof(executeCommand));
+        parameterTypes = artifact.Statement.Parameters.Select(slot => slot.Kind == SqlParameterBindingKind.Runtime
+            ? (PostgresRelationQueryScalarType?)RequireScalar(artifact.Parameters.Single(binding => binding.Position == slot.Position).ValueContract)
+            : ConstantScalar(slot.Constant!.Kind)).ToArray();
+        var presenceIndex = artifact.PresenceBindings.Select((binding, index) => (binding.Binding, Ordinal: scalarTypes.Length + index))
+            .ToDictionary(static pair => pair.Binding, static pair => pair.Ordinal);
+        presenceOrdinals = artifact.ResultFields.Select(field => field.PresenceDependencies
+            .Select(binding => presenceIndex[binding]).ToArray()).ToArray();
+        resultTypes = [.. scalarTypes, .. Enumerable.Repeat(PostgresRelationQueryScalarType.Boolean, artifact.PresenceBindings.Length)];
+        using var quote = new NpgsqlCommandBuilder();
+        projection = string.Join(", ", artifact.ResultFields.Select(field => "bounded_result." + quote.QuoteIdentifier(field.Alias))
+            .Concat(artifact.PresenceBindings.Select(binding => "bounded_result." + quote.QuoteIdentifier(binding.Alias))));
+
     }
 
     /// <summary>Exact native artifact retained for inspection and attribution.</summary>
@@ -75,41 +99,58 @@ public sealed class PostgresQueryRowsReader : IRelationQueryRowsReader
         cancellationToken.ThrowIfCancellationRequested();
         if (Transaction.Current is not null) throw new InvalidOperationException("Native query execution does not enlist in an ambient transaction.");
         var statement = artifact.Bind(parameters);
-        if (statement.Parameters.Any(parameter => parameter.Value is DateOnly or DateTime or DateTimeOffset))
-            throw new NotSupportedException("This native row reader does not admit temporal parameters.");
-        // The outer limit obtains one overflow row without changing the canonical query's semantics.
-        await using var command = runtime.DataSource.CreateCommand($"SELECT * FROM ({statement.Text}) AS bounded_result LIMIT {maximumRows + 1}");
-        foreach (var parameter in statement.Parameters)
+        var bound = ImmutableArray.CreateBuilder<PostgresNpgsqlParameter>(statement.Parameters.Length + 1);
+        for (var index = 0; index < statement.Parameters.Length; index++)
+            bound.Add(new(statement.Parameters[index].Value ?? DBNull.Value, parameterTypes[index], IsArray: false));
+        bound.Add(new(maximumRows + 1, PostgresRelationQueryScalarType.Int32, IsArray: false));
+        var command = new PostgresNpgsqlCommand(
+            $"SELECT {projection} FROM ({statement.Text}) AS bounded_result LIMIT ${bound.Count.ToString(CultureInfo.InvariantCulture)}",
+            bound.MoveToImmutable(), resultTypes, maximumBytes, maximumRows, PermitTemporalValues: false);
+        var raw = await executeCommand(command, cancellationToken).ConfigureAwait(false);
+        if (raw.Rows.Length > maximumRows) throw new InvalidOperationException("Native query exceeded its complete-result row bound.");
+        var result = ImmutableArray.CreateBuilder<ObservationValue>(raw.Rows.Length);
+        foreach (var row in raw.Rows)
         {
-            var value = parameter.Value;
-            command.Parameters.Add(value is null
-                ? new NpgsqlParameter { NpgsqlDbType = NpgsqlDbType.Unknown, Value = DBNull.Value }
-                : new NpgsqlParameter { Value = value });
+            if (row.Length != resultTypes.Length) throw new InvalidOperationException("The native row width differs from its compiled projection.");
+            result.Add(ObservationValue.FromFieldAssignments(Fields(row)));
         }
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        var ordinals = artifact.ResultFields.Select(field => reader.GetOrdinal(field.Alias)).ToArray();
-        var presenceOrdinals = artifact.PresenceBindings.ToDictionary(binding => binding.Binding, binding => reader.GetOrdinal(binding.Alias));
-        var budget = new PostgresNpgsqlResultBudget(maximumBytes);
-        var result = ImmutableArray.CreateBuilder<ObservationValue>();
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            if (result.Count == maximumRows) throw new InvalidOperationException("Native query exceeded its complete-result row bound.");
-            var row = ObservationValue.FromObject(new Dictionary<string, ObservationValue>());
-            for (var index = 0; index < artifact.ResultFields.Length; index++)
-            {
-                var field = artifact.ResultFields[index];
-                if (field.PresenceDependencies.Any(binding => reader.IsDBNull(presenceOrdinals[binding])
-                    || !reader.GetBoolean(presenceOrdinals[binding]))) continue;
-                var ordinal = ordinals[index];
-                var value = await reader.IsDBNullAsync(ordinal, cancellationToken).ConfigureAwait(false)
-                    ? ObservationValue.Null
-                    : PostgresRelationQueryScalarCatalog.ToObservationValue(
-                        await PostgresRelationQueryScalarCatalog.ReadAsync(reader, ordinal, scalarTypes[index], budget, cancellationToken).ConfigureAwait(false),
-                        scalarTypes[index]);
-                row = row.WithField(field.Field.Path, value);
-            }
-            result.Add(row);
-        }
-        return result.ToImmutable();
+        return result.MoveToImmutable();
     }
+
+    IEnumerable<KeyValuePair<FieldPath, ObservationValue>> Fields(ImmutableArray<object?> row)
+    {
+        for (var index = 0; index < artifact.ResultFields.Length; index++)
+        {
+            var field = artifact.ResultFields[index];
+            if (!IsPresent(row, presenceOrdinals[index])) continue;
+            yield return new(field.Field.Path, row[index] is null ? ObservationValue.Null
+                : PostgresRelationQueryScalarCatalog.ToObservationValue(row[index], scalarTypes[index]));
+        }
+    }
+
+    static bool IsPresent(ImmutableArray<object?> row, int[] dependencies)
+    {
+        foreach (var ordinal in dependencies) if (row[ordinal] is not true) return false;
+        return true;
+    }
+
+    static PostgresRelationQueryScalarType RequireScalar(ValueContract contract) =>
+        PostgresRelationQueryScalarCatalog.TryFromSemanticType(contract.Type, out var scalar)
+            ? scalar : throw new ArgumentException("A parameter has no exact PostgreSQL scalar encoding.");
+
+    static PostgresRelationQueryScalarType? ConstantScalar(SqlConstantKind kind) => kind switch
+    {
+        SqlConstantKind.Null => null,
+        SqlConstantKind.Boolean => PostgresRelationQueryScalarType.Boolean,
+        SqlConstantKind.Int32 => PostgresRelationQueryScalarType.Int32,
+        SqlConstantKind.Int64 => PostgresRelationQueryScalarType.Int64,
+        SqlConstantKind.Decimal => PostgresRelationQueryScalarType.Numeric,
+        SqlConstantKind.String => PostgresRelationQueryScalarType.Text,
+        SqlConstantKind.Uuid => PostgresRelationQueryScalarType.Uuid,
+        SqlConstantKind.Date => PostgresRelationQueryScalarType.Date,
+        SqlConstantKind.Timestamp => PostgresRelationQueryScalarType.Timestamp,
+        SqlConstantKind.TimestampWithTimeZone => PostgresRelationQueryScalarType.TimestampWithTimeZone,
+        SqlConstantKind.Bytes => PostgresRelationQueryScalarType.Bytea,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind))
+    };
 }

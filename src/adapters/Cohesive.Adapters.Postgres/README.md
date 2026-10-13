@@ -173,3 +173,9 @@ The composed policy rejects a null partition scope at construction. Missing remo
 mismatched partition scopes raise `RelationQueryPreparationException`
 with a `postgres.composed.*` code and semantic compilation evidence. Identity caching and allocation
 boundaries are documented once in the [Storage README](../../Cohesive.Storage/README.md).
+
+`PostgresQueryRowsReader` executes a prepared unpaged row artifact through the shared
+Npgsql executor. Parameters and the overflow limit have explicit provider types; results
+use sequential decoding and one-pass immutable row assembly. Its byte budget counts all
+retrieved scalar values, including presence columns and suppressed fields. Raw rows are
+bounded and invocation-owned. See [qualification](../../../docs/performance/repeated-representation-work.md).
