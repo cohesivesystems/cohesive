@@ -1,3 +1,5 @@
+using Cohesive.Model;
+using static Cohesive.Model.Serialization.LengthPrefixedFingerprintEncoding;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
@@ -158,7 +160,7 @@ public sealed class RelationQueryCompiledPlanReference
     const string CatalogComponent = "catalog";
     const string DemandComponent = "demand";
     const string InputsComponent = "inputs";
-    static readonly ConditionalWeakTable<CompiledRelationQueryPlan, Lazy<RelationQueryCompiledPlanReference>>
+    static readonly WeakPreparationCache<CompiledRelationQueryPlan, RelationQueryCompiledPlanReference>
         References = new();
 
     /// <summary>Creates portable attribution to an exact compiled input contract.</summary>
@@ -258,11 +260,7 @@ public sealed class RelationQueryCompiledPlanReference
     public static RelationQueryCompiledPlanReference From(CompiledRelationQueryPlan plan)
     {
         ArgumentNullException.ThrowIfNull(plan);
-        return References.GetValue(
-            plan,
-            static candidate => new(
-                () => Create(candidate),
-                LazyThreadSafetyMode.ExecutionAndPublication)).Value;
+        return References.Get(plan, static candidate => Create(candidate));
     }
 
     internal ImmutableArray<string> GetMismatchedComponents(CompiledRelationQueryPlan plan)
@@ -340,6 +338,10 @@ public static class RelationQueryCompiledPlanReferenceFingerprinter
 
 static class RelationQueryCompiledPlanFingerprinter
 {
+    static readonly JsonSerializerOptions ShapeOptions = new(JsonSerializerDefaults.Web);
+    static readonly CanonicalJsonPropertyExclusions ShapeExclusions = new("/diagnostics", "/hasErrors");
+    static RelationQueryCompiledPlanFingerprinter() => ShapeOptions.MakeReadOnly(populateMissingResolver: true);
+
     const string Algorithm = "sha256";
     const string ShapeSnapshotsCanonicalization = "relation-query-plan-shapes/v1-c14n/v2";
     const string DemandCanonicalization = "relation-query-plan-demand/v1-c14n/v1";
@@ -384,21 +386,11 @@ static class RelationQueryCompiledPlanFingerprinter
         foreach (var document in ordered)
         {
             Append(canonical, document.SchemaVersion);
-            var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
-            var node = JsonSerializer.SerializeToNode(document.Graph, options)
-                       ?? throw new InvalidOperationException(
-                           "Failed to materialize a shape graph for compiled-plan canonicalization.");
-            if (node is System.Text.Json.Nodes.JsonObject graph)
-            {
-                // Diagnostics describe graph construction; they are not semantic compiler inputs.
-                graph.Remove("diagnostics");
-                graph.Remove("hasErrors");
-            }
-
-            var graphBytes = CanonicalJsonWriter.GetCanonicalBytes(
-                node,
-                options,
-                RelationCanonicalJsonArrayOrderings.ShapeGraph);
+            using var graph = JsonSerializer.SerializeToDocument(document.Graph, ShapeOptions);
+            if (graph.RootElement.ValueKind == JsonValueKind.Null)
+                throw new InvalidOperationException("Failed to materialize a shape graph for compiled-plan canonicalization.");
+            var graphBytes = CanonicalJsonWriter.GetCanonicalBytes(graph.RootElement,
+                RelationCanonicalJsonArrayOrderings.ShapeGraph, exclusions: ShapeExclusions);
             Append(canonical, graphBytes);
         }
 
@@ -420,7 +412,7 @@ static class RelationQueryCompiledPlanFingerprinter
         Append(canonical, demand.RelationFields.Length);
         foreach (var field in demand.RelationFields)
         {
-            Append(canonical, field);
+            AppendField(canonical, field);
         }
 
         Append(canonical, demand.QueryResults.Length);
@@ -431,7 +423,7 @@ static class RelationQueryCompiledPlanFingerprinter
             Append(canonical, result.Fields.Length);
             foreach (var field in result.Fields)
             {
-                Append(canonical, field);
+                AppendField(canonical, field);
             }
         }
 
@@ -470,7 +462,7 @@ static class RelationQueryCompiledPlanFingerprinter
         Append(buffer, value);
     }
 
-    static void Append(ArrayBufferWriter<byte> buffer, RelationQueryFieldReference field)
+    static void AppendField(ArrayBufferWriter<byte> buffer, RelationQueryFieldReference field)
     {
         Append(buffer, field.Shape.GraphId.Value);
         Append(buffer, field.Shape.ShapeId.Value);
@@ -482,14 +474,7 @@ static class RelationQueryCompiledPlanFingerprinter
         }
     }
 
-    static void Append(ArrayBufferWriter<byte> buffer, string value)
-    {
-        var length = Encoding.UTF8.GetByteCount(value);
-        Append(buffer, length);
-        var destination = buffer.GetSpan(length);
-        Encoding.UTF8.GetBytes(value.AsSpan(), destination);
-        buffer.Advance(length);
-    }
+
 
     static void AppendNullable(ArrayBufferWriter<byte> buffer, string? value)
     {
@@ -502,17 +487,7 @@ static class RelationQueryCompiledPlanFingerprinter
         Append(buffer, value);
     }
 
-    static void Append(ArrayBufferWriter<byte> buffer, ReadOnlySpan<byte> value)
-    {
-        Append(buffer, value.Length);
-        value.CopyTo(buffer.GetSpan(value.Length));
-        buffer.Advance(value.Length);
-    }
 
-    static void Append(ArrayBufferWriter<byte> buffer, int value)
-    {
-        var destination = buffer.GetSpan(sizeof(int));
-        BinaryPrimitives.WriteInt32BigEndian(destination, value);
-        buffer.Advance(sizeof(int));
-    }
+
+
 }

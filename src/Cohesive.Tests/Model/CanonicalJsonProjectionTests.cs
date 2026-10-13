@@ -61,7 +61,7 @@ public sealed class CanonicalJsonProjectionTests(Xunit.Abstractions.ITestOutputH
         using var document = JsonDocument.Parse(new byte[] { 123, 34, invalid, 34, 58, 49, 125 });
         var expected = Assert.Throws<InvalidOperationException>(() => document.RootElement.EnumerateObject().First().Name);
         var actual = Assert.Throws<InvalidOperationException>(() => CanonicalJsonWriter.ComputeCanonicalSequenceSha256(
-            document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical));
+            document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical, default));
         Assert.Equal(expected.Message, actual.Message);
     }
 
@@ -107,7 +107,7 @@ public sealed class CanonicalJsonProjectionTests(Xunit.Abstractions.ITestOutputH
         Assert.Equal("{\"retained\":1.00}", Write(document.RootElement, exclusions));
         Assert.Throws<InvalidOperationException>(() => Write(document.RootElement, null));
         Assert.Equal(SHA256.HashData("{\"retained\":1.00}"u8), CanonicalJsonWriter.ComputeCanonicalSequenceSha256(
-            document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical, exclusions: exclusions));
+            document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical, default, exclusions: exclusions));
     }
 
     [Fact]
@@ -115,11 +115,11 @@ public sealed class CanonicalJsonProjectionTests(Xunit.Abstractions.ITestOutputH
     {
         using var document = JsonDocument.Parse("{\"omit\":0,\"b\":1.00,\"a\":-0}");
         Assert.Equal(SHA256.HashData("{\"a\":0,\"b\":1}"u8), CanonicalJsonWriter.ComputeCanonicalSequenceSha256(
-            document.RootElement, CanonicalJsonSequenceProfile.ExactDecimalRational,
+            document.RootElement, CanonicalJsonSequenceProfile.ExactDecimalRational, default,
             exclusions: new("/omit")));
         using var repeated = JsonDocument.Parse("{\"a\":1,\"\\u0061\":2}");
         var error = Assert.Throws<ArgumentException>(() => CanonicalJsonWriter.ComputeCanonicalSequenceSha256(
-            repeated.RootElement, CanonicalJsonSequenceProfile.ExactDecimalRational));
+            repeated.RootElement, CanonicalJsonSequenceProfile.ExactDecimalRational, default));
         Assert.Equal("Duplicate JSON property 'a'.", error.Message);
     }
 
@@ -132,7 +132,7 @@ public sealed class CanonicalJsonProjectionTests(Xunit.Abstractions.ITestOutputH
             ? JsonSerializer.Serialize(Enumerable.Range(0, 128).Reverse().ToDictionary(i => $"{i:D3}/é/🙂/\n", i => i))
             : "[" + string.Join(",", Enumerable.Repeat("{\"text\":\"" + new string('a', 512) + "\",\"number\":1.2300}", 4096)) + "]";
         using var document = JsonDocument.Parse(raw);
-        byte[] Hash() => CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical);
+        byte[] Hash() => CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical, default);
         for (var warm = 0; warm < 20; warm++) Hash();
         var samples = new long[7];
         for (var i = 0; i < samples.Length; i++)
@@ -153,12 +153,12 @@ public sealed class CanonicalJsonProjectionTests(Xunit.Abstractions.ITestOutputH
         using var document = JsonDocument.Parse("{\"identity\":{\"contentHash\":\"omit\",\"id\":\"retain\"},\"value\":1.00}");
         var exclusions = new CanonicalJsonPropertyExclusions("/identity/contentHash");
         var expected = CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement,
-            CanonicalJsonSequenceProfile.PreserveLexical, exclusions: exclusions);
+            CanonicalJsonSequenceProfile.PreserveLexical, default, exclusions: exclusions);
         await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
         {
             for (var i = 0; i < 100; i++)
                 Assert.Equal(expected, CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement,
-                    CanonicalJsonSequenceProfile.PreserveLexical, exclusions: exclusions));
+                    CanonicalJsonSequenceProfile.PreserveLexical, default, exclusions: exclusions));
         })));
     }
 

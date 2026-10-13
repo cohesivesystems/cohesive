@@ -236,3 +236,8 @@ such as `/identity/contentHash` once. Pass it to sequence writing or hashing to 
 those properties during traversal. Rules are ordinal, apply to repeated occurrences,
 and do not propagate into array elements. Omitted values are not validated: use this
 for an explicit fingerprint projection, alongside separate document admission.
+
+Ordered canonical hashing can combine structural array ordering, exact property exclusions and a raw
+version prefix in one traversal. Hash APIs require an explicit writer-options argument; choose the same
+encoder as the existing fingerprint contract. Relations preserves its relaxed escaping and versioned
+bytes. See [repeated representation qualification](../../docs/performance/repeated-representation-work.md).

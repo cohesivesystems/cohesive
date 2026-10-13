@@ -1,3 +1,4 @@
+using static Cohesive.Model.Serialization.LengthPrefixedFingerprintEncoding;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
@@ -187,7 +188,7 @@ public static class RelationQueryRealizationFingerprinter
             foreach (var fact in requirement.StaticFacts.OrderBy(static fact => (int)fact.Kind))
             {
                 Append(buffer, (int)fact.Kind);
-                AppendInt64(buffer, fact.Value);
+                Append(buffer, fact.Value);
             }
 
             var uses = requirement.Uses
@@ -687,14 +688,7 @@ public static class RelationQueryRealizationFingerprinter
         ];
     }
 
-    static void Append(IBufferWriter<byte> buffer, string value)
-    {
-        var length = Encoding.UTF8.GetByteCount(value);
-        Append(buffer, length);
-        var destination = buffer.GetSpan(length);
-        Encoding.UTF8.GetBytes(value.AsSpan(), destination);
-        buffer.Advance(length);
-    }
+
 
     static void AppendOptional(IBufferWriter<byte> buffer, string? value)
     {
@@ -707,19 +701,9 @@ public static class RelationQueryRealizationFingerprinter
         Append(buffer, value);
     }
 
-    static void Append(IBufferWriter<byte> buffer, bool value)
-    {
-        var destination = buffer.GetSpan(1);
-        destination[0] = value ? (byte)1 : (byte)0;
-        buffer.Advance(1);
-    }
 
-    static void Append(IBufferWriter<byte> buffer, int value)
-    {
-        var destination = buffer.GetSpan(sizeof(int));
-        BinaryPrimitives.WriteInt32BigEndian(destination, value);
-        buffer.Advance(sizeof(int));
-    }
+
+
 
     static void AppendNullableEnum(IBufferWriter<byte> buffer, int? value) =>
         AppendNullableInt32(buffer, value);
@@ -736,15 +720,10 @@ public static class RelationQueryRealizationFingerprinter
         Append(buffer, value.HasValue);
         if (value is not { } concrete)
             return;
-        AppendInt64(buffer, concrete);
+        Append(buffer, concrete);
     }
 
-    static void AppendInt64(IBufferWriter<byte> buffer, long value)
-    {
-        var destination = buffer.GetSpan(sizeof(long));
-        BinaryPrimitives.WriteInt64BigEndian(destination, value);
-        buffer.Advance(sizeof(long));
-    }
+
 
     sealed record RelevantInputs(
         ImmutableArray<RelationQueryTargetCapabilityEvidence> Evidence,

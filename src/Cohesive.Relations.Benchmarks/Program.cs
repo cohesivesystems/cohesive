@@ -3,6 +3,8 @@ using BenchmarkDotNet.Running;
 if (args is ["--portable-field-concurrency", .. var fieldArgs])
     return Cohesive.Relations.Benchmarks.PortableFieldConcurrencyBenchmark.Run(fieldArgs);
 
+if (args is ["--hash-projection-allocations", .. var hashArgs])
+    return Cohesive.Relations.Benchmarks.HashProjectionAllocationBenchmark.Run(hashArgs);
 var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 var discovered = false;
 foreach (var summary in summaries)

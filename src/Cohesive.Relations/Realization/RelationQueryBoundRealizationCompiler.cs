@@ -1,3 +1,4 @@
+using static Cohesive.Model.Serialization.LengthPrefixedFingerprintEncoding;
 using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
@@ -684,26 +685,9 @@ public static class RelationQueryBoundRealizationFingerprinter
             Append(buffer, concrete);
     }
 
-    static void Append(IBufferWriter<byte> buffer, string value)
-    {
-        var length = Encoding.UTF8.GetByteCount(value);
-        Append(buffer, length);
-        var destination = buffer.GetSpan(length);
-        Encoding.UTF8.GetBytes(value.AsSpan(), destination);
-        buffer.Advance(length);
-    }
 
-    static void Append(IBufferWriter<byte> buffer, bool value)
-    {
-        var destination = buffer.GetSpan(1);
-        destination[0] = value ? (byte)1 : (byte)0;
-        buffer.Advance(1);
-    }
 
-    static void Append(IBufferWriter<byte> buffer, int value)
-    {
-        var destination = buffer.GetSpan(sizeof(int));
-        BinaryPrimitives.WriteInt32BigEndian(destination, value);
-        buffer.Advance(sizeof(int));
-    }
+
+
+
 }

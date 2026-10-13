@@ -98,7 +98,7 @@ public sealed class CanonicalJsonSequenceProfileTests(Xunit.Abstractions.ITestOu
     static byte[] Hash(string raw)
     {
         using var document = JsonDocument.Parse(raw);
-        return CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical);
+        return CanonicalJsonWriter.ComputeCanonicalSequenceSha256(document.RootElement, CanonicalJsonSequenceProfile.PreserveLexical, default);
     }
 
     static byte[] Write(JsonElement element, JsonWriterOptions options, bool reference)

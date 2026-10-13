@@ -8,6 +8,9 @@ namespace Cohesive.Relations.Serialization;
 /// </summary>
 public static class RelationDraftJsonSerializer
 {
+    internal static JsonSerializerOptions ReadOnlyOptions { get; } = CreateOptions();
+    static RelationDraftJsonSerializer() => ReadOnlyOptions.MakeReadOnly(populateMissingResolver: true);
+
     /// <summary>Creates the canonical compact value profile for declared portable JSON projection.</summary>
     public static JsonSerializerOptions CreateOptions() => CreateOptions(indented: false);
 
