@@ -14,7 +14,7 @@
     <PackageReference Include="Aspire.Hosting.AppHost" Version="13.5.2" />
     <PackageReference Include="Aspire.Hosting.PostgreSQL" Version="13.5.2" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Aspire/Cohesive.Adapters.Aspire.csproj" IsAspireProjectResource="false" />
-    <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres.Infra/Cohesive.Adapters.Postgres.Infra.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Aspire.Postgres/Cohesive.Adapters.Aspire.Postgres.csproj" IsAspireProjectResource="false" />
     <ProjectReference Include="../OrderWorker/OrderWorker.csproj" ReferenceOutputAssembly="true" />
   </ItemGroup>
 </Project>

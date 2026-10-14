@@ -60,18 +60,12 @@ public sealed partial class PostgresPersistenceRegistration
             physical => [new PostgresRelationQuerySourceReader(cut.Remainder.Plan, physical, external.Id,
                 bound, remote.runtime.DataSource, remote.runtime, policy)], scope.LogicalPartition);
 
-        PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) => remote.tables.TryGetValue(shape, out var attachment)
-            ? attachment.Mapping : throw new RelationQueryPreparationException("composed mapping", cut.Original,
-                code: "postgres.composed.remoteMappingMissing",
-                detail: $"No remote PostgreSQL mapping is registered for shape '{shape}'.");
-        void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape)
-        {
-            var mapping = Mapping(shape);
-            if (mapping.PartitionField != scope.SourceSelector)
-                throw new RelationQueryPreparationException("composed policy", cut.Original,
-                    code: "postgres.composed.partitionSelectorMismatch", detail: "Remote entity partition selector differs from the declared scope.");
-            input.Identity(FieldPath.FromField(mapping.IdentityField), mapping.IdentityField)
-                .FieldsBySemanticPath().Partition(mapping.PartitionField);
-        }
+        Exception Missing(QualifiedShapeId shape) => new RelationQueryPreparationException("composed mapping", cut.Original,
+            code: "postgres.composed.remoteMappingMissing", detail: $"No remote PostgreSQL mapping is registered for shape '{shape}'.");
+        PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) => remote.bindings.Mapping(shape, () => Missing(shape));
+        void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape) =>
+            remote.bindings.Place(input, shape, scope.SourceSelector, () => Missing(shape),
+                () => new RelationQueryPreparationException("composed policy", cut.Original,
+                    code: "postgres.composed.partitionSelectorMismatch", detail: "Remote entity partition selector differs from the declared scope."));
     }
 }

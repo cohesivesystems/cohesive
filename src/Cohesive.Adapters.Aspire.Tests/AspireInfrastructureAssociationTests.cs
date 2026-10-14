@@ -1,3 +1,5 @@
+using Cohesive.Adapters.Aspire.Postgres;
+using Cohesive.Relations.Infra;
 using Aspire.Hosting;
 using Aspire.Hosting.ApplicationModel;
 using AspireFirst;
@@ -13,8 +15,8 @@ public sealed class AspireInfrastructureAssociationTests
 {
     static readonly SourceReference Source = SourceReference.Create("test", "aspire-first");
     static InfrastructureTargetImplementation Storage => ResourceImplementation(new("test/storage"),
-        [new(new("test/storage/evidence"), OrdersApp.OrderDetailsSnapshot, CapabilityRealizationKind.Native, sourceReferences: [Source]),
-         new(new("test/storage/availability"), Cohesive.Adapters.Postgres.Infra.PostgresInfrastructure.QuerySnapshot(AspireFirst.Orders.FulfillmentQueries.ReservationAvailability.CompilationRequest), CapabilityRealizationKind.Native, sourceReferences: [Source])]);
+        OrdersApp.StorageQueries.Requirements.Select((capability, index) => new InfrastructureCapabilityEvidence(
+            new($"test/storage/{index}"), capability, CapabilityRealizationKind.Native, sourceReferences: [Source])).ToArray());
     static InfrastructureTargetImplementation Process => WorkloadImplementation(new("test/process"),
         [new(new("test/process/evidence"), OrdersApp.ApplicationExecution, CapabilityRealizationKind.Native, sourceReferences: [Source])]);
     static IDistributedApplicationBuilder Builder() => DistributedApplication.CreateBuilder(new DistributedApplicationOptions
@@ -28,6 +30,22 @@ public sealed class AspireInfrastructureAssociationTests
             builder, OrdersApp.Definition, new("test/association"), new("development"), configure);
 
     [Fact]
+    public void Prepared_evidence_checks_actual_database_name_before_association()
+    {
+        var builder = Builder();
+        var server = builder.AddPostgres("postgres");
+        var wrong = server.AddDatabase("orders-label", "inventory");
+        Assert.Throws<ArgumentException>(() => Attach(builder, associations =>
+            associations.Resource(OrdersApp.Store, wrong, OrdersApp.StorageQueries, new("test/authority"))));
+        var correct = server.AddDatabase("different-label", "orders");
+        var worker = builder.AddExecutable("worker", "dotnet", ".", "--info");
+        Assert.True(Attach(builder, associations => associations
+            .Resource(OrdersApp.Store, correct, OrdersApp.StorageQueries, new("test/authority"))
+            .Workload(OrdersApp.Worker, worker, Process)).Deployment.IsComplete);
+        using var app = builder.Build();
+    }
+
+    [Fact]
     public void Project_inference_requires_native_metadata_and_does_not_claim_durable_execution()
     {
         var builder = Builder();
@@ -39,7 +57,19 @@ public sealed class AspireInfrastructureAssociationTests
         var inferred = AspireInfrastructureAssociation.Attach(builder, definition, new("test/project/native"), new("test"),
             a => a.Workload(OrdersApp.Worker, project, sources: [Source]));
         Assert.False(inferred.Deployment.IsComplete);
-        Assert.NotEmpty(inferred.Deployment.Diagnostics);
+        Assert.Contains(inferred.Deployment.Diagnostics, item => item.Code == InfrastructureCapabilityDiagnosticCodes.RequirementUnavailable
+            && item.SchemaLocation == "test/durable-execution");
+        // Facility selection is atomic: an unsupported extra requirement rejects the entire selection.
+        // Prove the inferred execution capability independently instead of treating incompleteness as evidence.
+        var executionOnly = Infrastructure.Define(new("test/execution"), new("1"), new("test/execution/bindings"),
+            infra => infra.Workload(OrdersApp.Worker).Requires(AspireInfrastructure.DotNetProjectExecution));
+        var supported = AspireInfrastructureAssociation.Attach(builder, executionOnly, new("test/execution/native"), new("test"),
+            a => a.Workload(OrdersApp.Worker, project, sources: [Source]));
+        Assert.True(supported.Deployment.IsComplete);
+        var execution = Assert.Single(supported.Deployment.FacilityPlan.CapabilityClosure.Decisions);
+        Assert.Equal(AspireInfrastructure.DotNetProjectExecution, execution.Capability);
+        Assert.True(execution.IsAdmissible);
+        Assert.Equal(CapabilityRealizationKind.Native, execution.Realization);
         var metadata = project.Resource.GetProjectMetadata();
         project.Resource.Annotations.Remove(metadata);
         Assert.Throws<InvalidOperationException>(() => AspireInfrastructureAssociation.Attach(builder, definition,

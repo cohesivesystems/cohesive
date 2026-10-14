@@ -134,12 +134,13 @@ Some explicit declarations carry meaning:
 Aspire association selection sources can default to a deterministic reference, but this example retains
 its real `Source` on both associations. Native project metadata supplies only .NET project execution.
 
-PostgreSQL evidence now comes from `FulfillmentStorage.Bindings.Prepare(...)`, using the same entity
-mappings and native compiler as the worker. `PostgresInfrastructure.QuerySnapshot(query)` requires an
-exact semantic plan; `QueryImplementation` contributes evidence linked to the prepared artifact and
-storage-binding fingerprints. Missing mappings or unsupported native query constructs fail preparation.
-No database connection is opened by AppHost preparation. Each query gets its own statement snapshot;
-this does not promise a common snapshot across multiple queries or the composed two-database path.
+`OrdersApp.StorageQueries` declares the query requirements once with stable identities and explicit
+semantic revisions. `PostgresInfrastructure.Prepare` uses the same offline mappings and native compiler
+as the worker; the returned capabilities drive Infra requirements. Exact required, provenance and binding
+plans must agree. Compiler changes alter evidence fingerprints, not public requirement identities.
+The optional Aspire/Postgres association rejects evidence for a different actual database, independently
+of its Aspire resource label. No database connection is opened during preparation. Each query gets its
+own statement snapshot, not a common snapshot across queries or the composed two-database path.
 
 This evidence does not certify schema installation, privileges, live readiness, conditional entity writes
 or atomic transition receipts. Those require their own prepared and/or runtime evidence; a database name

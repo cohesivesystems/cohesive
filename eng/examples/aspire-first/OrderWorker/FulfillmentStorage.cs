@@ -18,8 +18,9 @@ public static class FulfillmentStorage
     /// <param name="database">Caller-owned inventory data source.</param>
     /// <returns>An inventory-only registration; order and reservation requests fail at setup.</returns>
     public static PostgresPersistenceRegistration BindInventory(NpgsqlDataSource database) =>
-        new PostgresPersistenceRegistration(new(new(FulfillmentResources.InventoryDatabaseName), database, "aspire-first/inventory"))
-            .Entity(FulfillmentDomain.Inventory, Inventory);
+        new PostgresPersistenceBindings(new(FulfillmentResources.InventoryDatabaseName))
+            .Entity(FulfillmentDomain.Inventory, Inventory)
+            .Bind(new(new(FulfillmentResources.InventoryDatabaseName), database, "aspire-first/inventory"));
 
     /// <summary>Physical stock mapping, also projected into native query bindings.</summary>
     public static PostgresEntityRepositoryMapping Inventory { get; } = PostgresEntityRepositoryMapping.For(FulfillmentDomain.Inventory)

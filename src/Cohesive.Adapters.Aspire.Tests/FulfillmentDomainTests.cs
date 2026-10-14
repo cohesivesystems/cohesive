@@ -47,10 +47,10 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
     public void Registration_rejects_missing_and_duplicate_native_mappings_without_opening_a_connection()
     {
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var registration = new Cohesive.Adapters.Postgres.PostgresPersistenceRegistration(new(new("orders"), database, "test"))
+        var registration = new Cohesive.Adapters.Postgres.PostgresPersistenceBindings(new("orders"))
             .Entity(FulfillmentDomain.Orders, FulfillmentStorage.Orders);
         Assert.Throws<ArgumentException>(() => registration.Entity(FulfillmentDomain.Orders, FulfillmentStorage.Orders));
-        Assert.Throws<InvalidOperationException>(() => registration.Query(FulfillmentQueries.OrderDetails, 100, 10000));
+        Assert.Throws<InvalidOperationException>(() => registration.Bind(new(new("orders"), database, "test")).Query(FulfillmentQueries.OrderDetails, 100, 10000));
     }
     [Fact]
     public void Persistence_reuses_entity_authority_and_selects_only_consumed_mappings()

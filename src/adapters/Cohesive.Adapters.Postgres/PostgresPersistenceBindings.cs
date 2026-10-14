@@ -58,14 +58,15 @@ public sealed class PostgresPersistenceBindings
     /// <param name="request">Canonical query and exact semantic snapshots.</param>
     /// <returns>Fingerprint-validated native artifact, without opening a database connection.</returns>
     /// <exception cref="ArgumentNullException">Request is null.</exception>
-    /// <exception cref="PostgresQueryPreparationException">Semantic or native compilation fails.</exception>
+    /// <exception cref="RelationQueryPreparationException">Semantic compilation fails.</exception>
+    /// <exception cref="PostgresQueryPreparationException">Native compilation fails.</exception>
     /// <exception cref="InvalidOperationException">A required entity mapping is absent.</exception>
     /// <exception cref="RelationQueryArtifactAuthoringException">Placement or binding is invalid.</exception>
     public PostgresRelationQueryCompiledArtifact Prepare(RelationQueryCompilationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
         var compilation = RelationQueryStaticCompiler.Compile(request);
-        if (!compilation.IsSuccessful) throw new PostgresQueryPreparationException(compilation, null);
+        if (!compilation.IsSuccessful) throw new RelationQueryPreparationException("query preparation", compilation);
         var plan = compilation.Plan!;
         var builder = RelationQueryPlacement.For(plan);
         var source = builder.Source("postgres/query", PostgresRelationQuerySourceTargetProfile.Default, new(Database.Value));
@@ -85,13 +86,19 @@ public sealed class PostgresPersistenceBindings
         if (!native.IsSuccessful) throw new PostgresQueryPreparationException(compilation, native);
         var artifact = native.Artifacts.Single();
         return artifact;
+    }
 
-        PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) => Tables.TryGetValue(shape, out var mapping)
-            ? mapping.Mapping : throw new InvalidOperationException($"No PostgreSQL entity mapping is registered for query shape '{shape}'.");
-        void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape)
-        {
-            var mapping = Mapping(shape);
-            input.Identity(FieldPath.FromField(mapping.IdentityField), mapping.IdentityField).FieldsBySemanticPath();
-        }
+    internal PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape, Func<Exception>? missing = null) =>
+        Tables.TryGetValue(shape, out var mapping) ? mapping.Mapping
+            : throw missing?.Invoke() ?? new InvalidOperationException($"No PostgreSQL entity mapping is registered for query shape '{shape}'.");
+
+    internal void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape,
+        string? partitionSelector = null, Func<Exception>? missing = null, Func<Exception>? partitionMismatch = null)
+    {
+        var mapping = Mapping(shape, missing);
+        if (partitionSelector is not null && mapping.PartitionField != partitionSelector)
+            throw partitionMismatch?.Invoke() ?? new ArgumentException("Partition selector differs from the registered mapping.", nameof(partitionSelector));
+        input.Identity(FieldPath.FromField(mapping.IdentityField), mapping.IdentityField).FieldsBySemanticPath();
+        if (partitionSelector is not null) input.Partition(mapping.PartitionField);
     }
 }
