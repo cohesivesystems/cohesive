@@ -10,7 +10,9 @@ See the [runnable Aspire-first order example](../../../eng/examples/aspire-first
 contains the original objects and the ordinary `InfrastructureTargetDeploymentPlan`; inspect
 `Deployment.IsComplete` and `Deployment.Diagnostics` before starting the application.
 Requirements and explicit implementation evidence use existing Cohesive.Infra authoring.
-Evidence is not inferred from native CLR types. This association API is not a runtime
+The typed `.Workload(node, project, sources: ...)` overload verifies native project metadata and infers only
+`AspireInfrastructure.DotNetProjectExecution`. Executables and containers still require explicit implementations;
+additional capabilities, including durable execution, remain explicit. This association API is not a runtime
 readiness check and does not use the local materializer's observation collector.
 
 Native membership is captured once before authoring and checked by object identity, including a check after the synchronous

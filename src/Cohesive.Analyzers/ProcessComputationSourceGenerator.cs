@@ -5060,8 +5060,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             var input = Argument(awaited.Invocation, "input");
             var noInput = transition?.Parameter?.Type is INamedTypeSymbol { TypeArguments.Length: 3 } typed
                 && IsTypedCanonicalTransitionHandle(typed)
-                && typed.TypeArguments[1].ToDisplayString() == "Cohesive.Prelude.Unit";
-            var inputValue = $"__builder.Constant<global::Cohesive.Prelude.Unit>(global::Cohesive.Prelude.Unit.Value, {SourceArguments(awaited.Source, method.Name)})";
+                && SymbolEqualityComparer.Default.Equals(typed.TypeArguments[1], compilation.GetTypeByMetadataName("Cohesive.Prelude.Unit"));
+            var inputValue = string.Empty;
             if (transition is null || subject is null || (input is null && !noInput)
                 || !TryEmitValue(subject.Value, subject.Value.Type!, awaited.Source, out var subjectValue)
                 || (input is not null && !TryEmitValue(input.Value, input.Value.Type!, awaited.Source, out inputValue)))
@@ -5074,6 +5074,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 return false;
             }
+
+            if (input is null && noInput)
+                inputValue = $"__builder.CanonicalValue<global::Cohesive.Prelude.Unit>(global::Cohesive.Model.Expr.Const(global::Cohesive.Model.ObservationValue.FromObject(global::Cohesive.Prelude.Unit.Value)), {transitionReference}.Definition.Input, {SourceArguments(awaited.Source, method.Name)})";
 
             if (IsTypedCanonicalTransitionHandle(transition.Parameter?.Type))
                 transitionReference = $"{transitionReference}.Reference";

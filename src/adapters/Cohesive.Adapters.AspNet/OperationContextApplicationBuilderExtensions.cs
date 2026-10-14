@@ -23,16 +23,26 @@ public static class OperationContextApplicationBuilderExtensions
     /// <param name="identity">Immutable identity and grants selected by the caller.</param>
     /// <returns>The same collection.</returns>
     /// <remarks>This is not authentication. Intended for explicit local/test hosts or a trusted fixed
-    /// service identity. It replaces the context identity, so do not combine it with per-user authentication.
+    /// service identity. It cannot be combined with request identity resolution or another fixed identity.
     /// No actor, tenant, grant, or permissive default is invented by this registration.</remarks>
     /// <exception cref="ArgumentNullException">Services or identity is null.</exception>
+    /// <exception cref="InvalidOperationException">A fixed or resolved identity registration already exists.</exception>
     public static IServiceCollection AddFixedRequestIdentity(this IServiceCollection services,
         Cohesive.Identity.IdentityContext identity)
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(identity);
+        RequireNoFixedIdentity(services);
+        if (services.Any(d => d.ImplementationType == typeof(Identity.RequestIdentityContextEnricher)))
+            throw new InvalidOperationException("Fixed and resolved request identities cannot be combined.");
         services.AddSingleton<IHttpOperationContextEnricher>(new FixedIdentityEnricher(identity));
         return services;
+    }
+
+    internal static void RequireNoFixedIdentity(IServiceCollection services)
+    {
+        if (services.Any(d => d.ImplementationInstance is FixedIdentityEnricher))
+            throw new InvalidOperationException("A fixed request identity is already registered.");
     }
 
     sealed class FixedIdentityEnricher(Cohesive.Identity.IdentityContext identity) : IHttpOperationContextEnricher

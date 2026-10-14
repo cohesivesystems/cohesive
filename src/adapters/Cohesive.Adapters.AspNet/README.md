@@ -376,10 +376,12 @@ Missing, duplicate and undefined cases fail setup. This API projects domain reje
 HTTP 409 Problem Details contract; it does not infer arbitrary HTTP status codes. Wire codes are prepared
 once through Core `SerializedEnum<T>.GetWireName`, using the authoring enum catalog. Request handling
 performs dictionary lookup, with no enum reflection or serialization. A transition incorrectly returning
-an explicitly non-rejected case as a rejection remains a contract violation.
+an explicitly non-rejected case as a rejection returns sanitized HTTP 500 Problem Details with code
+`cohesive.transitions.rejection_mapping_invalid`; it is a server contract violation, not a domain conflict.
 
 No-input transitions authored with `TransitionAuthoring.Create<TEntity, TOutcome>` use shared Unit;
-the binding supplies it automatically, so no `.Input(...)` callback is needed.
+the binding supplies it automatically, so no `.Input(...)` callback is needed. The singleton wire contract
+is explicit to that authoring overload; default CLR inference for existing Unit declarations is unchanged.
 
 ## Bind a typed read operation
 
@@ -413,6 +415,9 @@ native host. It is independent of ASP.NET routing and works in background worker
 
 For an explicitly fixed local/test identity, `services.AddFixedRequestIdentity(identity)` registers the
 request-context enricher. The caller supplies all actors, scopes and grants; the adapter neither authenticates
-nor invents permissions. The registration is scoped to the service collection and replaces request identity,
-so it must not stand in for per-user authentication. Continue to register and use request OperationContext
-middleware normally.
+nor invents permissions. Combining it with `AddRequestIdentityContext`, in either order, or registering a
+second fixed identity fails at registration before modifying the collection. It must not stand in for
+per-user authentication. Continue to register and use request OperationContext middleware normally.
+
+For a prepared typed process, `app.MapServiceEphemeralProcess(hosted, route: "/fulfillment")` derives the
+JSON body type from the host. The explicit `HttpBinding` overload remains available for other transports.

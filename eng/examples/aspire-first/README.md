@@ -6,12 +6,13 @@ waits and volume configuration in native Aspire. It adds no second deployment in
 
 ## Read the flow
 
-1. `AppHost/OrdersApp.cs` declares two canonical nodes: order storage requires relational
-   persistence; the order application requires application execution and storage readiness.
+1. `AppHost/OrdersApp.cs` declares two canonical nodes: storage requires a single-statement snapshot
+   for each exact fulfillment query; the application requires .NET project execution and storage readiness.
 2. `Configure` creates the ordinary native AppHost: `AddPostgres().WithDataVolume()`,
    `AddDatabase`, `AddProject<Projects.OrderWorker>`, `WithReference` and `WaitFor`.
 3. `AspireInfrastructureAssociation.Attach` associates those **same** database/project
-   objects with the canonical nodes and explicit implementation evidence. Native names
+   objects with the canonical nodes. PostgreSQL evidence comes from prepared queries over
+   `FulfillmentStorage.Bindings`; project execution comes from native Aspire metadata. Native names
    supply physical identities; there is no repeated physical-name table. The PostgreSQL
    server, its password parameter and an illustrative Redis container remain Aspire-only.
 4. The existing target-deployment compiler matches requirements against evidence and
@@ -490,7 +491,8 @@ Order identity is an opaque string throughout the entity, query parameters, rout
 UUID text is only the server's allocation choice; existing `order-123` identities also work through Get,
 Details, Availability and Submit without normalization. Submission has no application input;
 HTTP and Process invocation select the entity once. Its portable `Unit` contract retains the existing
-wire value `"()"`, rather than introducing a domain command enum. Inventory adjustment contracts remain unchanged.
+wire value `"()"`, rather than introducing a domain command enum. This is an explicit no-input
+authoring contract; existing default Unit inference is unchanged. Inventory adjustment contracts remain unchanged.
 
 `OrderStatus` and `SubmissionOutcome` lower into closed enum contracts with explicit serialized names.
 The shared Core wire-equivalence helper deliberately ignores enum names and member ordering while

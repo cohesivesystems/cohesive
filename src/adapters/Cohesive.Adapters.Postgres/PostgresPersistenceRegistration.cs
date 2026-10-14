@@ -16,13 +16,17 @@ namespace Cohesive.Adapters.Postgres;
 public sealed partial class PostgresPersistenceRegistration
 {
     readonly PostgresNpgsqlRuntimeBinding runtime;
-    readonly Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> tables = [];
+    readonly PostgresPersistenceBindings bindings;
+    Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> tables => bindings.Tables;
 
     /// <summary>Creates a host-registration builder.</summary>
     /// <param name="runtime">Explicit database identity and caller-owned native data source.</param>
     /// <exception cref="ArgumentNullException">Runtime is null.</exception>
-    public PostgresPersistenceRegistration(PostgresNpgsqlRuntimeBinding runtime) =>
-        this.runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
+    public PostgresPersistenceRegistration(PostgresNpgsqlRuntimeBinding runtime) :
+        this(runtime ?? throw new ArgumentNullException(nameof(runtime)), new PostgresPersistenceBindings(runtime.Database)) { }
+
+    internal PostgresPersistenceRegistration(PostgresNpgsqlRuntimeBinding runtime, PostgresPersistenceBindings bindings)
+    { this.runtime = runtime; this.bindings = bindings; }
 
     /// <summary>Attaches an existing physical mapping to its exact canonical entity graph.</summary>
     /// <typeparam name="T">Entity state type.</typeparam>
@@ -33,10 +37,7 @@ public sealed partial class PostgresPersistenceRegistration
     /// <exception cref="ArgumentException">A shape is already mapped or the repository mapping is invalid.</exception>
     public PostgresPersistenceRegistration Entity<T>(DomainEntity<T> entity, PostgresEntityRepositoryMapping mapping) where T : notnull
     {
-        ArgumentNullException.ThrowIfNull(entity);
-        ArgumentNullException.ThrowIfNull(mapping);
-        PostgresEntityRepository.ValidateMapping(entity.Definition, mapping);
-        tables.Add(entity.Definition.StateShape.QualifiedId, (entity.Definition, mapping));
+        bindings.Entity(entity, mapping);
         return this;
     }
 
@@ -96,35 +97,7 @@ public sealed partial class PostgresPersistenceRegistration
     /// <exception cref="ArgumentException">Runtime affinity is invalid.</exception>
     public PostgresQueryRowsReader Prepare(RelationQueryCompilationRequest request, int maximumRows, long maximumBytes)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        var compilation = RelationQueryStaticCompiler.Compile(request);
-        var plan = compilation.Plan ?? throw new PostgresQueryPreparationException(compilation, null);
-        var builder = RelationQueryPlacement.For(plan);
-        var source = builder.Source("postgres/query", PostgresRelationQuerySourceTargetProfile.Default, new(runtime.Database.Value));
-        foreach (var input in plan.InputContract.Sources)
-            Place(builder.Place(input, source), input.Shape);
-        foreach (var input in plan.InputContract.Traversals)
-            Place(builder.Place(input, source), input.ResultShape);
-        var placement = builder.Build().RequireValue();
-        var binding = PostgresRelationQueryBinding.For(placement).Database(runtime.Database);
-        foreach (var input in placement.Inputs) binding.Table(input, Mapping(input.Shape));
-        var storage = binding.Build().RequireValue();
-        var feasibility = RelationQueryRealizationCompiler.Compile(plan, PostgresRelationQueryTargetProfile.Default,
-            PostgresRelationQueryTargetProfile.Policy, RelationQueryResultObservability.NotRequested);
-        var compiler = new PostgresRelationQueryCompiler();
-        var bound = compiler.Realize(new(plan, feasibility, placement.Placement), storage);
-        var native = compiler.Compile(new RelationQueryNativeCompilationRequest(plan, bound, placement.Placement), storage);
-        if (!native.IsSuccessful) throw new PostgresQueryPreparationException(compilation, native);
-        var artifact = native.Artifacts.Single();
-        return new PostgresQueryRowsReader(artifact, runtime, maximumRows, maximumBytes);
-
-        PostgresEntityRepositoryMapping Mapping(QualifiedShapeId shape) => tables.TryGetValue(shape, out var mapping)
-            ? mapping.Mapping : throw new InvalidOperationException($"No PostgreSQL entity mapping is registered for query shape '{shape}'.");
-        void Place(RelationQueryPlacementInputBuilder input, QualifiedShapeId shape)
-        {
-            var mapping = Mapping(shape);
-            input.Identity(FieldPath.FromField(mapping.IdentityField), mapping.IdentityField).FieldsBySemanticPath();
-        }
+        return new PostgresQueryRowsReader(bindings.Prepare(request), runtime, maximumRows, maximumBytes);
     }
 }
 

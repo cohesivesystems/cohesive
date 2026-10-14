@@ -10,6 +10,13 @@ public sealed class DefaultClrTypeRefMapperTests
     readonly DefaultClrTypeRefMapper mapper = new();
 
     [Fact]
+    public void Default_unit_mapping_preserves_legacy_custom_converter_contract()
+    {
+        var actual = new Cohesive.Model.Authoring.DefaultClrTypeRefMapper().Map(typeof(Cohesive.Prelude.Unit), null);
+        Assert.IsType<Cohesive.Model.OpaqueRuntimeTypeRef>(actual);
+    }
+
+    [Fact]
     public void Map_UsesCanonicalScalarKindsSharedWithClrShapeAuthoring()
     {
         (Type ClrType, ScalarTypeKind Expected)[] cases =

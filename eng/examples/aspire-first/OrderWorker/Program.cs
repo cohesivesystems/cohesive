@@ -42,5 +42,5 @@ app.UseExceptionHandler();
 app.UseRequestOperationContext();
 OrderEndpoints.Map(app, orders, details, availability);
 app.MapServiceEphemeralProcess(fulfillment,
-    http: new("POST", "/fulfillment", [], new(typeof(FulfillOrder))));
+    route: "/fulfillment");
 app.Run();

@@ -131,15 +131,16 @@ Some explicit declarations carry meaning:
   not runtime configuration. Convention-derived provenance can reduce authoring, but must still be
   materialized in those artifacts rather than dropped.
 
-Aspire association selection sources now default to a deterministic reference containing the manifest,
-canonical node and native resource name. Explicit sources override it. This default attributes the
-selection only; it does not attest provider capabilities. `OrdersApp.Source` still attributes the
-example's explicit capability assertions.
+Aspire association selection sources can default to a deterministic reference, but this example retains
+its real `Source` on both associations. Native project metadata supplies only .NET project execution.
 
-The next infrastructure step should project evidence from the PostgreSQL adapter's actual prepared
-contracts, particularly `PostgresRelationQueryTargetProfile` and its validated single-source, encoding,
-ordering and completeness boundaries. Do not replace these with a blanket joins capability: composed
-execution across databases does not gain a global snapshot. Conditional writes, partition selection and
-receipt support likewise depend on the configured repository/binding. Domain-derived requirements and
-this evidence must meet through the infrastructure compiler; the current example-level capability IDs
-are still explicit assertions, not that completed derivation chain.
+PostgreSQL evidence now comes from `FulfillmentStorage.Bindings.Prepare(...)`, using the same entity
+mappings and native compiler as the worker. `PostgresInfrastructure.QuerySnapshot(query)` requires an
+exact semantic plan; `QueryImplementation` contributes evidence linked to the prepared artifact and
+storage-binding fingerprints. Missing mappings or unsupported native query constructs fail preparation.
+No database connection is opened by AppHost preparation. Each query gets its own statement snapshot;
+this does not promise a common snapshot across multiple queries or the composed two-database path.
+
+This evidence does not certify schema installation, privileges, live readiness, conditional entity writes
+or atomic transition receipts. Those require their own prepared and/or runtime evidence; a database name
+or query artifact is insufficient. Native schema and receipt setup remain explicit in the worker.

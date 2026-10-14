@@ -13,7 +13,8 @@ public sealed class AspireInfrastructureAssociationTests
 {
     static readonly SourceReference Source = SourceReference.Create("test", "aspire-first");
     static InfrastructureTargetImplementation Storage => ResourceImplementation(new("test/storage"),
-        [new(new("test/storage/evidence"), OrdersApp.RelationalStorage, CapabilityRealizationKind.Native, sourceReferences: [Source])]);
+        [new(new("test/storage/evidence"), OrdersApp.OrderDetailsSnapshot, CapabilityRealizationKind.Native, sourceReferences: [Source]),
+         new(new("test/storage/availability"), Cohesive.Adapters.Postgres.Infra.PostgresInfrastructure.QuerySnapshot(AspireFirst.Orders.FulfillmentQueries.ReservationAvailability.CompilationRequest), CapabilityRealizationKind.Native, sourceReferences: [Source])]);
     static InfrastructureTargetImplementation Process => WorkloadImplementation(new("test/process"),
         [new(new("test/process/evidence"), OrdersApp.ApplicationExecution, CapabilityRealizationKind.Native, sourceReferences: [Source])]);
     static IDistributedApplicationBuilder Builder() => DistributedApplication.CreateBuilder(new DistributedApplicationOptions
@@ -25,6 +26,27 @@ public sealed class AspireInfrastructureAssociationTests
     static AspireInfrastructureAssociation Attach(IDistributedApplicationBuilder builder,
         Action<AspireInfrastructureAssociationBuilder> configure) => AspireInfrastructureAssociation.Attach(
             builder, OrdersApp.Definition, new("test/association"), new("development"), configure);
+
+    [Fact]
+    public void Project_inference_requires_native_metadata_and_does_not_claim_durable_execution()
+    {
+        var builder = Builder();
+        var configured = OrdersApp.Configure(builder);
+        var project = builder.CreateResourceBuilder((ProjectResource)configured.Resources[OrdersApp.Worker]);
+        var definition = Infrastructure.Define(new("test/project"), new("1"), new("test/project/bindings"), infra =>
+            infra.Workload(OrdersApp.Worker).Requires(AspireInfrastructure.DotNetProjectExecution)
+                .Requires(new InfrastructureCapabilityId("test/durable-execution")));
+        var inferred = AspireInfrastructureAssociation.Attach(builder, definition, new("test/project/native"), new("test"),
+            a => a.Workload(OrdersApp.Worker, project, sources: [Source]));
+        Assert.False(inferred.Deployment.IsComplete);
+        Assert.NotEmpty(inferred.Deployment.Diagnostics);
+        var metadata = project.Resource.GetProjectMetadata();
+        project.Resource.Annotations.Remove(metadata);
+        Assert.Throws<InvalidOperationException>(() => AspireInfrastructureAssociation.Attach(builder, definition,
+            new("test/project/missing-metadata"), new("test"), a => a.Workload(OrdersApp.Worker, project)));
+        project.Resource.Annotations.Add(metadata);
+        using var app = builder.Build();
+    }
 
     [Fact]
     public void Omitted_selection_sources_are_deterministic_and_match_explicit_convention()

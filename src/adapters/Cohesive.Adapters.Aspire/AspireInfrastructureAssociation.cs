@@ -10,8 +10,8 @@ namespace Cohesive.Adapters.Aspire;
 
 /// <summary>Associates canonical requirements with an existing native AppHost model without creating resources.</summary>
 /// <remarks>
-/// Aspire owns configuration, references, startup and disposal. Capability evidence is an explicit assertion,
-/// not inferred from resource CLR types or proof of live readiness. The native map is invocation-local;
+/// Aspire owns configuration, references, startup and disposal. Project metadata supports only the shared
+/// .NET project execution capability. Other evidence is explicit; neither establishes live readiness. The native map is invocation-local;
 /// only the ordinary deployment manifest and compiler result are portable.
 /// </remarks>
 public sealed class AspireInfrastructureAssociation
@@ -116,6 +116,28 @@ public sealed class AspireInfrastructureAssociationBuilder
             Sources(sources, node, native.Resource), sourceFile, sourceLine, sourceMember);
         resources.Add(node, native.Resource);
         return this;
+    }
+
+    /// <summary>Infers .NET project execution from an existing Aspire project with valid native metadata.</summary>
+    /// <param name="node">Canonical workload identity.</param>
+    /// <param name="native">Existing project resource; no process is started.</param>
+    /// <param name="sources">Selection attribution, or the deterministic association default.</param>
+    /// <param name="sourceFile">Compiler-provided authoring file.</param>
+    /// <param name="sourceLine">Compiler-provided authoring line.</param>
+    /// <param name="sourceMember">Compiler-provided authoring member.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">Native builder is null.</exception>
+    /// <exception cref="ArgumentException">Membership, identity or project path is invalid.</exception>
+    /// <exception cref="InvalidOperationException">Metadata is absent/ambiguous or authoring has completed.</exception>
+    public AspireInfrastructureAssociationBuilder Workload(InfrastructureNodeId node, IResourceBuilder<ProjectResource> native,
+        ImmutableArray<SourceReference> sources = default,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0, [CallerMemberName] string sourceMember = "")
+    {
+        ArgumentNullException.ThrowIfNull(native);
+        Validate(node, native.Resource);
+        var metadata = native.Resource.GetProjectMetadata();
+        ArgumentException.ThrowIfNullOrWhiteSpace(metadata.ProjectPath);
+        return Workload(node, native, AspireInfrastructure.DotNetProject, sources, sourceFile, sourceLine, sourceMember);
     }
 
     /// <summary>Associates an existing executable, project or container with a canonical workload.</summary>

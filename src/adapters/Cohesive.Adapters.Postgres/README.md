@@ -206,3 +206,15 @@ Npgsql executor. Parameters and the overflow limit have explicit provider types;
 use sequential decoding and one-pass immutable row assembly. Its byte budget counts all
 retrieved scalar values, including presence columns and suppressed fields. Raw rows are
 bounded and invocation-owned. See [qualification](../../../docs/performance/repeated-representation-work.md).
+
+## Offline infrastructure preparation
+
+`PostgresPersistenceBindings(databaseId).Entity(entity, mapping)` owns offline validated mappings.
+`Prepare(query.CompilationRequest)` runs the existing semantic/placement/native compilers without a
+connection; `Bind(runtime)` snapshots the same mappings into a `PostgresPersistenceRegistration`.
+The existing runtime-first constructor remains supported and delegates preparation to this same path.
+Mapping builders are host-composition objects and must not be mutated concurrently. Runtime parameters,
+connections and results remain invocation-scoped; no query-result cache or global registry is added.
+
+Optional [Cohesive.Adapters.Postgres.Infra](../Cohesive.Adapters.Postgres.Infra/README.md) projects prepared
+artifacts into exact infrastructure evidence without adding an Infra dependency to the base adapter.

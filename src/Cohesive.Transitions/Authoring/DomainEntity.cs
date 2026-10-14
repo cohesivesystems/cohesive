@@ -64,7 +64,7 @@ public sealed class DomainEntity<T> where T : notnull
         Action<TransitionBuilder<T, Unit, TOutcome>> configure,
         [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
         [CallerMemberName] string sourceMember = "") =>
-        TransitionAuthoring.Create(Definition.Shape,
+        TransitionAuthoring.Create<T, TOutcome>(Definition.Shape,
             id, revision, configure, sourceFile, sourceLine, sourceMember);
 
     /// <summary>Declares a reference to another entity's observation identity.</summary>
