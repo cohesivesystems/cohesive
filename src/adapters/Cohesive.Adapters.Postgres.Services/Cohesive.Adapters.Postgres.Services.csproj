@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Native query readers and infrastructure evidence derived from service selections.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Cohesive.Adapters.Postgres.Infra/Cohesive.Adapters.Postgres.Infra.csproj" />
+    <ProjectReference Include="../../Cohesive.Api.Execution/Cohesive.Api.Execution.csproj" />
+  </ItemGroup>
+</Project>

@@ -18,7 +18,9 @@ namespace Cohesive.Api.Execution.Services;
 /// invocation identity, authorization and repository reads remain invocation-scoped. No durable worker is created.</remarks>
 public sealed class ServiceProcessHostBuilder<TInput, TResult>
 {
-    readonly ServiceOperationBuilder operation;
+    readonly ServiceOperationBuilder? operation;
+    readonly ExecutionDefinitionDocument? declared;
+    readonly TimeSpan? declaredTimeout;
     readonly string operationId;
     readonly Process<TInput, TResult> process;
     readonly InteractionContractCatalog contracts;
@@ -38,6 +40,25 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
         }
         this.contracts = contracts ?? throw new InvalidOperationException("Interaction catalog construction produced no catalog.");
     }
+
+    internal ServiceProcessHostBuilder(ExecutionDefinitionDocument declaration, ServiceProcessOperation operation,
+        Process<TInput, TResult> process, InteractionContractCatalog? contracts)
+        : this(null!, operation.Id, process, contracts)
+    { declared = declaration; declaredTimeout = operation.Execution!.Timeout; }
+
+    internal void Use(ServiceDependencies dependencies, Func<ValueContract, IEntityRepository> repositories) =>
+        dependencies.Apply(this, process, repositories, contracts);
+
+    internal void Query(ProcessDefinitionLink link, ProcessRelationHandlerRegistration handler)
+    { links.Add(link); queries.Add(handler); }
+
+    /// <summary>Builds a separately declared service while preserving its timeout and authorization requirements.</summary>
+    /// <param name="authority">Logical execution authority.</param><param name="authorization">Invocation admission and resource authorization.</param>
+    /// <returns>The exact declaration and prepared runtime.</returns>
+    /// <exception cref="InvalidOperationException">No separately declared execution policy is available.</exception>
+    /// <exception cref="ServiceBindingValidationException">Dependency compilation fails.</exception>
+    public HostedServiceProcess<TInput, TResult> Build(string authority, IServiceInvocationAuthorization authorization) =>
+        Build(authority, declaredTimeout ?? throw new InvalidOperationException("Declare an execution timeout before binding."), authorization);
 
     /// <summary>Compiles and associates an exact transition with its receipt-capable entity authority.</summary>
     /// <typeparam name="TEntity">Entity projection.</typeparam>
@@ -118,7 +139,9 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
         ArgumentNullException.ThrowIfNull(authorization);
         var compilation = process.Compile(new ProcessDefinitionValidationContext(links));
         var plan = compilation.Plan ?? throw new ServiceBindingValidationException(compilation.Validation);
-        var declaration = operation.Run(plan).ExecuteEphemerally(timeout).Build();
+        if (declaredTimeout is { } expected && expected != timeout)
+            throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.ExecutionMismatch, "Binding cannot override the declared timeout.", "/bindings/process/timeout");
+        var declaration = declared ?? operation!.Run(plan).ExecuteEphemerally(timeout).Build();
         var deployed = new Dictionary<ExecutionDefinitionReference, ProcessTransitionOperationBinding>(transitions);
         var adapter = new EntityTransitionProcessOperationAdapter(invocation => deployed.GetValueOrDefault(invocation.Definition));
         var host = new RegisteredAsyncProcessReferenceHost(new ProcessRelationHandlerCatalog(queries), adapter.ExecuteAsync);

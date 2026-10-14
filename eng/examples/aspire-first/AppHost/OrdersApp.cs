@@ -6,7 +6,7 @@ using Cohesive.Infra.Realization;
 using Cohesive.Model;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres.Infra;
-using Cohesive.Relations.Infra;
+using Cohesive.Adapters.Postgres.Services;
 
 namespace AspireFirst;
 
@@ -17,11 +17,9 @@ public static class OrdersApp
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
     public static InfrastructureNodeId Worker { get; } = new("workloads/orders");
-    /// <summary>Prepare the declared query set once; requirements and native evidence share this authority.</summary>
-    public static PostgresPreparedQueryEvidence StorageQueries { get; } = PostgresInfrastructure.Prepare(
-        new("example/postgres"), FulfillmentStorage.Bindings,
-        new QuerySnapshotRequirement("orders/details", "1", FulfillmentQueries.OrderDetails.CompilationRequest),
-        new QuerySnapshotRequirement("orders/availability", "1", FulfillmentQueries.ReservationAvailability.CompilationRequest));
+    /// <summary>Derived entirely from the service's selected query registrations and native mappings.</summary>
+    public static PostgresPreparedQueryEvidence StorageQueries { get; } = FulfillmentStorage.Bindings
+        .PrepareService(FulfillmentService.Definition, new("example/postgres"));
     /// <summary>Required application execution capability.</summary>
     public static InfrastructureCapabilityId ApplicationExecution { get; } = AspireInfrastructure.DotNetProjectExecution;
 
@@ -30,7 +28,7 @@ public static class OrdersApp
     /// <summary>Canonical requirements, independent of native Aspire resource names and provider options.</summary>
     public static InfrastructureAuthoringResult Definition { get; } = Infrastructure.Define(
         id: new("example/orders"),
-        revision: new("3"),
+        revision: new("4"),
         bindingProfileId: new("example/orders/bindings"),
         infra =>
         {

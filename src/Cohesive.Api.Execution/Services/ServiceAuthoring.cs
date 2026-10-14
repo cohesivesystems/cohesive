@@ -8,6 +8,7 @@ using Cohesive.Processes.IR;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
+using Cohesive.Storage;
 
 namespace Cohesive.Api.Execution.Services;
 
@@ -17,6 +18,58 @@ public static class Service
     /// <summary>Begins an immutable service declaration with attributable identity and revision.</summary>
     public static ServiceBuilder Define(ExecutionDefinitionId id, ExecutionRevisionId revision, ExecutionProvenance provenance) =>
         new(id, revision, provenance);
+    /// <summary>Binds an exact separately declared service to a unique repository per observation contract.</summary>
+    /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process output.</typeparam>
+    /// <param name="declaration">Portable service authority.</param><param name="process">Exact process authority.</param>
+    /// <param name="dependencies">Immutable behavior registrations.</param><param name="repositories">Caller-owned entity repositories; matching is semantic, not CLR-name based.</param>
+    /// <returns>The prepared finite binding phase.</returns>
+    /// <exception cref="ServiceBindingValidationException">Repository authorities are missing or ambiguous, or service binding fails.</exception>
+    public static ServiceProcessHostBuilder<TInput, TResult> Bind<TInput, TResult>(ExecutionDefinitionDocument declaration,
+        Process<TInput, TResult> process, ServiceDependencies dependencies, params IEntityRepository[] repositories)
+    {
+        ArgumentNullException.ThrowIfNull(repositories);
+        var selected = new Dictionary<ValueContract, IEntityRepository>();
+        foreach (var repository in repositories)
+        {
+            ArgumentNullException.ThrowIfNull(repository);
+            if (!selected.TryAdd(ValueContract.FromShape(repository.EntityDefinition.Shape), repository))
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.RepositoryAmbiguous, "Multiple repositories claim the same entity observation.", "/bindings/repositories");
+        }
+        return Bind(declaration, process, dependencies, observation => selected.TryGetValue(observation, out var repository)
+            ? repository : throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.RepositoryMissing, "No repository supplies the required entity observation.", "/bindings/repositories"));
+    }
+
+    /// <summary>Binds a separately declared service through the same exact dependency resolver as inline authoring.</summary>
+    /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process output.</typeparam>
+    /// <param name="declaration">Validated portable service document.</param><param name="process">Exact process authority.</param>
+    /// <param name="dependencies">Immutable canonical definitions and native query selections.</param>
+    /// <param name="repositories">Setup-time resolver of exact observation contracts to entity authorities.</param>
+    /// <param name="contracts">Optional interaction catalog; omission selects an empty catalog.</param>
+    /// <returns>A prepared binding phase; invocation policy remains in the service document.</returns>
+    /// <exception cref="ServiceBindingValidationException">Document, execution mode or exact dependencies are invalid.</exception>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    public static ServiceProcessHostBuilder<TInput, TResult> Bind<TInput, TResult>(ExecutionDefinitionDocument declaration,
+        Process<TInput, TResult> process, ServiceDependencies dependencies, Func<ValueContract, IEntityRepository> repositories,
+        InteractionContractCatalog? contracts = null)
+    {
+        ArgumentNullException.ThrowIfNull(declaration); ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(dependencies); ArgumentNullException.ThrowIfNull(repositories);
+        var validation = ServiceDefinitionDocuments.ValidateAndProject(declaration, out _);
+        if (!validation.IsValid) throw new ServiceBindingValidationException(validation);
+        if (!process.IsValid) throw new ServiceBindingValidationException(process.Validation);
+        if (!declaration.Extensions.IsEmpty)
+            throw ServiceBindingValidationException.Error("services.binding.extensionsUnsupported", "This finite binding profile does not support service extensions.", "/extensions");
+        var definition = declaration.GetDefinition<ServiceDefinition>();
+        if (definition.Operations.Length != 1 || definition.Operations[0] is not ServiceProcessOperation operation
+            || operation.Process != process.Reference || operation.ResultClassifier is not null
+            || operation.Execution is not { Lifetime: ProcessExecutionLifetime.Ephemeral, Completion: ServiceProcessCompletion.Terminal })
+            throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.ProcessSelectionInvalid,
+                "This finite host requires one exact, unclassified ephemeral process operation.", "/bindings/process");
+        var host = new ServiceProcessHostBuilder<TInput, TResult>(declaration, operation, process, contracts);
+        host.Use(dependencies, repositories);
+        return host;
+    }
+
 }
 
 /// <summary>Immutable service authoring state. Branching a declaration never mutates an earlier branch.</summary>
@@ -29,10 +82,11 @@ public sealed class ServiceBuilder
     readonly ImmutableArray<ServiceOperation> operations;
 
     internal ServiceBuilder(ExecutionDefinitionId id, ExecutionRevisionId revision, ExecutionProvenance provenance,
-        ImmutableArray<ApiAuthorizationRequirement> requirements = default, ImmutableArray<ServiceOperation> operations = default)
+        ImmutableArray<ApiAuthorizationRequirement> requirements = default, ImmutableArray<ServiceOperation> operations = default, ServiceDependencies? dependencies = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id.Value);
         ArgumentException.ThrowIfNullOrWhiteSpace(revision.Value);
+        Dependencies = dependencies ?? new ServiceDependencies();
         this.id = id;
         this.revision = revision;
         this.provenance = provenance ?? throw new ArgumentNullException(nameof(provenance));
@@ -40,19 +94,45 @@ public sealed class ServiceBuilder
         this.operations = operations.IsDefault ? [] : operations;
     }
 
+    /// <summary>Host-composition selections shared by runtime and infrastructure preparation.</summary>
+    public ServiceDependencies Dependencies { get; }
+
+    /// <summary>Attaches immutable dependency registrations without changing the portable service document.</summary>
+    /// <param name="dependencies">Canonical behavior and explicit query roots.</param><returns>A new builder.</returns>
+    /// <exception cref="ArgumentNullException">Dependencies are null.</exception>
+    public ServiceBuilder Use(ServiceDependencies dependencies) =>
+        new(id, revision, provenance, requirements, operations, dependencies ?? throw new ArgumentNullException(nameof(dependencies)));
+
+    /// <summary>Binds the authored document to caller-owned repositories selected by exact observation contract.</summary>
+    /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process output.</typeparam>
+    /// <param name="process">Exact process authority.</param><param name="repositories">Unique entity authorities.</param>
+    /// <returns>The prepared finite binding phase.</returns>
+    /// <exception cref="ServiceBindingValidationException">The document or repositories cannot satisfy dependencies.</exception>
+    public ServiceProcessHostBuilder<TInput, TResult> Bind<TInput, TResult>(Process<TInput, TResult> process,
+        params IEntityRepository[] repositories) => Service.Bind(Build(), process, Dependencies, repositories);
+
+    /// <summary>Binds the authored document with its retained registrations.</summary>
+    /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process output.</typeparam>
+    /// <param name="process">Exact authored process.</param><param name="repositories">Setup-time entity authority resolver.</param>
+    /// <param name="contracts">Optional explicit interaction catalog.</param><returns>The finite process binding phase.</returns>
+    /// <exception cref="ServiceBindingValidationException">The exact document or dependencies cannot be bound.</exception>
+    public ServiceProcessHostBuilder<TInput, TResult> Bind<TInput, TResult>(Process<TInput, TResult> process,
+        Func<ValueContract, IEntityRepository> repositories, InteractionContractCatalog? contracts = null) =>
+        Service.Bind(Build(), process, Dependencies, repositories, contracts);
+
     /// <summary>Adds a requirement inherited by subsequently declared operations.</summary>
     /// <remarks>Earlier operations retain their declared requirements; repeated requirements are idempotent.</remarks>
     public ServiceBuilder Require(ApiAuthorizationRequirement requirement)
     {
         ArgumentNullException.ThrowIfNull(requirement);
-        return new(id, revision, provenance, requirements.Contains(requirement) ? requirements : requirements.Add(requirement), operations);
+        return new(id, revision, provenance, requirements.Contains(requirement) ? requirements : requirements.Add(requirement), operations, Dependencies);
     }
 
     /// <summary>Begins one operation; backing behavior and execution policy must be selected before building.</summary>
     public ServiceOperationBuilder Operation(string operationId) => new(this, operationId, null, requirements);
 
     internal ServiceBuilder Add(ServiceOperation operation) =>
-        new(id, revision, provenance, requirements, operations.Add(operation));
+        new(id, revision, provenance, requirements, operations.Add(operation), Dependencies);
 
     /// <summary>Materializes the existing canonical service IR and fingerprint; duplicate identities are rejected.</summary>
     /// <exception cref="ArgumentException">The service is empty or has duplicate operations or invalid requirements.</exception>

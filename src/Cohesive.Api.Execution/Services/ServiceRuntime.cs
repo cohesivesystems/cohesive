@@ -38,6 +38,39 @@ public static class ServiceBindingDiagnosticCodes
     public const string ObservationMismatch = "services.binding.observationMismatch";
     /// <summary>The native repository cannot commit entity state and receipt atomically.</summary>
     public const string ReceiptCapabilityMissing = "services.binding.receiptCapabilityMissing";
+    /// <summary>No repository supplies an exact required entity observation.</summary>
+    public const string RepositoryMissing = "services.binding.repositoryMissing";
+
+    /// <summary>Multiple supplied repositories claim the same entity observation.</summary>
+    public const string RepositoryAmbiguous = "services.binding.repositoryAmbiguous";
+
+    /// <summary>A process references an unregistered exact transition.</summary>
+    public const string TransitionMissing = "services.binding.transitionMissing";
+
+    /// <summary>A process references an unregistered exact hosted query.</summary>
+    public const string QueryMissing = "services.binding.queryMissing";
+
+    /// <summary>Native preparation received a query outside the service selection.</summary>
+    public const string QueryUnselected = "services.binding.queryUnselected";
+
+    /// <summary>A query identity is selected more than once.</summary>
+    public const string QueryDuplicate = "services.binding.queryDuplicate";
+
+    /// <summary>The native binding cannot realize the selected acquisition consistency.</summary>
+    public const string QueryPlacementUnsupported = "services.binding.queryPlacementUnsupported";
+
+    /// <summary>A point lookup repository has no fixed trusted partition.</summary>
+    public const string LookupPartitionMissing = "services.binding.lookupPartitionMissing";
+
+    /// <summary>An observational entity lookup was attached to a deterministic query.</summary>
+    public const string LookupSemanticsInvalid = "services.binding.lookupSemanticsInvalid";
+
+    /// <summary>The service does not select the supported exact process hosting profile.</summary>
+    public const string ProcessSelectionInvalid = "services.binding.processSelectionInvalid";
+
+    /// <summary>A binding attempts to override the declared execution policy.</summary>
+    public const string ExecutionMismatch = "services.binding.executionMismatch";
+
 }
 
 /// <summary>Structured declaration/binding diagnostics retained for human and agent inspection.</summary>

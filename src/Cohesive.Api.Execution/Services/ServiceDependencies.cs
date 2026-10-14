@@ -1,0 +1,159 @@
+using System.Collections.Immutable;
+using Cohesive.Execution;
+using Cohesive.Model;
+using Cohesive.Processes.Authoring;
+using Cohesive.Processes.Execution;
+using Cohesive.Processes.IR;
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.Compilation;
+using Cohesive.Storage;
+using Cohesive.Storage.Processes;
+using Cohesive.Transitions.Authoring;
+
+namespace Cohesive.Api.Execution.Services;
+
+/// <summary>Immutable host-composition registrations; exact Process references select dependencies at setup.</summary>
+/// <remarks>Canonical documents remain semantic authority. Delegates are runtime attachments, never persisted IR.
+/// Unused process dependencies do not resolve repositories. Query selections are explicit transport roots.
+/// Transition compilation is thread-safe and cached, including failures, for the registration lifetime.
+/// Lookup delegates must support concurrent invocation; repositories remain caller-owned.</remarks>
+public sealed class ServiceDependencies
+{
+    delegate ProcessTransitionOperationBinding TransitionFactory(Func<ValueContract, IEntityRepository> resolve, InteractionContractCatalog contracts);
+    delegate (ProcessDefinitionLink Link, ProcessRelationHandlerRegistration Handler) LookupFactory(Func<ValueContract, IEntityRepository> resolve);
+
+    readonly ImmutableDictionary<ExecutionDefinitionReference, TransitionFactory> transitions;
+    readonly ImmutableDictionary<ExecutionDefinitionReference, LookupFactory> lookups;
+    /// <summary>Creates an empty registration set.</summary>
+    public ServiceDependencies() : this(ImmutableDictionary<ExecutionDefinitionReference, TransitionFactory>.Empty,
+        ImmutableDictionary<ExecutionDefinitionReference, LookupFactory>.Empty, []) { }
+    ServiceDependencies(
+        ImmutableDictionary<ExecutionDefinitionReference, TransitionFactory> transitions,
+        ImmutableDictionary<ExecutionDefinitionReference, LookupFactory> lookups,
+        ImmutableArray<ServiceQuerySelection> queries)
+    { this.transitions = transitions; this.lookups = lookups; Queries = queries; }
+
+    /// <summary>Explicit relational query roots selected for this service's transports.</summary>
+    public ImmutableArray<ServiceQuerySelection> Queries { get; }
+
+    /// <summary>Registers canonical transition behavior, without choosing a repository manually.</summary>
+    /// <typeparam name="TEntity">State projection.</typeparam><typeparam name="TInput">Command projection.</typeparam><typeparam name="TResult">Outcome projection.</typeparam>
+    /// <param name="transition">Exact transition authority.</param>
+    /// <param name="expectedConcurrencyTokenField">Optional input field carrying the required observed token.</param>
+    /// <returns>A new immutable registration set.</returns>
+    /// <exception cref="ArgumentNullException">Transition is null.</exception>
+    /// <exception cref="ArgumentException">The exact dependency is already registered.</exception>
+    public ServiceDependencies Transition<TEntity, TInput, TResult>(Transition<TEntity, TInput, TResult> transition,
+        string? expectedConcurrencyTokenField = null) where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(transition);
+        var prepared = new Lazy<Cohesive.Transitions.Compilation.CompiledTransitionPlan>(() =>
+        {
+            var result = transition.Compile();
+            return result.Plan ?? throw new ServiceBindingValidationException(result.Validation);
+        });
+        return new(transitions.Add(transition.Reference, (resolve, contracts) =>
+            new(prepared.Value, resolve(transition.Definition.Observation), contracts,
+                expectedConcurrencyTokenField: expectedConcurrencyTokenField)), lookups, Queries);
+    }
+
+    /// <summary>Attaches a typed entity point read to an exact hosted-query contract.</summary>
+    /// <typeparam name="TEntity">Entity projection.</typeparam><typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Query result.</typeparam>
+    /// <param name="query">Canonical hosted query.</param><param name="entity">Authoritative entity.</param>
+    /// <param name="key">Invocation-time entity identity projection.</param><param name="result">Projection of the entity or its absence.</param>
+    /// <returns>A new immutable registration set.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">The exact query is already registered.</exception>
+    /// <exception cref="ServiceBindingValidationException">The query claims deterministic rather than observational semantics.</exception>
+    public ServiceDependencies Lookup<TEntity, TInput, TResult>(HostedQuery<TInput, TResult> query,
+        DomainEntity<TEntity> entity, Func<TInput, string> key, Func<TEntity?, TResult> result)
+        where TEntity : class where TInput : notnull where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(query); ArgumentNullException.ThrowIfNull(entity);
+        ArgumentNullException.ThrowIfNull(key); ArgumentNullException.ThrowIfNull(result);
+        if (query.EvaluationSemantics != Cohesive.Relations.IR.HostedQueryEvaluationSemantics.Observation)
+            throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.LookupSemanticsInvalid,
+                "An entity lookup cannot implement a deterministic-computation contract.", "/bindings/lookup");
+        return new(transitions, lookups.Add(query.Reference, resolve =>
+        {
+            var repository = resolve(ValueContract.FromShape(entity.Definition.Shape));
+            if (repository.EntityDefinition != entity.Definition)
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.ObservationMismatch,
+                    "Lookup repository differs from its entity authority.", "/bindings/lookup/entity");
+            var partition = repository.TransitionOperationCapabilities.PartitionKey
+                ?? throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.LookupPartitionMissing,
+                    "Entity lookup requires an explicit fixed repository partition.", "/bindings/lookup/partition");
+            var typed = new TypedEntityRepository<TEntity>(repository);
+            var options = new EntityReadOptions(partitionKey: partition);
+            return (query.CreateProcessDefinitionLink(), ProcessRelationHandlerRegistration.Create(query,
+                async (context, _, input) => result(await typed.TryGetEntity(context, key(input), options).ConfigureAwait(false))));
+        }), Queries);
+    }
+
+    /// <summary>Selects a canonical relational query once for transport reading and infrastructure preparation.</summary>
+    /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Query output.</typeparam>
+    /// <param name="query">Canonical query authority.</param><param name="revision">Explicit semantic revision.</param>
+    /// <param name="maximumRows">Complete-result row bound.</param><param name="maximumBytes">Decoded-value byte bound.</param>
+    /// <param name="consistency">Required acquisition guarantee; independent-source selection cannot claim a single snapshot.</param>
+    /// <returns>A new immutable registration set.</returns>
+    /// <exception cref="ArgumentException">The query is invalid or already selected.</exception>
+    public ServiceDependencies Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision,
+        int maximumRows, long maximumBytes, ServiceQueryConsistency consistency = ServiceQueryConsistency.SingleSnapshot)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var reference = ServiceQueryBinding.GetReference(revision, query.CompilationRequest);
+        if (Queries.Any(item => item.Reference.DefinitionId == reference.DefinitionId))
+            throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryDuplicate, "A query is already selected.", "/bindings/queries");
+        return new(transitions, lookups, Queries.Add(new(reference, query.CompilationRequest, maximumRows, maximumBytes, consistency)));
+    }
+
+    internal void Apply<TInput, TResult>(ServiceProcessHostBuilder<TInput, TResult> host, Process<TInput, TResult> process,
+        Func<ValueContract, IEntityRepository> resolve, InteractionContractCatalog contracts)
+    {
+        foreach (var reference in process.Definition.Nodes.OfType<InvokeTransitionProcessNode>().Select(node => node.Transition).Distinct())
+        {
+            if (!transitions.TryGetValue(reference, out var create))
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.TransitionMissing, "An exact transition dependency is not registered.", "/bindings/transitions");
+            host.Transition(create(resolve, contracts));
+        }
+        foreach (var reference in process.Definition.Nodes.OfType<EvaluateRelationProcessNode>().Select(node => node.Relation).Distinct())
+        {
+            if (!lookups.TryGetValue(reference, out var create))
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryMissing, "An exact hosted query dependency is not registered.", "/bindings/queries");
+            var binding = create(resolve);
+            host.Query(binding.Link, binding.Handler);
+        }
+    }
+}
+
+/// <summary>One selected relational query and explicit execution bounds; no runtime data source is retained.</summary>
+public sealed class ServiceQuerySelection
+{
+    internal ServiceQuerySelection(ExecutionDefinitionReference reference, RelationQueryCompilationRequest request, int maximumRows, long maximumBytes, ServiceQueryConsistency consistency)
+    {
+        if (!Enum.IsDefined(consistency)) throw new ArgumentOutOfRangeException(nameof(consistency));
+        Consistency = consistency;
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
+        Reference = reference; Request = request; MaximumRows = maximumRows; MaximumBytes = maximumBytes;
+    }
+    /// <summary>Selected acquisition guarantee.</summary>
+    public ServiceQueryConsistency Consistency { get; }
+    /// <summary>Canonical query identity, explicit revision and definition fingerprint.</summary>
+    public ExecutionDefinitionReference Reference { get; }
+    /// <summary>Exact semantic request.</summary>
+    public RelationQueryCompilationRequest Request { get; }
+    /// <summary>Complete-result row bound.</summary>
+    public int MaximumRows { get; }
+    /// <summary>Decoded-value byte bound.</summary>
+    public long MaximumBytes { get; }
+}
+
+/// <summary>Explicit consistency choice for a selected relational query.</summary>
+public enum ServiceQueryConsistency
+{
+    /// <summary>All query reads must share one snapshot.</summary>
+    SingleSnapshot,
+    /// <summary>Sources are acquired independently; no cross-source snapshot is claimed.</summary>
+    IndependentSources
+}
