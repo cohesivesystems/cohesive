@@ -7,6 +7,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Cohesive.Adapters.Postgres/Cohesive.Adapters.Postgres.csproj" />
-    <ProjectReference Include="../../Cohesive.Infra/Cohesive.Infra.csproj" />
+    <ProjectReference Include="../../Cohesive.Relations.Infra/Cohesive.Relations.Infra.csproj" />
   </ItemGroup>
 </Project>

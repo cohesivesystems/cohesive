@@ -10,8 +10,8 @@ using Cohesive.Transitions.Authoring;
 namespace Cohesive.Adapters.Postgres;
 
 /// <summary>Native PostgreSQL entity attachments shared by repositories and queries on one explicitly bound database.</summary>
-/// <remarks>Configure this mutable builder at host composition, then retain its repositories and prepared query readers.
-/// Query prepares once per call; no invocation result cache is introduced. Do not mutate the registration concurrently.
+/// <remarks>Bind an offline mapping snapshot at host composition, then retain its repositories and prepared query readers.
+/// Query prepares once per call; no invocation result cache is introduced.
 /// No connections are opened during preparation. No provider-neutral facade or global cache is introduced.</remarks>
 public sealed partial class PostgresPersistenceRegistration
 {
@@ -19,27 +19,8 @@ public sealed partial class PostgresPersistenceRegistration
     readonly PostgresPersistenceBindings bindings;
     Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> tables => bindings.Tables;
 
-    /// <summary>Creates a host-registration builder.</summary>
-    /// <param name="runtime">Explicit database identity and caller-owned native data source.</param>
-    /// <exception cref="ArgumentNullException">Runtime is null.</exception>
-    public PostgresPersistenceRegistration(PostgresNpgsqlRuntimeBinding runtime) :
-        this(runtime ?? throw new ArgumentNullException(nameof(runtime)), new PostgresPersistenceBindings(runtime.Database)) { }
-
     internal PostgresPersistenceRegistration(PostgresNpgsqlRuntimeBinding runtime, PostgresPersistenceBindings bindings)
     { this.runtime = runtime; this.bindings = bindings; }
-
-    /// <summary>Attaches an existing physical mapping to its exact canonical entity graph.</summary>
-    /// <typeparam name="T">Entity state type.</typeparam>
-    /// <param name="entity">Canonical entity authority.</param>
-    /// <param name="mapping">Native table/column configuration, reused from repository registration.</param>
-    /// <returns>This builder.</returns>
-    /// <exception cref="ArgumentNullException">An argument is null.</exception>
-    /// <exception cref="ArgumentException">A shape is already mapped or the repository mapping is invalid.</exception>
-    public PostgresPersistenceRegistration Entity<T>(DomainEntity<T> entity, PostgresEntityRepositoryMapping mapping) where T : notnull
-    {
-        bindings.Entity(entity, mapping);
-        return this;
-    }
 
     /// <summary>Creates a repository from the same entity attachment used by query preparation.</summary>
     /// <typeparam name="T">Canonical entity state type.</typeparam>
@@ -72,7 +53,8 @@ public sealed partial class PostgresPersistenceRegistration
     /// <exception cref="ArgumentNullException">Query is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A result bound is invalid.</exception>
     /// <exception cref="NotSupportedException">The artifact requires unsupported temporal execution.</exception>
-    /// <exception cref="PostgresQueryPreparationException">Static or native compilation fails; original results are retained.</exception>
+    /// <exception cref="RelationQueryPreparationException">Semantic compilation fails.</exception>
+    /// <exception cref="PostgresQueryPreparationException">Native compilation fails; original results are retained.</exception>
     /// <exception cref="InvalidOperationException">An input shape has no registered native mapping.</exception>
     /// <exception cref="RelationQueryArtifactAuthoringException">Placement or binding is invalid.</exception>
     public PostgresQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query,
@@ -88,7 +70,8 @@ public sealed partial class PostgresPersistenceRegistration
     /// <param name="maximumRows">Complete-result row limit; overflow fails.</param>
     /// <param name="maximumBytes">Complete decoded scalar-value byte limit.</param>
     /// <returns>A plan-affine reader retaining its native artifact.</returns>
-    /// <exception cref="PostgresQueryPreparationException">Static or native compilation fails.</exception>
+    /// <exception cref="RelationQueryPreparationException">Semantic compilation fails.</exception>
+    /// <exception cref="PostgresQueryPreparationException">Native compilation fails.</exception>
     /// <exception cref="ArgumentNullException">Request is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">A result bound is invalid.</exception>
     /// <exception cref="NotSupportedException">The artifact requires unsupported temporal execution.</exception>

@@ -69,6 +69,8 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | [`Cohesive.Adapters.OpenTelemetry`](src/adapters/Cohesive.Adapters.OpenTelemetry/README.md) | Optional native OpenTelemetry builder registration for existing Cohesive tracing and metric scopes. |
 | `Cohesive.Adapters.Parquet` | Parquet row and column writing helpers. |
 | [`Cohesive.Adapters.Postgres.Infra`](src/adapters/Cohesive.Adapters.Postgres.Infra/README.md) | Plan-specific infrastructure evidence derived from prepared native PostgreSQL query bindings. |
+| [`Cohesive.Relations.Infra`](src/Cohesive.Relations.Infra/README.md) | Provider-neutral versioned query snapshot requirements. |
+| [`Cohesive.Adapters.Aspire.Postgres`](src/adapters/Cohesive.Adapters.Aspire.Postgres/README.md) | Native database affinity checks for prepared query evidence. |
 | `Cohesive.Adapters.Postgres` | PostgreSQL relation/query and materialization integrations plus a durable Process distribution ledger. |
 | [`Cohesive.Adapters.SQLite`](src/adapters/Cohesive.Adapters.SQLite/README.md) | SQLite entity repositories with optimistic concurrency and atomic batches, exact scalar encodings, and module migrations. |
 | `Cohesive.Adapters.TypeScript` | TypeScript emitters for shapes, API clients, constants, and test mocks. |

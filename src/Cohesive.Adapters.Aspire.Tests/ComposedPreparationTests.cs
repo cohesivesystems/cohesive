@@ -23,7 +23,7 @@ public sealed class ComposedPreparationTests
         using var db = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test;Timeout=1");
         var orders = FulfillmentStorage.Bind(db);
         var remote = failure == "missing-mapping"
-            ? new PostgresPersistenceRegistration(new(new("inventory"), db, "test"))
+            ? new PostgresPersistenceBindings(new("inventory")).Bind(new(new("inventory"), db, "test"))
             : FulfillmentStorage.BindInventory(db);
         var scope = new PostgresRelationQueryPartitionScope(new("local"),
             failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition);

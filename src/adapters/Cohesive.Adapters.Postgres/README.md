@@ -110,7 +110,7 @@ use the existing source-acquisition path with explicit policies where those cont
 
 ## Register a typed query at host composition
 
-`PostgresPersistenceRegistration(runtime).Entity(domainEntity, mapping).Query(query, maximumRows, maximumBytes)`
+`PostgresPersistenceBindings(databaseId).Entity(domainEntity, mapping).Bind(runtime).Query(query, maximumRows, maximumBytes)`
 places all demanded entity sources/traversals in the explicitly selected database, projects the registered
 repository mappings and invokes the existing static/placement/feasibility/native compilers. It opens no
 connection. Missing mappings and invalid plans fail at registration; static/native compilation failures
