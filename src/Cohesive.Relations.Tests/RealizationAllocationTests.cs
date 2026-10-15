@@ -35,6 +35,94 @@ public sealed class RealizationAllocationTests(ITestOutputHelper output)
     }
 
     [Fact]
+    public void NestedKeyBuilderWritesExactlyTheNestedSequenceKeyText()
+    {
+        string?[] values = [null, "", "é🙂", "-1:", "3:abc", new('y', 700)];
+        long?[] numbers = [null, 0, -5, 42, long.MaxValue];
+        int[] ordinals = [0, 7, 12345, -3];
+        var expected = PreviousKey(
+        [
+            PreviousKey(values),
+            PreviousKey(numbers.Select(static n => n?.ToString(CultureInfo.InvariantCulture))),
+            PreviousKey(ordinals.Select(static o => o.ToString("D4", CultureInfo.InvariantCulture))),
+            PreviousKey([PreviousKey(values), PreviousKey([])]),
+        ]);
+
+        var key = new SequenceKeyBuilder(stackalloc char[16]);
+        var part = new SequenceKeyBuilder(stackalloc char[16]);
+        var inner = new SequenceKeyBuilder(stackalloc char[16]);
+        try
+        {
+            foreach (var value in values) part.Add(value);
+            key.AddNested(ref part);
+            foreach (var number in numbers) part.Add(number);
+            key.AddNested(ref part);
+            foreach (var ordinal in ordinals) part.AddOrdinal(ordinal);
+            key.AddNested(ref part);
+            foreach (var value in values) inner.Add(value);
+            part.AddNested(ref inner);
+            part.AddNested(ref inner); // A cleared builder contributes the empty sequence.
+            key.AddNested(ref part);
+            Assert.Equal(expected, key.ToString());
+        }
+        finally
+        {
+            inner.Dispose();
+            part.Dispose();
+            key.Dispose();
+        }
+    }
+
+    [Fact]
+    public void WarmNestedKeyAllocatesOnlyItsResult()
+    {
+        var values = Enumerable.Range(0, 64).Select(i => new string('x', 64) + i).ToArray();
+        string Build()
+        {
+            var key = new SequenceKeyBuilder(stackalloc char[256]);
+            var part = new SequenceKeyBuilder(stackalloc char[256]);
+            try
+            {
+                foreach (var value in values)
+                {
+                    part.Add(value);
+                    part.AddOrdinal(value.Length);
+                    key.AddNested(ref part);
+                }
+                return key.ToString();
+            }
+            finally
+            {
+                part.Dispose();
+                key.Dispose();
+            }
+        }
+        for (var i = 0; i < 4; i++) Build();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var actual = Build();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(PreviousKey(values.Select(static value =>
+            PreviousKey([value, value.Length.ToString("D4", CultureInfo.InvariantCulture)]))), actual);
+        Assert.True(allocated <= actual.Length * 2L + 256, $"Allocated {allocated} for {actual.Length} characters.");
+    }
+
+    [Fact]
+    public void ProfileAnalysisIsSharedPerImmutableProfileInstance()
+    {
+        RelationQueryTargetCapabilityProfile Create() => new(new("target/test"), new("target/test/v1"),
+            ["schema/v1"], ["compiler/test"],
+            [new(new("evidence/filter"), new LogicalRelationQueryCapability(RelationQueryLogicalCapabilityKind.Filter))]);
+        var profile = Create();
+        var first = RelationQueryTargetCapabilityProfileAnalysis.Analyze(profile);
+        Assert.Same(first, RelationQueryTargetCapabilityProfileAnalysis.Analyze(profile));
+        // Another instance, even with equal content, is analyzed independently.
+        var other = RelationQueryTargetCapabilityProfileAnalysis.Analyze(Create());
+        Assert.NotSame(first, other);
+        Assert.Equal(first.Evidence.Keys.Order(), other.Evidence.Keys.Order());
+        Assert.Empty(first.Issues);
+    }
+
+    [Fact]
     public void WarmFingerprintDoesNotRetainACompleteCanonicalByteBuffer()
     {
         var profileName = "compiler/é🙂/" + new string('x', 128 * 1024);

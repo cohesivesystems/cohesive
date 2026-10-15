@@ -299,10 +299,10 @@ public static class RelationQueryPhysicalPlanner
 
         bool ValidateGlobalInputs()
         {
-            var reportFingerprint = RelationQueryRealizationFingerprinter.Compute(realization);
+            // RelationQueryRealizationReport's only constructor rejects a fingerprint that differs from its
+            // normalized content, so every report instance is already self-consistent.
             var terminalRealization = interpreter.Realize(plan);
-            if (!Equals(reportFingerprint, realization.Fingerprint)
-                || realization.Status != RelationQueryRealizationStatus.Realizable
+            if (realization.Status != RelationQueryRealizationStatus.Realizable
                 || !realization.IsRealizable
                 || !Equals(terminalRealization.Fingerprint, realization.Fingerprint)
                 || !realization.Plan.GetMismatchedComponents(plan).IsDefaultOrEmpty)

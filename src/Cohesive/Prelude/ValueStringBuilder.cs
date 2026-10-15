@@ -43,7 +43,7 @@ public ref struct ValueStringBuilder(Span<char> initialBuffer, ArrayPool<char>? 
     /// Appends a span of characters to the builder.
     /// </summary>
     /// <param name="value">Characters to append.</param>
-    public void Append(ReadOnlySpan<char> value)
+    public void Append(scoped ReadOnlySpan<char> value)
     {
         var required = pos + value.Length;
         if (required > buffer.Length)

@@ -326,25 +326,14 @@ public static class RelationQueryRealizationCompiler
             ImmutableArray<RelationQueryRealizationDecision> decisions,
             RelationQueryRealizationStatus status)
         {
-            var normalizedDiagnostics = diagnostics.ToImmutable();
-            var fingerprint = RelationQueryRealizationFingerprinter.Compute(
-                plan,
-                profile,
-                policy,
-                observability,
-                requirements,
-                decisions,
-                normalizedDiagnostics,
-                status);
-            return new(
+            return RelationQueryRealizationReport.CreateFingerprinted(
                 plan,
                 profile,
                 policy,
                 requirements,
                 decisions,
-                normalizedDiagnostics,
+                diagnostics.ToImmutable(),
                 status,
-                fingerprint,
                 observability);
         }
 
@@ -1135,18 +1124,37 @@ public static class RelationQueryRealizationCompiler
         {
             Proof = proof;
             Validations = validations.IsDefault ? [] : validations;
-            Key = RelationQueryRealizationOrdering.SequenceKey(
-            [
-                proof.Key,
-                RelationQueryRealizationOrdering.SequenceKey(Validations.Select(static validation =>
-                    RelationQueryRealizationOrdering.SequenceKey(
-                    [
-                        validation.Boundary.Value,
-                        ((int)validation.Kind).ToString("D4", System.Globalization.CultureInfo.InvariantCulture),
-                        validation.CapabilityEvidence?.Value,
-                        validation.MeasuredValue?.ToString(System.Globalization.CultureInfo.InvariantCulture)
-                    ])))
-            ]);
+            Key = CreateKey(proof.Key, Validations);
+        }
+
+        // Same text as nested SequenceKey([proof, [[boundary, kind, evidence, measured], ...]]).
+        static string CreateKey(
+            string proof,
+            ImmutableArray<RelationQueryOperatingBoundaryValidation> validations)
+        {
+            var key = new SequenceKeyBuilder(stackalloc char[256]);
+            var sequence = new SequenceKeyBuilder(stackalloc char[256]);
+            var validation = new SequenceKeyBuilder(stackalloc char[128]);
+            try
+            {
+                key.Add(proof);
+                foreach (var item in validations)
+                {
+                    validation.Add(item.Boundary.Value);
+                    validation.AddOrdinal((int)item.Kind);
+                    validation.Add(item.CapabilityEvidence?.Value);
+                    validation.Add(item.MeasuredValue);
+                    sequence.AddNested(ref validation);
+                }
+                key.AddNested(ref sequence);
+                return key.ToString();
+            }
+            finally
+            {
+                validation.Dispose();
+                sequence.Dispose();
+                key.Dispose();
+            }
         }
 
         public Proof Proof { get; }
@@ -1186,14 +1194,35 @@ public static class RelationQueryRealizationCompiler
             Boundaries = Normalize(boundaries, static item => item.Value);
             Rules = Normalize(rules, static item => item.Value);
             Guarantees = guarantees.Length <= 1 ? guarantees : [.. guarantees.Distinct().OrderBy(static item => (int)item)];
-            Key = RelationQueryRealizationOrdering.SequenceKey(
-            [
-                RelationQueryRealizationOrdering.SequenceKey(Evidence.Select(static item => item.Value)),
-                RelationQueryRealizationOrdering.SequenceKey(Boundaries.Select(static item => item.Value)),
-                RelationQueryRealizationOrdering.SequenceKey(Rules.Select(static item => item.Value)),
-                RelationQueryRealizationOrdering.SequenceKey(Guarantees.Select(static item =>
-                    ((int)item).ToString("D4", System.Globalization.CultureInfo.InvariantCulture)))
-            ]);
+            Key = CreateKey(Evidence, Boundaries, Rules, Guarantees);
+        }
+
+        // Same text as nested SequenceKey([[evidence...], [boundaries...], [rules...], [guarantees D4...]]).
+        static string CreateKey(
+            ImmutableArray<RelationQueryTargetCapabilityEvidenceId> evidence,
+            ImmutableArray<RelationQueryOperatingBoundaryId> boundaries,
+            ImmutableArray<RelationQueryCompositionRuleId> rules,
+            ImmutableArray<RelationQueryGuaranteeCapabilityKind> guarantees)
+        {
+            var key = new SequenceKeyBuilder(stackalloc char[256]);
+            var part = new SequenceKeyBuilder(stackalloc char[256]);
+            try
+            {
+                foreach (var item in evidence) part.Add(item.Value);
+                key.AddNested(ref part);
+                foreach (var item in boundaries) part.Add(item.Value);
+                key.AddNested(ref part);
+                foreach (var item in rules) part.Add(item.Value);
+                key.AddNested(ref part);
+                foreach (var item in guarantees) part.AddOrdinal((int)item);
+                key.AddNested(ref part);
+                return key.ToString();
+            }
+            finally
+            {
+                part.Dispose();
+                key.Dispose();
+            }
         }
 
         // Merged proofs often pass their existing sorted sets back through construction.

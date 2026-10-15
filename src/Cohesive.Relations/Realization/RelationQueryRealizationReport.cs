@@ -299,6 +299,38 @@ public sealed class RelationQueryRealizationReport
         RelationQueryRealizationStatus status,
         RelationQueryRealizationFingerprint fingerprint,
         RelationQueryResultObservability observability = default)
+        : this(plan, targetProfile, policy, requirements, decisions, diagnostics, status,
+            fingerprint, observability, computeFingerprint: false)
+    {
+    }
+
+    /// <summary>
+    /// Creates a validated report whose fingerprint is computed once from its normalized content.
+    /// </summary>
+    /// <remarks>Used by the realization compiler, which would otherwise compute the same fingerprint twice.</remarks>
+    internal static RelationQueryRealizationReport CreateFingerprinted(
+        RelationQueryCompiledPlanReference plan,
+        RelationQueryTargetCapabilityProfile targetProfile,
+        RelationQueryRealizationPolicy policy,
+        ImmutableArray<RelationQueryRealizationRequirement> requirements,
+        ImmutableArray<RelationQueryRealizationDecision> decisions,
+        ImmutableArray<RelationQueryRealizationDiagnostic> diagnostics,
+        RelationQueryRealizationStatus status,
+        RelationQueryResultObservability observability) =>
+        new(plan, targetProfile, policy, requirements, decisions, diagnostics, status, null, observability,
+            computeFingerprint: true);
+
+    RelationQueryRealizationReport(
+        RelationQueryCompiledPlanReference plan,
+        RelationQueryTargetCapabilityProfile targetProfile,
+        RelationQueryRealizationPolicy policy,
+        ImmutableArray<RelationQueryRealizationRequirement> requirements,
+        ImmutableArray<RelationQueryRealizationDecision> decisions,
+        ImmutableArray<RelationQueryRealizationDiagnostic> diagnostics,
+        RelationQueryRealizationStatus status,
+        RelationQueryRealizationFingerprint? fingerprint,
+        RelationQueryResultObservability observability,
+        bool computeFingerprint)
     {
         Plan = Guard.RequireNotNull(plan);
         TargetProfile = Guard.RequireNotNull(targetProfile);
@@ -309,7 +341,8 @@ public sealed class RelationQueryRealizationReport
         Diagnostics = NormalizeDiagnostics(diagnostics);
         if (!Enum.IsDefined(status))
             throw new ArgumentOutOfRangeException(nameof(status), status, "Unsupported realization status.");
-        var suppliedFingerprint = Guard.RequireNotNull(fingerprint);
+        if (!computeFingerprint)
+            ArgumentNullException.ThrowIfNull(fingerprint);
 
         ValidateTargetProfileDiagnostics(TargetProfile, Diagnostics);
         ValidateInputDeclarationDiagnostics(Requirements, Policy, Diagnostics);
@@ -324,14 +357,14 @@ public sealed class RelationQueryRealizationReport
             Decisions,
             Diagnostics,
             status);
-        if (!Equals(suppliedFingerprint, expectedFingerprint))
+        if (!computeFingerprint && !Equals(fingerprint, expectedFingerprint))
         {
             throw new ArgumentException(
                 "The supplied realization fingerprint does not match the normalized report content.",
                 nameof(fingerprint));
         }
 
-        Fingerprint = suppliedFingerprint;
+        Fingerprint = expectedFingerprint;
         Status = status;
     }
 
