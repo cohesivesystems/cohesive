@@ -128,3 +128,31 @@ reads, Release .NET 10/macOS). Mutable lists and byte arrays remain independent;
 can be shared. The 4 KiB regression ceiling rejects the alpha.138 binary. This is a typed-row
 microbenchmark, not a measured reduction of Ari's Process case. New differential cases
 cover value-type/nullable constructor defaults, `init` members and mixed-member failures.
+
+## Annotation map merges
+
+`AnnotationMap.Merge` freezes its existing builder with `ToImmutable()` instead of enumerating
+it into a second immutable dictionary. Later sets still win duplicate keys, keys retain default
+ordinal identity, annotation values stay immutable, and input maps remain unchanged. The change
+belongs in Core's existing merge operation; callers need no new API or cache.
+
+On macOS arm64, .NET SDK 10.0.201/runtime 10.0.5, Release (October 15, 2026), merging two disjoint
+128-key maps allocated **36,984 B before / 16,480 B after**, using the median of seven warm calls.
+A fixed **24,576 B** ceiling rejects the former implementation and leaves about 49% headroom above
+the measured result. Setup and annotation value construction are outside that measurement.
+
+The original Ari X12 Process cases were also compared in five alternating control/candidate
+fresh-process pairs per version, with fresh repositories and cold then repeated execution in each
+process. Control is Ari #222 with public Cohesive alpha.139. Candidate replaces only Core with the
+same alpha.139 source plus this merge change; it is an experimental binary substitution, not a
+published package or Ari upgrade. Counters use `GC.GetTotalAllocatedBytes(precise: true)` around
+the complete case. Results below are cumulative allocations, not retained heap or a latency claim.
+
+| Case | Control cold B | Candidate cold B | Control repeated B | Candidate repeated B | Repeated saving |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| x12-004010-204 | 255,047,072 | 252,528,032 | 57,877,312 | 56,721,184 | 1,156,128 (2.0%) |
+| x12-005030-204 | 261,018,216 | 258,598,688 | 65,136,616 | 63,838,936 | 1,297,680 (2.0%) |
+
+[Forty matched samples](evidence/annotation-map-merge-x12.csv). Reproduce using the
+[Ari protocol preparation harness](https://github.com/cohesivesystems/ari/tree/567e115c0b753175b52c18a59b160e660947d0c5/eng/runtime-performance/protocol-preparation).
+`AnnotationMapMergeTests` locks in merge semantics and the fixed warm allocation ceiling.
