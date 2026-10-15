@@ -86,7 +86,7 @@ public sealed record HostedQueryDependency
 /// definition dependencies, and portable configuration. Executable handlers, repositories, credentials, ambient
 /// configuration, and runtime placement are deliberately excluded.
 /// </remarks>
-public sealed record HostedQueryDefinition
+public sealed record HostedQueryDefinition : IImmutableExecutionDefinition
 {
     /// <summary>Creates a canonical hosted-Query definition.</summary>
     /// <param name="input">Portable invocation-input contract.</param>

@@ -367,10 +367,20 @@ internal sealed class RelationQueryTargetCapabilityProfileAnalysis
 
     public ImmutableArray<RelationQueryTargetCapabilityProfileIssue> Issues { get; }
 
+    // Profiles and analyses are immutable; realization, placement and physical planning analyze the same
+    // profile instance repeatedly. Weak keys bound retention to the profile's lifetime.
+    static readonly System.Runtime.CompilerServices.ConditionalWeakTable<
+        RelationQueryTargetCapabilityProfile, RelationQueryTargetCapabilityProfileAnalysis> Analyses = new();
+
     public static RelationQueryTargetCapabilityProfileAnalysis Analyze(
         RelationQueryTargetCapabilityProfile profile)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        return Analyses.GetValue(profile, AnalyzeCore);
+    }
+
+    static RelationQueryTargetCapabilityProfileAnalysis AnalyzeCore(RelationQueryTargetCapabilityProfile profile)
+    {
 
         ImmutableArray<RelationQueryTargetCapabilityProfileIssue>.Builder issues =
             ImmutableArray.CreateBuilder<RelationQueryTargetCapabilityProfileIssue>();
@@ -712,24 +722,11 @@ internal static class RelationQueryRealizationOrdering
 
     public static string SequenceKey(IEnumerable<string?> values)
     {
-        Span<char> initial = stackalloc char[256];
-        Span<char> length = stackalloc char[10]; // Maximum nonnegative Int32 decimal length.
-        var key = new ValueStringBuilder(initial);
+        var key = new SequenceKeyBuilder(stackalloc char[256]);
         try
         {
             foreach (var value in values)
-            {
-                if (value is null)
-                {
-                    key.Append("-1:");
-                    continue;
-                }
-
-                value.Length.TryFormat(length, out var written, provider: CultureInfo.InvariantCulture);
-                key.Append(length[..written]);
-                key.Append(':');
-                key.Append(value);
-            }
+                key.Add(value);
             return key.ToString();
         }
         finally
@@ -740,3 +737,65 @@ internal static class RelationQueryRealizationOrdering
 
     static string EnumKey(int value) => value.ToString("D4", CultureInfo.InvariantCulture);
 }
+
+/// <summary>Writes the length-prefixed realization ordering key without intermediate strings.</summary>
+/// <remarks>
+/// Produces exactly the text of <see cref="RelationQueryRealizationOrdering.SequenceKey"/>: each value is written
+/// as its decimal length, ':', then its characters, and <see langword="null"/> as "-1:". A nested key is appended
+/// from another builder's span, so composite keys no longer allocate each inner key as a separate string.
+/// </remarks>
+internal ref struct SequenceKeyBuilder(Span<char> initialBuffer)
+{
+    ValueStringBuilder key = new(initialBuffer);
+
+    public void Add(string? value)
+    {
+        if (value is null)
+            key.Append("-1:");
+        else
+            Add(value.AsSpan());
+    }
+
+    public void Add(scoped ReadOnlySpan<char> value)
+    {
+        Span<char> length = stackalloc char[10]; // Maximum nonnegative Int32 decimal length.
+        value.Length.TryFormat(length, out var written, provider: CultureInfo.InvariantCulture);
+        key.Append(length[..written]);
+        key.Append(':');
+        key.Append(value);
+    }
+
+    /// <summary>Adds an enum ordinal using the four-digit invariant form of <c>ToString("D4")</c>.</summary>
+    public void AddOrdinal(int value)
+    {
+        Span<char> digits = stackalloc char[11];
+        value.TryFormat(digits, out var written, "D4", CultureInfo.InvariantCulture);
+        Add(digits[..written]);
+    }
+
+    /// <summary>Adds an invariant decimal integer, or the null marker.</summary>
+    public void Add(long? value)
+    {
+        if (value is not { } number)
+        {
+            key.Append("-1:");
+            return;
+        }
+
+        Span<char> digits = stackalloc char[20];
+        number.TryFormat(digits, out var written, provider: CultureInfo.InvariantCulture);
+        Add(digits[..written]);
+    }
+
+    /// <summary>Adds <paramref name="inner"/>'s complete key as one value and clears it for reuse.</summary>
+    public void AddNested(scoped ref SequenceKeyBuilder inner)
+    {
+        Add(inner.key.AsSpan());
+        inner.key.Clear();
+    }
+
+    public override string ToString() => key.ToString();
+
+    public void Dispose() => key.Dispose();
+}
+

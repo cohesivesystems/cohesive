@@ -37,6 +37,30 @@ public sealed class HostedQueryAuthoringTests
     }
 
     [Fact]
+    public void DefinitionProjectionIsSharedPerDocumentWithoutRepeatedDecoding()
+    {
+        var query = HostedQuery<QueryInput, QueryResult>.Create(new("query/shared-projection"), new("1"),
+            new("tests.computation", "1"), new QueryConfiguration("schema-mapping", "exact", "retain-entity-version"),
+            Provenance());
+        Assert.True(query.IsValid, Format(query.Validation));
+
+        // Contract properties are read on every hosted invocation; they must not decode the document again.
+        Assert.Same(query.Definition, query.Definition);
+        Assert.Same(query.InputContract, query.InputContract);
+        Assert.Same(query.ResultContract, query.ResultContract);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 16; i++) _ = query.InputContract;
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+
+        // Projection ownership stays with each document instance.
+        var restored = HostedQueryDefinitionDocuments.TryDeserialize(
+            ExecutionDefinitionJsonSerializer.Serialize(query.Document), out var document, out var definition);
+        Assert.True(restored.IsValid, Format(restored));
+        Assert.Equal(query.Definition, definition);
+        Assert.NotSame(query.Definition, document!.GetDefinition<HostedQueryDefinition>());
+    }
+
+    [Fact]
     public void Create_AuthorsTypedCanonicalDocumentAndExactRelationDependency()
     {
         var projection = Projection();

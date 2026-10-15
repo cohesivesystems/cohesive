@@ -279,20 +279,32 @@ public sealed record RelationQueryRealizationRequirementUse
         return [.. keyed.OrderBy(static item => item.Key, StringComparer.Ordinal).Select(static item => item.Trace)];
     }
 
-    internal static string TraceKey(RelationQueryRealizationTrace trace) =>
-        RelationQueryRealizationOrdering.SequenceKey(trace.Steps.Select(static step =>
-            RelationQueryRealizationOrdering.SequenceKey(
-            [
-                ((int)step.Kind).ToString("D4", System.Globalization.CultureInfo.InvariantCulture),
-                step.Node.Value,
-                step.SiteKind is { } siteKind
-                    ? ((int)siteKind).ToString("D4", System.Globalization.CultureInfo.InvariantCulture)
-                    : null,
-                step.ExpressionSite?.Value,
-                step.Assignment?.Value,
-                step.Ordinal?.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                step.InvariantName
-            ])));
+    internal static string TraceKey(RelationQueryRealizationTrace trace)
+    {
+        var key = new SequenceKeyBuilder(stackalloc char[256]);
+        var step = new SequenceKeyBuilder(stackalloc char[256]);
+        try
+        {
+            foreach (var item in trace.Steps)
+            {
+                step.AddOrdinal((int)item.Kind);
+                step.Add(item.Node.Value);
+                if (item.SiteKind is { } siteKind) step.AddOrdinal((int)siteKind);
+                else step.Add((string?)null);
+                step.Add(item.ExpressionSite?.Value);
+                step.Add(item.Assignment?.Value);
+                step.Add(item.Ordinal);
+                step.Add(item.InvariantName);
+                key.AddNested(ref step);
+            }
+            return key.ToString();
+        }
+        finally
+        {
+            step.Dispose();
+            key.Dispose();
+        }
+    }
 }
 
 /// <summary>Typed semantic location from which a realization requirement was projected.</summary>

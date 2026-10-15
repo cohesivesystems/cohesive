@@ -4,6 +4,7 @@ using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
+using Cohesive.Relations.Realization;
 
 namespace Cohesive.Relations.Compilation;
 
@@ -862,28 +863,40 @@ static class RelationQueryRequirementOrdering
         var normalized = traces.IsDefault ? [] : traces;
         if (normalized.Any(static trace => trace is null))
             throw new ArgumentException("Requirement traces cannot contain null entries.", nameof(traces));
+        if (normalized.Length <= 1)
+            return normalized;
 
+        // Compute each canonical key once; the first trace per key wins, ordered by key.
         return
         [
-            .. normalized.GroupBy(TraceKey, StringComparer.Ordinal)
-                .Select(static group => group.First())
-                .OrderBy(TraceKey, StringComparer.Ordinal)
+            .. normalized.Select(static trace => (Trace: trace, Key: TraceKey(trace)))
+                .DistinctBy(static item => item.Key, StringComparer.Ordinal)
+                .OrderBy(static item => item.Key, StringComparer.Ordinal)
+                .Select(static item => item.Trace)
         ];
     }
 
-    public static string TraceKey(RelationQueryRequirementTrace trace) =>
-        string.Concat(trace.Steps.Select(static step =>
-            Encode(step.Node.Value)
-            + Encode(((int)step.Kind).ToString(System.Globalization.CultureInfo.InvariantCulture))
-            + Encode(step.SiteKind is null
-                ? null
-                : ((int)step.SiteKind.Value).ToString(System.Globalization.CultureInfo.InvariantCulture))
-            + Encode(step.ExpressionSite?.Value)
-            + Encode(step.Assignment?.Value)
-            + Encode(step.Ordinal?.ToString(System.Globalization.CultureInfo.InvariantCulture))
-            + Encode(step.InvariantName)));
-
-    static string Encode(string? value) => value is null
-        ? "-1:"
-        : $"{value.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)}:{value}";
+    // Concatenated length-prefixed fields per step: "{length}:{value}", or "-1:" for null.
+    public static string TraceKey(RelationQueryRequirementTrace trace)
+    {
+        var key = new SequenceKeyBuilder(stackalloc char[256]);
+        try
+        {
+            foreach (var step in trace.Steps)
+            {
+                key.Add(step.Node.Value);
+                key.Add((int)step.Kind);
+                key.Add(step.SiteKind is { } siteKind ? (int)siteKind : null);
+                key.Add(step.ExpressionSite?.Value);
+                key.Add(step.Assignment?.Value);
+                key.Add(step.Ordinal);
+                key.Add(step.InvariantName);
+            }
+            return key.ToString();
+        }
+        finally
+        {
+            key.Dispose();
+        }
+    }
 }
