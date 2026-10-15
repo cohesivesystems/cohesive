@@ -1,4 +1,5 @@
 using Cohesive.Adapters.Postgres;
+using Cohesive.Adapters.Postgres.Services;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Physical;
 
@@ -17,7 +18,7 @@ public static class ReservationAvailabilityQueryBindings
     /// <param name="persistence">Existing registration containing all three entity mappings.</param>
     /// <returns>A prepared native reader; retain at host lifetime.</returns>
     public static PostgresQueryReader<string, ReservationAvailability[]> BindNative(PostgresPersistenceRegistration persistence) =>
-        persistence.Query(FulfillmentQueries.ReservationAvailability, 1000, 1_000_000);
+        persistence.Query(FulfillmentService.Definition, FulfillmentQueries.ReservationAvailability);
 
     /// <summary>Runs the order/reservation join in PostgreSQL and enriches its rowset from a separate inventory database.</summary>
     /// <param name="orders">Existing orders database registration.</param>

@@ -5,6 +5,8 @@ using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Host.Services;
 using Cohesive.Storage;
 using Cohesive.Adapters.Postgres;
+using Cohesive.Adapters.Postgres.Services;
+using Cohesive.Api.Execution.Services;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -31,9 +33,10 @@ IEntityRepository<InventoryItem> inventory = persistence.Repository(FulfillmentD
 
 
 // Prepare once and pass the contracts directly to their sole consumer.
-var details = persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
-var availability = ReservationAvailabilityQueryBindings.BindNative(persistence);
-var fulfillment = FulfillmentProcessBindings.Bind(orders, inventory);
+var details = persistence.Query(FulfillmentService.Definition, FulfillmentQueries.OrderDetails);
+var availability = persistence.Query(FulfillmentService.Definition, FulfillmentQueries.ReservationAvailability);
+var fulfillment = FulfillmentService.Definition.Bind(FulfillmentProcess.Definition, orders, inventory)
+    .Build(authority: "aspire-first", authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
 // Explicit opt-in: private native failure details belong only in protected operator logs.
 builder.Services.AddCohesiveTransitionFailureLogging(fulfillment);
 

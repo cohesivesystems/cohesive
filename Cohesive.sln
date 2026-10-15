@@ -212,6 +212,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Relations.Infra", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Aspire.Postgres", "src\adapters\Cohesive.Adapters.Aspire.Postgres\Cohesive.Adapters.Aspire.Postgres.csproj", "{C90C88D1-123D-4358-826F-893886FAE25B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Postgres.Services", "src\adapters\Cohesive.Adapters.Postgres.Services\Cohesive.Adapters.Postgres.Services.csproj", "{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1386,6 +1388,18 @@ Global
 		{C90C88D1-123D-4358-826F-893886FAE25B}.Release|x64.Build.0 = Release|Any CPU
 		{C90C88D1-123D-4358-826F-893886FAE25B}.Release|x86.ActiveCfg = Release|Any CPU
 		{C90C88D1-123D-4358-826F-893886FAE25B}.Release|x86.Build.0 = Release|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Debug|x64.Build.0 = Debug|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Debug|x86.Build.0 = Debug|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Release|x64.ActiveCfg = Release|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Release|x64.Build.0 = Release|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Release|x86.ActiveCfg = Release|Any CPU
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1456,5 +1470,6 @@ Global
 		{9A46A7CD-FEA7-41BE-94D6-B7B2B5D4E2C0} = {3E9C3776-17C9-28DE-3735-A8B9F121C183}
 		{2F2D4CB6-A455-4E31-AEF3-9B53159E8C5E} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{C90C88D1-123D-4358-826F-893886FAE25B} = {3E9C3776-17C9-28DE-3735-A8B9F121C183}
+		{9B04535A-F4BE-4A24-BD0D-752E6CFF604A} = {3E9C3776-17C9-28DE-3735-A8B9F121C183}
 	EndGlobalSection
 EndGlobal

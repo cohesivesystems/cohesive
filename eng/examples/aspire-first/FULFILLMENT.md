@@ -3,8 +3,9 @@
 `FulfillmentDomain` remains the state authority. Native Aspire owns resources; native PostgreSQL mappings
 attach to the same domain definitions. `FulfillmentProcess.Run` is authoring syntax compiled into canonical
 Process IR, not an async application coordinator. Its generated definition can be inspected and fingerprinted.
-`FulfillmentProcessBindings` uses `Service.Define(...).Operation(...).Run(process, bindings => ...).Build(...)` to prepare exact
-links, catalogs and the shared runtime at startup. Receipt schema must be bound and validated before constructing receipt-capable repositories.
+`FulfillmentService` uses the existing `Service.Define` builder to select canonical transitions, a typed stock lookup
+and relational queries once. `Definition.Bind(process, orders, inventory).Build(...)` prepares exact links, catalogs
+and the shared runtime at startup, matching repositories against the declared entity contracts. Receipt schema must be bound and validated before constructing receipt-capable repositories.
 The binding phase retains canonical compiler diagnostics;
 applications bind domain operations to repositories without recreating adapters and dispatch catalogs.
 
@@ -81,7 +82,7 @@ reconstitution, state checkpoints and read projections. Those are not inferred f
 
 ### Operator failure details
 
-`FulfillmentProcessBindings.Bind` returns the prepared `HostedServiceProcess` directly; `Program` maps
+`FulfillmentService.Definition.Bind(...).Build(...)` returns the prepared `HostedServiceProcess` directly; `Program` maps
 its single route through the native ASP.NET extension and opts into `AddCohesiveTransitionFailureLogging(fulfillment)`; route mapping has no
 subscription or lifetime wiring. The generic-host integration in `Cohesive.Host` subscribes at native host startup and releases the
 subscription on stop or disposal, including disposal without stopping. An unstarted host never subscribes.
@@ -134,8 +135,9 @@ Some explicit declarations carry meaning:
 Aspire association selection sources can default to a deterministic reference, but this example retains
 its real `Source` on both associations. Native project metadata supplies only .NET project execution.
 
-`OrdersApp.StorageQueries` declares the query requirements once with stable identities and explicit
-semantic revisions. `PostgresInfrastructure.Prepare` uses the same offline mappings and native compiler
+`OrdersApp.StorageQueries` is derived by `Bindings.PrepareService(FulfillmentService.Definition, ...)`.
+The selected query identities, revisions, bounds and consistency live on the service registration, not in a second
+AppHost list. The optional `Cohesive.Adapters.Postgres.Services` integration uses the same offline mappings and native compiler
 as the worker; the returned capabilities drive Infra requirements. Exact required, provenance and binding
 plans must agree. Compiler changes alter evidence fingerprints, not public requirement identities.
 The optional Aspire/Postgres association rejects evidence for a different actual database, independently
@@ -145,3 +147,24 @@ own statement snapshot, not a common snapshot across queries or the composed two
 This evidence does not certify schema installation, privileges, live readiness, conditional entity writes
 or atomic transition receipts. Those require their own prepared and/or runtime evidence; a database name
 or query artifact is insufficient. Native schema and receipt setup remain explicit in the worker.
+
+## Service declarations and host attachments
+
+The portable service and Process documents remain authoritative for operation identity, execution policy,
+timeout and dependency references. `ServiceDependencies` attaches existing transition definitions and native
+lookup delegates; it does not synthesize domain behavior from names. Only exact dependencies referenced by
+the process resolve repositories. Missing or ambiguous repositories fail during binding, and the lookup
+uses the repository's fixed partition. Authorization remains explicit when the host is built.
+
+Separately authored services use the same preparation path:
+
+```csharp
+var hosted = Service.Bind(serviceDocument, process, dependencies, orders, inventory)
+    .Build(authority: "example", authorization: authorization);
+```
+
+This automatic binding profile hosts one ephemeral, terminal process operation. Multiple operations,
+durable execution, effects and child-process hosting still need their explicit bindings. The relational query
+selections are host composition roots for the existing HTTP readers, not newly inferred portable service
+query operations. The composed two-database example remains an explicit placement alternative;
+`PrepareService` rejects independent-source selections instead of advertising a native snapshot for them.

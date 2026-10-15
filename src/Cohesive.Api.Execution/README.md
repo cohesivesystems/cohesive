@@ -352,3 +352,26 @@ and exact typed process alongside the declaration/runtime. ASP.NET can map the p
 `app.MapServiceEphemeralProcess(hosted, http: ...)`. Preparation remains explicit and host-scoped; the
 existing declaration plus deferred resolver overload is available for lazy runtime construction. The
 non-generic base remains the host-scoped diagnostic subscription contract.
+
+### Deriving process bindings from service registrations
+
+`Service.Define(...).Use(new ServiceDependencies().Transition(transition).Lookup(query, entity, key, result))`
+registers canonical behavior once. After declaring the operation with `.Operation(...).Run(process).ExecuteEphemerally(timeout)`,
+call `.Bind(process, repositories...).Build(authority, authorization)`. Exact Process references select the
+registered dependencies; repositories match authoritative entity contracts. Missing, ambiguous or incompatible
+bindings fail at setup through `ServiceBindingValidationException`. Unused transition registrations do not
+resolve repositories. The existing explicit process-host builder remains available for other binding profiles.
+
+`Service.Bind(document, process, dependencies, repositories...)` supports a separately declared service through
+that same path, preserving its timeout and authorization requirements. The automatic profile accepts one
+unclassified, ephemeral terminal process operation; it does not infer durable hosting or arbitrary effects.
+
+`ServiceDependencies.Query` selects relational transport roots with explicit revision, result bounds and
+consistency. The optional `Cohesive.Adapters.Postgres.Services` package consumes these same selections for
+native readers and infrastructure evidence. These host attachments are not serialized into the portable
+service document or converted into scoped `ServiceQueryOperation` definitions.
+
+Registration sets are immutable. Transition compilation is lazy, thread-safe and shared by branches of the
+same registration; its result or failure is cached for that registration's lifetime. Binding and query preparation
+belong at host setup. Repository reads, identity, authorization, inputs and results remain invocation-scoped.
+Lookup delegates must be safe for concurrent invocation, and hosts retain ownership of repositories/data sources.
