@@ -122,7 +122,7 @@ public static class AnnotationMap
             foreach (var (key, value) in set)
                 builder[key] = value;
         }
-        return [..builder];
+        return builder.ToImmutable();
     }
 
     /// <summary>Projects nonempty annotation scalars into dotted property and indexed array paths.</summary>
