@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
@@ -21,6 +22,16 @@ public sealed class RelationQueryPhysicalExecutor
 {
     readonly ImmutableDictionary<RelationQuerySourceInstanceId, IRelationQuerySourceReader> readers;
     readonly IRelationQueryInterpreter interpreter;
+
+    // Plan-integrity verification depends only on these immutable instances and the interpreter. Remember each
+    // successful verification so an evaluator's cached preparation is not re-fingerprinted and re-planned for
+    // every execution. Any different instance, including an equal deserialized copy, is verified afresh.
+    static readonly ConditionalWeakTable<CompiledRelationQueryPhysicalPlan, VerifiedPlanInputs> VerifiedPlans = new();
+
+    sealed record VerifiedPlanInputs(
+        CompiledRelationQueryPlan Plan,
+        RelationQueryRealizationReport Realization,
+        IRelationQueryInterpreter Interpreter);
 
     /// <summary>Creates a physical executor over an exact set of source readers.</summary>
     /// <param name="sourceReaders">Readers keyed by the physical source identities in a placement.</param>
@@ -158,7 +169,13 @@ public sealed class RelationQueryPhysicalExecutor
         return await context.ExecuteAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    RelationQueryPhysicalExecutionDiagnostic? Preflight(RelationQueryPhysicalExecutionRequest request)
+    bool IsVerified(RelationQueryPhysicalExecutionRequest request) =>
+        VerifiedPlans.TryGetValue(request.PhysicalPlan, out var verified)
+        && ReferenceEquals(verified.Plan, request.Plan)
+        && ReferenceEquals(verified.Realization, request.Realization)
+        && ReferenceEquals(verified.Interpreter, interpreter);
+
+    RelationQueryPhysicalExecutionDiagnostic? VerifyPlanIntegrity(RelationQueryPhysicalExecutionRequest request)
     {
         var physical = request.PhysicalPlan;
         var realizationFingerprint = RelationQueryRealizationFingerprinter.Compute(request.Realization);
@@ -182,6 +199,16 @@ public sealed class RelationQueryPhysicalExecutor
                 RelationQueryPhysicalExecutionDiagnosticCodes.PlanMismatch,
                 "Physical execution requires the exact current semantic plan, realization, placement, policy, and physical-plan fingerprint.");
         }
+
+        VerifiedPlans.AddOrUpdate(physical, new(request.Plan, request.Realization, interpreter));
+        return null;
+    }
+
+    RelationQueryPhysicalExecutionDiagnostic? Preflight(RelationQueryPhysicalExecutionRequest request)
+    {
+        var physical = request.PhysicalPlan;
+        if (!IsVerified(request) && VerifyPlanIntegrity(request) is { } integrityFailure)
+            return integrityFailure;
 
         if (ValidateTraversalReachabilityConversions(request) is { } reachabilityFailure)
             return reachabilityFailure;

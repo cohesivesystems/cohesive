@@ -1,9 +1,11 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Observability;
 using Cohesive.Relations.Physical;
 using Cohesive.Relations.Realization;
 
@@ -673,6 +675,70 @@ public sealed class RelationQueryPhysicalExecutorTests
         Assert.Contains(result.Diagnostics, static diagnostic =>
             diagnostic.Code == RelationQueryPhysicalExecutionDiagnosticCodes.SourceReaderMissing
             && diagnostic.Source == FederatedLoadPhysicalExecutionFixture.EquipmentSource);
+        AssertNoIo(readers);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_VerifiesPlanIntegrityOncePerExactPreparedInputs()
+    {
+        var query = FederatedLoadPhysicalExecutionFixture.Create(
+            FederatedLoadRelationFixture.QueryDocument,
+            maximumBatchSize: 2);
+        var executor = new RelationQueryPhysicalExecutor(CreateReaders(query).All);
+        var replans = 0;
+        ActivityTraceId? trace = null;
+        using var scope = new ActivitySource("cohesive.relations.tests.preflight");
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name is RelationQueryTelemetry.ActivitySourceName
+                or "cohesive.relations.tests.preflight",
+            Sample = static (ref ActivityCreationOptions<ActivityContext> _) => ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                // The listener is process-wide; count only this test's trace.
+                if (activity.TraceId == trace
+                    && activity.OperationName == RelationQueryTelemetry.PhysicalPlanningActivityName)
+                    Interlocked.Increment(ref replans);
+            }
+        };
+        ActivitySource.AddActivityListener(listener);
+        using var root = scope.StartActivity("preflight");
+        trace = Assert.IsType<Activity>(root).TraceId;
+
+        var first = await executor.ExecuteAsync(Request(query, "tests/preflight/first"));
+        var afterFirst = replans;
+        var second = await executor.ExecuteAsync(Request(query, "tests/preflight/second"));
+
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, first.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, second.Status);
+        Assert.Equal(1, afterFirst);
+        Assert.Equal(afterFirst, replans);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_PreviouslyVerifiedPhysicalPlanStillRejectsStaleRealization()
+    {
+        var query = FederatedLoadPhysicalExecutionFixture.Create(
+            FederatedLoadRelationFixture.QueryDocument,
+            maximumBatchSize: 2);
+        var relation = FederatedLoadPhysicalExecutionFixture.Create(
+            FederatedLoadRelationFixture.RelationDocument,
+            maximumBatchSize: 2);
+        var verified = await new RelationQueryPhysicalExecutor(CreateReaders(query).All)
+            .ExecuteAsync(Request(query, "tests/verified"));
+        var readers = CreateReaders(query);
+
+        var result = await new RelationQueryPhysicalExecutor(readers.All).ExecuteAsync(new(
+            query.Plan,
+            query.PhysicalPlan,
+            relation.Realization,
+            new("tests/stale-after-verified"),
+            capabilities: FederatedLoadPhysicalExecutionFixture.AvailableCapabilities(query.Plan)));
+
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, verified.Status);
+        Assert.Equal(RelationQueryExecutionStatus.Failed, result.Status);
+        Assert.Contains(result.Diagnostics, static diagnostic =>
+            diagnostic.Code == RelationQueryPhysicalExecutionDiagnosticCodes.PlanMismatch);
         AssertNoIo(readers);
     }
 
