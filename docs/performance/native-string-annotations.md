@@ -11,6 +11,10 @@ protocol model or an Ari cache.
 Keep the immutable authoring string directly and write it through the owning `Utf8JsonWriter`. The public
 `Value` compatibility view is lazy and owned, with atomic publication. Concurrent first view requests may
 prepare redundant snapshots; all callers receive the published view. No global cache retains annotations.
+Native text retains UTF-16 storage instead of an owned UTF-8 snapshot until the JSON view is requested.
+When the caller already retains the string, this avoids duplicate storage; a newly composed ASCII fragment
+can retain more bytes than its old UTF-8 snapshot despite allocating less overall. Retained-heap effects
+were not measured and must not be inferred from allocation counters.
 JSON-backed annotations pay one additional reference field; they remain unboxed and retain their original
 owned snapshots and escape spelling. Numbers, booleans, arrays and imported/custom-converted values retain
 the existing JSON representation. Invalid UTF-16 authoring strings and null retain serializer normalization.
