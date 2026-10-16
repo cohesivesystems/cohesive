@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Reflection;
+using Microsoft.Data.Sqlite;
 using Cohesive.Model.Serialization;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
@@ -255,6 +257,83 @@ public sealed class SqliteProcessDurableStoreTests
         Assert.Equal(7, results.Count(result => result.Disposition == ProcessStoreMutationDisposition.Replayed));
         Assert.All(results, result => Assert.Equal(results[0].Snapshot!.Revision, result.Snapshot!.Revision));
     }
+
+    [Theory]
+    [InlineData(5, 5, true, true)] // BUSY
+    [InlineData(5, 517, true, true)] // BUSY_SNAPSHOT
+    [InlineData(6, 6, true, true)] // LOCKED
+    [InlineData(6, 262, true, true)] // LOCKED_SHAREDCACHE
+    [InlineData(10, 10, true, false)] // IOERR
+    [InlineData(19, 19, true, false)] // CONSTRAINT
+    [InlineData(5, 5, false, false)] // Immediate operations retain their existing failure contract.
+    public async Task DeferredContentionRetriesFreshTransactionsOnly(int errorCode, int extendedErrorCode,
+        bool deferred, bool retry)
+    {
+        using var file = new DatabaseFixture();
+        var store = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var error = new SqliteException("injected native contention", errorCode, extendedErrorCode);
+        var attempts = 0;
+        async Task<ProcessStoreMutationResult> Operation(InMemoryProcessDurableStore reference, OperationContext context)
+        {
+            var result = await reference.InitializeAsync(context, new("initialize"), checkpoint);
+            Assert.Equal(ProcessStoreMutationDisposition.Applied, result.Disposition);
+            if (++attempts < 3) throw error;
+            return result;
+        }
+
+        var pending = InvokeAccess(store, Context, checkpoint, Operation, deferred);
+        if (retry)
+        {
+            Assert.Equal(ProcessStoreMutationDisposition.Applied, (await pending).Disposition);
+            Assert.Equal(3, attempts);
+            var snapshot = await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId);
+            Assert.Equal(ProcessStorageRevision.Initial, snapshot!.Revision);
+        }
+        else
+        {
+            Assert.Same(error, await Assert.ThrowsAsync<SqliteException>(() => pending));
+            Assert.Equal(1, attempts);
+            Assert.Null(await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeferredContentionStopsAtBoundOrCancellation(bool cancel)
+    {
+        using var file = new DatabaseFixture();
+        using var cancellation = new CancellationTokenSource();
+        var store = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var context = Context.WithCancellationToken(cancellation.Token);
+        var error = new SqliteException("injected persistent busy", 5);
+        var attempts = 0;
+        async Task<ProcessStoreMutationResult> Operation(InMemoryProcessDurableStore reference, OperationContext attemptContext)
+        {
+            await reference.InitializeAsync(attemptContext, new("initialize"), checkpoint);
+            attempts++;
+            if (cancel) cancellation.Cancel();
+            throw error;
+        }
+
+        var pending = InvokeAccess(store, context, checkpoint, Operation, deferred: true);
+        if (cancel) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        else Assert.Same(error, await Assert.ThrowsAsync<SqliteException>(() => pending));
+        Assert.Equal(cancel ? 1 : 3, attempts);
+        Assert.Null(await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId));
+    }
+
+    // Inject native failures into the existing transaction boundary without adding a production test hook.
+    // The real writer-reservation and concurrent-publication tests above qualify native WAL behavior.
+    static Task<ProcessStoreMutationResult> InvokeAccess(SqliteProcessDurableStore store, OperationContext context,
+        ProcessDurableCheckpoint checkpoint,
+        Func<InMemoryProcessDurableStore, OperationContext, Task<ProcessStoreMutationResult>> operation, bool deferred) =>
+        (Task<ProcessStoreMutationResult>)typeof(SqliteProcessDurableStore)
+            .GetMethod("AccessAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .MakeGenericMethod(typeof(ProcessStoreMutationResult))
+            .Invoke(store, [context, checkpoint.ContinuationIdentity.ProcessInstanceId, operation, true, deferred, null])!;
 
     internal static ProcessDurableRuntime Runtime(IProcessDurableStore store, ProcessDurabilityTestFixture fixture, IProcessReferenceHost host) =>
         new(store, host, new("worker", TimeSpan.FromMinutes(5)), new Binding(fixture.DurableOperation.Binding),

@@ -13,9 +13,9 @@ namespace Cohesive.Adapters.SQLite;
 /// <remarks>
 /// Apply Schema explicitly. Each instance occupies one portable document in the shared commit schema. The existing
 /// reference store owns mutation semantics. Initialization and commit compare retries in a deferred WAL transaction,
-/// reserving the writer only for changed state; other mutations use immediate transactions. Snapshot conflicts
-/// retry at most three times before propagating the native error. Publication remains atomic, and commits
-/// recheck the physical lease after obtaining the writer reservation.
+/// reserving the writer only for changed state; other mutations use immediate transactions. Busy or locked errors
+/// on these deferred operations retry at most three attempts before propagating the native error. Publication
+/// remains atomic, and commits recheck the physical lease after obtaining the writer reservation.
 /// Local values belong to the Process aggregate, not arbitrary application tables. Calls may run concurrently;
 /// SQLite serializes writers. The adapter uses the local system UTC clock for physical lease checks, not the
 /// caller's replay clock. This bounded profile rewrites the complete instance including historical receipts.
@@ -180,14 +180,15 @@ public sealed class SqliteProcessDurableStore : IProcessDurableStore
         Func<ProcessDurableStoreDocument, TResult?>? rejectAtCommit = null)
     {
         // A WAL read snapshot allows collision checks without reserving the database writer.
-        // If another writer invalidates a fresh mutation's snapshot, replay the unchanged intent
-        // against a new snapshot. Disposing AccessOnce's transaction rolls back before retry.
-        const int snapshotAttempts = 3;
-        const int sqliteBusySnapshot = 517;
+        // Busy/locked upgrades (including BUSY_SNAPSHOT) replay the unchanged intent against a
+        // fresh snapshot. AccessOnce disposes its transaction before retry; the provider's bounded
+        // busy timeout applies within each attempt. Cancellation stops before the next attempt.
+        const int contentionAttempts = 3;
+        const int sqliteBusy = 5, sqliteLocked = 6;
         for (var attempt = 1; ; attempt++)
         {
             try { return await AccessOnceAsync(context, instanceId, operation, mutate, deferWriteLock, rejectAtCommit).ConfigureAwait(false); }
-            catch (SqliteException error) when (deferWriteLock && error.SqliteExtendedErrorCode == sqliteBusySnapshot && attempt < snapshotAttempts)
+            catch (SqliteException error) when (deferWriteLock && (error.SqliteErrorCode is sqliteBusy or sqliteLocked) && attempt < contentionAttempts)
             {
                 context.ThrowIfCancellationRequested();
             }

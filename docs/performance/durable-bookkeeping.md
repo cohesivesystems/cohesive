@@ -9,7 +9,9 @@ A worker defaults to `ProcessCheckpointVerification.Standard`. Activations advan
 sequence; the reducer creates the receipt and continuation together. The store checks receipt chronology,
 retained evidence, legal successors, expected storage revision and live worker fencing before atomic publication.
 Both modes require the first activation's before-continuation fingerprint. Restart admission compares it with the
-clean continuation for the pinned definition and input, including after that attempt has progressed. Standard
+clean continuation for the pinned definition and input, including after that attempt has progressed. An absent
+first receipt is allowed only when no completed activation is recorded: safe points or a progressed current
+continuation require the receipt. Attempts restarted before completing any activation remain valid. Standard
 omits recurring before/after content-chain checks; sequences alone do not prove arbitrary continuation content.
 Persisted checkpoints still undergo schema, contract, plan, receipt and ledger admission validation.
 
@@ -46,9 +48,13 @@ checks. The provider-neutral receipt document preserves this evidence across res
 immutable, append-only replay evidence under its gate and compares checkpoint content after releasing the gate.
 SQLite uses a deferred WAL read transaction for initialization and commit: replay comparison does not reserve
 the writer. A changed mutation upgrades to a write transaction; an invalidated snapshot rolls back and retries
-against fresh state, at most three attempts. The commit rechecks the physical lease after obtaining the writer
-reservation and rolls back staged state and receipt if the lease expired. Other mutations retain immediate
+against fresh state, at most three attempts. This covers primary `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6),
+including their extended variants such as `BUSY_SNAPSHOT` (517). Each attempt uses the configured native busy
+timeout; cancellation is checked before retry and unrelated native failures propagate immediately. The commit
+rechecks the physical lease after obtaining the writer reservation and rolls back staged state and receipt if the lease expired. Other mutations retain immediate
 transactions. Full commit hashing is an internal reference operation for tests and benchmarks, not a public API.
+A source audit of Cohesive and the qualifying Ari checkout found no production or diagnostic consumer;
+`StorageExecutionTelemetry` and the durable status projector consume checkpoint state without this digest.
 
 Safe-point and activation commit identities use instance, attempt, activation ID and the prior activation count.
 Affinity commits use their control revision and slot; operation-ledger commits use operation ID and storage
@@ -67,7 +73,8 @@ initialization (3 KiB each) with 1,024 and 8,192 fields of 128 characters each. 
 cancellation, replay and malformed-checkpoint tests remain authoritative. Materialization conformance defaults
 to Standard, exercises crash/replay in both modes, and always compares final state with the reference interpreter.
 SQLite tests also cover replay while another writer reservation remains held and eight concurrent identical
-initializations/commits.
+initializations/commits. Injected native failures at the transaction boundary cover busy/locked variants,
+fresh-state retries, exhaustion, cancellation, and propagation of unrelated failures without retry.
 
 The opt-in structured workload uses 1,024 and 8,192 four-field object rows. Setup and compilation are outside the
 measurement. Full-hash preparation is an explicit same-build reference, not a claim of historical timing equivalence:
@@ -113,10 +120,12 @@ Evidence: [alternating X12 samples](evidence/durable-bookkeeping/x12-matched.csv
 Use `eng/runtime-performance/durable-bookkeeping/compare-ari.py --baseline <control/ProtocolPreparation.dll>
 --candidate <candidate/ProtocolPreparation.dll> --output <samples.csv>` for the same pairing procedure.
 
-Validation: solution command 4,651 passed / 41 environment skips; native SQLite 224 passed; Ari engine source
+Validation: solution command 4,653 passed / 41 environment skips; native SQLite 233 passed; Ari engine source
 qualification 936 passed / 18 emulator skips. Temporarily restoring eager commit hashing fails both sized
 construction cases at 4,448 B against the 3,072 B ceiling; restoring initialization hashing fails both sized
 initialization cases at 4,160 B against the same ceiling. Optimized source passes after restoration.
+One earlier full run failed the unchanged single-sample normalization allocation ratio; its isolated recheck
+and the subsequent full run passed. That test remains sensitive to allocation noise.
 
 ## Remaining work
 
