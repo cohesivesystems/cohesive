@@ -42,7 +42,7 @@ public sealed class ProcessActivationFingerprintChainTests
             activation,
             decision.Disposition,
             decision.Evidence,
-            fixture.Checkpoint.UpdatedAtUtc.AddMinutes(2));
+            fixture.Checkpoint.UpdatedAtUtc.AddMinutes(2), ProcessCheckpointVerification.Diagnostic);
 
         var exception = Assert.Throws<ArgumentException>(() => new ProcessDurableCheckpoint(
             fixture.Checkpoint.SchemaVersion,
@@ -75,7 +75,7 @@ public sealed class ProcessActivationFingerprintChainTests
             original.Activation,
             original.Disposition,
             original.Evidence,
-            original.CommittedAtUtc);
+            original.CommittedAtUtc, ProcessCheckpointVerification.Diagnostic);
         Assert.NotEqual(
             mismatched.AfterContinuation,
             ProcessStorageContentFingerprints.Continuation(fixture.Checkpoint.Continuation));
@@ -104,7 +104,7 @@ public sealed class ProcessActivationFingerprintChainTests
             original.Activation,
             ProcessActivationDisposition.Completed,
             original.Evidence,
-            original.CommittedAtUtc);
+            original.CommittedAtUtc, ProcessCheckpointVerification.Diagnostic);
 
         var exception = Assert.Throws<ArgumentException>(() =>
             ProcessDurabilityTestFixture.CopyCheckpoint(
@@ -114,20 +114,66 @@ public sealed class ProcessActivationFingerprintChainTests
         Assert.Contains("final activation disposition must match", exception.Message);
     }
 
-    [Fact]
-    public void Compatibility_RejectsProgressedReplacementAttemptThatDidNotBeginFromCleanContinuation()
+    [Theory]
+    [InlineData(ProcessCheckpointVerification.Standard)]
+    [InlineData(ProcessCheckpointVerification.Diagnostic)]
+    public void Compatibility_RejectsProgressedReplacementAttemptThatDidNotBeginFromCleanContinuation(ProcessCheckpointVerification verification)
     {
         var fixture = ProcessDurabilityTestFixture.Create(
             definitionId: "process/durable-checkpoint/restart-fingerprint",
             semanticVariant: "restart-fingerprint",
             recoveryPolicy: ProcessRecoveryPolicy.RestartAttempt);
-        var checkpoint = ProgressReplacementAttempt(fixture);
+        var checkpoint = CreateReplacementAttemptCheckpoint(fixture, verification);
 
         var validation = ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint);
 
         var diagnostic = Assert.Single(validation.Diagnostics, static candidate =>
             candidate.Code == ProcessCheckpointDiagnosticCodes.RestartAttemptIncompatible);
         Assert.Equal("/activations/1/beforeContinuation", diagnostic.Location);
+    }
+
+    [Fact]
+    public void Compatibility_RejectsHistoricalAttemptWithMissingFirstReceipt()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(recoveryPolicy: ProcessRecoveryPolicy.RestartAttempt);
+        var checkpoint = CreateReplacementAttemptCheckpoint(fixture, ProcessCheckpointVerification.Standard, progress: false);
+        var originalValidation = ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint);
+        Assert.True(originalValidation.IsValid, string.Join("; ", originalValidation.Diagnostics));
+        var missing = ProcessDurabilityTestFixture.CopyCheckpoint(checkpoint,
+            activations: checkpoint.Activations.RemoveAt(0));
+
+        var validation = ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, missing);
+
+        Assert.Contains(validation.Diagnostics, diagnostic =>
+            diagnostic.Code == ProcessCheckpointDiagnosticCodes.RestartAttemptIncompatible
+            && diagnostic.Location == "/control/attempts/0");
+    }
+
+    [Fact]
+    public void Compatibility_AdmitsRestartBeforeAnyCompletedActivation()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(recoveryPolicy: ProcessRecoveryPolicy.RestartAttempt);
+        var initial = fixture.Start.CreateInitialState();
+        var restartedAtUtc = fixture.Checkpoint.UpdatedAtUtc.AddMinutes(1);
+        ProcessAttemptId replacementAttempt = new("process-attempt/unstarted-replacement");
+        var executor = new ProcessControlReferenceExecutor(
+            Assert.IsType<InteractionContractCatalog>(fixture.Plan.ValidationContext.InteractionContracts));
+        var restarted = executor.Apply(initial,
+            new RestartProcessAttemptCommand(ProcessControlCommand.CurrentSchemaVersion,
+                new(new("control/restart-unstarted"), new("idempotency/restart-unstarted"),
+                    initial.ProcessInstanceId, fixture.Start.Request.Context.Authorization,
+                    restartedAtUtc, fixture.Start.Request.Context.Provenance),
+                Expectation(initial),
+                new(replacementAttempt, ProcessAttemptCleanupRequirement.RetainEvidence, new("tests.unstarted"))),
+            restartedAtUtc);
+        Assert.Equal(ProcessControlDecisionDisposition.Applied, restarted.Disposition);
+        var clean = ProcessReferenceInterpreter.Create(fixture.Plan,
+            new(initial.ProcessInstanceId, replacementAttempt), fixture.Start.Request.Input!);
+        var checkpoint = new ProcessDurableCheckpoint(fixture.Checkpoint.SchemaVersion, fixture.Start,
+            clean, restarted.State, createdAtUtc: fixture.Start.AcceptedAtUtc, updatedAtUtc: restartedAtUtc);
+
+        Assert.Empty(checkpoint.Activations);
+        Assert.True(ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint).IsValid);
     }
 
     [Fact]
@@ -173,7 +219,7 @@ public sealed class ProcessActivationFingerprintChainTests
             original.Activation,
             original.Disposition,
             original.Evidence,
-            original.CommittedAtUtc);
+            original.CommittedAtUtc, ProcessCheckpointVerification.Diagnostic);
         var incompatible = ProcessDurabilityTestFixture.CopyCheckpoint(
             fixture.Checkpoint,
             activations: [incompatibleReceipt]);
@@ -195,8 +241,8 @@ public sealed class ProcessActivationFingerprintChainTests
             ProcessStorageContentFingerprints.Continuation(result.Snapshot.Checkpoint.Continuation));
     }
 
-    static ProcessDurableCheckpoint ProgressReplacementAttempt(
-        ProcessDurabilityTestFixture fixture)
+    static ProcessDurableCheckpoint CreateReplacementAttemptCheckpoint(
+        ProcessDurabilityTestFixture fixture, ProcessCheckpointVerification verification, bool progress = true)
     {
         var controlExecutor = new ProcessControlReferenceExecutor(
             Assert.IsType<InteractionContractCatalog>(
@@ -225,6 +271,13 @@ public sealed class ProcessActivationFingerprintChainTests
             fixture.Plan,
             fixture.Checkpoint.Continuation,
             replacementAttempt);
+        if (!progress)
+        {
+            return new(fixture.Checkpoint.SchemaVersion, fixture.Start, clean, restart.State,
+                fixture.Checkpoint.Activations, fixture.Checkpoint.Operations, fixture.Checkpoint.Inbox,
+                fixture.Checkpoint.Emissions, fixture.Checkpoint.DurableOperations,
+                fixture.Checkpoint.CreatedAtUtc, restartedAtUtc);
+        }
         var activatedAtUtc = restartedAtUtc.AddMinutes(1);
         var activation = new ProcessActivation(
             new("activation/replacement"),
@@ -263,11 +316,12 @@ public sealed class ProcessActivationFingerprintChainTests
             sequence: 1,
             decision.State.Continuation,
             ProcessStorageContentFingerprints.Continuation(fixture.Checkpoint.Continuation),
-            ProcessStorageContentFingerprints.Continuation(decision.State),
+            verification == ProcessCheckpointVerification.Diagnostic ? ProcessStorageContentFingerprints.Continuation(decision.State) : null,
             activation,
             decision.Disposition,
             decision.Evidence,
-            committedAtUtc);
+            committedAtUtc,
+            verification);
         return new(
             fixture.Checkpoint.SchemaVersion,
             fixture.Checkpoint.Start,

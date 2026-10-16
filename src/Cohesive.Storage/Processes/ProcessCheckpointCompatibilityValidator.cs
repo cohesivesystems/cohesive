@@ -1054,6 +1054,17 @@ public static class ProcessCheckpointCompatibilityValidator
                 && receipt.Sequence == 1);
             if (firstReceipt is null)
             {
+                // A never-completed attempt has no receipt (including a restart before its first activation).
+                // Retained progress must not be admitted without the clean-start compatibility evidence.
+                if (!attempt.SafePoints.IsEmpty
+                    || (attempt.AttemptId == checkpoint.ContinuationIdentity.ProcessAttemptId
+                        && checkpoint.Continuation.CompletedActivationCount != 0))
+                {
+                    diagnostics.Add(Error(
+                        ProcessCheckpointDiagnosticCodes.RestartAttemptIncompatible,
+                        "An attempt with completed activation evidence requires its first activation receipt and clean-start fingerprint.",
+                        $"/control/attempts/{attemptIndex}"));
+                }
                 continue;
             }
 

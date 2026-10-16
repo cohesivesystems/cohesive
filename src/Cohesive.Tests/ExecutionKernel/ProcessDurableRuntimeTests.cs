@@ -54,12 +54,8 @@ public sealed partial class ProcessDurableRuntimeTests
 
         Assert.Equal(checkpoint.ContinuationIdentity, activation.Continuation);
         Assert.Equal(fixture.Activation, activation.Activation);
-        Assert.Equal(
-            ProcessStorageContentFingerprints.Continuation(before.Checkpoint.Continuation),
-            activation.BeforeContinuation);
-        Assert.Equal(
-            ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation),
-            activation.AfterContinuation);
+        Assert.NotNull(activation.BeforeContinuation);
+        Assert.Null(activation.AfterContinuation);
         Assert.Equal(checkpoint.Continuation.CompletedActivationCount, activation.Sequence);
         Assert.Equal(fixture.OperationResult, operation.Result);
         Assert.Equal(fixture.Operation.Definition, operation.OperationDefinition);
@@ -1515,9 +1511,7 @@ public sealed partial class ProcessDurableRuntimeTests
         Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, checkpoint.Continuation.Terminal.Kind);
         Assert.Equal(ProcessActivationDisposition.Cancelled, receipt.Disposition);
         Assert.Equal(checkpoint.ContinuationIdentity, receipt.Continuation);
-        Assert.Equal(
-            ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation),
-            receipt.AfterContinuation);
+        Assert.Null(receipt.AfterContinuation);
         Assert.Empty(checkpoint.Operations);
         Assert.Empty(checkpoint.Emissions);
         Assert.Equal(0, host.RelationCalls);
@@ -2235,7 +2229,7 @@ public sealed partial class ProcessDurableRuntimeTests
             ProcessCommitId commitId,
             ProcessDurableCheckpoint checkpoint)
         {
-            Initializations.Add((commitId, ProcessDurableCommitFingerprinter.ComputeCheckpoint(checkpoint)));
+            Initializations.Add((commitId, ProcessStorageContentFingerprints.Value(checkpoint)));
             if (mutation == ProviderCancellationMutation.Initialization && !thrown)
             {
                 thrown = true;
@@ -2249,7 +2243,7 @@ public sealed partial class ProcessDurableRuntimeTests
             OperationContext context,
             ProcessDurableCommit commit)
         {
-            Commits.Add((commit.Id, commit.Fingerprint));
+            Commits.Add((commit.Id, ProcessDurableCommitFingerprinter.Compute(commit)));
             if (mutation == ProviderCancellationMutation.Commit && !thrown)
             {
                 thrown = true;

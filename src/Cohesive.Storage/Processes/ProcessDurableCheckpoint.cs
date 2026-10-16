@@ -156,33 +156,35 @@ public sealed record ProcessActivationCommitReceipt
     /// <summary>Creates activation commit evidence.</summary>
     /// <param name="sequence">Positive committed activation sequence.</param>
     /// <param name="continuation">Logical Process instance and attempt whose continuation was committed.</param>
-    /// <param name="beforeContinuation">Fingerprint of the exact continuation consumed by the activation.</param>
-    /// <param name="afterContinuation">Fingerprint of the exact continuation atomically published by the activation.</param>
+    /// <param name="beforeContinuation">Required clean-start fingerprint for sequence one; otherwise Diagnostic-only.</param>
+    /// <param name="afterContinuation">Required Diagnostic fingerprint of the published continuation; absent for Standard.</param>
     /// <param name="activation">Exact activation request.</param>
     /// <param name="disposition">Finite semantic activation disposition.</param>
     /// <param name="evidence">Definition-bound activation trace and safe-point evidence.</param>
     /// <param name="committedAtUtc">UTC physical commit observation.</param>
+    /// <param name="verification">Evidence required on this receipt; retained independently of optional hashes.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="continuation"/>, <paramref name="activation"/>, or <paramref name="evidence"/> is
     /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// <paramref name="sequence"/> is not positive or <paramref name="disposition"/> is unsupported.
+    /// <paramref name="sequence"/> is not positive, or <paramref name="disposition"/> or <paramref name="verification"/> is unsupported.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// A continuation fingerprint is empty, activation identity/cause evidence differs, or
+    /// Required evidence for the declared policy is missing or empty, activation identity/cause evidence differs, or
     /// <paramref name="committedAtUtc"/> is not UTC.
     /// </exception>
     [JsonConstructor]
     public ProcessActivationCommitReceipt(
         long sequence,
         ProcessContinuationIdentity continuation,
-        ProcessContinuationFingerprint beforeContinuation,
-        ProcessContinuationFingerprint afterContinuation,
+        ProcessContinuationFingerprint? beforeContinuation,
+        ProcessContinuationFingerprint? afterContinuation,
         ProcessActivation activation,
         ProcessActivationDisposition disposition,
         ProcessExecutionEvidence evidence,
-        DateTimeOffset committedAtUtc)
+        DateTimeOffset committedAtUtc,
+        ProcessCheckpointVerification verification)
     {
         if (sequence <= 0)
         {
@@ -201,12 +203,19 @@ public sealed record ProcessActivationCommitReceipt
         ProcessCheckpointRequirements.RequireIdentity(
             continuation.ProcessAttemptId.Value,
             nameof(continuation));
-        ProcessCheckpointRequirements.RequireIdentity(
-            beforeContinuation.Value,
-            nameof(beforeContinuation));
-        ProcessCheckpointRequirements.RequireIdentity(
-            afterContinuation.Value,
-            nameof(afterContinuation));
+        if (verification is not (ProcessCheckpointVerification.Standard or ProcessCheckpointVerification.Diagnostic))
+            throw new ArgumentOutOfRangeException(nameof(verification));
+        if (verification == ProcessCheckpointVerification.Diagnostic
+            && (beforeContinuation is null || afterContinuation is null))
+            throw new ArgumentException("Diagnostic continuation fingerprints must both be retained.", nameof(afterContinuation));
+        if (verification == ProcessCheckpointVerification.Standard
+            && (beforeContinuation.HasValue != (sequence == 1) || afterContinuation is not null))
+            throw new ArgumentException("Standard receipts retain the clean-start fingerprint only on the first activation.", nameof(beforeContinuation));
+        if (beforeContinuation is { } before)
+            ProcessCheckpointRequirements.RequireIdentity(before.Value, nameof(beforeContinuation));
+        if (afterContinuation is { } after)
+            ProcessCheckpointRequirements.RequireIdentity(after.Value, nameof(afterContinuation));
+        Verification = verification;
         BeforeContinuation = beforeContinuation;
         AfterContinuation = afterContinuation;
         Activation = activation ?? throw new ArgumentNullException(nameof(activation));
@@ -230,17 +239,20 @@ public sealed record ProcessActivationCommitReceipt
         CommittedAtUtc = committedAtUtc;
     }
 
+    /// <summary>Declared evidence policy; required on the wire so deleting Diagnostic hashes cannot downgrade it.</summary>
+    public ProcessCheckpointVerification Verification { get; }
+
     /// <summary>Positive committed activation sequence.</summary>
     public long Sequence { get; }
 
     /// <summary>Logical Process instance and attempt whose continuation was committed.</summary>
     public ProcessContinuationIdentity Continuation { get; }
 
-    /// <summary>Fingerprint of the exact continuation consumed by the activation.</summary>
-    public ProcessContinuationFingerprint BeforeContinuation { get; }
+    /// <summary>Required clean-start fingerprint for sequence one; otherwise Diagnostic-only.</summary>
+    public ProcessContinuationFingerprint? BeforeContinuation { get; }
 
-    /// <summary>Fingerprint of the exact continuation atomically published by the activation.</summary>
-    public ProcessContinuationFingerprint AfterContinuation { get; }
+    /// <summary>Required Diagnostic fingerprint of the published continuation; absent for Standard.</summary>
+    public ProcessContinuationFingerprint? AfterContinuation { get; }
 
     /// <summary>Exact activation request.</summary>
     public ProcessActivation Activation { get; }
@@ -491,7 +503,7 @@ public sealed class ProcessDurableCheckpoint
 {
     /// <summary>Current exact physical checkpoint schema.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-process-durable-checkpoint/v6");
+        new("cohesive-process-durable-checkpoint/v7");
 
     /// <summary>Creates a complete validated physical Process checkpoint.</summary>
     /// <param name="schemaVersion">Exact physical checkpoint schema.</param>
@@ -791,7 +803,7 @@ public sealed class ProcessDurableCheckpoint
             .ToImmutableArray();
         HashSet<(ProcessAttemptId Attempt, ActivationId Activation)> identities = [];
         Dictionary<ProcessAttemptId, long> sequenceByAttempt = [];
-        Dictionary<ProcessAttemptId, ProcessContinuationFingerprint> afterContinuationByAttempt = [];
+        Dictionary<ProcessAttemptId, ProcessContinuationFingerprint?> afterContinuationByAttempt = [];
         foreach (var receipt in normalized)
         {
             RequireKnownAttempt(receipt.Continuation, nameof(values));
@@ -812,6 +824,8 @@ public sealed class ProcessDurableCheckpoint
             if (afterContinuationByAttempt.TryGetValue(
                     receipt.Continuation.ProcessAttemptId,
                     out var priorAfterContinuation)
+                && priorAfterContinuation is not null
+                && receipt.BeforeContinuation is not null
                 && receipt.BeforeContinuation != priorAfterContinuation)
             {
                 throw new ArgumentException(
@@ -838,8 +852,8 @@ public sealed class ProcessDurableCheckpoint
         }
 
         if (currentSequence > 0
-            && afterContinuationByAttempt[ContinuationIdentity.ProcessAttemptId]
-                != ProcessStorageContentFingerprints.Continuation(Continuation))
+            && afterContinuationByAttempt[ContinuationIdentity.ProcessAttemptId] is { } lastFingerprint
+            && lastFingerprint != ProcessStorageContentFingerprints.Continuation(Continuation))
         {
             throw new ArgumentException(
                 "The current attempt's final activation receipt must publish the exact checkpoint continuation.",

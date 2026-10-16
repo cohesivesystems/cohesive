@@ -27,10 +27,10 @@ public sealed class ProcessDurableCheckpointContractTests
         };
         var expected = "sha256-v1:" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
             StrictDocumentJson.GetCanonicalBytes(content, options)));
-        Assert.Equal(expected, commit.Fingerprint.Value);
+        Assert.Equal(expected, ProcessDurableCommitFingerprinter.Compute(commit).Value);
         var checkpointExpected = "sha256-v1:" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
             ProcessDurableCheckpointJsonSerializer.GetCanonicalBytes(checkpoint)));
-        Assert.Equal(checkpointExpected, ProcessDurableCommitFingerprinter.ComputeCheckpoint(checkpoint).Value);
+        Assert.Equal(checkpointExpected, ProcessStorageContentFingerprints.Value(checkpoint).Value);
     }
 
     [Fact]
@@ -329,7 +329,7 @@ public sealed class ProcessDurableCheckpointContractTests
             activationWithUnwitnessedInput,
             original.Disposition,
             original.Evidence,
-            original.CommittedAtUtc);
+            original.CommittedAtUtc, ProcessCheckpointVerification.Diagnostic);
         var checkpoint = ProcessDurabilityTestFixture.CopyCheckpoint(
             fixture.Checkpoint,
             activations: [incompatibleReceipt]);
@@ -464,11 +464,13 @@ public sealed class ProcessDurableCheckpointContractTests
                 beta
             ]);
 
+        Assert.Equal(first.IntentFingerprint, equivalent.IntentFingerprint);
+        Assert.NotEqual(first.IntentFingerprint, changed.IntentFingerprint);
         Assert.Equal(["local/alpha", "local/beta"], first.LocalMutations.Select(static value => value.Resource));
-        Assert.Equal(first.Fingerprint, equivalent.Fingerprint);
-        Assert.StartsWith("sha256-v1:", first.Fingerprint.Value, StringComparison.Ordinal);
-        Assert.Equal(74, first.Fingerprint.Value.Length);
-        Assert.NotEqual(first.Fingerprint, changed.Fingerprint);
+        Assert.Equal(ProcessDurableCommitFingerprinter.Compute(first), ProcessDurableCommitFingerprinter.Compute(equivalent));
+        Assert.StartsWith("sha256-v1:", ProcessDurableCommitFingerprinter.Compute(first).Value, StringComparison.Ordinal);
+        Assert.Equal(74, ProcessDurableCommitFingerprinter.Compute(first).Value.Length);
+        Assert.NotEqual(ProcessDurableCommitFingerprinter.Compute(first), ProcessDurableCommitFingerprinter.Compute(changed));
     }
 
     [Fact]
@@ -631,7 +633,7 @@ public sealed class ProcessDurableCheckpointContractTests
             activation.Activation,
             activation.Disposition,
             activation.Evidence with { Trace = traceWithoutCompletion },
-            activation.CommittedAtUtc);
+            activation.CommittedAtUtc, ProcessCheckpointVerification.Diagnostic);
 
         ProcessAttemptId replacementAttempt = new("process-attempt/2");
         var restartedAtUtc = fixture.Checkpoint.UpdatedAtUtc.AddMinutes(1);
@@ -942,7 +944,7 @@ public sealed class ProcessDurableCheckpointContractTests
                 original.Activation,
                 original.Disposition,
                 incompatibleEvidence,
-                original.CommittedAtUtc)]);
+                original.CommittedAtUtc, original.Verification)]);
 
         var validation = ProcessCheckpointCompatibilityValidator.Validate(fixture.Plan, checkpoint);
 

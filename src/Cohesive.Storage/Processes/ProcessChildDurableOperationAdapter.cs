@@ -481,7 +481,8 @@ public sealed partial class ProcessDurableRuntime
                 bindingResolver,
                 preventedAtUtc,
                 out var replacement,
-                out var reductionDiagnostics))
+                out var reductionDiagnostics,
+                options.CheckpointVerification))
         {
             return new(
                 ProcessDurableRuntimeDisposition.Incompatible,
@@ -1300,10 +1301,12 @@ static class ProcessChildStartSemantics
             || activation.Activation.Context.Provenance != plan.Document.Metadata.Provenance
             || activation.Activation.Context.CausationId != request.Context.EmissionId
             || activation.Activation.Context.Ordering != request.Context.Ordering
-            || activation.BeforeContinuation != ProcessStorageContentFingerprints.Continuation(
-                ProcessReferenceInterpreter.Create(plan, checkpoint.Start))
-            || activation.AfterContinuation != ProcessStorageContentFingerprints.Continuation(
-                checkpoint.Continuation)
+            || activation.BeforeContinuation is { } beforeFingerprint
+                && beforeFingerprint != ProcessStorageContentFingerprints.Continuation(
+                    ProcessReferenceInterpreter.Create(plan, checkpoint.Start))
+            || activation.AfterContinuation is { } afterFingerprint
+                && afterFingerprint != ProcessStorageContentFingerprints.Continuation(
+                    checkpoint.Continuation)
             || activation.CommittedAtUtc != checkpoint.UpdatedAtUtc)
         {
             return false;

@@ -182,7 +182,8 @@ public sealed class ProcessDurableCommit
             .OrderBy(static mutation => mutation.Resource, StringComparer.Ordinal)
             .ToImmutableArray();
         ObservedAtUtc = observedAtUtc;
-        Fingerprint = ProcessDurableCommitFingerprinter.Compute(this);
+        // Prepare once before entering a provider's store lock or write transaction.
+        IntentFingerprint = ProcessDurableCommitFingerprinter.ComputeIntent(this);
     }
 
     /// <summary>Stable commit identity reused after an ambiguous outcome.</summary>
@@ -206,8 +207,8 @@ public sealed class ProcessDurableCommit
     /// <summary>UTC commit-boundary observation.</summary>
     public DateTimeOffset ObservedAtUtc { get; }
 
-    /// <summary>Deterministic fingerprint of the entire commit intent.</summary>
-    public ProcessCommitFingerprint Fingerprint { get; }
+    internal ProcessCommitFingerprint IntentFingerprint { get; }
+
 }
 
 /// <summary>Immutable view of one atomically stored Process aggregate.</summary>
@@ -410,11 +411,26 @@ static class ProcessDurableCommitFingerprinter
         return new($"sha256-v1:{Convert.ToHexStringLower(digest)}");
     }
 
-    internal static ProcessCommitFingerprint ComputeCheckpoint(ProcessDurableCheckpoint checkpoint)
+    // The accepted snapshot already retains the exact checkpoint. Only the remaining intent fields
+    // need eager content evidence; replay compares the retained checkpoint on an identity collision.
+    internal static ProcessCommitFingerprint ComputeIntent(ProcessDurableCommit commit)
     {
-        var digest = StrictDocumentJson.ComputeCanonicalSha256(checkpoint, Options);
-        return new($"sha256-v1:{Convert.ToHexStringLower(digest)}");
+        var content = CreateIntentContent(commit);
+        var digest = StrictDocumentJson.ComputeCanonicalSha256(content, Options);
+        return new($"sha256-intent-v2:{Convert.ToHexStringLower(digest)}");
     }
+
+    internal static ProcessDurableCommitIntentContent CreateIntentContent(ProcessDurableCommit commit) =>
+        new(commit.Id, commit.ExpectedRevision, commit.Owner, commit.Fence, commit.LocalMutations, commit.ObservedAtUtc);
+
+    // Explicit JSON names are durable v2 digest components, independent of CLR naming and declaration order.
+    internal sealed record ProcessDurableCommitIntentContent(
+        [property: System.Text.Json.Serialization.JsonPropertyName("id")] ProcessCommitId Id,
+        [property: System.Text.Json.Serialization.JsonPropertyName("expectedRevision")] ProcessStorageRevision ExpectedRevision,
+        [property: System.Text.Json.Serialization.JsonPropertyName("owner")] string Owner,
+        [property: System.Text.Json.Serialization.JsonPropertyName("fence")] ProcessWorkerFence Fence,
+        [property: System.Text.Json.Serialization.JsonPropertyName("localMutations")] ImmutableArray<ProcessLocalMutation> LocalMutations,
+        [property: System.Text.Json.Serialization.JsonPropertyName("observedAtUtc")] DateTimeOffset ObservedAtUtc);
 
     sealed record ProcessDurableCommitContent(
         ProcessCommitId Id,

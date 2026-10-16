@@ -37,7 +37,7 @@ public sealed class ProcessDurableCheckpointChronologyTests
             fixture.Activation,
             fixture.Decision.Disposition,
             fixture.Decision.Evidence,
-            fixture.Activation.ObservedAtUtc.AddTicks(-1)));
+            fixture.Activation.ObservedAtUtc.AddTicks(-1), ProcessCheckpointVerification.Diagnostic));
     }
 
     [Fact]
