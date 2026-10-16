@@ -36,6 +36,55 @@ public sealed class ServiceDependencies
     /// <summary>Explicit relational query roots selected for this service's transports.</summary>
     public ImmutableArray<ServiceQuerySelection> Queries { get; }
 
+    /// <summary>Includes typed attachments generated from a process's actual direct invocations.</summary>
+    /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process result.</typeparam>
+    /// <param name="model">Completed process authoring instance.</param>
+    /// <returns>A new registration set; compilation and repository resolution remain deferred to binding.</returns>
+    /// <exception cref="ArgumentNullException">Model is null.</exception>
+    /// <exception cref="ServiceBindingValidationException">An attachment differs from the canonical graph, or competing recipes claim one exact dependency.</exception>
+    /// <exception cref="ArgumentException">An exact dependency is already explicitly registered.</exception>
+    /// <remarks>Raw exact references and arbitrary hosted queries still require explicit bindings. No handler is
+    /// inferred from a query name. Independently declared services can use this method or register each binding.</remarks>
+    public ServiceDependencies Process<TInput, TResult>(ProcessModel<TInput, TResult> model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var references = new HashSet<ExecutionDefinitionReference>();
+        foreach (var node in model.Definition.Definition.Nodes)
+        {
+            if (node is InvokeTransitionProcessNode transition) references.Add(transition.Transition);
+            if (node is EvaluateRelationProcessNode query) references.Add(query.Relation);
+        }
+        var contributed = new Dictionary<ExecutionDefinitionReference, ProcessDependency>();
+        var receiver = new DependencyReceiver(this);
+        foreach (var dependency in model.Dependencies)
+        {
+            var reference = dependency.Reference;
+            if (!references.Contains(reference))
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.GeneratedDependencyMismatch,
+                    "A generated attachment does not match an exact dependency in the canonical process.", "/bindings/process/dependencies");
+            if (contributed.TryGetValue(reference, out var previous))
+            {
+                if (!previous.HasSameAuthority(dependency))
+                    throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.GeneratedDependencyAmbiguous,
+                        "One exact dependency has more than one declaration or host recipe.", "/bindings/process/dependencies");
+                continue;
+            }
+            contributed.Add(reference, dependency);
+            dependency.Contribute(receiver);
+        }
+        return receiver.Dependencies;
+    }
+
+    sealed class DependencyReceiver(ServiceDependencies dependencies) : IProcessDependencyReceiver
+    {
+        internal ServiceDependencies Dependencies { get; private set; } = dependencies;
+        public void Transition<TEntity, TInput, TResult>(Transition<TEntity, TInput, TResult> transition) where TEntity : notnull =>
+            Dependencies = Dependencies.Transition(transition);
+        public void PointRead<TEntity, TInput, TResult>(EntityPointRead<TEntity, TInput, TResult> read)
+            where TEntity : class where TInput : notnull where TResult : notnull =>
+            Dependencies = Dependencies.Lookup(read.Query, read.Entity, read.Key, read.Result);
+    }
+
     /// <summary>Registers canonical transition behavior, without choosing a repository manually.</summary>
     /// <typeparam name="TEntity">State projection.</typeparam><typeparam name="TInput">Command projection.</typeparam><typeparam name="TResult">Outcome projection.</typeparam>
     /// <param name="transition">Exact transition authority.</param>

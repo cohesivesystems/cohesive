@@ -49,18 +49,15 @@ by offline construction. PostgreSQL validation and preparation retain the existi
 
 ## Remaining dependency-ordered composition work
 
-1. Derive process dependency registrations from typed generated references. Infer point-read contracts only from
-   an authoritative entity-query declaration; do not infer cardinality or consistency from method names. Remove
-   the example's manual hosted stock contract and service dependency list only when the replacement is tested.
-2. Add application service composition with typed instance endpoint selectors, repository resolution through
+1. Add application service composition with typed instance endpoint selectors, repository resolution through
    registered entity contracts, and optional extracted modules. Keep unrelated public queries outside a process's
    dependency closure. Validate missing/duplicate implementations after all contributions are assembled. Reject
    ambiguity; registration order must not pick a winner. Preserve separate contract/implementation authoring.
-3. Consolidate HTTP mapping and host lifetime/failure logging in the shared adapter. Implementations bind queries,
+2. Consolidate HTTP mapping and host lifetime/failure logging in the shared adapter. Implementations bind queries,
    entity operations, transitions and processes. API completion policy constrains selected runtime policy.
-4. Add explicit accepted-execution receipts and ResultOf-linked polling, then separately consider observation
+3. Add explicit accepted-execution receipts and ResultOf-linked polling, then separately consider observation
    streams and callback contracts. Neither SignalR nor SSE implies ordering, replay, retention or durable recovery.
-5. Attach registered storage/execution bindings to native Aspire resources and derive required infrastructure
+4. Attach registered storage/execution bindings to native Aspire resources and derive required infrastructure
    capabilities from prepared definitions. Preserve native-only resources and target configuration. Keep declared,
    validated and observed evidence distinct. Do not introduce a second infrastructure inventory.
 
@@ -81,5 +78,24 @@ startup-speed or end-to-end performance improvement is claimed.
 
 The optional host composition resolves only explicitly registered types via existing .NET constructor activation.
 It neither scans members nor guesses semantic dependencies. It removes hand-ordered construction and forced
-Definition reads; it does not yet infer the service's transition/lookup attachments or unrelated API query roots.
-Those are still tracked above and are not presented as a completed service-registration API.
+Definition reads. Generated process attachments now remove the repeated transition/lookup registration list;
+the full API implementation registry and unified endpoint mapping above remain separate work.
+
+## Generated process attachments
+
+The existing generator records typed transition and EntityPointRead handles that Execute actually invokes.
+ProcessModel.Dependencies prepares those attachments once. ServiceDependencies.Process(model) checks each
+attachment against the exact canonical graph reference before using the existing transition and lookup binding
+paths. Repeated aliases to one declaration are idempotent; competing recipes for the same exact reference fail
+with structured diagnostics. Raw references and arbitrary hosted queries still need explicit registrations;
+missing dependencies fail at host binding before repository IO. Separately declared services remain supported.
+
+EntityPointRead retains an existing observational HostedQuery, the exact entity, a key selector and a result
+projection. The query document remains portable authority; these delegates are explicit native host attachments,
+not serialized semantics or a proof of portable keyed-read lowering. They must be thread-safe and their implementation
+contract must be revised when their behavior changes. The repository supplies the trusted partition. No read runs
+while composing or generating dependencies. Typed Process transitions accept POCOs, matching Transition itself.
+
+Independent public SQL query selections remain explicit, with revision/bounds/consistency, and are not inferred
+as dependencies of Fulfill. Generated attachment inference does not complete API-to-service composition, durable
+execution, or capability evidence for arbitrary native callbacks.

@@ -375,3 +375,11 @@ Registration sets are immutable. Transition compilation is lazy, thread-safe and
 same registration; its result or failure is cached for that registration's lifetime. Binding and query preparation
 belong at host setup. Repository reads, identity, authorization, inputs and results remain invocation-scoped.
 Lookup delegates must be safe for concurrent invocation, and hosts retain ownership of repositories/data sources.
+
+## Generated process dependencies
+
+`new ServiceDependencies().Process(processModel)` consumes typed attachments generated from Execute. It reuses
+Transition/Lookup registration, validates exact graph references, deduplicates aliases to one declaration and
+rejects competing recipes. Missing raw-reference bindings still fail at setup. Compilation is cached by the
+resulting registration and repositories remain host-owned. Explicit Transition/Lookup registrations remain
+available for separately authored contracts; conflicting explicit/generated registrations cannot overwrite each other.

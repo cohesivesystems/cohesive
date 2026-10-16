@@ -125,10 +125,11 @@ Some explicit declarations carry meaning:
   execution. Details currently has no composed placement, so it needs no corresponding cut. The cut is
   placement advice, not a second query. A future named-subplan authoring seam should retain it with its
   exact query rather than infer it from node order or CLR result types.
-- `StockPointRead` is a native hosted observation. Its binding performs `TryGetEntity` for one SKU in
-  the receipt partition. Its name documents that implementation; the hosted-query IR currently declares
-  observation semantics, not a portable keyed-read operator. Removing the declaration would hide a
-  process dependency. The subsequent reserve transition remains the authority on stock availability.
+- `StockPointRead` is an `EntityPointRead` attaching the existing observational query to inventory,
+  an SKU selector and an absence-aware result projection. The generator retains it because Execute invokes it.
+  `ServiceDependencies.Process(process)` supplies its binding and the invoked transitions automatically.
+  The native lookup uses the repository's trusted partition; the reserve transition remains authoritative.
+  Key/result delegates remain explicit host code, not portable keyed-read IR.
 - `Provenance` attributes generated process/query/service artifacts to their producer and source. It is
   not runtime configuration. Convention-derived provenance can reduce authoring, but must still be
   materialized in those artifacts rather than dropped.

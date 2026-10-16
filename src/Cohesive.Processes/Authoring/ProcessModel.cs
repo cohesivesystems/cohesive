@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Prelude;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
@@ -27,14 +28,25 @@ public sealed class ProcessAttribute(string id, string revision,
 public abstract class ProcessModel<TInput, TResult> : IAuthoringModel, IExecutionDefinitionModel
 {
     readonly AuthoringState<Process<TInput, TResult>> definition;
+    readonly Lazy<ImmutableArray<ProcessDependency>> dependencies;
 
     /// <summary>Creates lazy definition storage without calling derived authoring during construction.</summary>
-    protected ProcessModel() => definition = new(CreateDefinition);
+    protected ProcessModel()
+    {
+        definition = new(CreateDefinition);
+        dependencies = new(CreateDependencies);
+    }
 
     /// <summary>Canonical process definition, generated once on first access.</summary>
     public Process<TInput, TResult> Definition => definition.Value;
-    void IAuthoringModel.Complete() => _ = Definition;
+    void IAuthoringModel.Complete() { _ = Definition; _ = Dependencies; }
     ExecutionDefinitionDocument IExecutionDefinitionModel.Document => Definition.Document;
+
+    /// <summary>Generated typed attachments; exact graph references are validated by the binding consumer.</summary>
+    public ImmutableArray<ProcessDependency> Dependencies => dependencies.Value;
+    /// <summary>Generated materialization of directly referenced typed declarations.</summary>
+    /// <returns>Immutable setup attachments; raw exact references require explicit host registration.</returns>
+    protected virtual ImmutableArray<ProcessDependency> CreateDependencies() => [];
 
     /// <summary>Generated source provenance, also usable by explicitly authored child contracts.</summary>
     public ExecutionProvenance Provenance => Metadata.Provenance;

@@ -52,7 +52,7 @@ public sealed partial class FulfillmentProcess : ProcessModel<FulfillOrder, Fulf
 {
     // A native point read is an explicit hosted query; no SQL or repository call enters the Process IR.
     /// <summary>Explicit native inventory point-read contract.</summary>
-    public HostedQuery<FulfillOrder, InventoryAvailability> StockPointRead { get; }
+    public EntityPointRead<InventoryItem, FulfillOrder, InventoryAvailability> StockPointRead { get; }
 
     readonly InventoryTransitions inventory;
     readonly OrderTransitions orders;
@@ -65,13 +65,14 @@ public sealed partial class FulfillmentProcess : ProcessModel<FulfillOrder, Fulf
     {
         this.inventory = inventory;
         this.orders = orders;
-        StockPointRead = HostedQuery<FulfillOrder, InventoryAvailability>.Create(
+        StockPointRead = new(HostedQuery<FulfillOrder, InventoryAvailability>.Create(
             new("fulfillment/stock"),
             new("1"),
             new("aspire-first.inventory-point-read", "1"),
             domain.Inventory.Definition.Shape.Id.Value,
-            Provenance
-            );
+            Provenance), domain.Inventory,
+            key: input => input.Sku,
+            result: item => new InventoryAvailability(item is not null, item?.Available ?? 0));
 
     }
 
@@ -83,13 +84,13 @@ public sealed partial class FulfillmentProcess : ProcessModel<FulfillOrder, Fulf
             return new FulfillmentResult("Rejected", "Inventory does not exist.");
         // The query is advisory. A retry may observe less stock after its own prior reservation;
         // exact operation replay and the authoritative transition decide whether to mutate.
-        var reserved = await process.Transition<StockResult>(inventory.Reserve.Reference, input.Sku, input);
+        var reserved = await process.Transition(inventory.Reserve, input.Sku, input);
         if (!reserved.Accepted)
             return new FulfillmentResult("Rejected", reserved.Reason);
         var submitted = await process.Transition(orders.Submit, input.OrderId);
         if (submitted.Outcome == SubmissionOutcome.Submitted)
             return new FulfillmentResult("Submitted", "Stock reserved and order submitted.");
-        var released = await process.Transition<StockResult>(inventory.Release.Reference, input.Sku, input);
+        var released = await process.Transition(inventory.Release, input.Sku, input);
         if (!released.Accepted)
             return new FulfillmentResult("NeedsAttention", "Order rejected; stock compensation rejected.");
         return new FulfillmentResult("Rejected", "Order rejected; stock released.");

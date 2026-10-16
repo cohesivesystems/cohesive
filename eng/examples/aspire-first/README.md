@@ -540,3 +540,12 @@ round-trip tests. Rejected submission now has problem code `orders.submit.NotDra
 worker. It declares topology names, not domain semantics. SQL remains explicit in this batch: schema
 projection, requirement-derived infrastructure admission, an inspectable system artifact and selecting
 composed placement in the running host are subsequent work. No shared snapshot is implied across databases.
+
+### Generated process dependencies
+
+FulfillmentService now calls `.Use(new ServiceDependencies().Process(process)...)` instead of repeating Reserve,
+Release, Submit and the stock lookup. The generator retains typed invocations from Execute; host binding checks
+exact canonical references. The stock lookup declares its entity/key/result recipe once beside its hosted-query
+contract. Public OrderDetails and ReservationAvailability selections remain explicit API roots with bounds;
+neither is falsely included in the fulfillment process's dependency closure. Separately declared services and raw
+references still support explicit bindings. No durable execution or new runtime capability is implied.

@@ -179,10 +179,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         }
         if (isModel && (candidate.Symbol.GetMembers("Metadata").Length != 0
             || candidate.Symbol.GetMembers("CreateDefinition").Length != 0
+            || candidate.Symbol.GetMembers("CreateDependencies").Length != 0
             || candidate.Symbol.GetMembers("__processMetadata").Length != 0))
         {
             Report(productionContext, UnsupportedMethodShape, candidate.Syntax.Identifier.GetLocation(),
-                candidate.Symbol.Name, "Metadata and CreateDefinition are supplied by the process generator");
+                candidate.Symbol.Name, "Metadata, CreateDefinition and CreateDependencies are supplied by the process generator");
             return;
         }
         if (isModel)
@@ -429,6 +430,15 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 .AppendLine("    /// <inheritdoc />")
                 .Append("    protected override global::Cohesive.Processes.Authoring.Process<")
                 .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType)).AppendLine("> CreateDefinition() => Define(Metadata);");
+        }
+        if (modelAttribute is not null)
+        {
+            builder.AppendLine("    /// <inheritdoc />")
+                .AppendLine("    protected override global::System.Collections.Immutable.ImmutableArray<global::Cohesive.Processes.Authoring.ProcessDependency> CreateDependencies() =>")
+                .AppendLine("    [");
+            foreach (var dependency in body.Dependencies)
+                builder.Append("        ").Append(dependency).AppendLine(",");
+            builder.AppendLine("    ];");
         }
         builder.AppendLine("}");
         return builder.ToString();
@@ -3256,6 +3266,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly Dictionary<string, string> emittedExactTerminals = new(StringComparer.Ordinal);
         readonly Dictionary<FlowIdentity, string> protocolByRequestIdentity = [];
         readonly List<string> builderStatements = [];
+        readonly List<string> dependencies = [];
         readonly HashSet<ILocalSymbol> resolvingPureLocals = new(SymbolEqualityComparer.Default);
         int valueOrdinal;
 
@@ -3562,6 +3573,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 [.. identities],
                 outputs,
                 [.. builderStatements],
+                [.. dependencies.Distinct(StringComparer.Ordinal)],
                 entry);
             return true;
         }
@@ -5089,13 +5101,21 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
-            if (IsTypedCanonicalRelationQueryHandle(relation.Parameter?.Type))
+            if (IsEntityPointRead(relation.Parameter?.Type))
+            {
+                dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.PointRead({relationReference})");
+                relationReference = $"{relationReference}.Reference";
+            }
+            else if (IsTypedCanonicalRelationQueryHandle(relation.Parameter?.Type))
                 relationReference = $"{relationReference}.Reference";
 
             builderStatements.Add(
                 $"__builder.EvaluateRelation(id: {awaited.Identity.Variable}, relation: {relationReference}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
             return true;
         }
+
+        static bool IsEntityPointRead(ITypeSymbol? type) => type is INamedTypeSymbol { Name: "EntityPointRead", Arity: 3 } named
+            && named.ContainingNamespace.ToDisplayString() == "Cohesive.Processes.Authoring";
 
         static bool IsTypedCanonicalRelationQueryHandle(ITypeSymbol? type) =>
             type is INamedTypeSymbol
@@ -5139,7 +5159,10 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 inputValue = $"__builder.CanonicalValue<global::Cohesive.Prelude.Unit>(global::Cohesive.Model.Expr.Const(global::Cohesive.Model.ObservationValue.FromObject(global::Cohesive.Prelude.Unit.Value)), {transitionReference}.Definition.Input, {SourceArguments(awaited.Source, method.Name)})";
 
             if (IsTypedCanonicalTransitionHandle(transition.Parameter?.Type))
+            {
+                dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.Transition({transitionReference})");
                 transitionReference = $"{transitionReference}.Reference";
+            }
 
             var withReceipt = awaited.Kind == AwaitKind.TransitionWithReceipt;
             var invocationMethod = withReceipt ? "InvokeTransitionWithReceipt" : "InvokeTransition";
@@ -6667,6 +6690,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         ImmutableArray<string> IdentityDeclarations,
         ImmutableArray<string> OutputDeclarations,
         ImmutableArray<string> BuilderStatements,
+        ImmutableArray<string> Dependencies,
         string EntryIdentity);
 
     readonly record struct ProjectedObjectMember(
