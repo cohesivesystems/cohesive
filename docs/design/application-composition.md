@@ -88,7 +88,7 @@ ProcessModel.Dependencies prepares those attachments once. ServiceDependencies.P
 attachment against the exact canonical graph reference before using the existing transition and lookup binding
 paths. Repeated aliases to one declaration are idempotent; competing recipes for the same exact reference fail
 with structured diagnostics. Raw references and arbitrary hosted queries still need explicit registrations;
-register those before calling Process(model), which rejects missing graph dependencies before repository IO. Separately declared services remain supported.
+registration order is independent. Final host binding reports all missing exact dependencies before repository IO. Separately declared services remain supported.
 
 EntityPointRead retains an existing observational HostedQuery, the exact entity, a key selector and a result
 projection. The query document remains portable authority; these delegates are explicit native host attachments,
@@ -99,3 +99,5 @@ while composing or generating dependencies. Typed Process transitions accept POC
 Independent public SQL query selections remain explicit, with revision/bounds/consistency, and are not inferred
 as dependencies of Fulfill. Generated attachment inference does not complete API-to-service composition, durable
 execution, or capability evidence for arbitrary native callbacks.
+
+Service dependency requirements are projected once per immutable ProcessDefinition instance into a weakly keyed, thread-safe cache. Generated-attachment admission and final binding reuse that set; coverage is checked only at final binding, after all contributions are available. The cache retains no repositories or invocation data.

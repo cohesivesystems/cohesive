@@ -380,8 +380,9 @@ Lookup delegates must be safe for concurrent invocation, and hosts retain owners
 
 `new ServiceDependencies().Process(processModel)` consumes typed attachments generated from Execute. It reuses
 Transition/Lookup registration, validates exact graph references, deduplicates aliases to one declaration and
-rejects competing recipes. Validation runs in both directions: every generated attachment must match the graph,
-and every graph transition/query must be registered. Register explicit raw-reference bindings before Process(model);
-missing bindings fail at that call, without repository IO. Compilation is cached by the
+rejects competing recipes. Generated attachments must match the graph immediately; complete graph coverage is checked at final Bind,
+after all contributions are available, before any repository IO. Process/Lookup/Transition registration order
+is independent. All missing exact references are reported together with identity, revision and fingerprint.
+The required set is prepared once per immutable definition and weakly retained, shared by admission and binding. Compilation is cached by the
 resulting registration and repositories remain host-owned. Explicit Transition/Lookup registrations remain
 available for separately authored contracts; conflicting explicit/generated registrations cannot overwrite each other.

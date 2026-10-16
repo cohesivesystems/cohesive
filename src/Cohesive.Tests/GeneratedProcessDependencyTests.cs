@@ -73,7 +73,7 @@ public sealed class GeneratedProcessDependencyTests
         var query = Read().Query;
         var process = new RawDependencyProcess(query.Reference);
         Assert.Empty(process.Dependencies);
-        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceDependencies().Process(process));
+        var error = Assert.Throws<ServiceBindingValidationException>(() => Bind(new ServiceDependencies().Process(process), process));
         Assert.Equal(ServiceBindingDiagnosticCodes.QueryMissing, Assert.Single(error.Validation.Diagnostics).Code);
         _ = new ServiceDependencies().Lookup(query, Entity, input => input, item => item?.Id ?? "missing").Process(process);
     }
@@ -101,11 +101,11 @@ public sealed class GeneratedProcessDependencyTests
     }
 
     [Fact]
-    public void Missing_raw_transition_is_rejected_at_registration()
+    public void Missing_raw_transition_is_rejected_at_binding()
     {
         var transition = Transition();
         var process = new RawTransitionProcess(transition.Reference);
-        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceDependencies().Process(process));
+        var error = Assert.Throws<ServiceBindingValidationException>(() => Bind(new ServiceDependencies().Process(process), process));
         Assert.Equal(ServiceBindingDiagnosticCodes.TransitionMissing, Assert.Single(error.Validation.Diagnostics).Code);
         _ = new ServiceDependencies().Transition(transition).Process(process);
     }
@@ -126,6 +126,60 @@ public sealed class GeneratedProcessDependencyTests
         var process = new TwoReadProcess(first, second);
         var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceDependencies().Process(process));
         Assert.Equal(ServiceBindingDiagnosticCodes.GeneratedDependencyAmbiguous, Assert.Single(error.Validation.Diagnostics).Code);
+    }
+
+    static void Bind(ServiceDependencies dependencies, ProcessModel<string, string> process)
+    {
+        var service = Service.Define(new("dependency/service"), new("1"), RunControlFixture.Provenance)
+            .Use(dependencies).Operation("run").Run(process.Definition).ExecuteEphemerally(TimeSpan.FromSeconds(1));
+        _ = service.Bind(process.Definition, _ => throw new RepositoryReachedException());
+    }
+
+    sealed class RepositoryReachedException : Exception;
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Explicit_lookup_registration_is_order_independent(bool processFirst)
+    {
+        var read = Read();
+        var process = new RawDependencyProcess(read.Reference);
+        var dependencies = new ServiceDependencies();
+        if (processFirst) dependencies = dependencies.Process(process);
+        dependencies = dependencies.Lookup(read.Query, Entity, read.Key, read.Result);
+        if (!processFirst) dependencies = dependencies.Process(process);
+        Assert.Throws<RepositoryReachedException>(() => Bind(dependencies, process));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Another_process_can_supply_a_raw_reference_in_either_order(bool rawFirst)
+    {
+        var transition = Transition();
+        var raw = new RawTransitionProcess(transition.Reference);
+        var typed = new StatementTransitionProcess(transition, transition);
+        var dependencies = rawFirst
+            ? new ServiceDependencies().Process(raw).Process(typed)
+            : new ServiceDependencies().Process(typed).Process(raw);
+        Assert.Throws<RepositoryReachedException>(() => Bind(dependencies, raw));
+    }
+
+    [Fact]
+    public void Binding_reports_every_missing_exact_reference_before_repository_io()
+    {
+        var transition = Transition();
+        var read = Read();
+        var process = new RawMixedProcess(transition.Reference, read.Reference);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => Bind(new ServiceDependencies().Process(process), process));
+        Assert.Equal(2, error.Validation.Diagnostics.Length);
+        foreach (var reference in new[] { transition.Reference, read.Reference })
+        {
+            var diagnostic = Assert.Single(error.Validation.Diagnostics.Where(d => d.Message.Contains(reference.DefinitionId.Value)));
+            Assert.Contains(reference.RevisionId.Value, diagnostic.Message);
+            Assert.Contains(reference.Fingerprint.Value, diagnostic.Message);
+            Assert.Contains(Uri.EscapeDataString(reference.DefinitionId.Value), diagnostic.Location);
+        }
     }
 
     sealed class Receiver : IProcessDependencyReceiver
@@ -205,5 +259,21 @@ public sealed partial class RawTransitionProcess : ProcessModel<string, string>
     {
         await process.Transition(transition, input, input);
         return input;
+    }
+}
+
+[Process(id: "dependency/raw-mixed", revision: "1")]
+public sealed partial class RawMixedProcess : ProcessModel<string, string>
+{
+    readonly ExecutionDefinitionReference transition;
+    readonly ExecutionDefinitionReference query;
+    public RawMixedProcess(ExecutionDefinitionReference transition, ExecutionDefinitionReference query)
+    { this.transition = transition; this.query = query; }
+    protected override async ProcessTask<string> Execute(ProcessContext process, string input)
+    {
+        await process.Transition(transition, input, input);
+        await process.Transition(transition, input, input);
+        var result = await process.Query<string>(query, input);
+        return result;
     }
 }
