@@ -251,10 +251,7 @@ public static class ChannelInteractionBindingValidator
             }
 
             values.Add((
-                new ExecutionDefinitionReference(
-                    document.Metadata.DefinitionId,
-                    document.Metadata.RevisionId,
-                    document.Metadata.Fingerprint),
+                document.Reference,
                 document.GetDefinition<ChannelDefinition>()));
         }
 

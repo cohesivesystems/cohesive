@@ -626,7 +626,7 @@ public static class MaterializationRebuildProcessFactory
                     RequestResolutionSemantics.Reconcile,
                     retentionHorizon: TimeSpan.FromDays(30))),
             Provenance(source: $"ari-177/{schemaAuthority}-request"));
-        RequestContractReference request = new(Reference(requestDocument));
+        RequestContractReference request = new(requestDocument.Reference);
         var documents = ImmutableArray.CreateBuilder<ExecutionDefinitionDocument>(outcomes.Length + 1);
         var replies = ImmutableArray.CreateBuilder<DurableReplyBinding>(outcomes.Length);
         documents.Add(requestDocument);
@@ -637,7 +637,7 @@ public static class MaterializationRebuildProcessFactory
                 RevisionId,
                 new ReplyContractDefinition(request, outcome.Outcome),
                 Provenance(source: $"ari-177/{schemaAuthority}-reply/{outcome.Outcome.Value}"));
-            var reply = new ReplyContractReference(Reference(replyDocument));
+            var reply = new ReplyContractReference(replyDocument.Reference);
             documents.Add(replyDocument);
             replies.Add(new(outcome.Outcome, reply));
         }
@@ -666,11 +666,6 @@ public static class MaterializationRebuildProcessFactory
     static InteractionValueSchema ValueSchema(ValueContract contract, string revision) => new(
         contract,
         new(revision));
-
-    static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) => new(
-        document.Metadata.DefinitionId,
-        document.Metadata.RevisionId,
-        document.Metadata.Fingerprint);
 
     static ExecutionProvenance Provenance(string source) => new(
         new ExecutionProducerProvenance("cohesive-storage-materialization-rebuild", "1"),

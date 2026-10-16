@@ -52,8 +52,10 @@ Aspire's connection configuration to its own equivalent recipe. They share sourc
 ```csharp
 var model = new FulfillmentApplication();
 var persistence = model.Storage.Bind(database);
-var orders = persistence.Repository(model.Domain.Orders);
-var details = persistence.Query(model.Service.Definition, model.Queries.OrderDetails);
+var services = OrderEndpoints.Define(model)
+    .Build(builder.Services, persistence.ForServices(receiptStorage));
+// After builder.Build() and middleware:
+app.MapServices(services);
 ```
 
 `DomainModel`, `QueryModel` and `ApiModel` provide their immutable definitions automatically. Reading
@@ -70,8 +72,8 @@ method is never used as an application coordinator. Generated provenance and nod
 inspectable. A new revision records the entry-method/provenance migration; no persisted-instance upgrade is claimed.
 
 This is the declaration-foundation slice of [application composition](../../../docs/design/application-composition.md).
-Service dependencies and runtime endpoint wiring are still explicit. Automatic dependency collection,
-partial implementation contributions, unified `MapApi`, and linked acceptance/polling are subsequent work.
+Generated process dependencies, partial API implementation contributions, mapping-based repository resolution
+and unified `MapServices` are implemented. Linked acceptance/polling remains subsequent work.
 It does not implement SignalR, Cosmos registration, event sourcing or durable execution in this example.
 
 ## Build and run
@@ -116,10 +118,11 @@ must be classified as a conflict or non-rejection; a newly added unmapped outcom
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with a `TransitionApiPreparationException` retaining structured compiler diagnostics. No global compilation cache or per-request compilation is added.
-All order routes (create, get, submit, details and availability) are declared as portable handles in `OrderApi`
-under one `Entity<Order>()` builder in a static constructor,
-and bound in `OrderEndpoints`: entity operations use `app.MapEntityApi<Order>(..., endpoints => ...)`,
-while the joined read uses `app.MapApiQuery(OrderApi.Details, details).FromRoute<Guid>(...).OkOrNotFound()`. Callbacks receive
+All order routes and the terminal fulfillment endpoint are declared as instance-owned portable handles in `OrderApi`.
+`OrderEndpoints.Define(model)` contributes implementations through `ServiceModelBuilder.Implement(model.Api, ...)`.
+Entity operations retain the existing typed entity binding; queries use typed endpoint selectors with explicit bounds.
+A second contribution binds Fulfill to the separately declared ephemeral service. Native route input and response
+policies remain at the ASP.NET seam, and `app.MapServices` publishes the complete validated surface. Callbacks receive
 typed order state and transition outcomes; `.Input(request => ...)` uses the existing request context
 and its `RequiredEntityId`. The separate declarations contain no handlers; the example's HTTP error body
 is explicitly the native `ProblemDetails` type. Creation declares 201, lookup/submission declare 404,
@@ -549,3 +552,31 @@ exact canonical references. The stock lookup declares its entity/key/result reci
 contract. Public OrderDetails and ReservationAvailability selections remain explicit API roots with bounds;
 neither is falsely included in the fulfillment process's dependency closure. Separately declared services and raw
 references still support explicit bindings. No durable execution or new runtime capability is implied.
+
+## Unified API implementation registration
+
+`OrderEndpoints` is the one place that binds API contracts to entity operations, relational queries and processes.
+Its two `Implement` calls demonstrate partial contributions to the same API instance. Query selections also feed
+AppHost capability preparation; they are no longer unrelated entries on the fulfillment process service.
+
+`persistence.ForServices(receiptStorage)` resolves process and endpoint repositories from the native entity mappings.
+It shares repositories by exact observation contract within that host scope. `Build` prepares the selected readers
+and process once per host construction, and opts the process into the existing host-owned failure logger. Database
+schema creation and disposal remain explicit native operations. No request performs composition or compilation.
+
+Missing/duplicate endpoint implementations fail at setup. Mapping stages native routes and materializes their
+handlers before publishing any data source, rejecting incomplete query bindings, repeated model mapping and exact
+method/template collisions. More general ASP.NET template ambiguity remains native routing policy. A prepared
+model belongs to one route builder; build another model for another host. Native-only routes may coexist.
+
+Fulfill declares terminal completion (HTTP 200 after execution), not acceptance for a background job. The typed
+endpoint is projected from the exact service declaration and included in OrderApi; binding checks its process,
+request/result contracts and policies. Accepted receipts, polling and durable workers remain out of this batch.
+
+
+Endpoint implementation coverage is inspectable offline through `model.Services.Plan.Definition`.
+The portable plan in `Cohesive.Api.Execution` owns query selections used by AppHost; HTTP recipes attach
+in the ASP.NET adapter. Wrong or duplicate query/process endpoint handles fail during contribution,
+and missing coverage fails before storage resolution. Repeated host preparation reuses the same prepared
+surface. Process endpoint authoring uses `Endpoints.Process(service.Definition, "fulfill", process).Route(...)`;
+the typed process supplies C# input/output contracts while the service remains separately declared.

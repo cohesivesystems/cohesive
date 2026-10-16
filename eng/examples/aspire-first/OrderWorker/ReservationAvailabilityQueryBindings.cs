@@ -6,7 +6,7 @@ using Cohesive.Relations.Physical;
 namespace AspireFirst.Orders;
 
 /// <summary>Binds the reservation-availability query to native SQL or composed cross-database execution.</summary>
-public sealed class ReservationAvailabilityQueryBindings(FulfillmentQueries queries, FulfillmentService service)
+public sealed class ReservationAvailabilityQueryBindings(FulfillmentQueries queries)
 {
     /// <summary>Independent bounds for this example’s composed execution.</summary>
     public static RelationQueryPhysicalPlanningPolicy PlanningPolicy { get; } = new(
@@ -16,9 +16,10 @@ public sealed class ReservationAvailabilityQueryBindings(FulfillmentQueries quer
 
     /// <summary>Runs all joins in one native PostgreSQL statement.</summary>
     /// <param name="persistence">Existing registration containing all three entity mappings.</param>
+    /// <param name="selections">Query requirements derived from API implementations.</param>
     /// <returns>A prepared native reader; retain at host lifetime.</returns>
-    public PostgresQueryReader<string, ReservationAvailability[]> BindNative(PostgresPersistenceRegistration persistence) =>
-        persistence.Query(service.Definition, queries.ReservationAvailability);
+    public PostgresQueryReader<string, ReservationAvailability[]> BindNative(PostgresPersistenceRegistration persistence, Cohesive.Api.Execution.Services.ServiceDependencies selections) =>
+        persistence.Query(selections, queries.ReservationAvailability);
 
     /// <summary>Runs the order/reservation join in PostgreSQL and enriches its rowset from a separate inventory database.</summary>
     /// <param name="orders">Existing orders database registration.</param>

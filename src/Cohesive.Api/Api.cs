@@ -60,6 +60,22 @@ public sealed class ApiBuilder
     /// </summary>
     public RootOperationBuilder Action(string name) => new(this, this, name, ApiOperationKind.Action, entity: null);
 
+    /// <summary>Includes a separately declared endpoint without replacing its semantic authority.</summary>
+    /// <typeparam name="TEndpoint">Endpoint handle type.</typeparam>
+    /// <param name="endpoint">Existing declaration to contribute.</param>
+    /// <returns>The same endpoint handle.</returns>
+    /// <exception cref="InvalidOperationException">The API is frozen or the identity is already declared.</exception>
+    public TEndpoint Include<TEndpoint>(TEndpoint endpoint) where TEndpoint : ApiEndpoint
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        return definition.Edit(() =>
+        {
+            if (!endpointIds.Add(endpoint.Id)) throw new InvalidOperationException($"API definition already contains endpoint '{endpoint.Id}'.");
+            endpoints.Add(endpoint);
+            return endpoint;
+        });
+    }
+
     internal ApiEndpoint Add(ApiOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);

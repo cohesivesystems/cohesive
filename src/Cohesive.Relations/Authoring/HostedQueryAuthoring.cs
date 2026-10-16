@@ -44,10 +44,7 @@ public sealed class HostedQuery<TInput, TResult>
     public HostedQueryDefinition Definition => Document.GetDefinition<HostedQueryDefinition>();
 
     /// <summary>Exact identity, revision, and semantic fingerprint of this hosted Query.</summary>
-    public ExecutionDefinitionReference Reference => new(
-        Document.Metadata.DefinitionId,
-        Document.Metadata.RevisionId,
-        Document.Metadata.Fingerprint);
+    public ExecutionDefinitionReference Reference => Document.Reference;
 
     /// <summary>Portable invocation contract projected from the canonical definition.</summary>
     public ValueContract InputContract => Definition.Input;

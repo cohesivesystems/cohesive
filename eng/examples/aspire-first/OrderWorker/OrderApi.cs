@@ -1,4 +1,5 @@
 using Cohesive.Api;
+using Cohesive.Api.Execution.Services;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AspireFirst.Orders;
@@ -7,9 +8,12 @@ namespace AspireFirst.Orders;
 public sealed class OrderApi : ApiModel
 {
     /// <summary>Declares the public contract using the exact transition reference.</summary>
+    /// <param name="service">Execution contract.</param>
+    /// <param name="process">Exact process authority.</param>
     /// <param name="transitions">Order behavior declarations, without runtime bindings.</param>
-    public OrderApi(OrderTransitions transitions)
+    public OrderApi(OrderTransitions transitions, FulfillmentService service, FulfillmentProcess process)
     {
+        Fulfill = Endpoints.Process(service.Definition, "fulfill", process).Route("POST", "/fulfillment");
         var orders = Endpoints.Entity<Order>();
         Create = orders.Command("Create")
             .Route("POST", "/orders").Build<OrderCreated>(ApiResultKind.Created);
@@ -26,6 +30,8 @@ public sealed class OrderApi : ApiModel
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<ReservationAvailability[]>();
     }
 
+    /// <summary>Runs fulfillment to terminal completion before returning.</summary>
+    public ServiceProcessEndpoint<FulfillOrder, FulfillmentResult> Fulfill { get; }
     /// <summary>Creates a fresh order.</summary>
     public ApiEndpoint<OrderCreated> Create { get; }
     /// <summary>Reads an existing order.</summary>

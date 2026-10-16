@@ -18,7 +18,8 @@ namespace Cohesive.Adapters.AspNet.Entities;
 public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
 {
     readonly EntityDefinition entity;
-    readonly IEntityRepository repository;
+    IEntityRepository? repository;
+    readonly List<EntityCreationPolicy> creationPolicies = [];
     readonly string partition;
     readonly ObservationMaterializer<TEntity> materializer;
     readonly EntityApiEndpointOptions options;
@@ -32,17 +33,26 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     /// <param name="repository">Caller-owned repository for that exact definition.</param>
     /// <param name="partition">Explicit point-read partition; not an authorization policy.</param>
     public TypedEntityApiBindings(EntityDefinition entity, IEntityRepository repository, string partition)
+        : this(entity, partition) => Attach(repository);
+
+    internal TypedEntityApiBindings(EntityDefinition entity, string partition)
     {
         ArgumentNullException.ThrowIfNull(entity);
-        ArgumentNullException.ThrowIfNull(repository);
         ArgumentException.ThrowIfNullOrWhiteSpace(partition);
-        if (!ReferenceEquals(entity, repository.EntityDefinition))
-            throw new ArgumentException("Repository must use the supplied canonical entity definition.", nameof(repository));
         this.entity = entity;
-        this.repository = repository;
         this.partition = partition;
         materializer = ObservationMaterializer.For<TEntity>(entity.StateShape).Compile();
-        options = new() { Entity = entity, RepositoryResolver = (_, _) => repository, ReadPartitionKeyResolver = _ => partition };
+        options = new() { Entity = entity, RepositoryResolver = (_, _) => this.repository
+            ?? throw new InvalidOperationException("Attach persistence before mapping."), ReadPartitionKeyResolver = _ => partition };
+    }
+
+    internal void Attach(IEntityRepository value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (!ReferenceEquals(entity, value.EntityDefinition))
+            throw new ArgumentException("Repository must use the supplied canonical entity definition.", nameof(value));
+        foreach (var policy in creationPolicies) value.CreationCapabilities.Require(policy);
+        repository = value;
     }
 
     /// <summary>Binds a separately declared read endpoint with typed state and success response.</summary>
@@ -91,7 +101,8 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(respond);
         Validate<TResponse>(endpoint, ApiOperationKind.Command, ApiResultKind.Created);
-        repository.CreationCapabilities.Require(policy);
+        repository?.CreationCapabilities.Require(policy);
+        creationPolicies.Add(policy);
         if (policy == EntityCreationPolicy.ReplaceExisting)
         {
             Add(endpoint, EntityApiOperationBinding.Create(endpoint,
@@ -157,6 +168,8 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
         routes.MapEntityApiDefinition(new ApiDefinition(endpoints), options);
         mapped = true;
     }
+
+    internal IReadOnlyList<ApiEndpoint> BoundEndpoints => endpoints;
 
     internal void BeginTransition() { EnsureMutable(); pendingTransitions++; }
     internal void CompleteTransition() => pendingTransitions--;

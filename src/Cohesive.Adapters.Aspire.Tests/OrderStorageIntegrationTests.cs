@@ -53,7 +53,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, Model, repository, persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), Model.Availability.BindNative(persistence));
+            OrderHttpTestBindings.Map(app, Model, repository, persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), Model.Availability.BindNative(persistence, Model.StorageQueries));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -120,7 +120,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, Model, new TypedEntityRepository<Order>(racing), persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), Model.Availability.BindNative(persistence));
+            OrderHttpTestBindings.Map(app, Model, new TypedEntityRepository<Order>(racing), persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), Model.Availability.BindNative(persistence, Model.StorageQueries));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };

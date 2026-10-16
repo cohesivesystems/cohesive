@@ -360,7 +360,7 @@ public static class ProcessInvocationProtocolAuthoring
                 inputSchema,
                 responsePolicy.CreateObligation(terminalOutcomes)),
             provenance);
-        RequestContractReference request = new(Reference(requestDocument));
+        RequestContractReference request = new(requestDocument.Reference);
         var replyPrefix = replyDefinitionPrefix ?? new($"{requestDefinitionId.Value}/reply");
         var exactReplyRevision = replyRevisionId ?? requestRevisionId;
         var completedDocument = ReplyDocument(
@@ -407,10 +407,10 @@ public static class ProcessInvocationProtocolAuthoring
             mapping,
             requestDocument,
             request,
-            new(Reference(completedDocument)),
-            new(Reference(failedDocument)),
-            new(Reference(cancelledDocument)),
-            new(Reference(terminatedDocument)),
+            new(completedDocument.Reference),
+            new(failedDocument.Reference),
+            new(cancelledDocument.Reference),
+            new(terminatedDocument.Reference),
             documents,
             catalog);
     }
@@ -425,11 +425,6 @@ public static class ProcessInvocationProtocolAuthoring
         revision,
         new ReplyContractDefinition(request, outcome),
         provenance);
-
-    static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) => new(
-        document.Metadata.DefinitionId,
-        document.Metadata.RevisionId,
-        document.Metadata.Fingerprint);
 
     static string Format(DocumentValidationResult validation) => string.Join(
         "; ",

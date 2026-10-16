@@ -95,8 +95,7 @@ public static class ServiceApiProjection
         Type requestType, HttpBinding? http, IReadOnlyList<ApiScopePolicy>? scopePolicies)
     {
         var operationId = declared.Id;
-        var reference = new ExecutionDefinitionReference(declaration.Metadata.DefinitionId,
-            declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint);
+        var reference = declaration.Reference;
         var nativeResults = declared is ServiceProcessOperation { Execution.Completion: ServiceProcessCompletion.Admission }
             ? native.Results.Select(result => result.Kind == ApiResultKind.Success
                 ? new ApiResultDefinition(ApiResultKind.Accepted, result.BodyType, result.IsPrimary,
@@ -126,8 +125,7 @@ public static class ServiceApiProjection
             throw new ArgumentException("The operation is not a declared query.", nameof(operationId));
         if (http?.Body is { } body && body.BodyType != typeof(TRequest))
             throw new ArgumentException("The HTTP body must match the medium request type.", nameof(http));
-        var reference = new ExecutionDefinitionReference(declaration.Metadata.DefinitionId,
-            declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint);
+        var reference = declaration.Reference;
         var operation = new ApiOperation(operationId, ApiOperationKind.Query, typeof(TRequest), typeof(TResponse),
             id: new(OperationIdentity(reference, operationId)), scopePolicies: scopePolicies,
             authorizationRequirements: query.AuthorizationRequirements,
@@ -141,7 +139,7 @@ public static class ServiceApiProjection
 
     /// <summary>Projects terminal ephemeral invocation from the exact typed Process contracts without resolving a runtime.</summary>
     /// <exception cref="ArgumentException">The definition, policy or body contract does not match.</exception>
-    public static ApiEndpoint ProjectEphemeralProcess<TInput, TOutput>(ExecutionDefinitionDocument declaration,
+    public static ServiceProcessEndpoint<TInput, TOutput> ProjectEphemeralProcess<TInput, TOutput>(ExecutionDefinitionDocument declaration,
         string operationId, Cohesive.Processes.Authoring.Process<TInput, TOutput> process, HttpBinding? http = null,
         IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
     {
@@ -159,7 +157,7 @@ public static class ServiceApiProjection
     /// <returns>The endpoint derived from the declared operation and medium contracts.</returns>
     /// <exception cref="ArgumentException">The operation, Process, or HTTP body is incompatible.</exception>
     /// <exception cref="ServiceBindingValidationException">The declaration or Process is invalid.</exception>
-    public static ApiEndpoint ProjectEphemeralProcess<TRequest, TResponse, TInput, TOutput>(
+    public static ServiceProcessEndpoint<TRequest, TResponse> ProjectEphemeralProcess<TRequest, TResponse, TInput, TOutput>(
         ExecutionDefinitionDocument declaration, string operationId,
         Cohesive.Processes.Authoring.Process<TInput, TOutput> process, HttpBinding? http = null,
         IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
@@ -173,7 +171,7 @@ public static class ServiceApiProjection
         if (http?.Body is { } body && body.BodyType != typeof(TRequest))
             throw new ArgumentException("HTTP input must match the medium request contract.", nameof(http));
         var projected = new ApiOperation(operation.Id, ApiOperationKind.Command, typeof(TRequest), typeof(TResponse),
-            id: new(OperationIdentity(new(declaration.Metadata.DefinitionId, declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint), operationId)),
+            id: new(OperationIdentity(declaration.Reference, operationId)),
             authorizationRequirements: operation.AuthorizationRequirements, scopePolicies: scopePolicies,
             results: [new(ApiResultKind.Success, typeof(TResponse), isPrimary: true),
                 new(ApiResultKind.Forbidden, typeof(ApiProblem)),
@@ -184,7 +182,7 @@ public static class ServiceApiProjection
                 new(ApiResultKind.DomainError, typeof(ApiProblem)),
                 new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);
         if (http is not null) projected = projected.WithHttp(http);
-        return new ApiDefinition([projected]).Endpoints[0];
+        return new ServiceProcessEndpoint<TRequest, TResponse>(projected, declaration, process.Reference, operationId);
     }
 
     static ServiceOperation GetOperation(ExecutionDefinitionDocument declaration, string operationId)
@@ -205,8 +203,7 @@ public static class ServiceApiProjection
     {
         if (GetOperation(declaration, operationId) is not TOperation result)
             throw new ArgumentException("The operation is not a declared Process result read.", nameof(operationId));
-        return CreateResult<TResponse>(new(declaration.Metadata.DefinitionId,
-            declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint), result, http, scopePolicies: scopePolicies);
+        return CreateResult<TResponse>(declaration.Reference, result, http, scopePolicies: scopePolicies);
     }
 
     internal static string OperationIdentity(ExecutionDefinitionReference reference, string operationId) =>

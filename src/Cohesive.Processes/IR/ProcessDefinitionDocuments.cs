@@ -129,7 +129,7 @@ public static class ProcessDefinitionDocuments
                 : ProcessDefinitionValidator.Validate(
                     candidate,
                     context: null,
-                    DefinitionReference(parsedDocument)),
+                    parsedDocument.Reference),
             out definition);
     }
 
@@ -159,7 +159,7 @@ public static class ProcessDefinitionDocuments
                 : ProcessDefinitionValidator.Validate(
                     candidate,
                     context,
-                    DefinitionReference(parsedDocument)),
+                    parsedDocument.Reference),
             out definition);
     }
 
@@ -169,7 +169,7 @@ public static class ProcessDefinitionDocuments
     {
         ArgumentNullException.ThrowIfNull(document);
         var graph = context?.ShapeGraph;
-        var definitionReference = DefinitionReference(document);
+        var definitionReference = document.Reference;
         return Projection.ValidateAndProject(
             ExecutionDefinitionDocumentValidator.Validate(document, graph),
             document,
@@ -187,7 +187,7 @@ public static class ProcessDefinitionDocuments
             ExecutionDefinitionDocumentValidator.Validate(document, context.ShapeGraph),
             document,
             definition,
-            candidate => ProcessDefinitionValidator.Validate(candidate, context, DefinitionReference(document)));
+            candidate => ProcessDefinitionValidator.Validate(candidate, context, document.Reference));
 
     internal static DocumentValidationResult ValidateAuthored(
         ExecutionDefinitionDocument document,
@@ -201,13 +201,8 @@ public static class ProcessDefinitionDocuments
             candidate => ProcessDefinitionValidator.Validate(
                 candidate,
                 context: null,
-                DefinitionReference(document)));
+                document.Reference));
     }
-
-    static ExecutionDefinitionReference DefinitionReference(ExecutionDefinitionDocument document) => new(
-        document.Metadata.DefinitionId,
-        document.Metadata.RevisionId,
-        document.Metadata.Fingerprint);
 
     static string? FindProjectionFailurePath(JsonElement definition, Exception exception)
     {

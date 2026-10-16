@@ -218,7 +218,7 @@ public sealed class ExecutionDefinitionDocumentCatalog
             if (validation.IsValid)
             {
                 candidates.Add(new(
-                    Reference(document),
+                    document.Reference,
                     document));
             }
             index++;
@@ -249,12 +249,6 @@ public sealed class ExecutionDefinitionDocumentCatalog
             : null;
         return result;
     }
-
-    static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) =>
-        new(
-            document.Metadata.DefinitionId,
-            document.Metadata.RevisionId,
-            document.Metadata.Fingerprint);
 
     static string Prefix(string prefix, string? location) =>
         string.IsNullOrEmpty(location) || location == "$"

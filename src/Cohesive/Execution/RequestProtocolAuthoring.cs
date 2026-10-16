@@ -935,7 +935,7 @@ public static partial class InteractionContractAuthoring
             description);
         var requestValidation = InteractionContractDocuments.ValidateAuthored(initialRequest, requestDefinition);
         var requestDocument = initialRequest.WithRetainedDiagnostics(requestValidation.Diagnostics);
-        RequestContractReference request = new(Reference(requestDocument));
+        RequestContractReference request = new(requestDocument.Reference);
 
         var replyPrefix = replyDefinitionPrefix ?? new($"{definitionId.Value}/reply");
         var exactReplyRevision = replyRevisionId ?? revisionId;
@@ -956,7 +956,7 @@ public static partial class InteractionContractAuthoring
             var replyValidation = InteractionContractDocuments.ValidateAuthored(initialReply, replyDefinition);
             var replyDocument = initialReply.WithRetainedDiagnostics(replyValidation.Diagnostics);
             documents.Add(replyDocument);
-            replies.Add(new(outcome.Id, new(Reference(replyDocument))));
+            replies.Add(new(outcome.Id, new(replyDocument.Reference)));
         }
 
         var exactDocuments = documents.MoveToImmutable();
@@ -1004,8 +1004,4 @@ public static partial class InteractionContractAuthoring
         DocumentValidationResult Validation,
         InteractionContractCatalog? Catalog);
 
-    static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) => new(
-        document.Metadata.DefinitionId,
-        document.Metadata.RevisionId,
-        document.Metadata.Fingerprint);
 }

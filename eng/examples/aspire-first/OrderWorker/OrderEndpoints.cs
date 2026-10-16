@@ -1,42 +1,39 @@
-using Cohesive.Adapters.AspNet.Entities;
-using Cohesive.Adapters.AspNet;
+using Cohesive.Adapters.AspNet.Services;
+using Cohesive.Api.Execution.Services;
 using Cohesive.Storage;
-using Cohesive.Relations.Execution;
 
 namespace AspireFirst.Orders;
 
 /// <summary>HTTP declarations bind to the shared load, decide and concurrency-guarded commit implementation.</summary>
 public static class OrderEndpoints
 {
-    /// <summary>Maps entity operations and the joined read through shared API bindings.</summary>
-    /// <param name="model">Shared contract and behavior declarations.</param>
-    /// <param name="app">Application endpoint builder.</param>
-    /// <param name="details">Prepared canonical reader for the canonical joined query.</param>
-    /// <param name="availability">Prepared reservation availability reader.</param>
-    /// <param name="orders">Caller-owned order repository.</param>
-    public static void Map(WebApplication app, FulfillmentApplication model,
-        IEntityRepository<Order> orders,
-        IRelationQueryReader<string, OrderDetails?> details,
-        IRelationQueryReader<string, ReservationAvailability[]> availability
-        )
-    {
-        app.MapEntityApi<Order>(model.Domain.Orders.Definition, orders, partition: FulfillmentDemo.LocalPartition,
-            endpoints => endpoints
-                .Create(model.Api.Create, EntityCreationPolicy.IfAbsent,
-                    initialize: partition => new Order(Guid.NewGuid().ToString("D"), partition),
-                    identity: order => order.Id,
-                    respond: order => TypedResults.Created($"/orders/{order.Id}", new OrderCreated(order.Id))
-                )
-                .Get(model.Api.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-                .Transition(model.Api.Submit, model.Orders.Submit)
-                    .OnApplied((order, outcome) => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-                    .OnRejected(outcome => outcome.Outcome, codePrefix: "orders.submit", responses => responses
-                        .Conflict(SubmissionOutcome.NotDraft, title: "Order cannot be submitted", detail: "Order must be Draft to submit.")
-                        .NotRejected(SubmissionOutcome.Submitted))
-        );
+    /// <summary>Contributes entity, query and process implementations to the same public API.</summary>
+    /// <param name="model">Canonical application declarations.</param><returns>Offline implementation recipes.</returns>
+    public static ServiceModelBuilder Define(FulfillmentApplication model) => new ServiceModelBuilder()
+        .Implement(model.Api, bindings => ConfigureOrders(bindings, model))
+        .Implement(model.Api, bindings => bindings.Bind(api => api.Fulfill, model.Service.Definition, model.Process,
+            authority: "aspire-first", authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
+            logPrivateFailures: true));
 
-        app.MapApiQuery(model.Api.Availability, availability).FromRoute<string>("id", id => id).OkOrNotFound();
-        app.MapApiQuery(model.Api.Details, details).FromRoute<string>("id", id => id).OkOrNotFound();
+    /// <summary>Contributes order operations independently of fulfillment execution.</summary>
+    /// <param name="bindings">Shared API implementation contribution.</param><param name="model">Canonical application declarations.</param>
+    public static void ConfigureOrders(ServiceApiImplementation<OrderApi> bindings, FulfillmentApplication model)
+    {
+        bindings.Entity(model.Domain.Orders, partition: FulfillmentDemo.LocalPartition, (api, endpoints) => endpoints
+            .Create(api.Create, EntityCreationPolicy.IfAbsent,
+                initialize: partition => new Order(Guid.NewGuid().ToString("D"), partition),
+                identity: order => order.Id,
+                respond: order => TypedResults.Created($"/orders/{order.Id}", new OrderCreated(order.Id)))
+            .Get(api.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
+            .Transition(api.Submit, model.Orders.Submit)
+                .OnApplied((order, outcome) => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
+                .OnRejected(outcome => outcome.Outcome, codePrefix: "orders.submit", responses => responses
+                    .Conflict(SubmissionOutcome.NotDraft, title: "Order cannot be submitted", detail: "Order must be Draft to submit.")
+                    .NotRejected(SubmissionOutcome.Submitted)));
+        bindings.Bind(api => api.Details, model.Queries.OrderDetails, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
+            configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound());
+        bindings.Bind(api => api.Availability, model.Queries.ReservationAvailability, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
+            configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound());
     }
 
 }

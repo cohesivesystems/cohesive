@@ -43,6 +43,21 @@ public sealed partial class PostgresPersistenceRegistration
             selectEntityId, selectVersion);
     }
 
+    /// <summary>Resolves an untyped repository from an exact entity observation contract in these mappings.</summary>
+    /// <param name="observation">Required canonical entity observation.</param>
+    /// <param name="transitionReceipts">Optional schema-validated receipt storage on this data source.</param>
+    /// <returns>A repository retaining the registered entity authority and native mapping.</returns>
+    /// <exception cref="InvalidOperationException">No unique exact mapping exists.</exception>
+    public IEntityRepository Repository(ValueContract observation, PostgresTransitionReceiptStorage? transitionReceipts = null)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        var matches = tables.Values.Where(item => ValueContract.FromShape(item.Entity.Shape) == observation).ToArray();
+        if (matches.Length != 1)
+            throw new InvalidOperationException("Exactly one registered entity mapping must match the observation contract.");
+        var attachment = matches[0];
+        return new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping, transitionReceipts);
+    }
+
     /// <summary>Validates and prepares a typed query using the existing static, placement and native compilers.</summary>
     /// <typeparam name="TInput">Invocation type.</typeparam>
     /// <typeparam name="TResult">Application result type.</typeparam>

@@ -42,10 +42,7 @@ public sealed class AuthoredDomainEventContract<TPayload>
         ?? throw new InvalidOperationException("The authored document does not contain a domain-event contract.");
 
     /// <summary>Exact typed reference to this canonical domain-event contract.</summary>
-    public DomainEventContractReference Reference => new(new(
-        Document.Metadata.DefinitionId,
-        Document.Metadata.RevisionId,
-        Document.Metadata.Fingerprint));
+    public DomainEventContractReference Reference => new(Document.Reference);
 }
 
 /// <summary>Produces canonical interaction contracts from typed C# payload declarations.</summary>
