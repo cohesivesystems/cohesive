@@ -11,7 +11,7 @@ using Cohesive.Adapters.Postgres.Services;
 namespace AspireFirst;
 
 /// <summary>A native AppHost with optional Cohesive requirement validation attached to selected resources.</summary>
-public sealed class OrdersApp
+public sealed class OrdersApp : InfrastructureModel
 {
     /// <summary>Canonical order storage identity.</summary>
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
@@ -24,15 +24,12 @@ public sealed class OrdersApp
 
     static readonly SourceReference Source = SourceReference.Create("example", "aspire-first/orders/v1");
 
-    /// <summary>Canonical requirements, independent of native Aspire resource names and provider options.</summary>
-    public InfrastructureAuthoringResult Definition { get; }
-
     /// <summary>Prepares requirements from the same offline composition as the worker.</summary>
-    public OrdersApp()
+    /// <param name="model">Same activated application graph consumed by the worker.</param>
+    public OrdersApp(FulfillmentApplication model)
     {
-        var model = new FulfillmentApplication();
         StorageQueries = model.Storage.Bindings.PrepareService(model.StorageQueries, new("example/postgres"));
-        Definition = Infrastructure.Define(
+        Define(
             id: new("example/orders"),
             revision: new("4"),
             bindingProfileId: new("example/orders/bindings"),

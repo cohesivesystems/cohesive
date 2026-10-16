@@ -227,3 +227,9 @@ retain explicit host/context placement. Physical placement is not authorization.
 cases used by memory, SQLite, PostgreSQL and the environment-gated Cosmos suite. Native corruption and rollback
 cases remain with their providers. See `TransitionReceiptValidationBenchmarks` for warm encoding cost; no cache
 bypasses validation of retained or externally modified evidence.
+
+## Optional instance authoring
+
+`StorageModel<TBindings>` coordinates one native offline builder recipe with `IAuthoringModel` activation.
+The recipe must return frozen, validated bindings and perform no IO; success and failure are cached per model.
+Use adapter builders directly when a model class is unnecessary. Runtime connections remain explicit attachments.

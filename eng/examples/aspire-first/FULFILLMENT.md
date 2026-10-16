@@ -1,4 +1,4 @@
-> Current entry point: `OrderEndpoints.Define(model)` composes partial entity/query/process implementations;
+> Current entry point: `model.Endpoints` composes partial entity/query/process implementations;
 > `Build(builder.Services, persistence.ForServices(receipts))` resolves their storage and logging;
 > `app.MapServices(prepared)` maps the complete API. The standalone binding APIs below remain available.
 

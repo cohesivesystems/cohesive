@@ -259,6 +259,31 @@ public sealed class ServiceModelTests
         }
     }
 
+    sealed class CompleteBindings : ApiBindingModel
+    {
+        readonly Catalog api;
+        public CompleteBindings(Catalog api)
+        {
+            this.api = api;
+            Bindings.Implement(api, bindings => { First(bindings); Second(bindings); });
+        }
+        public void AddLate() => Bindings.Implement(api, _ => { });
+    }
+
+    [Fact]
+    public void Api_binding_model_freezes_offline_recipes_before_native_preparation()
+    {
+        var model = new CompleteBindings(new Catalog());
+        ((Cohesive.Prelude.IAuthoringModel)model).Complete();
+        Assert.NotNull(model.Plan.Definition);
+        Assert.Throws<InvalidOperationException>(model.AddLate);
+        var persistence = new Persistence();
+        var services = new ServiceCollection();
+        var prepared = model.Build(services, persistence);
+        Assert.Same(prepared, model.Build(services, persistence));
+        Assert.Equal(2, persistence.Prepared);
+    }
+
     sealed class EchoProcess(string id = "echo") : ProcessModel<string, string>
     {
         protected override ProcessAuthoringMetadata Metadata => new(new(id), new("1"), new("return"),

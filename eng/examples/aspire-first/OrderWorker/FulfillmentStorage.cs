@@ -1,31 +1,28 @@
 using Cohesive.Adapters.Postgres;
 using Npgsql;
+using Cohesive.Storage;
 
 namespace AspireFirst.Orders;
 
 /// <summary>Instance-owned native storage attachments to the exact domain supplied by composition.</summary>
-public sealed class FulfillmentStorage
+public sealed class FulfillmentStorage : StorageModel<PostgresPersistenceBindings>
 {
-    readonly FulfillmentDomain domain;
-
     /// <summary>Builds immutable offline mappings without opening a connection.</summary>
     /// <param name="domain">Shared canonical entities.</param>
     public FulfillmentStorage(FulfillmentDomain domain)
+        : base(() => PostgresPersistenceBindings.Define(new(FulfillmentResources.DatabaseName), storage => Configure(domain, storage)))
     {
-        this.domain = domain;
-        Bindings = PostgresPersistenceBindings.Define(new(FulfillmentResources.DatabaseName), Configure);
         InventoryBindings = PostgresPersistenceBindings.Define(new(FulfillmentResources.InventoryDatabaseName),
             storage => storage.Entity(domain.Inventory, Bindings.Mapping(domain.Inventory)));
     }
 
-    /// <summary>All entities colocated in the native database.</summary>
-    public PostgresPersistenceBindings Bindings { get; }
     /// <summary>Only inventory for the independently placed remote source.</summary>
     public PostgresPersistenceBindings InventoryBindings { get; }
 
     /// <summary>Contributes native mappings; the same recipe can be applied inline.</summary>
+    /// <param name="domain">Canonical entity declarations.</param>
     /// <param name="storage">Caller-owned PostgreSQL authoring builder.</param>
-    public void Configure(PostgresPersistenceBindings storage)
+    public static void Configure(FulfillmentDomain domain, PostgresPersistenceBindings storage)
     {
         storage.Entity(domain.Orders, order => order
             .Table("public", "cohesive_orders")
@@ -39,10 +36,10 @@ public sealed class FulfillmentStorage
             .Column(value => value.OrderId, "order_id")
             .Column(value => value.Sku, "sku")
             .Column(value => value.Quantity, "quantity"));
-        ConfigureInventory(storage);
+        ConfigureInventory(domain, storage);
     }
 
-    void ConfigureInventory(PostgresPersistenceBindings storage) => storage.Entity(domain.Inventory, item => item
+    static void ConfigureInventory(FulfillmentDomain domain, PostgresPersistenceBindings storage) => storage.Entity(domain.Inventory, item => item
         .Table("public", "cohesive_inventory")
         .Identity(value => value.Sku, "sku")
         .Partition(value => value.Partition, "partition_key")

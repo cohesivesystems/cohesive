@@ -63,6 +63,14 @@ public sealed class ServiceApiBindingsBuilder
     internal void Add(Func<IServicePersistence, PreparedApiContribution> prepare) => state.Edit(() => { contributions.Add((_, persistence) => prepare(persistence)); return this; });
     internal void Add(Func<IServiceCollection, IServicePersistence, PreparedApiContribution> prepare) =>
         state.Edit(() => { contributions.Add(prepare); return this; });
+    /// <summary>Freezes authoring and validates offline endpoint coverage without preparing native resources.</summary>
+    /// <exception cref="ServiceBindingValidationException">Coverage is incomplete or inconsistent.</exception>
+    public void Complete()
+    {
+        _ = state.Value;
+        _ = Plan.Definition;
+    }
+
     /// <summary>Freezes all contributions, resolves storage once and checks complete, unique implementation coverage.</summary>
     /// <param name="services">Host services owning optional logging subscriptions.</param>
     /// <param name="persistence">Native storage resolution; resources remain caller-owned.</param>

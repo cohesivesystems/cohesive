@@ -68,11 +68,19 @@ stop/start, disposal without stop, duplicate registration, disabled logging and 
 
 ## Offline application composition
 
-`ApplicationModelBuilder` composes explicitly registered declaration types by their constructors, independent of
-registration order. `Build()` constructs each once, completes `IAuthoringModel` instances, and validates documents
-from `IExecutionDefinitionModel` through the canonical execution catalog. Duplicate revisions, cycles and missing
-dependencies fail at setup. Models must not own disposable resources or perform IO; native connections remain
-separate runtime attachments. Completed models are resolved by `model.Get<T>()`. Preparation failures are cached.
+`ModelActivator.Create<T>()` discovers concrete constructor dependencies and prepares one offline graph.
+The optional callback accepts ordinary `IServiceCollection` singleton registrations for interfaces/factories.
+Dependencies complete before consumers are constructed, so constructor-assigned get-only handles are ready.
+No property reflection, source generator, explicit Prepare call or runtime service container is required.
+
+The underlying `ApplicationModelBuilder` also supports direct explicit registration. `Build()` returns
+`PreparedApplicationModel`, with shared instances and a validated canonical execution catalog. The optional
+`ApplicationModel` root exposes this through `Composition` after activation. DI handles construction and
+singleton sharing; `IAuthoringModel` completion and semantic validation remain a shared lifecycle concern.
+Missing interfaces, cycles, duplicate revisions, unsupported lifetimes and disposable resources fail at setup.
+Factories perform no IO and must not retain the temporary provider. Constructor selection is intentionally
+strict for discovery: one public constructor, or an explicit factory. Models and prepared values are scoped
+to one activation; failure caching belongs to the direct builder/authoring instance.
 
 ## Finite host-owned process execution
 

@@ -30,12 +30,30 @@ Partial contributions must ultimately resolve into one validated model rather th
   worker runtime bindings consume the same construction recipe. Independent instances have equal portable
   query/process identities without sharing mutable catalogs or credentials.
 
-`ApplicationModelBuilder` registers the finite set of offline declaration types. Constructor dependencies resolve
-once regardless of registration order; missing dependencies and cycles fail during Build. Completion freezes
-registered authoring models automatically. Canonical execution documents pass through the existing
-ExecutionDefinitionDocumentCatalog, which rejects duplicate identity/revision pairs (including differing fingerprints).
-Constructor configuration is therefore allowed, but two variants cannot silently occupy one revision in a composition.
-There is no global identity registry; separate independently deployed compositions must still govern revision changes.
+`ModelActivator.Create<T>()` discovers the concrete constructor dependency graph and uses an isolated
+singleton DI provider to construct it. Each dependency completes `IAuthoringModel` before its consumer's
+constructor runs. Constructors assign get-only handles through existing builders; no `partial`, annotations,
+virtual constructor callbacks, property injection or `null!` are needed. Interface dependencies and custom
+factories use ordinary `IServiceCollection` registration in the activator callback. Models require one public
+constructor unless explicitly supplied by a factory. Cycles, missing interfaces, duplicate registrations,
+non-singleton registrations and disposable runtime resources fail during activation.
+
+`ApplicationModelBuilder` remains the explicit, builder-only entry point. Its `Build()` returns
+`PreparedApplicationModel`. The optional `ApplicationModel` base exposes that validated composition only
+after activation returns. Canonical execution documents pass through `ExecutionDefinitionDocumentCatalog`,
+which rejects duplicate identity/revision pairs, including different fingerprints. DI handles shared instances;
+the small lifecycle layer completes declarations and validates their semantic evidence. Factories must not
+retain the temporary provider; activation owns no runtime connection, worker or scope.
+
+`ApiBindingModel` wraps `ServiceApiBindingsBuilder` and validates/finalizes offline endpoint recipes before
+consumers inspect query selections. `Build(services, persistence)` still explicitly prepares the live host.
+`StorageModel<TBindings>` runs an existing adapter's offline mapping builder once; it deliberately does not
+introduce a provider-neutral mapping DSL. `InfrastructureModel` records one `Infrastructure.Define` recipe
+and caches its canonical result. Native Aspire configuration remains in `OrdersApp.Configure(builder)`.
+The AppHost activates `OrdersApp`, whose constructor consumes the same `FulfillmentApplication` graph used
+by the worker. The worker never references AppHost or Aspire hosting packages.
+
+There is no global semantic identity registry. Independent compositions still govern their own revision changes.
 
 `AuthoringState<T>` owns the shared freeze-once protocol: edits serialize with preparation, freezing starts before
 validation, and both successful results and failures are cached. Query order uses an explicit insertion list with a
