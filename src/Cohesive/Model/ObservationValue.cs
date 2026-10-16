@@ -1612,10 +1612,23 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// <param name="options">CLR deserialization options; observation JSON encoding retains its plain-value contract.</param>
     /// <param name="bytesEncoding">Encoding for binary values, including nested values.</param>
     /// <returns>The typed value, owning any retained JSON storage after temporary pooled bytes are returned.</returns>
+    /// <remarks>
+    /// Explicit <see cref="IImmutableObservationProjection"/> results may be shared for this exact immutable
+    /// object payload and frozen serializer profile. Other CLR results remain independent on every call.
+    /// Reuse conveys no contextual validation or admission evidence.
+    /// </remarks>
     /// <exception cref="JsonException">JSON cannot be converted to the requested CLR contract.</exception>
     /// <exception cref="NotSupportedException">The requested CLR contract is unsupported by its serializer.</exception>
     /// <exception cref="InvalidOperationException">A value has no JSON representation under the selected binary encoding.</exception>
     public T? Deserialize<T>(JsonSerializerOptions? options = null, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw)
+    {
+        if (Kind == ObservationValueKind.Object && Fields is { Count: > 0 } && typeof(IImmutableObservationProjection).IsAssignableFrom(typeof(T))
+            && (options is null || options.IsReadOnly))
+            return ImmutableObservationProjectionCache.Read<T>(this, options, bytesEncoding);
+        return DeserializeIndependent<T>(options, bytesEncoding);
+    }
+
+    internal T? DeserializeIndependent<T>(JsonSerializerOptions? options, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw)
     {
         using PooledByteBufferWriter buffer = new();
         using (var writer = new Utf8JsonWriter(buffer))
