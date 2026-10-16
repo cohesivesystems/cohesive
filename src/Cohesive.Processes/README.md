@@ -28,7 +28,8 @@ accessing Definition. Faulted preparation is cached. A process type must not als
 The class-level attribute declares recovery policy; ephemeral/durable runtime selection remains a separate binding.
 
 `Dependencies` retains typed transitions and explicit `EntityPointRead<TEntity,TInput,TResult>` recipes invoked
-by Execute, generated through the same lowering path and cached per instance. Native hosting can consume them
+by Execute, including discarded statement-form transition results. Both transition forms share attachment lowering.
+Dependencies use the same freeze-once AuthoringState lifetime as Definition, caching success or failure per instance. Native hosting can consume them
 through `IProcessDependencyReceiver`; no repository is resolved during generation. Raw references and arbitrary
 hosted queries remain explicit adapter obligations. The point-read recipe retains an existing hosted-query
 contract and explicit entity/key/result attachments; it does not infer cardinality from a method name.

@@ -88,7 +88,7 @@ ProcessModel.Dependencies prepares those attachments once. ServiceDependencies.P
 attachment against the exact canonical graph reference before using the existing transition and lookup binding
 paths. Repeated aliases to one declaration are idempotent; competing recipes for the same exact reference fail
 with structured diagnostics. Raw references and arbitrary hosted queries still need explicit registrations;
-missing dependencies fail at host binding before repository IO. Separately declared services remain supported.
+register those before calling Process(model), which rejects missing graph dependencies before repository IO. Separately declared services remain supported.
 
 EntityPointRead retains an existing observational HostedQuery, the exact entity, a key selector and a result
 projection. The query document remains portable authority; these delegates are explicit native host attachments,

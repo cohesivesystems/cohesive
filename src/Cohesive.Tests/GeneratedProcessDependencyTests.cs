@@ -72,13 +72,42 @@ public sealed class GeneratedProcessDependencyTests
     {
         var query = Read().Query;
         var process = new RawDependencyProcess(query.Reference);
-        var dependencies = new ServiceDependencies().Process(process);
         Assert.Empty(process.Dependencies);
-        var service = Service.Define(new("raw/service"), new("1"), RunControlFixture.Provenance)
-            .Use(dependencies).Operation("run").Run(process.Definition).ExecuteEphemerally(TimeSpan.FromSeconds(1));
-        var error = Assert.Throws<ServiceBindingValidationException>(() => service.Bind(process.Definition,
-            _ => throw new InvalidOperationException("Repository must not be resolved.")));
+        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceDependencies().Process(process));
         Assert.Equal(ServiceBindingDiagnosticCodes.QueryMissing, Assert.Single(error.Validation.Diagnostics).Code);
+        _ = new ServiceDependencies().Lookup(query, Entity, input => input, item => item?.Id ?? "missing").Process(process);
+    }
+
+    [Fact]
+    public void Statement_transitions_attach_their_exact_authority()
+    {
+        var transition = Transition();
+        var process = new StatementTransitionProcess(transition, transition);
+        Assert.Equal(2, process.Definition.Definition.Nodes.OfType<InvokeTransitionProcessNode>().Count());
+        Assert.All(process.Dependencies, dependency => Assert.Equal(transition.Reference, dependency.Reference));
+        Assert.Equal(2, process.Dependencies.Length);
+        _ = new ServiceDependencies().Process(process);
+    }
+
+    [Fact]
+    public void Competing_transition_authorities_for_one_exact_reference_are_rejected()
+    {
+        var first = Transition();
+        var second = Transition();
+        Assert.Equal(first.Reference, second.Reference);
+        var error = Assert.Throws<ServiceBindingValidationException>(() =>
+            new ServiceDependencies().Process(new StatementTransitionProcess(first, second)));
+        Assert.Equal(ServiceBindingDiagnosticCodes.GeneratedDependencyAmbiguous, Assert.Single(error.Validation.Diagnostics).Code);
+    }
+
+    [Fact]
+    public void Missing_raw_transition_is_rejected_at_registration()
+    {
+        var transition = Transition();
+        var process = new RawTransitionProcess(transition.Reference);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceDependencies().Process(process));
+        Assert.Equal(ServiceBindingDiagnosticCodes.TransitionMissing, Assert.Single(error.Validation.Diagnostics).Code);
+        _ = new ServiceDependencies().Transition(transition).Process(process);
     }
 
     [Fact]
@@ -149,5 +178,32 @@ public sealed partial class TwoReadProcess : ProcessModel<string, string>
         var observed = await process.Query(first, input);
         var result = await process.Query(second, observed);
         return result;
+    }
+}
+
+[Process(id: "dependency/statements", revision: "1")]
+public sealed partial class StatementTransitionProcess : ProcessModel<string, string>
+{
+    readonly Transition<GeneratedProcessDependencyTests.Item, string, string> first;
+    readonly Transition<GeneratedProcessDependencyTests.Item, string, string> second;
+    public StatementTransitionProcess(Transition<GeneratedProcessDependencyTests.Item, string, string> first,
+        Transition<GeneratedProcessDependencyTests.Item, string, string> second) { this.first = first; this.second = second; }
+    protected override async ProcessTask<string> Execute(ProcessContext process, string input)
+    {
+        await process.Transition(first, input, input);
+        await process.Transition(second, input, input);
+        return input;
+    }
+}
+
+[Process(id: "dependency/raw-transition", revision: "1")]
+public sealed partial class RawTransitionProcess : ProcessModel<string, string>
+{
+    readonly ExecutionDefinitionReference transition;
+    public RawTransitionProcess(ExecutionDefinitionReference transition) => this.transition = transition;
+    protected override async ProcessTask<string> Execute(ProcessContext process, string input)
+    {
+        await process.Transition(transition, input, input);
+        return input;
     }
 }

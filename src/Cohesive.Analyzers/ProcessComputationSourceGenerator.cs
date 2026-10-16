@@ -4290,8 +4290,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             action.Syntax,
                             "Transition requires an exact definition, portable subject and input, and a stable continuation role");
                     }
-                    if (IsTypedCanonicalTransitionHandle(transition.Parameter?.Type))
-                        transitionReference = $"{transitionReference}.Reference";
+                    transitionReference = AttachTransition(transition.Parameter?.Type, transitionReference);
                     builderStatements.Add(
                         $"__builder.InvokeTransition(id: {action.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {transitionInputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {action.Identity.Variable}, role: {transitionRole}, target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
                     return true;
@@ -5158,11 +5157,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             if (input is null && noInput)
                 inputValue = $"__builder.CanonicalValue<global::Cohesive.Prelude.Unit>(global::Cohesive.Model.Expr.Const(global::Cohesive.Model.ObservationValue.FromObject(global::Cohesive.Prelude.Unit.Value)), {transitionReference}.Definition.Input, {SourceArguments(awaited.Source, method.Name)})";
 
-            if (IsTypedCanonicalTransitionHandle(transition.Parameter?.Type))
-            {
-                dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.Transition({transitionReference})");
-                transitionReference = $"{transitionReference}.Reference";
-            }
+            transitionReference = AttachTransition(transition.Parameter?.Type, transitionReference);
 
             var withReceipt = awaited.Kind == AwaitKind.TransitionWithReceipt;
             var invocationMethod = withReceipt ? "InvokeTransitionWithReceipt" : "InvokeTransition";
@@ -5170,6 +5165,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             builderStatements.Add(
                 $"__builder.{invocationMethod}(id: {awaited.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {receiptArgument}{SourceArguments(awaited.Source, method.Name)});");
             return true;
+        }
+
+        string AttachTransition(ITypeSymbol? type, string reference)
+        {
+            if (!IsTypedCanonicalTransitionHandle(type)) return reference;
+            dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.Transition({reference})");
+            return $"{reference}.Reference";
         }
 
         bool TryEmitEffect(AwaitFlow awaited, string successor)

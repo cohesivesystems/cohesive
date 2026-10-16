@@ -28,7 +28,7 @@ public sealed class ProcessAttribute(string id, string revision,
 public abstract class ProcessModel<TInput, TResult> : IAuthoringModel, IExecutionDefinitionModel
 {
     readonly AuthoringState<Process<TInput, TResult>> definition;
-    readonly Lazy<ImmutableArray<ProcessDependency>> dependencies;
+    readonly AuthoringState<ImmutableArray<ProcessDependency>> dependencies;
 
     /// <summary>Creates lazy definition storage without calling derived authoring during construction.</summary>
     protected ProcessModel()

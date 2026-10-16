@@ -41,9 +41,9 @@ public sealed class ServiceDependencies
     /// <param name="model">Completed process authoring instance.</param>
     /// <returns>A new registration set; compilation and repository resolution remain deferred to binding.</returns>
     /// <exception cref="ArgumentNullException">Model is null.</exception>
-    /// <exception cref="ServiceBindingValidationException">An attachment differs from the canonical graph, or competing recipes claim one exact dependency.</exception>
+    /// <exception cref="ServiceBindingValidationException">An attachment differs from the canonical graph, a graph dependency is missing, or competing recipes claim one exact dependency.</exception>
     /// <exception cref="ArgumentException">An exact dependency is already explicitly registered.</exception>
-    /// <remarks>Raw exact references and arbitrary hosted queries still require explicit bindings. No handler is
+    /// <remarks>Raw exact references and arbitrary hosted queries require explicit bindings before this call. No handler is
     /// inferred from a query name. Independently declared services can use this method or register each binding.</remarks>
     public ServiceDependencies Process<TInput, TResult>(ProcessModel<TInput, TResult> model)
     {
@@ -72,6 +72,7 @@ public sealed class ServiceDependencies
             contributed.Add(reference, dependency);
             dependency.Contribute(receiver);
         }
+        receiver.Dependencies.RequireDependencies(model.Definition);
         return receiver.Dependencies;
     }
 
@@ -156,20 +157,30 @@ public sealed class ServiceDependencies
         return new(transitions, lookups, Queries.Add(new(reference, query.CompilationRequest, maximumRows, maximumBytes, consistency)));
     }
 
+    void RequireDependencies<TInput, TResult>(Process<TInput, TResult> process)
+    {
+        foreach (var node in process.Definition.Nodes)
+        {
+            if (node is InvokeTransitionProcessNode transition && !transitions.ContainsKey(transition.Transition))
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.TransitionMissing,
+                    "An exact transition dependency is not registered.", "/bindings/transitions");
+            if (node is EvaluateRelationProcessNode query && !lookups.ContainsKey(query.Relation))
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryMissing,
+                    "An exact hosted query dependency is not registered.", "/bindings/queries");
+        }
+    }
+
     internal void Apply<TInput, TResult>(ServiceProcessHostBuilder<TInput, TResult> host, Process<TInput, TResult> process,
         Func<ValueContract, IEntityRepository> resolve, InteractionContractCatalog contracts)
     {
+        RequireDependencies(process);
         foreach (var reference in process.Definition.Nodes.OfType<InvokeTransitionProcessNode>().Select(node => node.Transition).Distinct())
         {
-            if (!transitions.TryGetValue(reference, out var create))
-                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.TransitionMissing, "An exact transition dependency is not registered.", "/bindings/transitions");
-            host.Transition(create(resolve, contracts));
+            host.Transition(transitions[reference](resolve, contracts));
         }
         foreach (var reference in process.Definition.Nodes.OfType<EvaluateRelationProcessNode>().Select(node => node.Relation).Distinct())
         {
-            if (!lookups.TryGetValue(reference, out var create))
-                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryMissing, "An exact hosted query dependency is not registered.", "/bindings/queries");
-            var binding = create(resolve);
+            var binding = lookups[reference](resolve);
             host.Query(binding.Link, binding.Handler);
         }
     }
