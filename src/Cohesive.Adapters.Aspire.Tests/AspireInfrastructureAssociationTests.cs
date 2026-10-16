@@ -13,9 +13,11 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class AspireInfrastructureAssociationTests
 {
+    static readonly OrdersApp ExampleApp = new();
+
     static readonly SourceReference Source = SourceReference.Create("test", "aspire-first");
     static InfrastructureTargetImplementation Storage => ResourceImplementation(new("test/storage"),
-        OrdersApp.StorageQueries.Requirements.Select((capability, index) => new InfrastructureCapabilityEvidence(
+        ExampleApp.StorageQueries.Requirements.Select((capability, index) => new InfrastructureCapabilityEvidence(
             new($"test/storage/{index}"), capability, CapabilityRealizationKind.Native, sourceReferences: [Source])).ToArray());
     static InfrastructureTargetImplementation Process => WorkloadImplementation(new("test/process"),
         [new(new("test/process/evidence"), OrdersApp.ApplicationExecution, CapabilityRealizationKind.Native, sourceReferences: [Source])]);
@@ -27,7 +29,7 @@ public sealed class AspireInfrastructureAssociationTests
     });
     static AspireInfrastructureAssociation Attach(IDistributedApplicationBuilder builder,
         Action<AspireInfrastructureAssociationBuilder> configure) => AspireInfrastructureAssociation.Attach(
-            builder, OrdersApp.Definition, new("test/association"), new("development"), configure);
+            builder, ExampleApp.Definition, new("test/association"), new("development"), configure);
 
     [Fact]
     public void Prepared_evidence_checks_actual_database_name_before_association()
@@ -36,11 +38,11 @@ public sealed class AspireInfrastructureAssociationTests
         var server = builder.AddPostgres("postgres");
         var wrong = server.AddDatabase("orders-label", "inventory");
         Assert.Throws<ArgumentException>(() => Attach(builder, associations =>
-            associations.Resource(OrdersApp.Store, wrong, OrdersApp.StorageQueries, new("test/authority"))));
+            associations.Resource(OrdersApp.Store, wrong, ExampleApp.StorageQueries, new("test/authority"))));
         var correct = server.AddDatabase("different-label", "orders");
         var worker = builder.AddExecutable("worker", "dotnet", ".", "--info");
         Assert.True(Attach(builder, associations => associations
-            .Resource(OrdersApp.Store, correct, OrdersApp.StorageQueries, new("test/authority"))
+            .Resource(OrdersApp.Store, correct, ExampleApp.StorageQueries, new("test/authority"))
             .Workload(OrdersApp.Worker, worker, Process)).Deployment.IsComplete);
         using var app = builder.Build();
     }
@@ -49,7 +51,7 @@ public sealed class AspireInfrastructureAssociationTests
     public void Project_inference_requires_native_metadata_and_does_not_claim_durable_execution()
     {
         var builder = Builder();
-        var configured = OrdersApp.Configure(builder);
+        var configured = new OrdersApp().Configure(builder);
         var project = builder.CreateResourceBuilder((ProjectResource)configured.Resources[OrdersApp.Worker]);
         var definition = Infrastructure.Define(new("test/project"), new("1"), new("test/project/bindings"), infra =>
             infra.Workload(OrdersApp.Worker).Requires(AspireInfrastructure.DotNetProjectExecution)
@@ -101,7 +103,7 @@ public sealed class AspireInfrastructureAssociationTests
     public void Runnable_example_uses_generated_project_metadata_and_existing_native_database()
     {
         var builder = Builder();
-        var association = OrdersApp.Configure(builder);
+        var association = new OrdersApp().Configure(builder);
         Assert.True(association.Deployment.IsComplete,
             string.Join(Environment.NewLine, association.Deployment.Diagnostics.Select(d => d.Message)));
         Assert.Equal(2, association.Resources.Count);
@@ -128,7 +130,7 @@ public sealed class AspireInfrastructureAssociationTests
         Assert.Equal(before, builder.Resources);
         for (var i = 0; i < before.Length; i++) Assert.Equal(annotations[i], before[i].Annotations);
         Assert.Same(database.Resource, association.Resources[OrdersApp.Store]);
-        var direct = InfrastructureTargetDeployments.Define(new("test/association"), OrdersApp.Definition.Definition,
+        var direct = InfrastructureTargetDeployments.Define(new("test/association"), ExampleApp.Definition.Definition,
             new("test/association/facilities"), new("test/association/profile"), AspireInfrastructureAssociation.Target,
             new("development"), [InfrastructureDefinitionDocument.CurrentSchemaVersion], d => d
                 .ResourceUsing(OrdersApp.Store, Storage, new("aspire/resource/storage"), new("aspire/test"), [Source])

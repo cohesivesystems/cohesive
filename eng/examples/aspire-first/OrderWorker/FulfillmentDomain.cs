@@ -6,35 +6,32 @@ using Cohesive.Relations.Authoring;
 namespace AspireFirst.Orders;
 
 /// <summary>One domain declaration; persistence and queries attach to these exact entity handles.</summary>
-public static class FulfillmentDomain
+public sealed class FulfillmentDomain : DomainModel
 {
     /// <summary>Canonical order identity field.</summary>
     public const string OrderIdField = "id";
     /// <summary>Canonical partition field shared by the example entities.</summary>
     public const string PartitionField = "partition";
-    static FulfillmentDomain()
+    /// <summary>Declares the shared entities and their canonical references.</summary>
+    public FulfillmentDomain() : base(revision: "2")
     {
-        var domain = new DomainModelBuilder().Version("2");
-        Orders = domain.Entity<Order>("example/order");
-        Inventory = domain.Entity<InventoryItem>("example/inventory");
-        Reservations = domain.Entity<Reservation>("example/reservation");
+        Orders = Entity<Order>("example/order");
+        Inventory = Entity<InventoryItem>("example/inventory");
+        Reservations = Entity<Reservation>("example/reservation");
         ReservationOrder = Reservations.References(reservation => reservation.OrderId, Orders);
         ReservationItem = Reservations.References(reservation => reservation.Sku, Inventory);
-        Definition = domain.Build();
     }
 
     /// <summary>Canonical order state authority.</summary>
-    public static DomainEntity<Order> Orders { get; }
+    public DomainEntity<Order> Orders { get; }
     /// <summary>Canonical inventory state authority.</summary>
-    public static DomainEntity<InventoryItem> Inventory { get; }
+    public DomainEntity<InventoryItem> Inventory { get; }
     /// <summary>Canonical reservation state authority.</summary>
-    public static DomainEntity<Reservation> Reservations { get; }
+    public DomainEntity<Reservation> Reservations { get; }
     /// <summary>Reservation-to-order semantic reference, reusable by queries and later processes.</summary>
-    public static RelationQueryExpressionRelationship<Reservation, Order> ReservationOrder { get; }
+    public RelationQueryExpressionRelationship<Reservation, Order> ReservationOrder { get; }
     /// <summary>Reservation-to-inventory semantic reference.</summary>
-    public static RelationQueryExpressionRelationship<Reservation, InventoryItem> ReservationItem { get; }
-    /// <summary>Immutable domain entity catalog.</summary>
-    public static DomainModelDefinition Definition { get; }
+    public RelationQueryExpressionRelationship<Reservation, InventoryItem> ReservationItem { get; }
 }
 
 /// <summary>Stock for one SKU in the local demo partition.</summary>

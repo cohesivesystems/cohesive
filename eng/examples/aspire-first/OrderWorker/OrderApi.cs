@@ -4,11 +4,13 @@ using Microsoft.AspNetCore.Mvc;
 namespace AspireFirst.Orders;
 
 /// <summary>Portable order API declarations, independent of ASP.NET handlers and repository instances.</summary>
-public static class OrderApi
+public sealed class OrderApi : ApiModel
 {
-    static OrderApi()
+    /// <summary>Declares the public contract using the exact transition reference.</summary>
+    /// <param name="transitions">Order behavior declarations, without runtime bindings.</param>
+    public OrderApi(OrderTransitions transitions)
     {
-        var orders = Api.Define().Entity<Order>();
+        var orders = Endpoints.Entity<Order>();
         Create = orders.Command("Create")
             .Route("POST", "/orders").Build<OrderCreated>(ApiResultKind.Created);
         Get = orders.Query("Get")
@@ -17,24 +19,21 @@ public static class OrderApi
         Submit = orders.Command("Submit")
             .Route("POST", "/orders/{id}/submit").RouteParameter<string>("id")
             .Result<ProblemDetails>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound)
-            .Transition(OrderTransitions.Submit.Reference).Build<OrderSummary>();
+            .Transition(transitions.Submit.Reference).Build<OrderSummary>();
         Details = orders.Query("Details").Route("GET", "/orders/{id}/details")
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<OrderDetails>();
         Availability = orders.Query("availability").Route("GET", "/orders/{id}/availability")
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<ReservationAvailability[]>();
-        Definition = orders.Build();
     }
 
     /// <summary>Creates a fresh order.</summary>
-    public static ApiEndpoint<OrderCreated> Create { get; }
+    public ApiEndpoint<OrderCreated> Create { get; }
     /// <summary>Reads an existing order.</summary>
-    public static ApiEndpoint<OrderSummary> Get { get; }
+    public ApiEndpoint<OrderSummary> Get { get; }
     /// <summary>Submits an existing order using the exact declared transition.</summary>
-    public static ApiEndpoint<OrderSummary> Submit { get; }
+    public ApiEndpoint<OrderSummary> Submit { get; }
     /// <summary>Queries order details through the canonical fulfillment relation.</summary>
-    public static ApiEndpoint<OrderDetails> Details { get; }
+    public ApiEndpoint<OrderDetails> Details { get; }
     /// <summary>Current joined reservation demand and inventory observations.</summary>
-    public static ApiEndpoint<ReservationAvailability[]> Availability { get; }
-    /// <summary>The complete portable surface, suitable for other API projections.</summary>
-    public static ApiDefinition Definition { get; }
+    public ApiEndpoint<ReservationAvailability[]> Availability { get; }
 }

@@ -18,6 +18,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 [Collection("Order PostgreSQL schema")]
 public sealed partial class OrderStorageIntegrationTests
 {
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
     const string ConnectionVariable = "COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING";
 
     [PostgresFact]
@@ -28,13 +29,13 @@ public sealed partial class OrderStorageIntegrationTests
         using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
-        var persistence = FulfillmentStorage.Bind(database);
-        var repository = persistence.Repository(FulfillmentDomain.Orders);
+        var persistence = Model.Storage.Bind(database);
+        var repository = persistence.Repository(Model.Domain.Orders);
         var context = OperationContext.Create();
         var id = Guid.NewGuid();
         try
         {
-            var first = await repository.Upsert(context, FulfillmentDemo.RegisterOrder(id));
+            var first = await repository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, id));
             var loaded = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
             Assert.NotNull(loaded);
             var typed = await repository.TryGetEntity(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
@@ -52,7 +53,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, repository, persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), ReservationAvailabilityQueryBindings.BindNative(persistence));
+            OrderEndpoints.Map(app, Model, repository, persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), Model.Availability.BindNative(persistence));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -106,11 +107,11 @@ public sealed partial class OrderStorageIntegrationTests
         using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
-        var persistence = FulfillmentStorage.Bind(database);
-        var repository = persistence.Repository(FulfillmentDomain.Orders);
+        var persistence = Model.Storage.Bind(database);
+        var repository = persistence.Repository(Model.Domain.Orders);
         var context = OperationContext.Create();
         var id = Guid.NewGuid();
-        var initial = await repository.Upsert(context, FulfillmentDemo.RegisterOrder(id));
+        var initial = await repository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, id));
         try
         {
             // Both HTTP requests must observe the same token before either can commit.
@@ -119,7 +120,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, new TypedEntityRepository<Order>(racing), persistence.Query(FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), ReservationAvailabilityQueryBindings.BindNative(persistence));
+            OrderEndpoints.Map(app, Model, new TypedEntityRepository<Order>(racing), persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), Model.Availability.BindNative(persistence));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };

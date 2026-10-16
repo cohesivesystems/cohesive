@@ -1,5 +1,9 @@
 # Cohesive.Adapters.Postgres
 
+## Instance composition
+
+`PostgresPersistenceBindings.Define(databaseId, configure)` accepts inline or extracted configuration through the existing native builder and freezes the result. `bindings.Entity(entity, mapping => mapping.Table(...).Identity(...).Partition(...))` removes the need for a parallel mapping-property catalog. `Mapping(entity)` exposes a declared immutable mapping and rejects a foreign entity authority. Runtime `Bind` still attaches a caller-owned Npgsql data source and snapshots mappings.
+
 `Cohesive.Adapters.Postgres` realizes Cohesive Relations, Storage, materialization, Process durability, and logical
 replication semantics on PostgreSQL through explicit bindings and Npgsql-backed runtime ports.
 

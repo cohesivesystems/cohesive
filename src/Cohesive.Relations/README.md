@@ -1,5 +1,9 @@
 # Cohesive.Relations
 
+## Instance composition
+
+`QueryModel` optionally groups instance-owned typed queries. Assign `Query(existingTypedQuery)` to each property; inherited `Definition` collects the canonical compilation requests once and rejects late or duplicate-ID additions. It neither compiles queries nor chooses database placement.
+
 `Cohesive.Relations` lets applications describe relationships, projections, filters, and queries in typed C# while
 leaving storage placement and execution strategy to compilers and adapters.
 

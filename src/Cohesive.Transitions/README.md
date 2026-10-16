@@ -1,5 +1,9 @@
 # Cohesive.Transitions
 
+## Instance composition
+
+`DomainModel` offers optional instance authoring over `DomainModelBuilder`: declare entities in the derived constructor and use inherited `Definition`. First access freezes the builder and caches the exact immutable entity catalog; late additions fail. No reflection or virtual construction hook is used.
+
 `Cohesive.Transitions` models one entity change as portable, inspectable semantics: admission rules, branching,
 sparse updates, invariants, interactions, machine movements, and typed outcomes.
 

@@ -9,33 +9,34 @@ namespace AspireFirst.Orders;
 public static class OrderEndpoints
 {
     /// <summary>Maps entity operations and the joined read through shared API bindings.</summary>
+    /// <param name="model">Shared contract and behavior declarations.</param>
     /// <param name="app">Application endpoint builder.</param>
     /// <param name="details">Prepared canonical reader for the canonical joined query.</param>
     /// <param name="availability">Prepared reservation availability reader.</param>
     /// <param name="orders">Caller-owned order repository.</param>
-    public static void Map(WebApplication app,
+    public static void Map(WebApplication app, FulfillmentApplication model,
         IEntityRepository<Order> orders,
         IRelationQueryReader<string, OrderDetails?> details,
         IRelationQueryReader<string, ReservationAvailability[]> availability
         )
     {
-        app.MapEntityApi<Order>(FulfillmentDomain.Orders.Definition, orders, partition: FulfillmentDemo.LocalPartition,
+        app.MapEntityApi<Order>(model.Domain.Orders.Definition, orders, partition: FulfillmentDemo.LocalPartition,
             endpoints => endpoints
-                .Create(OrderApi.Create, EntityCreationPolicy.IfAbsent,
+                .Create(model.Api.Create, EntityCreationPolicy.IfAbsent,
                     initialize: partition => new Order(Guid.NewGuid().ToString("D"), partition),
                     identity: order => order.Id,
                     respond: order => TypedResults.Created($"/orders/{order.Id}", new OrderCreated(order.Id))
                 )
-                .Get(OrderApi.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-                .Transition(OrderApi.Submit, OrderTransitions.Submit)
+                .Get(model.Api.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
+                .Transition(model.Api.Submit, model.Orders.Submit)
                     .OnApplied((order, outcome) => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
                     .OnRejected(outcome => outcome.Outcome, codePrefix: "orders.submit", responses => responses
                         .Conflict(SubmissionOutcome.NotDraft, title: "Order cannot be submitted", detail: "Order must be Draft to submit.")
                         .NotRejected(SubmissionOutcome.Submitted))
         );
 
-        app.MapApiQuery(OrderApi.Availability, availability).FromRoute<string>("id", id => id).OkOrNotFound();
-        app.MapApiQuery(OrderApi.Details, details).FromRoute<string>("id", id => id).OkOrNotFound();
+        app.MapApiQuery(model.Api.Availability, availability).FromRoute<string>("id", id => id).OkOrNotFound();
+        app.MapApiQuery(model.Api.Details, details).FromRoute<string>("id", id => id).OkOrNotFound();
     }
 
 }

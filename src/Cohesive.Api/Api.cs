@@ -23,6 +23,7 @@ public sealed class ApiBuilder
     readonly List<ApiEndpoint> endpoints = [];
     readonly HashSet<ApiEndpointId> endpointIds = [];
     readonly string? name;
+    bool frozen;
 
     internal ApiBuilder(string? name = null)
     {
@@ -60,6 +61,7 @@ public sealed class ApiBuilder
     internal ApiEndpoint Add(ApiOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
+        if (frozen) throw new InvalidOperationException("The API definition is frozen.");
         var endpoint = new ApiEndpoint(operation);
         if (!endpointIds.Add(endpoint.Id))
             throw new InvalidOperationException($"API definition already contains endpoint '{endpoint.Id}'.");
@@ -83,6 +85,14 @@ public sealed class ApiBuilder
     /// Builds the immutable API definition.
     /// </summary>
     public ApiDefinition Build() => new(endpoints);
+
+    internal ApiDefinition Freeze()
+    {
+        var definition = Build();
+        frozen = true;
+        return definition;
+    }
+
 }
 
 /// <summary>

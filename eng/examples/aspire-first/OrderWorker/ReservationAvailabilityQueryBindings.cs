@@ -6,7 +6,7 @@ using Cohesive.Relations.Physical;
 namespace AspireFirst.Orders;
 
 /// <summary>Binds the reservation-availability query to native SQL or composed cross-database execution.</summary>
-public static class ReservationAvailabilityQueryBindings
+public sealed class ReservationAvailabilityQueryBindings(FulfillmentQueries queries, FulfillmentService service)
 {
     /// <summary>Independent bounds for this example’s composed execution.</summary>
     public static RelationQueryPhysicalPlanningPolicy PlanningPolicy { get; } = new(
@@ -17,18 +17,18 @@ public static class ReservationAvailabilityQueryBindings
     /// <summary>Runs all joins in one native PostgreSQL statement.</summary>
     /// <param name="persistence">Existing registration containing all three entity mappings.</param>
     /// <returns>A prepared native reader; retain at host lifetime.</returns>
-    public static PostgresQueryReader<string, ReservationAvailability[]> BindNative(PostgresPersistenceRegistration persistence) =>
-        persistence.Query(FulfillmentService.Definition, FulfillmentQueries.ReservationAvailability);
+    public PostgresQueryReader<string, ReservationAvailability[]> BindNative(PostgresPersistenceRegistration persistence) =>
+        persistence.Query(service.Definition, queries.ReservationAvailability);
 
     /// <summary>Runs the order/reservation join in PostgreSQL and enriches its rowset from a separate inventory database.</summary>
     /// <param name="orders">Existing orders database registration.</param>
     /// <param name="inventory">Existing inventory database registration, independently bound and read.</param>
     /// <returns>A prepared composed reader exposing exact split and execution evidence.</returns>
     /// <remarks>No global snapshot is promised across these two data sources. Scope is the example's local partition.</remarks>
-    public static RelationQuerySubplanReader<string, ReservationAvailability[]> BindComposed(PostgresPersistenceRegistration orders, PostgresPersistenceRegistration inventory)
+    public RelationQuerySubplanReader<string, ReservationAvailability[]> BindComposed(PostgresPersistenceRegistration orders, PostgresPersistenceRegistration inventory)
         => orders.QueryComposed(
-            FulfillmentQueries.ReservationAvailability,
-            FulfillmentQueries.ReservationDemandProjection,
+            queries.ReservationAvailability,
+            queries.ReservationDemandProjection,
             remote: inventory,
             composedPolicy: new PostgresRelationQueryComposedPolicy(
                 PlanningPolicy, maximumRowsPerRead: 1000,

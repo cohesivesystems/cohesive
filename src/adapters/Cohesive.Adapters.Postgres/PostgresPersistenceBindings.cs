@@ -9,9 +9,10 @@ namespace Cohesive.Adapters.Postgres;
 
 /// <summary>Offline PostgreSQL entity mappings used by native query preparation and runtime registration.</summary>
 /// <remarks>Configure once at host composition. Bind snapshots the mappings; later edits cannot change an
-/// existing runtime registration. Preparation performs no IO and retains no credentials or data source.</remarks>
+/// existing runtime registration. Define freezes authoring and rejects late contributions. Preparation performs no IO and retains no credentials or data source.</remarks>
 public sealed class PostgresPersistenceBindings
 {
+    bool frozen;
     internal readonly Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> Tables = [];
     /// <summary>Creates offline bindings for one explicitly identified database.</summary>
     /// <param name="database">Stable database identity shared with the eventual runtime binding.</param>
@@ -31,13 +32,70 @@ public sealed class PostgresPersistenceBindings
     /// <returns>This setup builder.</returns>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ArgumentException">Mapping is invalid or the entity is already attached.</exception>
+    /// <exception cref="InvalidOperationException">The bindings have been frozen by Define.</exception>
     public PostgresPersistenceBindings Entity<T>(DomainEntity<T> entity, PostgresEntityRepositoryMapping mapping) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(entity);
         ArgumentNullException.ThrowIfNull(mapping);
         PostgresEntityRepository.ValidateMapping(entity.Definition, mapping);
+        RequireMutable();
         Tables.Add(entity.Definition.StateShape.QualifiedId, (entity.Definition, mapping));
         return this;
+    }
+
+    /// <summary>Authors and freezes offline mappings through the existing native mapping builder.</summary>
+    /// <param name="database">Stable connection/database identity.</param>
+    /// <param name="configure">Setup-only contribution; never retained or run per request.</param>
+    /// <returns>Frozen mappings usable for offline evidence and runtime binding.</returns>
+    /// <exception cref="ArgumentNullException">Configure is null.</exception>
+    /// <exception cref="ArgumentException">A database or mapping is invalid or duplicated.</exception>
+    public static PostgresPersistenceBindings Define(PostgresRelationQueryDatabaseId database,
+        Action<PostgresPersistenceBindings> configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        var bindings = new PostgresPersistenceBindings(database);
+        configure(bindings);
+        bindings.frozen = true;
+        return bindings;
+    }
+
+    /// <summary>Contributes a native mapping directly, without a parallel mapping property catalog.</summary>
+    /// <typeparam name="T">Canonical entity state.</typeparam>
+    /// <param name="entity">Canonical entity authority.</param>
+    /// <param name="configure">Native PostgreSQL mapping configuration.</param>
+    /// <returns>This setup builder.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">A mapping is invalid or duplicated.</exception>
+    /// <exception cref="InvalidOperationException">The bindings are frozen or required mapping fields are missing.</exception>
+    public PostgresPersistenceBindings Entity<T>(DomainEntity<T> entity,
+        Action<PostgresEntityRepositoryMappingBuilder<T>> configure) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        ArgumentNullException.ThrowIfNull(configure);
+        RequireMutable();
+        var builder = PostgresEntityRepositoryMapping.For(entity);
+        configure(builder);
+        return Entity(entity, builder.Build());
+    }
+
+    /// <summary>Returns a declared mapping for inspection or explicit native composition.</summary>
+    /// <typeparam name="T">Canonical state type.</typeparam>
+    /// <param name="entity">Exact entity authority used during registration.</param>
+    /// <returns>The immutable native mapping.</returns>
+    /// <exception cref="ArgumentNullException">Entity is null.</exception>
+    /// <exception cref="ArgumentException">The entity is missing or belongs to another declaration instance.</exception>
+    public PostgresEntityRepositoryMapping Mapping<T>(DomainEntity<T> entity) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        if (!Tables.TryGetValue(entity.Definition.StateShape.QualifiedId, out var entry)
+            || !ReferenceEquals(entry.Entity, entity.Definition))
+            throw new ArgumentException("The exact entity is not registered in these database bindings.", nameof(entity));
+        return entry.Mapping;
+    }
+
+    void RequireMutable()
+    {
+        if (frozen) throw new InvalidOperationException("The PostgreSQL bindings are frozen.");
     }
 
     /// <summary>Attaches a caller-owned data source to a snapshot of these mappings.</summary>

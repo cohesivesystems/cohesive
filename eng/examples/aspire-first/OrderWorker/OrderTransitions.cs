@@ -19,15 +19,21 @@ public enum SubmissionOutcome
 public sealed record SubmitOrderResult(OrderStatus Status, SubmissionOutcome Outcome);
 
 /// <summary>POCO-authored order lifecycle; preparation belongs to application binding.</summary>
-public static class OrderTransitions
+public sealed class OrderTransitions
 {
     /// <summary>Only draft orders may be submitted; a rejected decision produces no commit.</summary>
-    public static Transition<Order, Cohesive.Prelude.Unit, SubmitOrderResult> Submit { get; } =
-        FulfillmentDomain.Orders.Transition<SubmitOrderResult>(
+    public Transition<Order, Cohesive.Prelude.Unit, SubmitOrderResult> Submit { get; }
+
+    /// <summary>Declares guarded order operations against the supplied domain.</summary>
+    /// <param name="domain">Shared entity authority.</param>
+    public OrderTransitions(FulfillmentDomain domain)
+    {
+        Submit = domain.Orders.Transition<SubmitOrderResult>(
             id: new("example/order/submit"), revision: new("4"),
             transition => transition
                 .Requires(order => order.Status == OrderStatus.Draft, order => new SubmitOrderResult(order.Status, SubmissionOutcome.NotDraft))
                 .Set(order => order.Status, OrderStatus.Submitted)
                 .Return(new SubmitOrderResult(OrderStatus.Submitted, SubmissionOutcome.Submitted))
             );
+    }
 }

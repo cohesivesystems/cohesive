@@ -17,6 +17,18 @@ dotnet add package Cohesive.Analyzers
 `Cohesive.Analyzers` supplies the expression-first C# source generator. Add it as an analyzer reference when using
 project references.
 
+## One process per instance
+
+Tag a partial `ProcessModel<TInput, TResult>` subtype with `[Process(id: "orders/fulfill", revision: "1")]`
+and override `protected async ProcessTask<TResult> Execute(ProcessContext process, TInput input)`.
+The existing generator lowers this syntax-only method, supplies metadata/provenance, and the inherited
+`Definition` prepares once on first access. Constructor-supplied immutable declarations may be referenced
+through fields/properties; invocation input may not select an exact dependency. Complete construction before
+accessing Definition. Faulted preparation is cached. A process type must not also carry GenerateProcessDefinition.
+The class-level attribute declares recovery policy; ephemeral/durable runtime selection remains a separate binding.
+
+The standalone factory style below remains supported and uses the same lowering path.
+
 ## Author a Process
 
 Human-written Processes use ordinary asynchronous structure. Local node identities are deterministic conventions and

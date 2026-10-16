@@ -24,22 +24,22 @@ public sealed partial class OrderStorageIntegrationTests
         var id = Guid.NewGuid().ToString("D");
         var sku = "subplan-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create();
-        var persistence = FulfillmentStorage.Bind(orders);
-        var inventoryPersistence = FulfillmentStorage.BindInventory(inventoryDatabase);
-        var orderRepository = persistence.Repository(FulfillmentDomain.Orders);
-        var reservations = persistence.Repository(FulfillmentDomain.Reservations);
+        var persistence = Model.Storage.Bind(orders);
+        var inventoryPersistence = Model.Storage.BindInventory(inventoryDatabase);
+        var orderRepository = persistence.Repository(Model.Domain.Orders);
+        var reservations = persistence.Repository(Model.Domain.Reservations);
         try
         {
-            await orderRepository.Upsert(context, FulfillmentDemo.RegisterOrder(Guid.Parse(id)));
-            var native = ReservationAvailabilityQueryBindings.BindNative(persistence);
-            var composed = ReservationAvailabilityQueryBindings.BindComposed(persistence, inventoryPersistence);
+            await orderRepository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, Guid.Parse(id)));
+            var native = Model.Availability.BindNative(persistence);
+            var composed = Model.Availability.BindComposed(persistence, inventoryPersistence);
             var emptyNative = await native.ReadAsync(id);
             var emptyComposed = await composed.ReadAsync(id);
             Assert.Equal(emptyNative, emptyComposed);
             Assert.Null(Assert.Single(emptyComposed).ReservationId);
             foreach (var registration in new[] { persistence, inventoryPersistence })
             {
-                var repository = registration.Repository(FulfillmentDomain.Inventory);
+                var repository = registration.Repository(Model.Domain.Inventory);
                 var item = new InventoryItem(sku, FulfillmentDemo.LocalPartition, 8);
                 await repository.Upsert(context, item);
                 Assert.Equal(item, await repository.TryGetEntity(context, sku));
