@@ -19,7 +19,8 @@ static class ProcessDurableCheckpointReducer
         IDurableRequestBindingResolver bindingResolver,
         DateTimeOffset committedAtUtc,
         out ProcessDurableCheckpoint? replacement,
-        out ImmutableArray<DocumentValidationDiagnostic> diagnostics)
+        out ImmutableArray<DocumentValidationDiagnostic> diagnostics,
+        ProcessCheckpointVerification verification = ProcessCheckpointVerification.Standard)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(checkpoint);
@@ -27,6 +28,17 @@ static class ProcessDurableCheckpointReducer
         ArgumentNullException.ThrowIfNull(decision);
         ArgumentNullException.ThrowIfNull(control);
         ArgumentNullException.ThrowIfNull(bindingResolver);
+
+        if (verification is not (ProcessCheckpointVerification.Standard or ProcessCheckpointVerification.Diagnostic))
+            throw new ArgumentOutOfRangeException(nameof(verification));
+        if (decision.State.Continuation != checkpoint.ContinuationIdentity
+            || decision.State.CompletedActivationCount != checked(checkpoint.Continuation.CompletedActivationCount + 1))
+        {
+            replacement = null;
+            diagnostics = [Error(ProcessCheckpointDiagnosticCodes.ActivationReceiptIncompatible,
+                "An activation must advance its exact continuation by one committed sequence.", "/continuation/completedActivationCount")];
+            return false;
+        }
 
         List<DocumentValidationDiagnostic> failures = [];
         var inbox = ApplyInbox(checkpoint, activation, decision, failures);
@@ -48,8 +60,12 @@ static class ProcessDurableCheckpointReducer
             return false;
         }
 
-        var before = ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation);
-        var after = ProcessStorageContentFingerprints.Continuation(decision.State);
+        ProcessContinuationFingerprint? before = null, after = null;
+        // Clean-attempt admission is required in both modes; only recurring hash-chain evidence is optional.
+        if (checkpoint.Continuation.CompletedActivationCount == 0 || verification == ProcessCheckpointVerification.Diagnostic)
+            before = ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation);
+        if (verification == ProcessCheckpointVerification.Diagnostic)
+            after = ProcessStorageContentFingerprints.Continuation(decision.State);
         var receipt = new ProcessActivationCommitReceipt(
             decision.State.CompletedActivationCount,
             decision.State.Continuation,
@@ -58,7 +74,8 @@ static class ProcessDurableCheckpointReducer
             activation,
             decision.Disposition,
             decision.Evidence,
-            committedAtUtc);
+            committedAtUtc,
+            verification);
         replacement = new(
             checkpoint.SchemaVersion,
             checkpoint.Start,

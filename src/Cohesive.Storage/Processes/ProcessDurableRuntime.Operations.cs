@@ -1686,7 +1686,7 @@ public sealed partial class ProcessDurableRuntime
         var lease = snapshot.WorkerLease
             ?? throw new InvalidOperationException("A durable operation commit requires the current Process worker lease.");
         var commit = new ProcessDurableCommit(
-            ProcessDurableRuntimeIdentities.OperationLedgerCommit(operation),
+            ProcessDurableRuntimeIdentities.OperationLedgerCommit(operation, snapshot.Revision),
             snapshot.Revision,
             options.WorkerId,
             lease.Fence,

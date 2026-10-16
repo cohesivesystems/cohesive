@@ -387,7 +387,7 @@ public sealed class ProcessDurabilityFinalInvariantRegressionTests
             receipt.Activation,
             receipt.Disposition,
             evidence,
-            receipt.CommittedAtUtc)];
+            receipt.CommittedAtUtc, receipt.Verification)];
     }
 
     static InteractionEnvelope MutateEnvelope(

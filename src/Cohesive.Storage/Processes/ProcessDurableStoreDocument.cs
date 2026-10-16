@@ -36,28 +36,29 @@ public sealed record ProcessDurableCommitReceiptDocument
 {
     /// <summary>Creates durable commit replay evidence.</summary>
     /// <param name="id">Stable write-once commit identity.</param>
-    /// <param name="fingerprint">Canonical fingerprint of the exact commit intent.</param>
+    /// <param name="intentFingerprint">Digest of commit metadata and local mutations, excluding the checkpoint; null for initialization.</param>
     /// <param name="snapshot">Exact aggregate snapshot returned by a replay.</param>
     /// <exception cref="ArgumentNullException"><paramref name="snapshot"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">An identity is empty.</exception>
     [JsonConstructor]
     public ProcessDurableCommitReceiptDocument(
         ProcessCommitId id,
-        ProcessCommitFingerprint fingerprint,
+        ProcessCommitFingerprint? intentFingerprint,
         ProcessDurableStoreSnapshot snapshot)
     {
         ProcessCheckpointRequirements.RequireIdentity(id.Value, nameof(id));
-        ProcessCheckpointRequirements.RequireIdentity(fingerprint.Value, nameof(fingerprint));
+        if (intentFingerprint is { } value)
+            ProcessCheckpointRequirements.RequireIdentity(value.Value, nameof(intentFingerprint));
         Id = id;
-        Fingerprint = fingerprint;
+        IntentFingerprint = intentFingerprint;
         Snapshot = snapshot ?? throw new ArgumentNullException(nameof(snapshot));
     }
 
     /// <summary>Stable write-once commit identity.</summary>
     public ProcessCommitId Id { get; }
 
-    /// <summary>Canonical fingerprint of the exact commit intent.</summary>
-    public ProcessCommitFingerprint Fingerprint { get; }
+    /// <summary>Digest of commit metadata and local mutations, excluding the checkpoint; null for initialization.</summary>
+    public ProcessCommitFingerprint? IntentFingerprint { get; }
 
     /// <summary>Exact aggregate snapshot returned by a replay.</summary>
     public ProcessDurableStoreSnapshot Snapshot { get; }
@@ -200,7 +201,7 @@ public sealed record ProcessDurableStoreDocument
 {
     /// <summary>Current portable Process durable-store document schema.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-process-durable-store/v1");
+        new("cohesive-process-durable-store/v2");
 
     /// <summary>Creates a complete durable-store authority document.</summary>
     /// <param name="schemaVersion">Exact portable document schema.</param>

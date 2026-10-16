@@ -373,14 +373,14 @@ public sealed partial class ProcessDurableRuntime
 
             var committedAtUtc = context.UtcNow;
             var safePointNode = ResolveSafePointNode(plan, decision);
-            var before = ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation);
+            var beforeSequence = checkpoint.Continuation.CompletedActivationCount;
             var safePoint = controlExecutor.ReachSafePoint(
                 begun.State,
                 new(
                     ProcessDurableRuntimeIdentities.SafePoint(
                         checkpoint.ContinuationIdentity,
                         activation,
-                        before),
+                        beforeSequence),
                     Expectation(begun.State),
                     activation.Id,
                     safePointNode,
@@ -410,7 +410,8 @@ public sealed partial class ProcessDurableRuntime
                     bindingResolver,
                     committedAtUtc,
                     out var replacement,
-                    out var reductionDiagnostics))
+                    out var reductionDiagnostics,
+                    options.CheckpointVerification))
             {
                 return new(
                     ProcessDurableRuntimeDisposition.Rejected,
@@ -438,7 +439,7 @@ public sealed partial class ProcessDurableRuntime
                 ProcessDurableRuntimeIdentities.ActivationCommit(
                     checkpoint.ContinuationIdentity,
                     activation,
-                    before),
+                    beforeSequence),
                 snapshot.Revision,
                 options.WorkerId,
                 lease.Fence,
@@ -893,7 +894,7 @@ public sealed partial class ProcessDurableRuntime
                     diagnostics: activationDecision.Diagnostics);
             }
 
-            var before = ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation);
+            var beforeSequence = checkpoint.Continuation.CompletedActivationCount;
             var committedAtUtc = context.UtcNow;
             var committedControl = decision.State;
             if (activeControl is not null)
@@ -905,7 +906,7 @@ public sealed partial class ProcessDurableRuntime
                         ProcessDurableRuntimeIdentities.SafePoint(
                             expectedContinuation,
                             activation,
-                            before),
+                            beforeSequence),
                         Expectation(activeControl),
                         activation.Id,
                         safePointNode,
@@ -935,7 +936,8 @@ public sealed partial class ProcessDurableRuntime
                     bindingResolver,
                     committedAtUtc,
                     out var replacement,
-                    out var reductionDiagnostics))
+                    out var reductionDiagnostics,
+                    options.CheckpointVerification))
             {
                 return new(
                     ProcessDurableRuntimeDisposition.Rejected,
@@ -962,7 +964,7 @@ public sealed partial class ProcessDurableRuntime
                 ProcessDurableRuntimeIdentities.ActivationCommit(
                     expectedContinuation,
                     activation,
-                    before),
+                    beforeSequence),
                 snapshot.Revision,
                 options.WorkerId,
                 lease.Fence,

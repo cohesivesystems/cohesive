@@ -27,9 +27,17 @@ stores the successor. No second implementation of checkpoint, lease, inbox, outb
 rules is introduced. Process-local mutations are values inside this aggregate; they do not enlist arbitrary
 market-data repository tables in the transaction.
 
-An immediate transaction acquires SQLite's writer boundary before loading state. Reduction and replacement
-remain inside that transaction. Physical lease validation uses the host's current system UTC time under
-that boundary, not the caller's historical replay clock. All cooperating processes must use the same
+Initialization and logical commits load and compare retry evidence in a deferred WAL transaction, without
+reserving the writer. Changed state upgrades atomically to a write transaction. `SQLITE_BUSY` and
+`SQLITE_LOCKED` (including extended variants such as `BUSY_SNAPSHOT`) dispose the transaction and retry the
+same intent against fresh state, up to three attempts. Each attempt uses the configured native busy timeout;
+three saturated upgrade waits deliberately allow about 15 seconds of lock waiting with the default five-second
+timeout, plus transaction work. This is not an end-to-end deadline. Cancellation stops before retry and cannot
+interrupt a native wait already executing. Other mutations retain immediate transactions, and unrelated failures
+propagate.
+Physical commit lease validation uses the host's current system UTC time and is rechecked after acquiring the
+writer reservation; expiry rolls back staged state and receipt. The caller's historical replay clock cannot
+substitute for this fencing check. All cooperating processes must use the same
 local clock and authority binding. The adapter inherits SQLite's single-writer and local-filesystem scope;
 it is not a multi-host distributed lease authority. Lease acquisition/renewal observations remain explicit
 runtime inputs and require a trustworthy host clock.

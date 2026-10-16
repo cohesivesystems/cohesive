@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Microsoft.Data.Sqlite;
 using Cohesive.Model.Serialization;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
@@ -198,6 +199,131 @@ public sealed class SqliteProcessDurableStoreTests
         }
         await Assert.ThrowsAsync<InvalidDataException>(() => Open(file.Path).LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId));
         await Assert.ThrowsAsync<InvalidDataException>(() => Open(file.Path).InitializeAsync(Context, new("initialize"), checkpoint));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReplayDoesNotReserveWriterWhileComparingCheckpoint(bool initialize)
+    {
+        using var file = new DatabaseFixture();
+        var store = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var initialized = await store.InitializeAsync(Context, new("initialize"), checkpoint);
+        var now = DateTimeOffset.UtcNow;
+        var acquired = await store.AcquireWorkerAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId,
+            initialized.Snapshot!.Revision, "worker", TimeSpan.FromMinutes(5), now);
+        var commit = new ProcessDurableCommit(new("commit"), acquired.Snapshot!.Revision, "worker",
+            acquired.Snapshot.WorkerLease!.Fence, WithTime(checkpoint, now), [], now);
+        Assert.Equal(ProcessStoreMutationDisposition.Applied, (await store.CommitAsync(Context, commit)).Disposition);
+        using var connection = Database(file.Path).OpenConnection();
+        using var writer = connection.BeginTransaction(deferred: false);
+        // The writer stays reserved until replay returns. A BEGIN IMMEDIATE replay deadlocks here;
+        // a WAL read snapshot can load, verify and compare the immutable accepted receipt.
+        var replay = Task.Run(() => initialize
+            ? Open(file.Path).InitializeAsync(Context, new("initialize"), checkpoint)
+            : Open(file.Path).CommitAsync(Context, commit));
+        Assert.Equal(ProcessStoreMutationDisposition.Replayed,
+            (await replay.WaitAsync(TimeSpan.FromSeconds(5))).Disposition);
+    }
+
+    [Fact]
+    public async Task ConcurrentIdenticalInitializationsUseOneReceipt()
+    {
+        using var file = new DatabaseFixture();
+        _ = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            Open(file.Path).InitializeAsync(Context, new("initialize"), checkpoint))));
+        Assert.Single(results, result => result.Disposition == ProcessStoreMutationDisposition.Applied);
+        Assert.Equal(7, results.Count(result => result.Disposition == ProcessStoreMutationDisposition.Replayed));
+    }
+
+    [Fact]
+    public async Task ConcurrentIdenticalCommitsUseOneReceipt()
+    {
+        using var file = new DatabaseFixture();
+        var store = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var initialized = await store.InitializeAsync(Context, new("initialize"), checkpoint);
+        var now = DateTimeOffset.UtcNow;
+        var acquired = await store.AcquireWorkerAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId,
+            initialized.Snapshot!.Revision, "worker", TimeSpan.FromMinutes(5), now);
+        var commit = new ProcessDurableCommit(new("commit"), acquired.Snapshot!.Revision, "worker",
+            acquired.Snapshot.WorkerLease!.Fence, WithTime(checkpoint, now), [], now);
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => Open(file.Path).CommitAsync(Context, commit))));
+        Assert.Single(results, result => result.Disposition == ProcessStoreMutationDisposition.Applied);
+        Assert.Equal(7, results.Count(result => result.Disposition == ProcessStoreMutationDisposition.Replayed));
+        Assert.All(results, result => Assert.Equal(results[0].Snapshot!.Revision, result.Snapshot!.Revision));
+    }
+
+    [Theory]
+    [InlineData(5, 5, true, true)] // BUSY
+    [InlineData(5, 517, true, true)] // BUSY_SNAPSHOT
+    [InlineData(6, 6, true, true)] // LOCKED
+    [InlineData(6, 262, true, true)] // LOCKED_SHAREDCACHE
+    [InlineData(10, 10, true, false)] // IOERR
+    [InlineData(19, 19, true, false)] // CONSTRAINT
+    [InlineData(5, 5, false, false)] // Immediate operations retain their existing failure contract.
+    public async Task DeferredContentionRetriesFreshTransactionsOnly(int errorCode, int extendedErrorCode,
+        bool deferred, bool retry)
+    {
+        using var file = new DatabaseFixture();
+        var store = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var error = new SqliteException("injected native contention", errorCode, extendedErrorCode);
+        var attempts = 0;
+        async Task<ProcessStoreMutationResult> Operation(InMemoryProcessDurableStore reference, OperationContext context)
+        {
+            var result = await reference.InitializeAsync(context, new("initialize"), checkpoint);
+            Assert.Equal(ProcessStoreMutationDisposition.Applied, result.Disposition);
+            if (++attempts < 3) throw error;
+            return result;
+        }
+
+        var pending = store.AccessAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId, Operation,
+            mutate: true, deferWriteLock: deferred);
+        if (retry)
+        {
+            Assert.Equal(ProcessStoreMutationDisposition.Applied, (await pending).Disposition);
+            Assert.Equal(3, attempts);
+            var snapshot = await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId);
+            Assert.Equal(ProcessStorageRevision.Initial, snapshot!.Revision);
+        }
+        else
+        {
+            Assert.Same(error, await Assert.ThrowsAsync<SqliteException>(() => pending));
+            Assert.Equal(1, attempts);
+            Assert.Null(await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId));
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeferredContentionStopsAtBoundOrCancellation(bool cancel)
+    {
+        using var file = new DatabaseFixture();
+        using var cancellation = new CancellationTokenSource();
+        var store = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var context = Context.WithCancellationToken(cancellation.Token);
+        var error = new SqliteException("injected persistent busy", 5);
+        var attempts = 0;
+        async Task<ProcessStoreMutationResult> Operation(InMemoryProcessDurableStore reference, OperationContext attemptContext)
+        {
+            await reference.InitializeAsync(attemptContext, new("initialize"), checkpoint);
+            attempts++;
+            if (cancel) cancellation.Cancel();
+            throw error;
+        }
+
+        var pending = store.AccessAsync(context, checkpoint.ContinuationIdentity.ProcessInstanceId, Operation,
+            mutate: true, deferWriteLock: true);
+        if (cancel) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        else Assert.Same(error, await Assert.ThrowsAsync<SqliteException>(() => pending));
+        Assert.Equal(cancel ? 1 : 3, attempts);
+        Assert.Null(await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId));
     }
 
     internal static ProcessDurableRuntime Runtime(IProcessDurableStore store, ProcessDurabilityTestFixture fixture, IProcessReferenceHost host) =>

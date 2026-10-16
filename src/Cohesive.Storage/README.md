@@ -8,9 +8,13 @@ requested atomicity. `UpsertBatch(context, entities, atomicity)` maps ordinary r
 single writes, then invokes one native batch. Per-candidate concurrency tokens use the canonical
 `EntityBatchWriteRequest` overload. Unsupported atomicity is rejected instead of silently using independent writes.
 
-Durable Process fingerprints retain their `sha256-v1` canonical profile while streaming canonical
-output into the core hash sink. Complete checkpoints and receipt history are still hashed; persisted
-admission and exact-retry checks remain mandatory. See [qualification](../../docs/performance/strict-document-hashes.md).
+Durable Process workers default to `ProcessCheckpointVerification.Standard`: atomic receipts, storage CAS and
+worker fences retain their durability boundaries. The first activation retains clean-start compatibility evidence;
+later activations omit recurring continuation hashes. Select `Diagnostic` on `ProcessDurableRuntimeOptions` to
+require before/after hashes on every receipt. Each receipt declares its policy, so missing required hashes are
+rejected during admission. Commit retries still reject changed content; complete checkpoint comparison runs only
+on a commit-ID collision. The small intent digest is prepared before entering the provider. Checkpoint/store wire schemas are intentionally replaced; existing wire
+formats are not admitted. See [the contract and qualification](../../docs/performance/durable-bookkeeping.md).
 
 ## Install
 

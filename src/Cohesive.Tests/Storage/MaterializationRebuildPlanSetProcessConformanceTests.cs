@@ -8,8 +8,10 @@ namespace Cohesive.Tests.Storage;
 
 public sealed partial class MaterializationRebuildProcessConformanceTests
 {
-    [Fact]
-    public async Task CanonicalPlanSetParent_CrashReplayPreservesChildAndConvergesWithReferenceInterpretation()
+    [Theory]
+    [InlineData(ProcessCheckpointVerification.Standard)]
+    [InlineData(ProcessCheckpointVerification.Diagnostic)]
+    public async Task CanonicalPlanSetParent_CrashReplayPreservesChildAndConvergesWithReferenceInterpretation(ProcessCheckpointVerification verification)
     {
         var materialization = CreateMaterializationFixture();
         var planSet = MaterializationRebuildPlanJsonSerializerTests.CreateSinglePlanSet(materialization.Plan);
@@ -21,7 +23,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         var workerRuntime = new ProcessDurableRuntime(
             store: new InMemoryProcessDurableStore(),
             host: RejectingHost.Instance,
-            options: RuntimeOptions("worker/materialization-plan-set/shards"),
+            options: RuntimeOptions("worker/materialization-plan-set/shards", verification: verification),
             bindingResolver: new ExactBindingResolver([artifacts.Leaf.ShardRebuildBinding]),
             operationAdapterResolver: new DurableOperationAdapterCatalog(
             [
@@ -32,7 +34,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         var leafRuntime = new ProcessDurableRuntime(
             store: new InMemoryProcessDurableStore(),
             host: RejectingHost.Instance,
-            options: RuntimeOptions("worker/materialization-plan-set/leaves"),
+            options: RuntimeOptions("worker/materialization-plan-set/leaves", verification: verification),
             bindingResolver: new ExactBindingResolver(
             [
                 artifacts.Leaf.InitializationBinding,
@@ -68,7 +70,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         var promotionRuntime = new ProcessDurableRuntime(
             store: promotionStore,
             host: RejectingHost.Instance,
-            options: RuntimeOptions("worker/materialization-plan-set/promotions"),
+            options: RuntimeOptions("worker/materialization-plan-set/promotions", verification: verification),
             bindingResolver: new ExactBindingResolver(
             [
                 artifacts.ActivateReadyBinding,
@@ -119,7 +121,7 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
             host: RejectingHost.Instance,
             options: RuntimeOptions(
                 "worker/materialization-plan-set/parent",
-                maxAmbiguousStoreMutationAttempts: 1),
+                maxAmbiguousStoreMutationAttempts: 1, verification: verification),
             bindingResolver: new ExactBindingResolver(
             [
                 artifacts.InitializationBinding,
@@ -263,7 +265,10 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 activation.Activation,
                 RejectingHost.Instance);
             Assert.Equal(activation.Disposition, decision.Disposition);
-            Assert.Equal(activation.AfterContinuation, ProcessStorageContentFingerprints.Continuation(decision.State));
+            if (activation.Verification == ProcessCheckpointVerification.Diagnostic)
+                Assert.Equal(activation.AfterContinuation, ProcessStorageContentFingerprints.Continuation(decision.State));
+            else
+                Assert.Null(activation.AfterContinuation);
             reference = decision.State;
         }
         Assert.Equal(
@@ -275,10 +280,12 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
 
     static ProcessDurableRuntimeOptions RuntimeOptions(
         string workerId,
-        int maxAmbiguousStoreMutationAttempts = 3) => new(
+        int maxAmbiguousStoreMutationAttempts = 3,
+        ProcessCheckpointVerification verification = ProcessCheckpointVerification.Standard) => new(
         workerId,
         workerLease: TimeSpan.FromMinutes(5),
-        maxAmbiguousStoreMutationAttempts);
+        maxAmbiguousStoreMutationAttempts,
+        checkpointVerification: verification);
 
     static ProcessStartReceipt PlanSetStart(
         MaterializationRebuildPlanSet planSet,
