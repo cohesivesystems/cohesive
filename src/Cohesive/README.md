@@ -57,6 +57,9 @@ Explicit `IImmutableObservationProjection` types (including `ShapeGraphDocument`
 interpretations of the same immutable payload under the same frozen serializer profile and binary encoding.
 Mutable results remain independent. Reuse conveys no validation or admission evidence.
 `CanonicalJsonWriter.GetCanonicalSequenceText` returns owned text using the same explicit profile, encoder and exclusions as streaming canonical output.
+`AnnotationValue.FromString` retains well-formed strings directly; ordinary serialization and scalar
+flattening do not need a JSON document. Requesting `Value` lazily produces an owned compatibility view.
+Parsed annotations retain their original owned JSON snapshots.
 `AnnotationMapJsonConverter` optionally shares owned backing for annotation maps up to 64 KiB of encoded JSON; use it for buffered messages and budget for parsing the complete map (including parser metadata).
 See [decoding contracts and allocation budgets](../../docs/performance/pooled-observation-decoding.md).
 

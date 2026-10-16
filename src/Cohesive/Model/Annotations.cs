@@ -37,20 +37,63 @@ public readonly record struct AnnotationKey
 public sealed record AnnotationValue
 {
     int cachedHash;
+    // A native string needs no JSON DOM until a caller explicitly requests the compatibility view.
+    // Replacing it with an owned boxed element is a thread-safe representation change, not mutation.
+    readonly JsonElement snapshot;
+    object? textOrView;
+
+    AnnotationValue(string text) => textOrView = text;
     /// <summary>
     /// Creates an annotation value.
     /// </summary>
     internal AnnotationValue(JsonElement value)
     {
-        Value = value.Clone();
+        snapshot = value.Clone();
     }
 
     /// <summary>Owned, read-only JSON snapshot of the annotation.</summary>
-    public JsonElement Value { get; }
+    /// <remarks>Native authoring strings materialize this compatibility view only when requested.
+    /// Serialization and scalar flattening do not require it. Publication is thread-safe.</remarks>
+    public JsonElement Value
+    {
+        get
+        {
+            var current = Volatile.Read(ref textOrView);
+            if (current is null) return snapshot;
+            if (current is JsonElement element) return element;
+            object prepared = JsonSerializer.SerializeToElement((string)current);
+            var winner = Interlocked.CompareExchange(ref textOrView, prepared, current);
+            return winner is JsonElement shared ? shared : (JsonElement)prepared;
+        }
+    }
+
+    internal bool TryGetString(out string? text)
+    {
+        var current = Volatile.Read(ref textOrView);
+        if (current is string native) { text = native; return true; }
+        var element = current is JsonElement view ? view : snapshot;
+        if (element.ValueKind == JsonValueKind.String) { text = element.GetString(); return true; }
+        text = null;
+        return false;
+    }
+
+    internal void WriteTo(Utf8JsonWriter writer)
+    {
+        var current = Volatile.Read(ref textOrView);
+        if (current is string text) writer.WriteStringValue(text);
+        else if (current is JsonElement view) view.WriteTo(writer);
+        else snapshot.WriteTo(writer);
+    }
 
     /// <summary>Compares annotation values using structural JSON equality.</summary>
-    public bool Equals(AnnotationValue? other) => ReferenceEquals(this, other)
-        || other is not null && JsonElement.DeepEquals(Value, other.Value);
+    public bool Equals(AnnotationValue? other)
+    {
+        if (ReferenceEquals(this, other)) return true;
+        if (other is null) return false;
+        if (TryGetString(out var text))
+            return other.TryGetString(out var otherText) && string.Equals(text, otherText, StringComparison.Ordinal);
+        return !other.TryGetString(out _) && JsonElement.DeepEquals(Value, other.Value);
+    }
 
     /// <summary>Computes a hash aligned with structural JSON equality, including exact numeric equivalence.</summary>
     public override int GetHashCode()
@@ -66,8 +109,21 @@ public sealed record AnnotationValue
         return previous != 0 ? previous : computed;
     }
 
-    /// <summary>Creates a string annotation value.</summary>
-    public static AnnotationValue FromString(string value) => new(JsonSerializer.SerializeToElement(value));
+    /// <summary>Creates a string annotation value without materializing JSON for well-formed text.</summary>
+    /// <param name="value">Immutable text. Null and malformed UTF-16 retain JSON serializer normalization.</param>
+    /// <returns>An immutable annotation; its JSON compatibility view is prepared only if requested.</returns>
+    public static AnnotationValue FromString(string value)
+    {
+        // The prior serializer normalizes unpaired UTF-16 surrogates. Preserve that edge contract.
+        if (value is null) return new(JsonSerializer.SerializeToElement(value));
+        for (var index = 0; index < value.Length; index++)
+        {
+            if (!char.IsSurrogate(value[index])) continue;
+            if (!char.IsHighSurrogate(value[index]) || index + 1 == value.Length || !char.IsLowSurrogate(value[++index]))
+                return new(JsonSerializer.SerializeToElement(value));
+        }
+        return new AnnotationValue(value);
+    }
 
     /// <summary>Creates a boolean annotation value.</summary>
     public static AnnotationValue FromBool(bool value) => new(JsonSerializer.SerializeToElement(value));
@@ -86,9 +142,12 @@ public sealed record AnnotationValue
     public static AnnotationValue FromObject(IEnumerable<KeyValuePair<AnnotationKey, AnnotationValue>> values)
     {
         ArgumentNullException.ThrowIfNull(values);
-        Dictionary<string, JsonElement> properties = new(StringComparer.Ordinal);
+        Dictionary<string, AnnotationValue> properties = new(StringComparer.Ordinal);
         foreach (var (key, value) in values)
-            properties[key.Value] = value.Value;
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            properties[key.Value] = value;
+        }
         return new(JsonSerializer.SerializeToElement(properties));
     }
 
@@ -97,6 +156,7 @@ public sealed record AnnotationValue
     {
         if (value is AnnotationValue annotationValue)
             return annotationValue;
+        if (value is string text) return FromString(text);
         return new(JsonSerializer.SerializeToElement(ObservationValue.FromObject(value)));
     }
 
@@ -134,7 +194,14 @@ public static class AnnotationMap
     {
         ArgumentNullException.ThrowIfNull(annotations);
         var scalars = ImmutableDictionary.CreateBuilder<string, string>(comparer ?? StringComparer.Ordinal);
-        foreach (var (key, value) in annotations) Flatten(key.Value, value.Value);
+        foreach (var (key, value) in annotations)
+        {
+            if (value.TryGetString(out var text))
+            {
+                if (!string.IsNullOrWhiteSpace(key.Value) && !string.IsNullOrWhiteSpace(text)) scalars[key.Value] = text;
+            }
+            else Flatten(key.Value, value.Value);
+        }
         return scalars.ToImmutable();
 
         void Flatten(string path, JsonElement value)
