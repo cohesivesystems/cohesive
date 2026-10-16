@@ -81,5 +81,5 @@ separate runtime attachments. Completed models are resolved by `model.Get<T>()`.
 execution adapter and process runtime; the worker supplies bounded scheduling and host cancellation only.
 It declares Host lifetime, never Durable. Request disconnects do not cancel admitted work; host exit loses
 receipt/result history. Capacity includes completed instances, with no eviction or automatic retry. For the
-HTTP composition, `BindHosted` prepares and registers this provider at ServiceModelBuilder.Build, leaving
+HTTP composition, `BindHosted` prepares and registers this provider at ServiceApiBindingsBuilder.Build, leaving
 AppHost semantic inspection offline. See [the protocol](../../docs/design/accepted-process-api.md).

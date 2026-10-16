@@ -8,8 +8,8 @@
 attach to the same domain definitions. `FulfillmentProcess.Execute` is authoring syntax compiled into canonical
 Process IR, not an async application coordinator. Its class-level `[Process]` declaration generates an instance-owned, cached definition that can be inspected and fingerprinted.
 `FulfillmentApplication` supplies shared instances of the domain, queries, transitions and process.
-`FulfillmentService` uses the existing `Service.Define` builder to select canonical transitions, a typed stock lookup
-once; HTTP relations are separate API query bindings. `ServiceModelBuilder.Build(..., persistence.ForServices(receipts))` prepares exact links, catalogs
+`OrderApi` colocates service policy with its process endpoint pair. Generated process dependencies supply
+the transitions and stock lookup; HTTP relations remain separate API query bindings. `ServiceApiBindingsBuilder.Build(..., persistence.ForServices(receipts))` prepares exact links, catalogs
 and the shared runtime at startup, matching repositories against the declared entity contracts. Receipt schema must be bound and validated before constructing receipt-capable repositories.
 The binding phase retains canonical compiler diagnostics;
 applications bind domain operations to repositories without recreating adapters and dispatch catalogs.

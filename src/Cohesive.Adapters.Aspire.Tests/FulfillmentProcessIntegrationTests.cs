@@ -110,7 +110,7 @@ public sealed class FulfillmentProcessIntegrationTests
             var builder = WebApplication.CreateBuilder();
             builder.Services.AddRequestOperationContext();
             builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
-            FulfillmentDemoIdentity.AddHttpPolicies(builder.Services, model.Service.Definition);
+            FulfillmentDemoIdentity.AddHttpPolicies(builder.Services, model.Api.Fulfill.Declaration);
             var registered = OrderEndpoints.Define(model).Build(builder.Services, persistence.ForServices(receiptStorage));
             await using var app = builder.Build();
             app.UseRequestOperationContext();

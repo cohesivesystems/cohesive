@@ -20,7 +20,7 @@ Partial contributions must ultimately resolve into one validated model rather th
   is an immutable request collection, not a second query IR or a provider execution plan.
 - `ApiModel` supplies a frozen Definition from ApiBuilder. Existing ApiDefinition.Combine composes separately
   declared contracts and rejects duplicate endpoint IDs. Native route collisions and partial implementation registration belong to the separate
-  ServiceModelBuilder/MapServices boundary.
+  ServiceApiBindingsBuilder/MapServices boundary.
 - PostgreSQL's existing offline bindings gain inline mapping callbacks and a frozen Define recipe. Native table,
   column, key and partition choices stay with the adapter. Bind retains native data-source ownership at the host.
 - `[Process]` on `ProcessModel<TInput, TResult>` generates metadata, provenance and cached definition lowering
@@ -49,7 +49,7 @@ by offline construction. PostgreSQL validation and preparation retain the existi
 
 ## Remaining dependency-ordered composition work
 
-1. Implemented: the ASP.NET ServiceModelBuilder composes typed API selectors and optional modules,
+1. Implemented: the ASP.NET ServiceApiBindingsBuilder composes typed API selectors and optional modules,
    preserves separately declared APIs/services, and resolves native storage through IServicePersistence.
    Public query roots belong to API bindings and project into infrastructure selections; they remain outside
    the process dependency closure. Coverage is checked after contributions, before route publication.
@@ -108,7 +108,7 @@ Required dependency preparation uses the shared WeakPreparationCache/Preparation
 
 ## HTTP implementation boundary
 
-ServiceModelBuilder lives in the ASP.NET adapter because its recipes select HTTP input, response and native
+ServiceApiBindingsBuilder lives in the ASP.NET adapter because its recipes select HTTP input, response and native
 route configuration. It is not another portable service IR: ApiDefinition and ServiceDefinition remain authority.
 The generic IServicePersistence contract only resolves canonical observations and bounded query preparations;
 PostgreSQL implements it using existing mappings, repository constructors and native query compilation. Provider

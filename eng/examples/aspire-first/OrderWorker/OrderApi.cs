@@ -1,4 +1,5 @@
 using Cohesive.Api;
+using Cohesive.Execution;
 using Cohesive.Api.Execution.Services;
 using Microsoft.AspNetCore.Mvc;
 
@@ -8,11 +9,16 @@ namespace AspireFirst.Orders;
 public sealed class OrderApi : ApiModel
 {
     /// <summary>Declares the public contract using the exact transition reference.</summary>
-    /// <param name="service">Execution contract.</param>
+    /// <param name="process">Execution contract.</param>
     /// <param name="transitions">Order behavior declarations, without runtime bindings.</param>
-    public OrderApi(OrderTransitions transitions, FulfillmentService service)
+    public OrderApi(OrderTransitions transitions, FulfillmentProcess process)
     {
-        Fulfill = Endpoints.AcceptedProcess<FulfillmentRequest, FulfillmentResult>(service.Definition,
+        Fulfill = Endpoints.Process(process).Accepted<FulfillmentRequest>(
+            id: new("fulfillment"), revision: new("2"),
+            configure: service => service
+                .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
+                .ReturnAfterAdmission(ProcessExecutionLifetime.Host)
+                .Operation("result").Require(new("fulfillment.read")).ReadResultOf(process.Definition),
             startOperationId: "fulfill", resultOperationId: "result",
             startRoute: "/fulfillment", resultRoute: "/fulfillment/results/{instanceId}");
         var orders = Endpoints.Entity<Order>();
@@ -32,7 +38,7 @@ public sealed class OrderApi : ApiModel
     }
 
     /// <summary>Acknowledges fulfillment and exposes its independently authorized result.</summary>
-    public ServiceAcceptedProcessApi<FulfillmentRequest, FulfillmentResult> Fulfill { get; }
+    public ColocatedProcessApi<FulfillmentRequest, FulfillOrder, FulfillmentResult> Fulfill { get; }
     /// <summary>Creates a fresh order.</summary>
     public ApiEndpoint<OrderCreated> Create { get; }
     /// <summary>Reads an existing order.</summary>

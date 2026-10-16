@@ -20,25 +20,25 @@ namespace Cohesive.Adapters.AspNet.Services;
 /// <summary>Composes partial implementations of instance-owned HTTP API contracts.</summary>
 /// <remarks>Single-threaded authoring; Build freezes contributions. Existing API, query and service documents
 /// remain authorities. Native route configuration is retained as host attachment, never portable semantics.</remarks>
-public sealed class ServiceModelBuilder
+public sealed class ServiceApiBindingsBuilder
 {
     /// <summary>Portable admission and query evidence; can be inspected without persistence.</summary>
     public ServiceImplementationPlan Plan { get; } = new();
     readonly object buildGate = new();
-    ServiceModel? built;
+    ServiceApiBindings? built;
     IServiceCollection? builtServices;
     IServicePersistence? builtPersistence;
     readonly List<Func<IServiceCollection, IServicePersistence, PreparedApiContribution>> contributions = [];
-    readonly AuthoringState<ServiceModelBuilder> state;
+    readonly AuthoringState<ServiceApiBindingsBuilder> state;
 
     /// <summary>Starts an empty, host-local implementation composition.</summary>
-    public ServiceModelBuilder() => state = new(() => this);
+    public ServiceApiBindingsBuilder() => state = new(() => this);
 
     /// <summary>Contributes implementations to a catalog that owns its definition; repeated contributions compose the same contract.</summary>
     /// <typeparam name="TApi">Application API declaration type.</typeparam>
     /// <param name="api">Shared instance-owned contract.</param><param name="configure">Setup-only contribution.</param>
     /// <returns>This builder.</returns>
-    public ServiceModelBuilder Implement<TApi>(TApi api, Action<ServiceApiImplementation<TApi>> configure) where TApi : IApiDeclaration
+    public ServiceApiBindingsBuilder Implement<TApi>(TApi api, Action<ServiceApiImplementation<TApi>> configure) where TApi : IApiDeclaration
     {
         ArgumentNullException.ThrowIfNull(api);
         return Implement(api, api.Definition, configure);
@@ -48,7 +48,7 @@ public sealed class ServiceModelBuilder
     /// <typeparam name="TApi">Typed endpoint catalog.</typeparam><param name="api">Catalog used by selectors.</param>
     /// <param name="definition">Explicit contract authority.</param><param name="configure">Setup-only contribution.</param>
     /// <returns>This builder.</returns>
-    public ServiceModelBuilder Implement<TApi>(TApi api, ApiDefinition definition, Action<ServiceApiImplementation<TApi>> configure)
+    public ServiceApiBindingsBuilder Implement<TApi>(TApi api, ApiDefinition definition, Action<ServiceApiImplementation<TApi>> configure)
     {
         ArgumentNullException.ThrowIfNull(api); ArgumentNullException.ThrowIfNull(definition); ArgumentNullException.ThrowIfNull(configure);
         return state.Edit(() =>
@@ -68,7 +68,7 @@ public sealed class ServiceModelBuilder
     /// <param name="persistence">Native storage resolution; resources remain caller-owned.</param>
     /// <returns>A prepared HTTP model. Mapping performs no storage resolution.</returns>
     /// <exception cref="ServiceBindingValidationException">Contract coverage or implementation ownership is invalid.</exception>
-    public ServiceModel Build(IServiceCollection services, IServicePersistence persistence)
+    public ServiceApiBindings Build(IServiceCollection services, IServicePersistence persistence)
     {
         ArgumentNullException.ThrowIfNull(services); ArgumentNullException.ThrowIfNull(persistence);
         _ = state.Value;
@@ -97,10 +97,10 @@ internal sealed record PreparedApiContribution(IReadOnlyList<ApiEndpoint> Endpoi
 /// <typeparam name="TApi">Endpoint catalog type.</typeparam>
 public sealed class ServiceApiImplementation<TApi>
 {
-    readonly ServiceModelBuilder model;
+    readonly ServiceApiBindingsBuilder model;
     readonly TApi api;
     readonly ApiDefinition definition;
-    internal ServiceApiImplementation(ServiceModelBuilder model, TApi api, ApiDefinition definition)
+    internal ServiceApiImplementation(ServiceApiBindingsBuilder model, TApi api, ApiDefinition definition)
     { this.model = model; this.api = api; this.definition = definition; }
 
     TEndpoint Select<TEndpoint>(Func<TApi, TEndpoint> select) where TEndpoint : ApiEndpoint
@@ -181,6 +181,27 @@ public sealed class ServiceApiImplementation<TApi>
             model.Add(_ => new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project), []));
         });
         return this;
+    }
+
+    /// <summary>Binds a colocated process API using its retained service and generated dependency recipe.</summary>
+    /// <typeparam name="TRequest">HTTP command.</typeparam><typeparam name="TInput">Process input.</typeparam>
+    /// <typeparam name="TResult">Process result.</typeparam>
+    /// <param name="select">Pair owned by this API.</param><param name="authority">Execution authority.</param>
+    /// <param name="authorization">Per-operation authorization.</param><param name="maximumExecutions">Retained instance bound.</param>
+    /// <param name="bind">Retry identities and input projection.</param><param name="project">Authorized result projection.</param>
+    /// <param name="logPrivateFailures">Opt in to scoped operator diagnostics.</param>
+    /// <param name="authorizationPolicyResolver">HTTP policy mapping.</param><returns>This contribution.</returns>
+    public ServiceApiImplementation<TApi> BindHosted<TRequest, TInput, TResult>(
+        Func<TApi, ColocatedProcessApi<TRequest, TInput, TResult>> select,
+        string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
+        Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
+            ProcessContinuationIdentity Continuation, ObservationValue Input)> bind, Func<PortableValue, TResult> project,
+        bool logPrivateFailures = false, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(select);
+        var pair = select(api) ?? throw ServiceImplementationPlan.Error("services.api.foreignEndpoint", "Select a linked API contract.");
+        return BindHosted(_ => pair, pair.Service, pair.Process, authority, authorization, maximumExecutions,
+            bind, project, logPrivateFailures, authorizationPolicyResolver);
     }
 
     /// <summary>Attaches bounded host-owned execution to a declared admission/poll pair, preparing only at Build.</summary>

@@ -36,7 +36,7 @@ var runtime = new ServiceRuntime(api.Declaration,
      new ServiceProcessResultBinding("fulfillment-result", plan, authority, retainedValues)],
     authorization);
 
-var model = new ServiceModelBuilder()
+var model = new ServiceApiBindingsBuilder()
     .Implement(api, implementation => implementation.Bind(
         pair => pair,
         runtime,
@@ -95,7 +95,7 @@ they prove composition and protocol behavior, **not crash durability or producti
 Existing service/runtime/provider suites retain responsibility for durable storage and activation guarantees.
 
 The running Aspire-first fulfillment demo uses Host lifetime: one bounded generic-host worker over native
-in-memory admission and checkpoint execution. It reuses FulfillmentService and includes start/result in OrderApi.
+in-memory admission and checkpoint execution. OrderApi colocates the service policy and linked start/result contract; generated dependencies follow the selected process.
 It survives request disconnects but loses execution history on host exit. PostgreSQL entity receipts have their
 own lifetime. No external scheduler, cloud resource or deployment is activated by this change.
 SSE, SignalR, callbacks, cancellation APIs and event-authoritative state are separate capabilities.
@@ -121,3 +121,15 @@ finite supported graphs; there is no timer driver, retry loop, distributed coord
 Tests hold a native query open to prove admission precedes completion, caller cancellation is detached,
 waiting expires without cancelling work, replay does not execute twice, and a new worker has no old results.
 The actual PostgreSQL demo HTTP test follows the linked receipt to the committed fulfillment result.
+
+## Colocated and separate authoring
+
+`Endpoints.Process(process).Accepted<TRequest>(...)` constructs the same canonical service document as
+`Service.Define(...).AcceptedApi<TRequest,TResult>(...)`. Its configure callback uses the existing service
+builder, with generated dependencies already attached. Explicit service identity/revision remain durable
+contracts rather than inferred CLR names. The typed pair retains the process recipe so `BindHosted` need not
+repeat service/process arguments. It never constructs an executor during authoring.
+
+Separately declared services remain supported for reusable contracts and independent composition.
+`ServiceApiBindingsBuilder` and its prepared `ServiceApiBindings` live in the ASP.NET adapter; these are
+route implementation/preparation objects, not a second semantic service model.

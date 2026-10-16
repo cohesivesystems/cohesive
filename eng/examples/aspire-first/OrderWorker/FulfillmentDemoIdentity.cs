@@ -15,12 +15,12 @@ public static class FulfillmentDemoIdentity
     /// <summary>Maps the declared demo requirements to the same service admission policy at the HTTP boundary.</summary>
     /// <param name="services">Worker services with request OperationContext support.</param>
     /// <param name="service">Canonical fulfillment service; requirements are not duplicated here.</param>
-    public static void AddHttpPolicies(IServiceCollection services, ServiceBuilder service)
+    public static void AddHttpPolicies(IServiceCollection services, ExecutionDefinitionDocument service)
     {
         var admission = new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField));
         services.AddAuthorization(options =>
         {
-            foreach (var operation in service.Build().GetDefinition<ServiceDefinition>().Operations)
+            foreach (var operation in service.GetDefinition<ServiceDefinition>().Operations)
                 foreach (var requirement in operation.AuthorizationRequirements)
                     options.AddPolicy(requirement.Id, policy => policy.RequireAssertion(async context =>
                         context.Resource is HttpContext http && await admission.AdmitAsync(

@@ -394,7 +394,7 @@ Required dependency preparation uses the shared WeakPreparationCache/Preparation
 ## Accepted process composition
 
 `ServiceBuilder.AcceptedApi<TRequest, TResult>` declares a 202 native admission receipt and an independently
-authorized polling endpoint. `ServiceModelBuilder` binds the linked pair to a complete `ServiceRuntime`;
+authorized polling endpoint. `ServiceApiBindingsBuilder` binds the linked pair to a complete `ServiceRuntime`;
 `MapServiceAcceptedProcess` supports direct native routing. Execution remains with the qualified native
 dispatcher and retained-value provider, with no implicit worker activation or automatic retry.
 See [the protocol and binding walkthrough](../../docs/design/accepted-process-api.md) for contracts, examples and limits.
