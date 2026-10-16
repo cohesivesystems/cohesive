@@ -22,4 +22,26 @@ if (args is ["--allocation-counters"])
     return;
 }
 
+if (args is ["--annotation-counters"])
+{
+    Console.WriteLine("string_length,median_allocated_bytes");
+    foreach (var length in new[] { 32, 1024 })
+    {
+        var benchmark = new NativeStringAnnotationBenchmarks { Length = length };
+        benchmark.Setup();
+        for (var warm = 0; warm < 20; warm++) benchmark.CreateAndWrite();
+        var samples = new long[7];
+        for (var run = 0; run < samples.Length; run++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 128; i++) benchmark.CreateAndWrite();
+            samples[run] = (GC.GetAllocatedBytesForCurrentThread() - before) / 128;
+        }
+        Array.Sort(samples);
+        Console.WriteLine($"{length},{samples[3]}");
+        benchmark.Cleanup();
+    }
+    return;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(DeclaredProjectionBenchmarks).Assembly).Run(args);
