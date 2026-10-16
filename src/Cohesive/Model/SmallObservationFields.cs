@@ -12,15 +12,15 @@ internal sealed class SmallObservationFields : IReadOnlyDictionary<string, Obser
     SmallObservationFields(KeyValuePair<string, ObservationValue>[] fields, int count)
     { this.fields = fields; Count = count; }
 
-    internal static SmallObservationFields Read(JsonElement element, int capacity)
+    internal static SmallObservationFields Read(JsonElement element, int capacity, ObservationJsonPropertyNames? names)
     {
         System.Diagnostics.Debug.Assert(capacity is > 0 and <= 8);
         var fields = new KeyValuePair<string, ObservationValue>[capacity];
         var count = 0;
         foreach (var property in element.EnumerateObject())
         {
-            var key = property.Name;
-            var value = ObservationValue.FromJsonElement(property.Value);
+            var key = names?.Get(property) ?? property.Name;
+            var value = ObservationValue.FromJsonElement(property.Value, names);
             var index = 0;
             while (index < count && !StringComparer.Ordinal.Equals(fields[index].Key, key)) index++;
             fields[index] = new(key, value); // Token acquisition retains last-property-wins semantics.

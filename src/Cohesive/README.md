@@ -52,6 +52,9 @@ SHA-256 digest; the consuming block owns its fingerprint profile and prefix. See
 
 Declared converter/polymorphic values project directly into owned observations without a mutable
 JSON tree. See [typed projection qualification](../../docs/performance/hosted-value-projection.md).
+JSON-to-observation conversion reuses repeated property-name strings within large input traversals;
+its temporary bounded table never retains parser data after return. Small inputs bypass preparation.
+See [property-name qualification](../../docs/performance/observation-name-reuse.md).
 `ObservationValue.Deserialize<T>` uses pooled UTF-8 storage; results own retained JSON data.
 Explicit `IImmutableObservationProjection` types (including `ShapeGraphDocument`) can reuse decoded
 interpretations of the same immutable payload under the same frozen serializer profile and binary encoding.

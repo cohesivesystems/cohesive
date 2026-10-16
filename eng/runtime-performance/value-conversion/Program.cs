@@ -44,4 +44,29 @@ if (args is ["--annotation-counters"])
     return;
 }
 
+if (args is ["--property-name-counters"])
+{
+    Console.WriteLine("rows,name_length,unique_names,median_allocated_bytes");
+    foreach (var rows in new[] { 1, 1024 })
+    foreach (var length in new[] { 8, 256 })
+    foreach (var unique in new[] { false, true })
+    {
+        var benchmark = new PropertyNameProjectionBenchmarks { Rows = rows, NameLength = length, UniqueNames = unique };
+        benchmark.Setup();
+        for (var warm = 0; warm < 20; warm++) benchmark.Project();
+        var samples = new long[7];
+        for (var run = 0; run < samples.Length; run++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var result = benchmark.Project();
+            samples[run] = GC.GetAllocatedBytesForCurrentThread() - before;
+            GC.KeepAlive(result);
+        }
+        Array.Sort(samples);
+        Console.WriteLine($"{rows},{length},{unique},{samples[3]}");
+        benchmark.Cleanup();
+    }
+    return;
+}
+
 BenchmarkSwitcher.FromAssembly(typeof(DeclaredProjectionBenchmarks).Assembly).Run(args);
