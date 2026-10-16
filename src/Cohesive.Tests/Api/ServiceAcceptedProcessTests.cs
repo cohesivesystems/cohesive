@@ -35,7 +35,7 @@ public sealed class ServiceAcceptedProcessTests
         var fixture = new Fixture();
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
-        var models = new ServiceModelBuilder().Implement(fixture.Api, fixture.Api.Definition,
+        var models = new ServiceModelBuilder().Implement(fixture.Api,
             api => api.Bind(pair => pair, fixture.Runtime, (_, command) => (new(command.Id), new(command.Id),
                 new(new(command.Id), new("attempt")), ObservationValue.FromString(command.Text)), value => value.Value!.Value.GetRequiredString()));
         var model = models.Build(builder.Services, new NoPersistence());
@@ -159,7 +159,7 @@ public sealed class ServiceAcceptedProcessTests
             .Operation("start").Run(fixture.Plan).ReturnAfterDurableAdmission()
             .Operation("result").ReadResultOf(ProcessAuthoring.Project<string, string>(fixture.Plan.Document));
         var other = unrelated.AcceptedApi<Command, string>("start", "result", "/commands", "/results/{instanceId}");
-        Assert.Throws<ServiceBindingValidationException>(() => new ServiceModelBuilder().Implement(other, other.Definition,
+        Assert.Throws<ServiceBindingValidationException>(() => new ServiceModelBuilder().Implement(other,
             api => api.Bind(pair => pair, fixture.Runtime, (_, command) => (new(command.Id), new(command.Id),
                 new(new(command.Id), new("attempt")), ObservationValue.FromString(command.Text)), value => value.Value!.Value.GetRequiredString())));
     }

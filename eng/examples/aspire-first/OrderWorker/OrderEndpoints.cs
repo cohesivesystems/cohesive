@@ -1,6 +1,7 @@
 using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Storage;
+using Cohesive.Model;
 
 namespace AspireFirst.Orders;
 
@@ -14,6 +15,22 @@ public static class OrderEndpoints
         .Implement(model.Api, bindings => bindings.Bind(api => api.Fulfill, model.Service.Definition, model.Process,
             authority: "aspire-first", authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
             logPrivateFailures: true));
+
+    /// <summary>Adds the accepted-execution contract alongside the existing order/query/terminal endpoints.</summary>
+    /// <param name="model">Shared domain and process declarations.</param>
+    /// <param name="api">Optional admission/polling contract built from the same process.</param>
+    /// <param name="runtime">Complete native runtime for api.Fulfill.Declaration; no worker is created here.</param>
+    /// <returns>One implementation model for the complete HTTP surface.</returns>
+    public static ServiceModelBuilder DefineAccepted(FulfillmentApplication model, AcceptedFulfillmentApi api, ServiceRuntime runtime) =>
+        Define(model).Implement(api, bindings => bindings.Bind(
+            contract => contract.Fulfill,
+            runtime,
+            bind: (_, command) => (
+                new(command.CommandId),
+                new(command.IdempotencyKey),
+                new(new(command.InstanceId), new(command.AttemptId)),
+                ObservationValue.FromObject(command.Input)),
+            project: api.Project));
 
     /// <summary>Contributes order operations independently of fulfillment execution.</summary>
     /// <param name="bindings">Shared API implementation contribution.</param><param name="model">Canonical application declarations.</param>

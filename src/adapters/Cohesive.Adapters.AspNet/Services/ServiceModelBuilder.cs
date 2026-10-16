@@ -34,11 +34,11 @@ public sealed class ServiceModelBuilder
     /// <summary>Starts an empty, host-local implementation composition.</summary>
     public ServiceModelBuilder() => state = new(() => this);
 
-    /// <summary>Contributes implementations to an API instance; repeated contributions compose the same contract.</summary>
+    /// <summary>Contributes implementations to a catalog that owns its definition; repeated contributions compose the same contract.</summary>
     /// <typeparam name="TApi">Application API declaration type.</typeparam>
     /// <param name="api">Shared instance-owned contract.</param><param name="configure">Setup-only contribution.</param>
     /// <returns>This builder.</returns>
-    public ServiceModelBuilder Implement<TApi>(TApi api, Action<ServiceApiImplementation<TApi>> configure) where TApi : ApiModel
+    public ServiceModelBuilder Implement<TApi>(TApi api, Action<ServiceApiImplementation<TApi>> configure) where TApi : IApiDeclaration
     {
         ArgumentNullException.ThrowIfNull(api);
         return Implement(api, api.Definition, configure);

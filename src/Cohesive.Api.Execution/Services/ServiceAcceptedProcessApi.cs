@@ -13,7 +13,7 @@ public sealed record ServiceProcessReceipt(ProcessStartResult Admission, string 
 /// service. The result relationship remains visible on Result.Operation.ResultOf after API composition.</remarks>
 /// <typeparam name="TRequest">Medium command input, including caller-owned retry identities.</typeparam>
 /// <typeparam name="TResult">Public terminal result view.</typeparam>
-public sealed class ServiceAcceptedProcessApi<TRequest, TResult> where TRequest : class
+public sealed class ServiceAcceptedProcessApi<TRequest, TResult> : IApiDeclaration where TRequest : class
 {
     internal ServiceAcceptedProcessApi(ExecutionDefinitionDocument declaration, string startOperationId,
         string resultOperationId, string startRoute, string resultRoute)

@@ -37,7 +37,7 @@ var runtime = new ServiceRuntime(api.Declaration,
     authorization);
 
 var model = new ServiceModelBuilder()
-    .Implement(api, api.Definition, implementation => implementation.Bind(
+    .Implement(api, implementation => implementation.Bind(
         pair => pair,
         runtime,
         bind: (_, command) => (
@@ -55,6 +55,9 @@ This host-attachment sketch assumes a prepared `plan`, qualified `durableStart` 
 `retainedValues` repository, application authorization, and a pure result decoder. They are dependencies,
 not services this API silently creates. Existing durable storage/scheduler adapters own receipt retention,
 activation and recovery. The API layer neither compiles a process per request nor launches background tasks.
+`ApiModel` and the linked pair implement `IApiDeclaration`, so registration reads their own definition.
+The three-argument `Implement(catalog, definition, configure)` remains for a plain catalog whose contract is
+owned separately; it is not required here.
 The same API can be included in a larger `ApiDefinition.Combine` and implemented alongside entity/query
 endpoints. Existing instance-owned API catalogs can include `api.Start` and `api.Result`; the pair binding
 checks both original operations belong to the contributed definition. Separately declared services remain supported.

@@ -583,9 +583,55 @@ the typed process supplies C# input/output contracts while the service remains s
 
 ## Accepted execution as a separate binding
 
-The fulfillment endpoint in this running example still returns terminal ephemeral execution.
-For a declared 202 admission receipt and linked polling endpoint, see the
-[accepted-process composition walkthrough](../../../docs/design/accepted-process-api.md).
-It reuses native admission/result bindings and supports the same unified service model.
-Selecting and qualifying the demo's durable worker and retained-value providers is a separate step;
-changing an HTTP return status alone would not supply those guarantees.
+[`OrderWorker/AcceptedFulfillmentApi.cs`](OrderWorker/AcceptedFulfillmentApi.cs) is a compiled alternative API
+contribution over the **same** generated `FulfillmentProcess`. It declares durable admission and a separate
+result read, then includes both typed endpoints in its `ApiModel`:
+
+```csharp
+Fulfill = service.AcceptedApi<AcceptedFulfillOrder, FulfillmentResult>(
+    startOperationId: "fulfill", resultOperationId: "result",
+    startRoute: "/fulfillment/requests", resultRoute: "/fulfillment/results/{instanceId}");
+Endpoints.Include(Fulfill.Start);
+Endpoints.Include(Fulfill.Result);
+```
+
+[`OrderEndpoints.DefineAccepted`](OrderWorker/OrderEndpoints.cs) adds this contribution alongside existing
+order, query and terminal-fulfillment endpoints. Its registration is:
+
+```csharp
+Define(model).Implement(api, bindings => bindings.Bind(
+    contract => contract.Fulfill,
+    runtime,
+    bind: (_, command) => (
+        new(command.CommandId),
+        new(command.IdempotencyKey),
+        new(new(command.InstanceId), new(command.AttemptId)),
+        ObservationValue.FromObject(command.Input)),
+    project: api.Project));
+```
+
+`Implement` reads `api.Definition` through `IApiDeclaration`; the caller does not pass it again.
+The explicit-definition overload is for plain catalogs with a separately owned contract. Request binding
+retains the caller's retry identities and projects only domain input; it does not construct trusted authority.
+The terminal projection decodes the already-authorized retained result with the shared value adapter.
+
+Once native durable admission and retained-value providers are configured, the worker attachment would be:
+
+```csharp
+var accepted = new AcceptedFulfillmentApi(model.Process);
+// runtime must realize accepted.Fulfill.Declaration with qualified native execution providers.
+var services = OrderEndpoints.DefineAccepted(model, accepted, runtime)
+    .Build(builder.Services, persistence.ForServices(receiptStorage));
+app.MapServices(services);
+```
+
+The optional contribution requires `fulfillment.write` for admission and `fulfillment.read` for polling.
+The fixed demo identity currently grants only write; an eventual runnable durable mode must explicitly
+configure its read policy as well as its worker/storage providers. It cannot infer read permission from admission.
+
+The default `Program.cs` still runs terminal ephemeral fulfillment. The alternative declaration and binding
+recipe compile with the worker, and database-free tests inspect its exact process links, outcome contracts,
+independent permissions and definition-owned registration. No fake durable executor is installed.
+See the [accepted-process walkthrough](../../../docs/design/accepted-process-api.md) for the receipt/poll
+protocol and its HTTP tests. Selecting and qualifying the demo's durable worker and retained-value providers
+is the next execution step; changing an HTTP return status alone does not supply those guarantees.

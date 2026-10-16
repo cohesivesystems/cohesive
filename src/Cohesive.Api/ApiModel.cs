@@ -4,7 +4,7 @@ namespace Cohesive.Api;
 /// <summary>Optional instance authoring for a typed API using the existing endpoint builder.</summary>
 /// <remarks>Configure endpoints during construction, then share the instance. Definition freezes the
 /// builder once; member discovery uses no reflection. Separate contracts can still use ApiBuilder directly.</remarks>
-public abstract class ApiModel : IAuthoringModel
+public abstract class ApiModel : IAuthoringModel, IApiDeclaration
 {
     void IAuthoringModel.Complete() => _ = Definition;
 
