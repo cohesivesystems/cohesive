@@ -47,23 +47,53 @@ public sealed class ApplicationModelTests
         public MustNotConstruct(InvalidDependency dependency) => throw new Exception("Consumer must not run before invalid dependency fails.");
     }
 
-    public sealed class NativeStorage(Func<object> define) : Cohesive.Storage.StorageModel<object>(define);
+    public sealed record FirstBindings(string Database);
+    public sealed record SecondBindings(string Database);
+    public sealed class NativeStorage : Cohesive.Storage.StorageModel
+    {
+        public NativeStorage()
+        {
+            First = Storage.Define(() => new FirstBindings("orders"));
+            Second = Storage.Define(() => new SecondBindings("inventory"));
+        }
+        public FirstBindings First { get; }
+        public SecondBindings Second { get; }
+        public void AddLate() => Storage.Define(() => new FirstBindings("late"));
+    }
 
     [Fact]
-    public void Storage_model_reuses_its_native_builder_result_and_caches_failure()
+    public void Storage_model_owns_multiple_native_binding_types_in_declaration_order()
+    {
+        var model = ModelActivator.Create<NativeStorage>();
+        Assert.Collection(model.Definition,
+            value => Assert.Same(model.First, value),
+            value => Assert.Same(model.Second, value));
+        Assert.Equal(model.Definition, model.Definition);
+        Assert.Throws<InvalidOperationException>(model.AddLate);
+    }
+
+    [Fact]
+    public void Storage_builder_runs_each_recipe_once_and_rejects_edits_after_build()
     {
         var calls = 0;
-        var native = new object();
-        var model = new NativeStorage(() => { calls++; return native; });
-        Assert.Equal(0, calls);
-        ((IAuthoringModel)model).Complete();
-        Assert.Same(native, model.Bindings);
-        Assert.Same(native, model.Bindings);
+        var builder = new Cohesive.Storage.StorageModelBuilder();
+        var native = builder.Define(() => { calls++; return new FirstBindings("orders"); });
         Assert.Equal(1, calls);
+        Assert.Same(native, Assert.Single(builder.Build()));
+        Assert.Equal(builder.Build(), builder.Build());
+        Assert.Throws<InvalidOperationException>(() => builder.Define(() => { calls++; return native; }));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void Failed_storage_recipe_does_not_publish_a_contribution()
+    {
+        var builder = new Cohesive.Storage.StorageModelBuilder();
         var failure = new InvalidOperationException("invalid mapping");
-        var invalid = new NativeStorage(() => throw failure);
-        Assert.Same(failure, Assert.Throws<InvalidOperationException>(() => ((IAuthoringModel)invalid).Complete()));
-        Assert.Same(failure, Assert.Throws<InvalidOperationException>(() => invalid.Bindings));
+        Assert.Same(failure, Assert.Throws<InvalidOperationException>(() => builder.Define<object>(() => throw failure)));
+        Assert.Throws<InvalidOperationException>(() => builder.Define<object>(() => null!));
+        Assert.Throws<ArgumentNullException>(() => builder.Define<object>(null!));
+        Assert.Empty(builder.Build());
     }
 
     [Fact]

@@ -47,8 +47,9 @@ retain the temporary provider; activation owns no runtime connection, worker or 
 
 `ApiBindingModel` wraps `ServiceApiBindingsBuilder` and validates/finalizes offline endpoint recipes before
 consumers inspect query selections. `Build(services, persistence)` still explicitly prepares the live host.
-`StorageModel<TBindings>` runs an existing adapter's offline mapping builder once; it deliberately does not
-introduce a provider-neutral mapping DSL. `InfrastructureModel` records one `Infrastructure.Define` recipe
+`StorageModel` groups typed native binding contributions through `StorageModelBuilder`. Each recipe runs
+once during constructor authoring; activation freezes collection membership. One model can own several
+databases or providers without introducing a provider-neutral mapping DSL. `InfrastructureModel` records one `Infrastructure.Define` recipe
 and caches its canonical result. Native Aspire configuration remains in `OrdersApp.Configure(builder)`.
 The AppHost activates `OrdersApp`, whose constructor consumes the same `FulfillmentApplication` graph used
 by the worker. The worker never references AppHost or Aspire hosting packages.

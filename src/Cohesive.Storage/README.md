@@ -230,6 +230,16 @@ bypasses validation of retained or externally modified evidence.
 
 ## Optional instance authoring
 
-`StorageModel<TBindings>` coordinates one native offline builder recipe with `IAuthoringModel` activation.
-The recipe must return frozen, validated bindings and perform no IO; success and failure are cached per model.
-Use adapter builders directly when a model class is unnecessary. Runtime connections remain explicit attachments.
+`StorageModel` groups any number of native offline bindings, including different databases or providers.
+Assign strongly typed properties in the constructor with `Storage.Define(() => AdapterBindings.Define(...))`.
+Each recipe runs once during declaration and must return frozen, validated bindings without IO. Adapter errors
+surface immediately; failed recipes add nothing. Activation freezes membership, and `Definition` exposes the
+same native objects in declaration order without re-preparing them. It is an authoring collection, not a new
+portable storage IR. Use `StorageModelBuilder` directly when a subclass is unnecessary, or use adapter builders
+alone. Runtime connections remain explicit attachments.
+
+
+For example, one `FulfillmentStorage : StorageModel` declares both `Bindings` and `InventoryBindings`
+using `Storage.Define(...)`. Both properties retain `PostgresPersistenceBindings` as their type; the base
+class does not select a provider or require another subclass for each database. Different adapters can
+contribute their own immutable binding types through the same builder.

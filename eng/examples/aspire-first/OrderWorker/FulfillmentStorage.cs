@@ -5,16 +5,20 @@ using Cohesive.Storage;
 namespace AspireFirst.Orders;
 
 /// <summary>Instance-owned native storage attachments to the exact domain supplied by composition.</summary>
-public sealed class FulfillmentStorage : StorageModel<PostgresPersistenceBindings>
+public sealed class FulfillmentStorage : StorageModel
 {
     /// <summary>Builds immutable offline mappings without opening a connection.</summary>
     /// <param name="domain">Shared canonical entities.</param>
     public FulfillmentStorage(FulfillmentDomain domain)
-        : base(() => PostgresPersistenceBindings.Define(new(FulfillmentResources.DatabaseName), storage => Configure(domain, storage)))
     {
-        InventoryBindings = PostgresPersistenceBindings.Define(new(FulfillmentResources.InventoryDatabaseName),
-            storage => storage.Entity(domain.Inventory, Bindings.Mapping(domain.Inventory)));
+        Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
+            new(FulfillmentResources.DatabaseName), storage => Configure(domain, storage)));
+        InventoryBindings = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentResources.InventoryDatabaseName),
+            storage => storage.Entity(domain.Inventory, Bindings.Mapping(domain.Inventory))));
     }
+
+    /// <summary>Native mappings for the primary database.</summary>
+    public PostgresPersistenceBindings Bindings { get; }
 
     /// <summary>Only inventory for the independently placed remote source.</summary>
     public PostgresPersistenceBindings InventoryBindings { get; }
