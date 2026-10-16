@@ -34,8 +34,8 @@ A successful preparation establishes an independent statement snapshot per query
 snapshot or a common transaction across calls. Schema installation, privileges, runtime availability,
 conditional writes and transition receipt atomicity are not certified.
 
-Mappings have one authoring path: `PostgresPersistenceBindings.Entity(...).Bind(runtime)`. Bind snapshots
-mappings; later authoring cannot alter a runtime registration. The runtime-first constructor/Entity path
+Mappings have one authoring path: `PostgresPersistenceBindings.Define(database, configure).Bind(runtime)`. Define freezes
+mappings; runtime registration shares the immutable result. The runtime-first constructor/Entity path
 was removed. Standalone and composed queries share mapping lookup and input placement; semantic failures
 use `RelationQueryPreparationException`, while native lowering failures retain `PostgresQueryPreparationException`.
 

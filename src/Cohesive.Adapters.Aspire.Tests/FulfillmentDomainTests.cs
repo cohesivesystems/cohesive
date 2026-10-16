@@ -49,9 +49,11 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
     public void Registration_rejects_missing_and_duplicate_native_mappings_without_opening_a_connection()
     {
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var registration = new Cohesive.Adapters.Postgres.PostgresPersistenceBindings(new("orders"))
-            .Entity(Model.Domain.Orders, Model.Storage.Bindings.Mapping(Model.Domain.Orders));
-        Assert.Throws<ArgumentException>(() => registration.Entity(Model.Domain.Orders, Model.Storage.Bindings.Mapping(Model.Domain.Orders)));
+        var registration = Cohesive.Adapters.Postgres.PostgresPersistenceBindings.Define(new("orders"), bindings =>
+        {
+            bindings.Entity(Model.Domain.Orders, Model.Storage.Bindings.Mapping(Model.Domain.Orders));
+            Assert.Throws<ArgumentException>(() => bindings.Entity(Model.Domain.Orders, Model.Storage.Bindings.Mapping(Model.Domain.Orders)));
+        });
         Assert.Throws<InvalidOperationException>(() => registration.Bind(new(new("orders"), database, "test")).Query(Model.Queries.OrderDetails, 100, 10000));
     }
     [Fact]

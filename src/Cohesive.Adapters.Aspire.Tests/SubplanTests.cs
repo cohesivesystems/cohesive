@@ -20,9 +20,9 @@ public sealed class SubplanTests
         Assert.Single(cut.Remainder.Plan.Definition.Body.Nodes.OfType<JoinQueryNode>());
         Assert.DoesNotContain(cut.Remainder.Plan.Definition.Body.Nodes, node => cut.CoveredNodes.Contains(node.Id) && node.Id != cut.Cut.Id);
         using var db = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var native = new PostgresPersistenceBindings(new("orders"))
+        var native = PostgresPersistenceBindings.Define(new("orders"), bindings => bindings
             .Entity(Model.Domain.Orders, Model.Storage.Bindings.Mapping(Model.Domain.Orders))
-            .Entity(Model.Domain.Reservations, Model.Storage.Bindings.Mapping(Model.Domain.Reservations))
+            .Entity(Model.Domain.Reservations, Model.Storage.Bindings.Mapping(Model.Domain.Reservations)))
             .Bind(new(new("orders"), db, "test"))
             .Prepare(cut.Prefix.Request, 1000, 1_000_000);
         Assert.Equal(1, native.Artifact.Statement.Text.Split("LEFT JOIN", StringSplitOptions.None).Length - 1);

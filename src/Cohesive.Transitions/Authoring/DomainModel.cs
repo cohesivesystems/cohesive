@@ -1,3 +1,4 @@
+using Cohesive.Prelude;
 using Cohesive.Transitions.Model;
 
 namespace Cohesive.Transitions.Authoring;
@@ -6,12 +7,12 @@ namespace Cohesive.Transitions.Authoring;
 /// <remarks>Declare entities during construction, then share the instance. First Definition access freezes
 /// authoring and caches either the immutable definition or its validation failure. No virtual method runs
 /// from the base constructor, and no reflection discovers members.</remarks>
-public abstract class DomainModel
+public abstract class DomainModel : IAuthoringModel
 {
+    void IAuthoringModel.Complete() => _ = Definition;
+
     readonly DomainModelBuilder builder;
-    readonly object gate = new();
-    readonly Lazy<DomainModelDefinition> definition;
-    bool frozen;
+    readonly AuthoringState<DomainModelDefinition> definition;
 
     /// <summary>Creates an independently owned domain declaration.</summary>
     /// <param name="revision">Explicit semantic version, independent of the CLR class name.</param>
@@ -19,14 +20,7 @@ public abstract class DomainModel
     protected DomainModel(string revision)
     {
         builder = new DomainModelBuilder().Version(revision);
-        definition = new(() =>
-        {
-            lock (gate)
-            {
-                frozen = true;
-                return builder.Build();
-            }
-        });
+        definition = new(builder.Build);
     }
 
     /// <summary>The cached canonical domain definition; first access completes authoring.</summary>
@@ -41,10 +35,6 @@ public abstract class DomainModel
     /// <exception cref="ArgumentException">The entity name is invalid or duplicated.</exception>
     protected DomainEntity<T> Entity<T>(string name) where T : notnull
     {
-        lock (gate)
-        {
-            if (frozen) throw new InvalidOperationException("The domain definition is frozen.");
-            return builder.Entity<T>(name);
-        }
+        return definition.Edit(() => builder.Entity<T>(name));
     }
 }

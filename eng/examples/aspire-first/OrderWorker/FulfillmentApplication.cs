@@ -1,3 +1,5 @@
+using Cohesive.Host.Composition;
+
 namespace AspireFirst.Orders;
 
 /// <summary>One offline composition shared by the AppHost and worker; no connection or runtime is created.</summary>
@@ -7,18 +9,20 @@ public sealed class FulfillmentApplication
     /// <summary>Constructs the connected declarations, freezing domain and query catalogs after construction.</summary>
     public FulfillmentApplication()
     {
-        Domain = new();
-        Queries = new(Domain);
-        Storage = new(Domain);
-        Orders = new(Domain);
-        Inventory = new(Domain);
-        Api = new(Orders);
-        Process = new(Domain, Inventory, Orders);
-        Service = new(Domain, Queries, Orders, Inventory, Process);
-        Availability = new(Queries, Service);
-        _ = Domain.Definition;
-        _ = Queries.Definition;
-        _ = Api.Definition;
+        var model = new ApplicationModelBuilder()
+            .Add<FulfillmentService>().Add<OrderApi>().Add<FulfillmentProcess>()
+            .Add<FulfillmentQueries>().Add<FulfillmentStorage>().Add<FulfillmentDomain>()
+            .Add<OrderTransitions>().Add<InventoryTransitions>().Add<ReservationAvailabilityQueryBindings>()
+            .Build();
+        Domain = model.Get<FulfillmentDomain>();
+        Queries = model.Get<FulfillmentQueries>();
+        Storage = model.Get<FulfillmentStorage>();
+        Orders = model.Get<OrderTransitions>();
+        Inventory = model.Get<InventoryTransitions>();
+        Api = model.Get<OrderApi>();
+        Process = model.Get<FulfillmentProcess>();
+        Service = model.Get<FulfillmentService>();
+        Availability = model.Get<ReservationAvailabilityQueryBindings>();
     }
     /// <summary>Public API contract.</summary>
     public OrderApi Api { get; }

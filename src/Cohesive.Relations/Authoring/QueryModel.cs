@@ -1,3 +1,4 @@
+using Cohesive.Prelude;
 using System.Collections.Immutable;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
@@ -7,24 +8,19 @@ namespace Cohesive.Relations.Authoring;
 /// <summary>Optional instance catalog of typed queries authored through the existing query builders.</summary>
 /// <remarks>Construct on one thread before sharing. Reading Definition freezes the catalog; it neither
 /// compiles queries nor selects a provider. Canonical requests remain the authorities, not CLR member names.</remarks>
-public abstract class QueryModel
+public abstract class QueryModel : IAuthoringModel
 {
-    readonly Dictionary<QueryId, RelationQueryCompilationRequest> queries = [];
-    readonly object gate = new();
-    ImmutableArray<RelationQueryCompilationRequest> definition;
+    void IAuthoringModel.Complete() => _ = Definition;
+
+    readonly List<RelationQueryCompilationRequest> queries = [];
+    readonly HashSet<QueryId> ids = [];
+    readonly AuthoringState<ImmutableArray<RelationQueryCompilationRequest>> definition;
+
+    /// <summary>Starts an independently owned ordered query declaration.</summary>
+    protected QueryModel() => definition = new(() => [.. queries]);
 
     /// <summary>Canonical requests in declaration order, materialized once and safe to share.</summary>
-    public ImmutableArray<RelationQueryCompilationRequest> Definition
-    {
-        get
-        {
-            lock (gate)
-            {
-                if (definition.IsDefault) definition = [.. queries.Values];
-                return definition;
-            }
-        }
-    }
+    public ImmutableArray<RelationQueryCompilationRequest> Definition => definition.Value;
 
     /// <summary>Includes a typed query without changing its portable definition or result assembly.</summary>
     /// <typeparam name="TInput">Invocation input.</typeparam>
@@ -37,15 +33,15 @@ public abstract class QueryModel
     protected RelationQuery<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query)
     {
         ArgumentNullException.ThrowIfNull(query);
-        lock (gate)
+        return definition.Edit(() =>
         {
-            if (!definition.IsDefault) throw new InvalidOperationException("The query model is frozen.");
             var request = query.CompilationRequest;
             if (request.DefinitionDocument.Definition is not QueryDefinition queryDefinition)
                 throw new ArgumentException("A query catalog requires a canonical query definition.", nameof(query));
-            if (!queries.TryAdd(queryDefinition.Id, request))
+            if (!ids.Add(queryDefinition.Id))
                 throw new ArgumentException("A query with this semantic ID is already declared.", nameof(query));
+            queries.Add(request);
             return query;
-        }
+        });
     }
 }

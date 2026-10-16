@@ -1,3 +1,4 @@
+using Cohesive.Prelude;
 using Cohesive.Execution;
 using Cohesive.Processes.IR;
 
@@ -23,15 +24,18 @@ public sealed class ProcessAttribute(string id, string revision,
 /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process result.</typeparam>
 /// <remarks>Complete construction before accessing Definition. Successful preparation and failures are cached
 /// per instance. Only immutable declaration dependencies may be retained; never invocation-scoped services.</remarks>
-public abstract class ProcessModel<TInput, TResult>
+public abstract class ProcessModel<TInput, TResult> : IAuthoringModel, IExecutionDefinitionModel
 {
-    readonly Lazy<Process<TInput, TResult>> definition;
+    readonly AuthoringState<Process<TInput, TResult>> definition;
 
     /// <summary>Creates lazy definition storage without calling derived authoring during construction.</summary>
     protected ProcessModel() => definition = new(CreateDefinition);
 
     /// <summary>Canonical process definition, generated once on first access.</summary>
     public Process<TInput, TResult> Definition => definition.Value;
+    void IAuthoringModel.Complete() => _ = Definition;
+    ExecutionDefinitionDocument IExecutionDefinitionModel.Document => Definition.Document;
+
     /// <summary>Generated source provenance, also usable by explicitly authored child contracts.</summary>
     public ExecutionProvenance Provenance => Metadata.Provenance;
     /// <summary>Generated identity, revision and recovery policy.</summary>

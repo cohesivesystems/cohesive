@@ -22,9 +22,9 @@ public sealed class PostgresServiceSelectionTests
         return query.Source(Entity).Where(item => item.Id == key.Value && item.Partition == "local")
             .Select(item => new Row(item.Id)).BuildArrayQuery(new(id), new("Read"), key);
     }
-    static PostgresPersistenceBindings Bindings() => new PostgresPersistenceBindings(new("items"))
+    static PostgresPersistenceBindings Bindings() => PostgresPersistenceBindings.Define(new("items"), bindings => bindings
         .Entity(Entity, PostgresEntityRepositoryMapping.For(Entity).Table("public", "items")
-            .Identity(item => item.Id, "id").Partition(item => item.Partition, "partition").Build());
+            .Identity(item => item.Id, "id").Partition(item => item.Partition, "partition").Build()));
     static ServiceBuilder Service(ServiceDependencies dependencies) => Cohesive.Api.Execution.Services.Service
         .Define(new("test"), new("1"), RunControlFixture.Provenance).Use(dependencies);
 

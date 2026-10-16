@@ -1,3 +1,5 @@
+using System.Runtime.ExceptionServices;
+using Cohesive.Prelude;
 using Cohesive.Model;
 using Cohesive.Transitions.Model;
 using Cohesive.Transitions.Authoring;
@@ -8,19 +10,21 @@ using Cohesive.Relations.Realization;
 namespace Cohesive.Adapters.Postgres;
 
 /// <summary>Offline PostgreSQL entity mappings used by native query preparation and runtime registration.</summary>
-/// <remarks>Configure once at host composition. Bind snapshots the mappings; later edits cannot change an
-/// existing runtime registration. Define freezes authoring and rejects late contributions. Preparation performs no IO and retains no credentials or data source.</remarks>
+/// <remarks>Configure once at host composition. Define is the sole authoring entry point and freezes mappings before returning. Runtime registrations
+/// share immutable mappings. Completion freezes authoring and rejects late contributions. Preparation performs no IO and retains no credentials or data source.</remarks>
 public sealed class PostgresPersistenceBindings
 {
-    bool frozen;
+    readonly AuthoringState<PostgresPersistenceBindings> state;
+    ExceptionDispatchInfo? preparationFailure;
     internal readonly Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> Tables = [];
     /// <summary>Creates offline bindings for one explicitly identified database.</summary>
     /// <param name="database">Stable database identity shared with the eventual runtime binding.</param>
     /// <exception cref="ArgumentException">Database identity is empty.</exception>
-    public PostgresPersistenceBindings(PostgresRelationQueryDatabaseId database)
+    PostgresPersistenceBindings(PostgresRelationQueryDatabaseId database)
     {
         if (string.IsNullOrWhiteSpace(database.Value)) throw new ArgumentException("Database identity is required.", nameof(database));
         Database = database;
+        state = new(() => { preparationFailure?.Throw(); return this; });
     }
     /// <summary>Database identity covered by these mappings.</summary>
     public PostgresRelationQueryDatabaseId Database { get; }
@@ -38,9 +42,11 @@ public sealed class PostgresPersistenceBindings
         ArgumentNullException.ThrowIfNull(entity);
         ArgumentNullException.ThrowIfNull(mapping);
         PostgresEntityRepository.ValidateMapping(entity.Definition, mapping);
-        RequireMutable();
-        Tables.Add(entity.Definition.StateShape.QualifiedId, (entity.Definition, mapping));
-        return this;
+        return state.Edit(() =>
+        {
+            Tables.Add(entity.Definition.StateShape.QualifiedId, (entity.Definition, mapping));
+            return this;
+        });
     }
 
     /// <summary>Authors and freezes offline mappings through the existing native mapping builder.</summary>
@@ -54,8 +60,9 @@ public sealed class PostgresPersistenceBindings
     {
         ArgumentNullException.ThrowIfNull(configure);
         var bindings = new PostgresPersistenceBindings(database);
-        configure(bindings);
-        bindings.frozen = true;
+        try { configure(bindings); }
+        catch (Exception error) { bindings.preparationFailure = ExceptionDispatchInfo.Capture(error); }
+        _ = bindings.state.Value;
         return bindings;
     }
 
@@ -72,10 +79,12 @@ public sealed class PostgresPersistenceBindings
     {
         ArgumentNullException.ThrowIfNull(entity);
         ArgumentNullException.ThrowIfNull(configure);
-        RequireMutable();
-        var builder = PostgresEntityRepositoryMapping.For(entity);
-        configure(builder);
-        return Entity(entity, builder.Build());
+        return state.Edit(() =>
+        {
+            var builder = PostgresEntityRepositoryMapping.For(entity);
+            configure(builder);
+            return Entity(entity, builder.Build());
+        });
     }
 
     /// <summary>Returns a declared mapping for inspection or explicit native composition.</summary>
@@ -93,23 +102,17 @@ public sealed class PostgresPersistenceBindings
         return entry.Mapping;
     }
 
-    void RequireMutable()
-    {
-        if (frozen) throw new InvalidOperationException("The PostgreSQL bindings are frozen.");
-    }
-
-    /// <summary>Attaches a caller-owned data source to a snapshot of these mappings.</summary>
+    /// <summary>Attaches a caller-owned data source to these frozen mappings.</summary>
     /// <param name="runtime">Exact runtime binding for the declared database.</param>
-    /// <returns>Runtime registration with independent mapping ownership.</returns>
+    /// <returns>Runtime registration sharing immutable mappings; data-source ownership remains with the caller.</returns>
     /// <exception cref="ArgumentNullException">Runtime is null.</exception>
     /// <exception cref="ArgumentException">Database identities differ.</exception>
     public PostgresPersistenceRegistration Bind(PostgresNpgsqlRuntimeBinding runtime)
     {
         ArgumentNullException.ThrowIfNull(runtime);
         if (runtime.Database != Database) throw new ArgumentException("Offline and runtime database identities must match.", nameof(runtime));
-        var snapshot = new PostgresPersistenceBindings(Database);
-        foreach (var pair in Tables) snapshot.Tables.Add(pair.Key, pair.Value);
-        return new(runtime, snapshot);
+        _ = state.Value;
+        return new(runtime, this);
     }
 
     /// <summary>Compiles one native query through the existing semantic, placement and PostgreSQL validators.</summary>
@@ -123,6 +126,7 @@ public sealed class PostgresPersistenceBindings
     public PostgresRelationQueryCompiledArtifact Prepare(RelationQueryCompilationRequest request)
     {
         ArgumentNullException.ThrowIfNull(request);
+        _ = state.Value;
         var compilation = RelationQueryStaticCompiler.Compile(request);
         if (!compilation.IsSuccessful) throw new RelationQueryPreparationException("query preparation", compilation);
         var plan = compilation.Plan!;

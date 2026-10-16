@@ -57,7 +57,9 @@ var details = persistence.Query(model.Service.Definition, model.Queries.OrderDet
 ```
 
 `DomainModel`, `QueryModel` and `ApiModel` provide their immutable definitions automatically. Reading
-`Definition` freezes each catalog; late contributions are rejected. Direct builders remain supported.
+`ApplicationModelBuilder` resolves the explicitly registered declaration types by constructor dependency and freezes
+their catalogs during Build. No hand-ordered construction or forced Definition reads are required. Missing or cyclic
+dependencies and duplicate process revisions fail at setup. Direct builders remain supported.
 PostgreSQL `Define(databaseId, configure)` accepts extracted configuration methods or inline lambdas through
 the same native builder and freezes the resulting mappings. The inventory-only placement uses the same
 inventory configuration method without carrying unrelated orders/reservations mappings.

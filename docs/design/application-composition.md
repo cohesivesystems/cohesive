@@ -30,6 +30,18 @@ Partial contributions must ultimately resolve into one validated model rather th
   worker runtime bindings consume the same construction recipe. Independent instances have equal portable
   query/process identities without sharing mutable catalogs or credentials.
 
+`ApplicationModelBuilder` registers the finite set of offline declaration types. Constructor dependencies resolve
+once regardless of registration order; missing dependencies and cycles fail during Build. Completion freezes
+registered authoring models automatically. Canonical execution documents pass through the existing
+ExecutionDefinitionDocumentCatalog, which rejects duplicate identity/revision pairs (including differing fingerprints).
+Constructor configuration is therefore allowed, but two variants cannot silently occupy one revision in a composition.
+There is no global identity registry; separate independently deployed compositions must still govern revision changes.
+
+`AuthoringState<T>` owns the shared freeze-once protocol: edits serialize with preparation, freezing starts before
+validation, and both successful results and failures are cached. Query order uses an explicit insertion list with a
+separate duplicate-ID set. PostgreSQL's constructor is private; Define is the sole contribution boundary, including
+failure cleanup of captured builders.
+
 Construction happens before publication to other threads. Definition reads finalize catalogs. Process definition
 creation uses Lazy execution-and-publication semantics and caches failures; no virtual authoring runs in its base
 constructor. Query/result execution and request context are not cached by these classes. No connection is opened
@@ -57,7 +69,7 @@ and native/composed queries. This is not an event-authoritative state model or p
 
 ## Decisions
 
-Use/extend existing builders and generator rather than introduce a universal object registry, reflection scanning
+Use/extend existing builders and generator rather than introduce a universal semantic registry, reflection scanning
 of static properties, provider-option wrappers, or a competing graph format. Constructor arguments make ownership
 visible; optional base types supply actual freeze/cache contracts rather than empty marker types. Storage configuration
 uses an ordinary method on a C# class; a new configuration interface is unnecessary until a concrete resolver consumes it.
@@ -66,3 +78,8 @@ Validation covers late additions, duplicate semantic identities, mapping isolati
 models, generated instance dependencies and compile-time errors. Existing PostgreSQL/HTTP/process tests exercise
 native behavior; deterministic warm-access allocation checks protect the once-prepared process definition. No
 startup-speed or end-to-end performance improvement is claimed.
+
+The optional host composition resolves only explicitly registered types via existing .NET constructor activation.
+It neither scans members nor guesses semantic dependencies. It removes hand-ordered construction and forced
+Definition reads; it does not yet infer the service's transition/lookup attachments or unrelated API query roots.
+Those are still tracked above and are not presented as a completed service-registration API.

@@ -2,7 +2,7 @@
 
 ## Instance composition
 
-`PostgresPersistenceBindings.Define(databaseId, configure)` accepts inline or extracted configuration through the existing native builder and freezes the result. `bindings.Entity(entity, mapping => mapping.Table(...).Identity(...).Partition(...))` removes the need for a parallel mapping-property catalog. `Mapping(entity)` exposes a declared immutable mapping and rejects a foreign entity authority. Runtime `Bind` still attaches a caller-owned Npgsql data source and snapshots mappings.
+`PostgresPersistenceBindings.Define(databaseId, configure)` accepts inline or extracted configuration through the existing native builder and freezes the result. `bindings.Entity(entity, mapping => mapping.Table(...).Identity(...).Partition(...))` removes the need for a parallel mapping-property catalog. `Mapping(entity)` exposes a declared immutable mapping and rejects a foreign entity authority. Runtime `Bind` still attaches a caller-owned Npgsql data source and shares the frozen mappings.
 
 `Cohesive.Adapters.Postgres` realizes Cohesive Relations, Storage, materialization, Process durability, and logical
 replication semantics on PostgreSQL through explicit bindings and Npgsql-backed runtime ports.
@@ -215,8 +215,8 @@ bounded and invocation-owned. See [qualification](../../../docs/performance/repe
 
 `PostgresPersistenceBindings(databaseId).Entity(entity, mapping)` owns offline validated mappings.
 `Prepare(query.CompilationRequest)` runs the existing semantic/placement/native compilers without a
-connection; `Bind(runtime)` snapshots the same mappings into a `PostgresPersistenceRegistration`.
-The existing runtime-first constructor remains supported and delegates preparation to this same path.
+connection; `Bind(runtime)` shares the frozen mappings with a `PostgresPersistenceRegistration`.
+Offline bindings are created only through `Define`; the mutable public constructor has been removed.
 Mapping builders are host-composition objects and must not be mutated concurrently. Runtime parameters,
 connections and results remain invocation-scoped; no query-result cache or global registry is added.
 
