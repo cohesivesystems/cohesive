@@ -14,7 +14,7 @@ namespace Cohesive.Adapters.AspNet.Services;
 
 public static partial class ServiceEndpointRouteBuilderExtensions
 {
-    /// <summary>Maps durable admission and its independently authorized polling endpoint as one linked contract.</summary>
+    /// <summary>Maps admission and its independently authorized polling endpoint as one linked contract.</summary>
     /// <remarks>No worker is started here. Cancellation or ambiguous admission is not retried. The caller must retain
     /// command, idempotency, continuation and input across retries. Pending reads never dispatch the process.</remarks>
     /// <typeparam name="TRequest">Command body.</typeparam><typeparam name="TResult">Terminal result view.</typeparam>
@@ -35,6 +35,7 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(runtime); ArgumentNullException.ThrowIfNull(bind); ArgumentNullException.ThrowIfNull(project);
         if (runtime.Declaration.Reference != api.Declaration.Reference)
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "The linked endpoints require the exact declared service runtime.");
+        if (api.Response.MaximumWait is not null) runtime.RequireProcessResultWaiting(api.ResultOperationId);
         routes.MapApiEndpoint(api.Start, async (OperationContext context, HttpContext http) =>
         {
             var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation,
@@ -49,6 +50,14 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             var location = http.Request.PathBase + api.Result.Operation.Http!.Route.Replace("{instanceId}",
                 WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(instance)), StringComparison.Ordinal);
             http.Response.Headers.Location = location;
+            if (api.Response.MaximumWait is { } maximumWait)
+            {
+                var result = await runtime.ReadProcessResultAsync(context, api.ResultOperationId, new(instance), maximumWait).ConfigureAwait(false);
+                if (result.Kind == ApiResultKind.Success)
+                    return Results.Json(project(result.Outcome!), statusCode: api.Result.Operation.PrimaryResult.Http!.StatusCode);
+                if (result.Kind != ApiResultKind.Accepted)
+                    return ProjectServiceProblem(api.Result, result.Kind, result.Diagnostics);
+            }
             http.Response.Headers.RetryAfter = "1";
             return Results.Json(new ServiceProcessReceipt(admission, location), statusCode: StatusCodes.Status202Accepted);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(api.Declaration);

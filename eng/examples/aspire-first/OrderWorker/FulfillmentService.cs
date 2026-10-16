@@ -1,4 +1,5 @@
 using Cohesive.Api.Execution.Services;
+using Cohesive.Execution;
 
 namespace AspireFirst.Orders;
 
@@ -13,10 +14,11 @@ public sealed class FulfillmentService
     public FulfillmentService(FulfillmentProcess process)
     {
         Definition = Service.Define(
-            new("fulfillment"), new("1"), process.Provenance)
+            new("fulfillment"), new("2"), process.Provenance)
             .Use(new ServiceDependencies()
                 .Process(process))
-            .Operation("fulfill").Run(process.Definition)
-            .ExecuteEphemerally(TimeSpan.FromSeconds(15));
+            .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
+            .ReturnAfterAdmission(ProcessExecutionLifetime.Host)
+            .Operation("result").Require(new("fulfillment.read")).ReadResultOf(process.Definition);
     }
 }

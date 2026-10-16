@@ -6,7 +6,7 @@ namespace Cohesive.Api.Services;
 /// <summary>The event promised by a service invocation before returning its normal response.</summary>
 public enum ServiceProcessCompletion
 {
-    /// <summary>Return a receipt after durable admission, without promising terminal completion.</summary>
+    /// <summary>Return a receipt after admission to the selected execution lifetime, without promising terminal completion.</summary>
     Admission = 1,
     /// <summary>Await terminal execution within a cooperative cancellation budget.</summary>
     Terminal = 2
@@ -26,8 +26,8 @@ public sealed record ServiceProcessExecution
     {
         if (!Enum.IsDefined(lifetime)) throw new ArgumentOutOfRangeException(nameof(lifetime));
         if (!Enum.IsDefined(completion)) throw new ArgumentOutOfRangeException(nameof(completion));
-        if (completion == ServiceProcessCompletion.Admission && lifetime != ProcessExecutionLifetime.Durable)
-            throw new ArgumentException("Admission-only completion requires a durable execution authority.", nameof(completion));
+        if (completion == ServiceProcessCompletion.Admission && lifetime == ProcessExecutionLifetime.Ephemeral)
+            throw new ArgumentException("Admission-only completion requires host-owned or durable execution, not invocation-local execution.", nameof(completion));
         if ((completion == ServiceProcessCompletion.Terminal) != timeout.HasValue)
             throw new ArgumentException("Only terminal completion requires an explicit cancellation budget.", nameof(timeout));
         if (timeout is { } budget && (budget <= TimeSpan.Zero || budget.TotalMilliseconds > uint.MaxValue - 1))

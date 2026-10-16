@@ -12,25 +12,21 @@ public static class OrderEndpoints
     /// <param name="model">Canonical application declarations.</param><returns>Offline implementation recipes.</returns>
     public static ServiceModelBuilder Define(FulfillmentApplication model) => new ServiceModelBuilder()
         .Implement(model.Api, bindings => ConfigureOrders(bindings, model))
-        .Implement(model.Api, bindings => bindings.Bind(api => api.Fulfill, model.Service.Definition, model.Process,
+        .Implement(model.Api, bindings => bindings.BindHosted(
+            api => api.Fulfill, model.Service.Definition, model.Process,
             authority: "aspire-first", authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
-            logPrivateFailures: true));
-
-    /// <summary>Adds the accepted-execution contract alongside the existing order/query/terminal endpoints.</summary>
-    /// <param name="model">Shared domain and process declarations.</param>
-    /// <param name="api">Optional admission/polling contract built from the same process.</param>
-    /// <param name="runtime">Complete native runtime for api.Fulfill.Declaration; no worker is created here.</param>
-    /// <returns>One implementation model for the complete HTTP surface.</returns>
-    public static ServiceModelBuilder DefineAccepted(FulfillmentApplication model, AcceptedFulfillmentApi api, ServiceRuntime runtime) =>
-        Define(model).Implement(api, bindings => bindings.Bind(
-            contract => contract.Fulfill,
-            runtime,
+            maximumExecutions: 1000,
             bind: (_, command) => (
-                new(command.CommandId),
-                new(command.IdempotencyKey),
+                new(command.CommandId), new(command.IdempotencyKey),
                 new(new(command.InstanceId), new(command.AttemptId)),
                 ObservationValue.FromObject(command.Input)),
-            project: api.Project));
+            project: value =>
+            {
+                var decoded = Cohesive.Relations.Execution.HostedQueryValueAdapter.Decode<FulfillmentResult>(
+                    value, model.Process.Definition.Definition.Result);
+                return decoded.Type == Cohesive.Prelude.ResultType.Success ? decoded.Success!
+                    : throw new InvalidOperationException("The retained fulfillment result cannot be projected.");
+            }, logPrivateFailures: true, authorizationPolicyResolver: (_, requirement) => requirement.Id));
 
     /// <summary>Contributes order operations independently of fulfillment execution.</summary>
     /// <param name="bindings">Shared API implementation contribution.</param><param name="model">Canonical application declarations.</param>

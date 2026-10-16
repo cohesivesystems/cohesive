@@ -1,4 +1,5 @@
 using System.Net;
+using Cohesive.Host.Services;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Cohesive.Adapters.AspNet.Services;
@@ -28,6 +29,157 @@ public sealed class ServiceAcceptedProcessTests
 {
     public sealed record Command(string Id, string Text);
     static readonly ExecutionProvenance Provenance = new(new("tests"), new("tests/accepted"), DocumentOrigin.Generated);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Response_wait_is_independent_of_host_lifetime_and_retains_polling(bool wait)
+    {
+        var fixture = new Fixture(hosted: true, response: wait ? ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(5)) : null);
+        using var worker = fixture.Worker!;
+        await worker.StartAsync(default);
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
+        await using var app = builder.Build();
+        app.MapServiceAcceptedProcess(fixture.Api, fixture.Runtime,
+            (_, command) => (new(command.Id), new(command.Id), new(new(command.Id), new("attempt")), ObservationValue.FromString(command.Text)),
+            value => value.Value!.Value.GetRequiredString());
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
+        var command = new Command("host-instance", "echo-result");
+        var response = await client.PostAsJsonAsync("/commands", command);
+        Assert.Equal(wait ? HttpStatusCode.OK : HttpStatusCode.Accepted, response.StatusCode);
+        Assert.NotNull(response.Headers.Location);
+        var context = OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User)));
+        var terminal = await fixture.Runtime.ReadProcessResultAsync(context, "result", new(command.Id), TimeSpan.FromSeconds(5));
+        Assert.True(terminal.Kind == ApiResultKind.Success, string.Join(";", terminal.Diagnostics.Select(d => d.Code + ":" + d.Message)));
+        Assert.Equal(command.Text, await client.GetFromJsonAsync<string>(response.Headers.Location));
+        Assert.Contains(fixture.Api.Start.Operation.Results, result => result.Kind == ApiResultKind.Accepted);
+        Assert.Equal(wait, fixture.Api.Start.Operation.Results.Any(result => result.Kind == ApiResultKind.Success));
+        await app.StopAsync();
+        await worker.StopAsync(default);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_and_wait_timeout_do_not_cancel_admitted_host_work()
+    {
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var query = HostedQuery<string, string>.Create(new("blocked"), new("1"), new("test/blocked", "1"), "v1", Provenance);
+        var text = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
+        var process = ProcessAuthoring.Create<string, string>(
+            new(new("blocked-process"), new("1"), new("query"), ProcessRecoveryPolicy.ContinueAttempt, Provenance), builder =>
+            {
+                var output = builder.Output<string>(new("output"), text);
+                builder.EvaluateRelation(new("query"), query.Reference, builder.Input.Value,
+                    builder.Continuation(builder.Edge(new("next"), new("return")), output));
+                builder.Return(new("return"), output.Value);
+            });
+        var calls = 0;
+        var prepared = Service.Define(new("prepare"), new("1"), Provenance).Operation("prepare").Run(process,
+            host => host.Query(query, async (context, _, input) =>
+            {
+                Interlocked.Increment(ref calls);
+                entered.TrySetResult();
+                await release.Task.WaitAsync(context.CancellationToken);
+                return input;
+            })).Prepare();
+        var service = Service.Define(new("blocked-service"), new("1"), Provenance)
+            .Operation("start").Run(process).ReturnAfterAdmission(ProcessExecutionLifetime.Host)
+            .Operation("result").ReadResultOf(process);
+        using var worker = new HostProcessWorker(prepared, 1);
+        var runtime = worker.Bind(service.Build(), "tests", new Authorization());
+        await worker.StartAsync(default);
+        using var request = new CancellationTokenSource();
+        var context = OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User)));
+        var initial = await runtime.StartAsync(context.WithCancellationToken(request.Token), "start", new("one"), new("one"),
+            new(new("one"), new("attempt")), ObservationValue.FromString("hello"));
+        Assert.Equal(ApiResultKind.Accepted, initial.Kind);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            request.Cancel();
+            var pending = await runtime.ReadProcessResultAsync(context, "result", new("one"), TimeSpan.FromMilliseconds(10));
+            Assert.Equal(ApiResultKind.Accepted, pending.Kind);
+            var replay = await runtime.StartAsync(context, "start", new("one"), new("one"),
+                new(new("one"), new("attempt")), ObservationValue.FromString("hello"));
+            Assert.Equal(ProcessStartDisposition.Replayed, replay.Outcome!.Disposition);
+            Assert.Equal(1, calls);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => runtime.StartAsync(context, "start", new("two"), new("two"),
+                new(new("two"), new("attempt")), ObservationValue.FromString("hello")).AsTask());
+        }
+        finally { release.TrySetResult(); }
+        var completed = await runtime.ReadProcessResultAsync(context, "result", new("one"), TimeSpan.FromSeconds(5));
+        Assert.Equal(ApiResultKind.Success, completed.Kind);
+        Assert.Equal(1, calls);
+        await worker.StopAsync(default);
+        using var fresh = new HostProcessWorker(prepared, 1);
+        var restarted = fresh.Bind(service.Build(), "tests", new Authorization());
+        Assert.Equal(ApiResultKind.NotFound, (await restarted.ReadProcessResultAsync(context, "result", new("one"))).Kind);
+    }
+
+    [Fact]
+    public async Task Bounded_HTTP_wait_returns_original_receipt_when_execution_is_pending()
+    {
+        var fixture = new Fixture(response: ServiceProcessResponse.WaitForResult(TimeSpan.FromMilliseconds(10)));
+        fixture.Values.Current = ProcessExecutionValueReadResult.InProgress(new(fixture.Plan.DefinitionReference, new("pending")));
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
+        await using var app = builder.Build();
+        app.MapServiceAcceptedProcess(fixture.Api, fixture.Runtime,
+            (_, command) => (new(command.Id), new(command.Id), new(new(command.Id), new("attempt")), ObservationValue.FromString(command.Text)),
+            value => value.Value!.Value.GetRequiredString());
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
+        var response = await client.PostAsJsonAsync("/commands", new Command("pending", "input"));
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        var receipt = await response.Content.ReadFromJsonAsync<ServiceProcessReceipt>();
+        Assert.Equal(response.Headers.Location!.OriginalString, receipt!.ResultLocation);
+        Assert.Equal(1, fixture.Starts);
+        fixture.Complete("pending");
+        Assert.Equal("finished", await client.GetFromJsonAsync<string>(receipt.ResultLocation));
+        Assert.Equal(1, fixture.Starts);
+        await app.StopAsync();
+    }
+
+    [Fact]
+    public void Host_lifetime_round_trips_in_canonical_service_document()
+    {
+        var fixture = new Fixture(hosted: true);
+        using var worker = fixture.Worker!;
+        Assert.True(ExecutionDefinitionJsonSerializer.TryDeserialize(
+            ExecutionDefinitionJsonSerializer.Serialize(fixture.Api.Declaration), out var restored).IsValid);
+        Assert.Equal(fixture.Api.Declaration.Reference, restored!.Reference);
+        Assert.True(ServiceDefinitionDocuments.ValidateAndProject(restored, out var definition).IsValid);
+        Assert.Equal(ProcessExecutionLifetime.Host, Assert.IsType<ServiceProcessOperation>(definition!.Operations.Single(operation => operation.Id == "start")).Execution!.Lifetime);
+    }
+
+    [Fact]
+    public async Task API_wait_policy_rejects_nonwaiting_provider_before_registering_routes()
+    {
+        var fixture = new Fixture(response: ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(1)));
+        var runtime = new ServiceRuntime(fixture.Api.Declaration,
+            [new ServiceProcessBinding("start", fixture.Plan, "tests", (_, _, _) => throw new InvalidOperationException("Must not dispatch.")),
+             new ServiceProcessResultBinding("result", fixture.Plan, "tests", new NonWaitingValues())], fixture.Authorization);
+        var builder = WebApplication.CreateSlimBuilder();
+        await using var app = builder.Build();
+        var error = Assert.Throws<ServiceBindingValidationException>(() => app.MapServiceAcceptedProcess(fixture.Api, runtime,
+            (_, command) => (new(command.Id), new(command.Id), new(new(command.Id), new("attempt")), ObservationValue.FromString(command.Text)),
+            value => value.Value!.Value.GetRequiredString()));
+        Assert.Equal("services.binding.resultWaitingUnsupported", Assert.Single(error.Validation.Diagnostics).Code);
+        Assert.Empty(((Microsoft.AspNetCore.Routing.IEndpointRouteBuilder)app).DataSources);
+    }
+
+    [Fact]
+    public void Host_provider_cannot_claim_durable_execution()
+    {
+        var fixture = new Fixture(hosted: true);
+        using var worker = fixture.Worker!;
+        var durable = new Fixture();
+        Assert.Throws<ServiceBindingValidationException>(() => worker.Bind(durable.Api.Declaration, "tests", durable.Authorization));
+    }
 
     [Fact]
     public async Task Admission_replay_and_poll_share_exact_identity_without_restarting_execution()
@@ -200,7 +352,8 @@ public sealed class ServiceAcceptedProcessTests
         public Authorization Authorization { get; } = new();
         public int Starts;
         public bool ThrowAfterAdmission;
-        public Fixture()
+        public HostProcessWorker? Worker { get; }
+        public Fixture(bool hosted = false, ServiceProcessResponse? response = null)
         {
             var text = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
             var document = ProcessDefinitionDocuments.Create(new("echo"), new("1"),
@@ -208,9 +361,17 @@ public sealed class ServiceAcceptedProcessTests
                     ProcessRecoveryPolicy.ContinueAttempt), Provenance);
             Plan = ProcessStaticCompiler.Compile(document, new()).Plan!;
             Service = Cohesive.Api.Execution.Services.Service.Define(new("accepted"), new("1"), Provenance)
-                .Operation("start").Run(Plan).ReturnAfterDurableAdmission()
+                .Operation("start").Run(Plan).ReturnAfterAdmission(hosted ? ProcessExecutionLifetime.Host : ProcessExecutionLifetime.Durable)
                 .Operation("result").ReadResultOf(ProcessAuthoring.Project<string, string>(document));
-            Api = Service.AcceptedApi<Command, string>("start", "result", "/commands", "/results/{instanceId}");
+            Api = Service.AcceptedApi<Command, string>("start", "result", "/commands", "/results/{instanceId}", response);
+            if (hosted)
+            {
+                var prepared = Service.PrepareProcess(ProcessAuthoring.Project<string, string>(document),
+                    _ => throw new InvalidOperationException("Echo has no storage dependency."));
+                Worker = new HostProcessWorker(prepared, 2);
+                Runtime = Worker.Bind(Api.Declaration, "tests", Authorization);
+                return;
+            }
             var catalog = ExecutionControlApiCatalog.Create();
             var adapter = new InMemoryExecutionControlApiAdapter(ProcessControlTestFixture.Create().Catalog, catalog);
             Runtime = new(Api.Declaration,
@@ -234,10 +395,16 @@ public sealed class ServiceAcceptedProcessTests
             ValueTask.FromResult<ScopeRef?>(operation.Id == "result" && !ReadAllowed ? null : new("tenant", "tenant", PartitionKey: "tenant"));
         public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceOperation operation, EntitySnapshot snapshot) => ValueTask.FromResult(true);
     }
-    sealed class Values : IProcessExecutionValueRepository
+    sealed class NonWaitingValues : IProcessExecutionValueRepository
+    {
+        public ValueTask<ProcessExecutionValueReadResult> GetValuesAsync(OperationContext context, InteractionAuthorityScope scope, ProcessInstanceId instance) =>
+            throw new InvalidOperationException("Must not read during setup.");
+    }
+    sealed class Values : IProcessExecutionValueRepository, IProcessExecutionCompletionWaiter
     {
         public ProcessExecutionValueReadResult Current = ProcessExecutionValueReadResult.NotFound();
         public int Reads;
+        public ValueTask<bool> WaitForCompletionAsync(OperationContext context, InteractionAuthorityScope scope, ProcessInstanceId instance, TimeSpan maximumWait) => ValueTask.FromResult(false);
         public ValueTask<ProcessExecutionValueReadResult> GetValuesAsync(OperationContext context, InteractionAuthorityScope authorityScope, ProcessInstanceId processInstanceId)
         { Reads++; return ValueTask.FromResult(Current); }
     }

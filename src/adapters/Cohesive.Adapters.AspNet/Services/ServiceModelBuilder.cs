@@ -28,7 +28,7 @@ public sealed class ServiceModelBuilder
     ServiceModel? built;
     IServiceCollection? builtServices;
     IServicePersistence? builtPersistence;
-    readonly List<Func<IServicePersistence, PreparedApiContribution>> contributions = [];
+    readonly List<Func<IServiceCollection, IServicePersistence, PreparedApiContribution>> contributions = [];
     readonly AuthoringState<ServiceModelBuilder> state;
 
     /// <summary>Starts an empty, host-local implementation composition.</summary>
@@ -60,7 +60,9 @@ public sealed class ServiceModelBuilder
         });
     }
 
-    internal void Add(Func<IServicePersistence, PreparedApiContribution> prepare) => state.Edit(() => { contributions.Add(prepare); return this; });
+    internal void Add(Func<IServicePersistence, PreparedApiContribution> prepare) => state.Edit(() => { contributions.Add((_, persistence) => prepare(persistence)); return this; });
+    internal void Add(Func<IServiceCollection, IServicePersistence, PreparedApiContribution> prepare) =>
+        state.Edit(() => { contributions.Add(prepare); return this; });
     /// <summary>Freezes all contributions, resolves storage once and checks complete, unique implementation coverage.</summary>
     /// <param name="services">Host services owning optional logging subscriptions.</param>
     /// <param name="persistence">Native storage resolution; resources remain caller-owned.</param>
@@ -79,7 +81,7 @@ public sealed class ServiceModelBuilder
                 return built;
             }
             var definition = Plan.Definition;
-            var prepared = contributions.Select(prepare => prepare(persistence)).ToArray();
+            var prepared = contributions.Select(prepare => prepare(services, persistence)).ToArray();
             foreach (var process in prepared.SelectMany(item => item.LoggedProcesses)) services.AddCohesiveTransitionFailureLogging(process);
             builtServices = services;
             builtPersistence = persistence;
@@ -177,6 +179,55 @@ public sealed class ServiceApiImplementation<TApi>
             model.Plan.Implement(definition, start);
             model.Plan.Implement(definition, result);
             model.Add(_ => new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project), []));
+        });
+        return this;
+    }
+
+    /// <summary>Attaches bounded host-owned execution to a declared admission/poll pair, preparing only at Build.</summary>
+    /// <typeparam name="TRequest">HTTP command.</typeparam><typeparam name="TInput">Process input.</typeparam>
+    /// <typeparam name="TResult">Process and response result.</typeparam>
+    /// <param name="select">Pair owned by this API.</param><param name="service">Exact service declaration.</param>
+    /// <param name="process">Generated process with dependency recipes.</param><param name="authority">Execution authority.</param>
+    /// <param name="authorization">Per-operation authorization.</param><param name="maximumExecutions">Bound on retained host instances.</param>
+    /// <param name="bind">Caller-owned retry identity and input projection.</param><param name="project">Authorized result projection.</param>
+    /// <param name="logPrivateFailures">Opt in to scoped private operator diagnostics.</param>
+    /// <param name="authorizationPolicyResolver">Native HTTP policy mapping for declared authorization requirements.</param>
+    /// <returns>This contribution; no worker or storage is resolved during authoring.</returns>
+    public ServiceApiImplementation<TApi> BindHosted<TRequest, TInput, TResult>(
+        Func<TApi, ServiceAcceptedProcessApi<TRequest, TResult>> select, ServiceBuilder service,
+        ProcessModel<TInput, TResult> process, string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
+        Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
+            ProcessContinuationIdentity Continuation, ObservationValue Input)> bind, Func<PortableValue, TResult> project,
+        bool logPrivateFailures = false, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(select); ArgumentNullException.ThrowIfNull(service); ArgumentNullException.ThrowIfNull(process);
+        ArgumentNullException.ThrowIfNull(authorization); ArgumentNullException.ThrowIfNull(bind); ArgumentNullException.ThrowIfNull(project);
+        if (maximumExecutions <= 0) throw new ArgumentOutOfRangeException(nameof(maximumExecutions));
+        var pair = select(api) ?? throw ServiceImplementationPlan.Error("services.api.foreignEndpoint", "Select a linked API contract.");
+        var start = Select(_ => pair.Start);
+        var result = Select(_ => pair.Result);
+        var declaration = service.Build();
+        if (pair.Declaration.Reference != declaration.Reference
+            || declaration.GetDefinition<ServiceDefinition>().Operations.Any(operation => operation switch
+            {
+                ServiceProcessOperation entry => entry.Process != process.Definition.Reference
+                    || entry.Execution is not { Lifetime: ProcessExecutionLifetime.Host, Completion: ServiceProcessCompletion.Admission },
+                ServiceProcessResultOperation read => read.Process != process.Definition.Reference,
+                _ => true
+            }))
+            throw ServiceImplementationPlan.Error("services.api.processMismatch", "Host binding requires exact process references and host-owned admission.");
+        model.Plan.Contribute(definition, () =>
+        {
+            model.Plan.Implement(definition, start);
+            model.Plan.Implement(definition, result);
+            model.Add((services, persistence) =>
+            {
+                var prepared = service.PrepareProcess(process.Definition, persistence.Repository);
+                if (logPrivateFailures) services.AddCohesiveTransitionFailureLogging(prepared);
+                var worker = services.AddCohesiveHostProcessWorker(prepared, maximumExecutions);
+                var runtime = worker.Bind(declaration, authority, authorization);
+                return new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project, authorizationPolicyResolver), []);
+            });
         });
         return this;
     }

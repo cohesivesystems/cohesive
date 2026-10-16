@@ -199,8 +199,10 @@ separate canonical policy fields; neither confers ACID. Existing omitted policie
 behavior. Bindings reject unsupported combinations. Native start HTTP projection rejects ephemeral policies
 rather than exposing an admission contract for an operation promising completion.
 
-This authoring slice does not yet provide durable terminal waiting or Ari migration. Those remain in the declarative service refinement.
-Do not present the existing start adapter as a terminal-completion adapter.
+A linked process API may independently choose bounded result waiting through `ServiceProcessResponse.WaitForResult`.
+It composes admission with an authorized result read; its timeout ends waiting without cancelling execution.
+The start dispatcher itself remains an admission boundary. Host-lifetime background execution is also explicit
+through `ReturnAfterAdmission(ProcessExecutionLifetime.Host)` and cannot satisfy a Durable policy.
 
 
 A single-entity mutation can now be authored as a typed composition and supplied to `Run`:

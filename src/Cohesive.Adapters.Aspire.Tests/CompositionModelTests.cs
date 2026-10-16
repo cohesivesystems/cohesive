@@ -13,29 +13,30 @@ public sealed class CompositionModelTests
     public void Accepted_fulfillment_reuses_process_and_declares_independent_receipt_and_polling_contracts()
     {
         var model = new FulfillmentApplication();
-        var api = new AcceptedFulfillmentApi(model.Process);
-        Assert.Equal(2, api.Definition.Endpoints.Count);
+        var api = model.Api;
+        Assert.Equal(7, api.Definition.Endpoints.Count);
+        Assert.Equal(model.Service.Definition.Build().Reference, api.Fulfill.Declaration.Reference);
         Assert.Equal(ApiResultKind.Accepted, api.Fulfill.Start.Operation.PrimaryResult.Kind);
         Assert.Equal(api.Fulfill.Start.Id, api.Fulfill.Result.Operation.ResultOf);
-        Assert.Equal("/fulfillment/requests", api.Fulfill.Start.Operation.Http!.Route);
+        Assert.Equal("/fulfillment", api.Fulfill.Start.Operation.Http!.Route);
         Assert.Equal("/fulfillment/results/{instanceId}", api.Fulfill.Result.Operation.Http!.Route);
         var service = api.Fulfill.Declaration.GetDefinition<ServiceDefinition>();
         var start = Assert.IsType<ServiceProcessOperation>(service.Operations[0]);
         var result = Assert.IsType<ServiceProcessResultOperation>(service.Operations[1]);
         Assert.Equal(model.Process.Definition.Reference, start.Process);
         Assert.Equal(start.Process, result.Process);
-        Assert.Equal(ProcessExecutionLifetime.Durable, start.Execution!.Lifetime);
+        Assert.Equal(ProcessExecutionLifetime.Host, start.Execution!.Lifetime);
         Assert.Equal(ServiceProcessCompletion.Admission, start.Execution.Completion);
         Assert.Equal("fulfillment.write", Assert.Single(start.AuthorizationRequirements).Id);
         Assert.Equal("fulfillment.read", Assert.Single(result.AuthorizationRequirements).Id);
-        Assert.Equal(ApiResultKind.Success, model.Api.Fulfill.Operation.PrimaryResult.Kind);
+        Assert.Null(api.Fulfill.Response.MaximumWait);
 
         // Definition ownership is inferred for both the application catalog and a standalone pair.
         foreach (var declaration in new IApiDeclaration[] { api, api.Fulfill })
         {
             var implementation = new ServiceModelBuilder().Implement(declaration, _ => { });
             var error = Assert.Throws<ServiceBindingValidationException>(() => implementation.Plan.Definition);
-            Assert.Equal(2, error.Validation.Diagnostics.Length);
+            Assert.Equal(declaration.Definition.Endpoints.Count, error.Validation.Diagnostics.Length);
             Assert.All(error.Validation.Diagnostics, diagnostic => Assert.Equal("services.api.missingImplementation", diagnostic.Code));
         }
     }

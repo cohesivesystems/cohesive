@@ -1,7 +1,7 @@
 # Accepted process execution and linked results
 
-An accepted endpoint promises durable **admission**, not completion. The service declares that choice;
-HTTP composition cannot turn an ephemeral operation into a durable one. A second service operation reads
+An accepted endpoint promises **admission under its declared lifetime**, not completion. The service declares that lifetime;
+HTTP response timing cannot turn host-owned execution into durable execution. A second service operation reads
 the original retained process result under independent authorization.
 
 ## Declare, attach, bind
@@ -94,6 +94,30 @@ The tests use the existing in-memory native admission reference adapter and cont
 they prove composition and protocol behavior, **not crash durability or production worker readiness**.
 Existing service/runtime/provider suites retain responsibility for durable storage and activation guarantees.
 
-The running Aspire-first fulfillment demo remains ephemeral until a concrete durable worker/storage binding
-is selected and qualified. No worker, external scheduler, cloud resource or deployment is activated by this change.
+The running Aspire-first fulfillment demo uses Host lifetime: one bounded generic-host worker over native
+in-memory admission and checkpoint execution. It reuses FulfillmentService and includes start/result in OrderApi.
+It survives request disconnects but loses execution history on host exit. PostgreSQL entity receipts have their
+own lifetime. No external scheduler, cloud resource or deployment is activated by this change.
 SSE, SignalR, callbacks, cancellation APIs and event-authoritative state are separate capabilities.
+
+## Response timing versus execution lifetime
+
+The service admits work using `ReturnAfterAdmission(ProcessExecutionLifetime.Host)` or
+`ReturnAfterDurableAdmission()`. `ServiceProcessBinding` checks the provider lifetime against that declaration.
+Invocation-local `ExecuteEphemerally(timeout)` remains a separate terminal-only execution profile, whose
+deadline requests cancellation; it cannot silently promise background continuation.
+
+The linked API independently selects `ServiceProcessResponse.Acknowledge` (default) or
+`ServiceProcessResponse.WaitForResult(maximumWait)`. Waiting adds the result endpoint's terminal alternatives
+to the start API, while preserving the primary receipt contract and 202 fallback. Location is present after
+successful admission even if result reading fails or returns a terminal value. Result authorization is performed
+independently before waiting/disclosure. Expiration returns the original receipt; disconnect only cancels the
+HTTP wait. The process is never redispatched by polling or a wait timeout.
+
+`BindHosted` records complete offline API coverage and prepares execution only during model Build. It delegates
+to the shared native process runtime, not a second orchestration interpretation. Retention is bounded by instance
+count, includes completed instances, and never evicts retry evidence implicitly. One sequential worker runs
+finite supported graphs; there is no timer driver, retry loop, distributed coordination or recovery after exit.
+Tests hold a native query open to prove admission precedes completion, caller cancellation is detached,
+waiting expires without cancelling work, replay does not execute twice, and a new worker has no old results.
+The actual PostgreSQL demo HTTP test follows the linked receipt to the committed fulfillment result.

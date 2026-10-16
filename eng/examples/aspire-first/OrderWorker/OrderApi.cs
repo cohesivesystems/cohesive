@@ -9,11 +9,14 @@ public sealed class OrderApi : ApiModel
 {
     /// <summary>Declares the public contract using the exact transition reference.</summary>
     /// <param name="service">Execution contract.</param>
-    /// <param name="process">Exact process authority.</param>
     /// <param name="transitions">Order behavior declarations, without runtime bindings.</param>
-    public OrderApi(OrderTransitions transitions, FulfillmentService service, FulfillmentProcess process)
+    public OrderApi(OrderTransitions transitions, FulfillmentService service)
     {
-        Fulfill = Endpoints.Process(service.Definition, "fulfill", process).Route("POST", "/fulfillment");
+        Fulfill = service.Definition.AcceptedApi<FulfillmentRequest, FulfillmentResult>(
+            startOperationId: "fulfill", resultOperationId: "result",
+            startRoute: "/fulfillment", resultRoute: "/fulfillment/results/{instanceId}");
+        Endpoints.Include(Fulfill.Start);
+        Endpoints.Include(Fulfill.Result);
         var orders = Endpoints.Entity<Order>();
         Create = orders.Command("Create")
             .Route("POST", "/orders").Build<OrderCreated>(ApiResultKind.Created);
@@ -30,8 +33,8 @@ public sealed class OrderApi : ApiModel
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<ReservationAvailability[]>();
     }
 
-    /// <summary>Runs fulfillment to terminal completion before returning.</summary>
-    public ServiceProcessEndpoint<FulfillOrder, FulfillmentResult> Fulfill { get; }
+    /// <summary>Acknowledges fulfillment and exposes its independently authorized result.</summary>
+    public ServiceAcceptedProcessApi<FulfillmentRequest, FulfillmentResult> Fulfill { get; }
     /// <summary>Creates a fresh order.</summary>
     public ApiEndpoint<OrderCreated> Create { get; }
     /// <summary>Reads an existing order.</summary>

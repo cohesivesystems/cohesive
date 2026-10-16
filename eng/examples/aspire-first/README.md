@@ -118,10 +118,10 @@ must be classified as a conflict or non-rejection; a newly added unmapped outcom
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with a `TransitionApiPreparationException` retaining structured compiler diagnostics. No global compilation cache or per-request compilation is added.
-All order routes and the terminal fulfillment endpoint are declared as instance-owned portable handles in `OrderApi`.
+All order routes and the fulfillment start/result endpoints are declared as instance-owned portable handles in `OrderApi`.
 `OrderEndpoints.Define(model)` contributes implementations through `ServiceModelBuilder.Implement(model.Api, ...)`.
 Entity operations retain the existing typed entity binding; queries use typed endpoint selectors with explicit bounds.
-A second contribution binds Fulfill to the separately declared ephemeral service. Native route input and response
+A second contribution binds Fulfill to the existing service through the bounded host-owned worker. Native route input and response
 policies remain at the ASP.NET seam, and `app.MapServices` publishes the complete validated surface. Callbacks receive
 typed order state and transition outcomes; `.Input(request => ...)` uses the existing request context
 and its `RequiredEntityId`. The separate declarations contain no handlers; the example's HTTP error body
@@ -519,7 +519,7 @@ earlier query-header declaration and constructor-based nested result syntax rema
 running-program availability wiring and CQRS/event-sourcing guarantees are separate follow-ups.
 
 The running program also maps `/orders/{id}/availability` through `ReservationAvailabilityQueryBindings.BindNative`
-and `/fulfillment` through the canonical ephemeral Process. The former preserves the outer-join row with absent reservation fields when an order has no demand. Cross-database placement remains an alternate tested binding, not the default running configuration.
+and `/fulfillment` through the canonical host-owned Process. The former preserves the outer-join row with absent reservation fields when an order has no demand. Cross-database placement remains an alternate tested binding, not the default running configuration.
 
 ### Domain contract boundary
 
@@ -571,7 +571,7 @@ model belongs to one route builder; build another model for another host. Native
 
 Fulfill declares terminal completion (HTTP 200 after execution), not acceptance for a background job. The typed
 endpoint is projected from the exact service declaration and included in OrderApi; binding checks its process,
-request/result contracts and policies. Accepted receipts, polling and durable workers remain out of this batch.
+request/result contracts and policies. Accepted receipts and polling now share this model; durable worker binding remains separate.
 
 
 Endpoint implementation coverage is inspectable offline through `model.Services.Plan.Definition`.
@@ -581,57 +581,40 @@ and missing coverage fails before storage resolution. Repeated host preparation 
 surface. Process endpoint authoring uses `Endpoints.Process(service.Definition, "fulfill", process).Route(...)`;
 the typed process supplies C# input/output contracts while the service remains separately declared.
 
-## Accepted execution as a separate binding
+## One service, one API; response timing and durability are independent
 
-[`OrderWorker/AcceptedFulfillmentApi.cs`](OrderWorker/AcceptedFulfillmentApi.cs) is a compiled alternative API
-contribution over the **same** generated `FulfillmentProcess`. It declares durable admission and a separate
-result read, then includes both typed endpoints in its `ApiModel`:
+`FulfillmentService` declares the existing generated process once, with a start operation and an independently
+authorized result operation. `OrderApi` includes both alongside creation, reads, transitions and queries:
 
 ```csharp
-Fulfill = service.AcceptedApi<AcceptedFulfillOrder, FulfillmentResult>(
+Fulfill = service.Definition.AcceptedApi<FulfillmentRequest, FulfillmentResult>(
     startOperationId: "fulfill", resultOperationId: "result",
-    startRoute: "/fulfillment/requests", resultRoute: "/fulfillment/results/{instanceId}");
+    startRoute: "/fulfillment", resultRoute: "/fulfillment/results/{instanceId}");
 Endpoints.Include(Fulfill.Start);
 Endpoints.Include(Fulfill.Result);
 ```
 
-[`OrderEndpoints.DefineAccepted`](OrderWorker/OrderEndpoints.cs) adds this contribution alongside existing
-order, query and terminal-fulfillment endpoints. Its registration is:
+`OrderEndpoints.Define` binds this pair through `BindHosted`, using the same service and generated process.
+`Program` still calls `model.Services.Build(...)` and `app.MapServices(...)`. Authoring and AppHost inspection
+perform no execution or database access; Build prepares the exact native dependencies once and registers the
+worker with the generic host. There is no parallel accepted API or second service declaration.
 
-```csharp
-Define(model).Implement(api, bindings => bindings.Bind(
-    contract => contract.Fulfill,
-    runtime,
-    bind: (_, command) => (
-        new(command.CommandId),
-        new(command.IdempotencyKey),
-        new(new(command.InstanceId), new(command.AttemptId)),
-        ObservationValue.FromObject(command.Input)),
-    project: api.Project));
-```
+The running demo returns **202 + receipt + Location**, then executes stock query → reserve → submit (or
+compensate) in one host-owned worker. GET of Location returns pending, the terminal result, or a safe failure.
+Start requires `fulfillment.write`; result reads independently require `fulfillment.read`. The explicit synthetic
+demo identity grants both; this is not production authentication.
 
-`Implement` reads `api.Definition` through `IApiDeclaration`; the caller does not pass it again.
-The explicit-definition overload is for plain catalogs with a separately owned contract. Request binding
-retains the caller's retry identities and projects only domain input; it does not construct trusted authority.
-The terminal projection decodes the already-authorized retained result with the shared value adapter.
+The API can instead declare `response: ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(2))`.
+This adds terminal response alternatives while retaining the 202 receipt fallback and polling endpoint.
+The response deadline or caller disconnect ends waiting, not execution. The service execution lifetime does
+not change. Polling remains useful even when the original result response is lost.
 
-Once native durable admission and retained-value providers are configured, the worker attachment would be:
+`ProcessExecutionLifetime.Host` is explicit: the bounded in-memory admission, deduplication, checkpoints and
+results survive a request, **not a host exit**. The demo retains at most 1,000 instances including completed
+ones, refuses new admissions at capacity, and has no automatic retry, timers, multi-host coordination or
+restart recovery. PostgreSQL entity/transition receipts remain durable separately. Production durable
+execution requires an explicitly Durable service and a qualified native dispatcher/value repository; the
+host provider rejects that policy rather than pretending its in-memory state is durable.
 
-```csharp
-var accepted = new AcceptedFulfillmentApi(model.Process);
-// runtime must realize accepted.Fulfill.Declaration with qualified native execution providers.
-var services = OrderEndpoints.DefineAccepted(model, accepted, runtime)
-    .Build(builder.Services, persistence.ForServices(receiptStorage));
-app.MapServices(services);
-```
-
-The optional contribution requires `fulfillment.write` for admission and `fulfillment.read` for polling.
-The fixed demo identity currently grants only write; an eventual runnable durable mode must explicitly
-configure its read policy as well as its worker/storage providers. It cannot infer read permission from admission.
-
-The default `Program.cs` still runs terminal ephemeral fulfillment. The alternative declaration and binding
-recipe compile with the worker, and database-free tests inspect its exact process links, outcome contracts,
-independent permissions and definition-owned registration. No fake durable executor is installed.
-See the [accepted-process walkthrough](../../../docs/design/accepted-process-api.md) for the receipt/poll
-protocol and its HTTP tests. Selecting and qualifying the demo's durable worker and retained-value providers
-is the next execution step; changing an HTTP return status alone does not supply those guarantees.
+See [FULFILLMENT.md](FULFILLMENT.md) for the runnable request and the
+[linked-process design](../../../docs/design/accepted-process-api.md) for protocol and failure details.

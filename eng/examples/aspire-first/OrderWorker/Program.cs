@@ -10,6 +10,7 @@ var builder = WebApplication.CreateBuilder(args);
 var model = new FulfillmentApplication();
 builder.Services.AddRequestOperationContext();
 builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
+FulfillmentDemoIdentity.AddHttpPolicies(builder.Services, model.Service.Definition);
 builder.Services.AddCohesiveExceptionHandling();
 var connectionString = builder.Configuration.GetConnectionString(FulfillmentResources.DatabaseName)
     ?? throw new InvalidOperationException("The native Aspire orders database reference is required.");
@@ -31,5 +32,6 @@ var services = model.Services.Build(builder.Services, persistence.ForServices(re
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
+app.UseAuthorization();
 app.MapServices(services);
 app.Run();
