@@ -1,3 +1,4 @@
+using Cohesive.Api.Services;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
@@ -50,8 +51,9 @@ public sealed class ServiceModelBuilder
         ArgumentNullException.ThrowIfNull(api); ArgumentNullException.ThrowIfNull(definition); ArgumentNullException.ThrowIfNull(configure);
         return state.Edit(() =>
         {
-            Plan.Declare(definition);
-            configure(new(this, api, definition));
+            var count = contributions.Count;
+            try { Plan.Contribute(definition, () => configure(new(this, api, definition))); }
+            catch { contributions.RemoveRange(count, contributions.Count - count); throw; }
             return this;
         });
     }
@@ -155,21 +157,26 @@ public sealed class ServiceApiImplementation<TApi>
     /// <param name="authorization">Invocation authorization.</param>
     /// <param name="logPrivateFailures">Explicit opt-in to protected host logging of native failure details.</param>
     /// <returns>This contribution.</returns>
-    public ServiceApiImplementation<TApi> Bind<TInput, TResult>(Func<TApi, ApiEndpoint<TInput, TResult>> select, ServiceBuilder service,
+    public ServiceApiImplementation<TApi> Bind<TInput, TResult>(Func<TApi, ServiceProcessEndpoint<TInput, TResult>> select, ServiceBuilder service,
         ProcessModel<TInput, TResult> process, string authority, IServiceInvocationAuthorization authorization,
         bool logPrivateFailures = false)
     {
         ArgumentNullException.ThrowIfNull(service); ArgumentNullException.ThrowIfNull(process);
         var endpoint = Select(select);
         var declaration = service.Build();
-        var reference = new ExecutionDefinitionReference(declaration.Metadata.DefinitionId, declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint);
-        if (endpoint is not ServiceProcessEndpoint<TInput, TResult> projected || projected.Service != reference || projected.Process != process.Definition.Reference)
+        var reference = declaration.Reference;
+        if (endpoint.Service != reference || endpoint.Process != process.Definition.Reference)
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "Endpoint must project this exact service and process authority.");
+        var operations = declaration.GetDefinition<ServiceDefinition>().Operations;
+        if (operations.Length != 1 || operations[0].Id != endpoint.OperationId)
+            throw ServiceImplementationPlan.Error("services.api.operationMismatch", "This finite host requires the endpoint's single declared service operation.");
         var http = endpoint.Operation.Http ?? throw ServiceImplementationPlan.Error("services.api.httpMissing", "Process endpoint requires HTTP binding.");
         model.Plan.Implement(definition, endpoint);
         model.Add(persistence =>
         {
             var hosted = service.Bind(process.Definition, persistence.Repository).Build(authority, authorization);
+            if (hosted.OperationId != endpoint.OperationId)
+                throw ServiceImplementationPlan.Error("services.api.operationMismatch", "The endpoint and hosted service select different operations.");
             return new([endpoint], routes => routes.MapServiceEphemeralProcess(hosted, http,
                 scopePolicies: endpoint.Operation.ScopePolicies), logPrivateFailures ? [hosted] : []);
         });

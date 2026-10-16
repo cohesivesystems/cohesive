@@ -137,3 +137,16 @@ The PostgreSQL service resolver owns a thread-safe query cache keyed by query in
 for the resolver lifetime. It holds no input, authorization or result state. Repeated endpoint selections share
 the prepared reader; a different bound produces a different preparation. `Ok()` supports value and collection
 results; `OkOrNotFound(predicate)` requires explicit absence semantics for value types.
+
+
+Process projection returns `ServiceProcessEndpoint<TInput,TResult>`, and process `Bind` requires that
+handle. All `WithHttp` dispatch, including through either base endpoint type, preserves the exact service,
+process and operation ID. The current finite host admits one service operation; a multi-operation service
+is rejected during contribution, before persistence, rather than selecting an operation implicitly.
+`ExecutionDefinitionDocument.Reference` projects declared metadata and is excluded from serialization;
+it does not substitute for fingerprint validation.
+
+Each `Implement` contribution is atomic: if any registration fails, its endpoint coverage, query selections,
+API declaration and host recipes are restored. A callback cannot freeze an in-progress contribution.
+Contract admission uses `ServiceBindingValidationException`; route state failures use coded
+`ServiceMappingException : InvalidOperationException`, preserving the prior catch boundary.

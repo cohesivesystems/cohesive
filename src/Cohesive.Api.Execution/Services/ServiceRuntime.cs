@@ -230,7 +230,7 @@ public sealed partial class ServiceRuntime
             throw ServiceBindingValidationException.Error("services.binding.extensionsUnsupported",
                 "This service profile does not support semantic extensions.", "/extensions");
         Declaration = service;
-        definitionReference = new(service.Metadata.DefinitionId, service.Metadata.RevisionId, service.Metadata.Fingerprint);
+        definitionReference = service.Reference;
         var bound = new Dictionary<string, Func<ServiceBinding>>(StringComparer.Ordinal);
         foreach (var binding in bindings)
             if (binding.Value is null || !bound.TryAdd(binding.Key, binding.Value))

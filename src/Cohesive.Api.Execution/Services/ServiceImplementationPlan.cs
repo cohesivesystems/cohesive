@@ -14,6 +14,7 @@ public sealed class ServiceImplementationPlan
     readonly HashSet<ApiEndpointId> supplied = [];
     readonly AuthoringState<ApiDefinition> state;
     ServiceDependencies queries = new();
+    int contributionDepth;
 
     /// <summary>Starts an empty portable implementation plan.</summary>
     public ServiceImplementationPlan() => state = new(() =>
@@ -25,6 +26,30 @@ public sealed class ServiceImplementationPlan
         if (errors.Length != 0) throw new ServiceBindingValidationException(new([.. errors]));
         return definition;
     });
+
+    /// <summary>Atomically contributes endpoint and query selections; a failed callback leaves the plan unchanged.</summary>
+    /// <param name="definition">API authority for the contribution.</param><param name="configure">Synchronous authoring callback; must not freeze the plan.</param>
+    public void Contribute(ApiDefinition definition, Action configure)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        state.Edit(() =>
+        {
+            var previousDefinitions = definitions.ToArray();
+            var previousSupplied = supplied.ToArray();
+            var previousQueries = queries;
+            contributionDepth++;
+            try { Declare(definition); configure(); }
+            catch
+            {
+                definitions.Clear(); definitions.AddRange(previousDefinitions);
+                supplied.Clear(); supplied.UnionWith(previousSupplied);
+                queries = previousQueries;
+                throw;
+            }
+            finally { contributionDepth--; }
+            return this;
+        });
+    }
 
     /// <summary>Registers a contract authority. Repeated contributions to the same instance are supported.</summary>
     /// <param name="definition">Original API definition.</param>
@@ -66,7 +91,8 @@ public sealed class ServiceImplementationPlan
         });
 
     /// <summary>Freezes and validates complete coverage, without any persistence or host.</summary>
-    public ApiDefinition Definition => state.Value;
+    public ApiDefinition Definition => contributionDepth == 0 ? state.Value
+        : throw new InvalidOperationException("Complete the contribution before freezing its plan.");
     /// <summary>Portable query requirements derived from admitted implementations.</summary>
     public ServiceDependencies QueryDependencies { get { _ = Definition; return queries; } }
 

@@ -31,7 +31,7 @@ public sealed class OrderApi : ApiModel
     }
 
     /// <summary>Runs fulfillment to terminal completion before returning.</summary>
-    public ApiEndpoint<FulfillOrder, FulfillmentResult> Fulfill { get; }
+    public ServiceProcessEndpoint<FulfillOrder, FulfillmentResult> Fulfill { get; }
     /// <summary>Creates a fresh order.</summary>
     public ApiEndpoint<OrderCreated> Create { get; }
     /// <summary>Reads an existing order.</summary>

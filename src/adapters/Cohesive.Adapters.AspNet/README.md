@@ -443,3 +443,8 @@ create a separate builder for a different host. Missing, foreign, duplicate and 
 implementations report `ServiceBindingValidationException` with `services.api.*` codes.
 Query response bindings support `Ok()` for value/collection results and `OkOrNotFound(predicate)`
 for explicit absence. Reference results retain the null-as-absent default.
+
+Process binding requires `ServiceProcessEndpoint<TInput,TResult>` from the portable projection, including
+its operation ID. HTTP attachment through a base endpoint reference preserves that proof. Failed
+implementation callbacks contribute nothing. Mapping errors are `ServiceMappingException` (an
+`InvalidOperationException`) with a stable `Code`; admission errors remain contract-validation exceptions.

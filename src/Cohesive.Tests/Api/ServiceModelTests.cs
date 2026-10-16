@@ -55,7 +55,7 @@ public sealed class ServiceModelTests
         Assert.Equal(2, persistence.Prepared);
         await using var app = builder.Build();
         app.MapServices(prepared);
-        Assert.Throws<ServiceBindingValidationException>(() => app.MapServices(prepared));
+        Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
         app.Urls.Add("http://127.0.0.1:0");
         await app.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -89,7 +89,7 @@ public sealed class ServiceModelTests
         var builder = WebApplication.CreateBuilder();
         var prepared = new ServiceModelBuilder().Implement(api, First).Implement(api, Second).Build(builder.Services, new Persistence());
         await using var app = builder.Build();
-        Assert.Throws<ServiceBindingValidationException>(() => app.MapServices(prepared));
+        Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
         Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
     }
 
@@ -102,7 +102,7 @@ public sealed class ServiceModelTests
             bindings.Bind(a => a.Second, Query("second"), new("1"), 10, 1000, _ => { }))
             .Build(builder.Services, new Persistence());
         await using var app = builder.Build();
-        Assert.Throws<ServiceBindingValidationException>(() => app.MapServices(prepared));
+        Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
         Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
     }
 
@@ -172,7 +172,7 @@ public sealed class ServiceModelTests
     sealed class ProcessApi : ApiModel
     {
         public ProcessApi(ServiceBuilder service, EchoProcess process) => Echo = Endpoints.Process(service, "echo", process).Route("POST", "/echo");
-        public ApiEndpoint<string, string> Echo { get; }
+        public ServiceProcessEndpoint<string, string> Echo { get; }
     }
     static ServiceBuilder EchoService(EchoProcess process, string id = "echo-service") =>
         Service.Define(new(id), new("1"), process.Provenance).Operation("echo").Run(process.Definition).ExecuteEphemerally(TimeSpan.FromSeconds(2));
@@ -204,6 +204,61 @@ public sealed class ServiceModelTests
             bindings => bindings.Bind(a => a.Echo, EchoService(process, "another-service"), process,
                 "test", new IdentityServiceInvocationAuthorization("tenant", new("Tenant")))));
         Assert.Contains(error.Validation.Diagnostics, item => item.Code == "services.api.processMismatch");
+    }
+
+    [Fact]
+    public void Base_http_attachment_preserves_process_proof_and_operation_identity()
+    {
+        var process = new EchoProcess(); var api = new ProcessApi(EchoService(process), process);
+        ApiEndpoint untyped = api.Echo;
+        ApiEndpoint<string, string> typed = api.Echo;
+        foreach (var attached in new[] { untyped.WithHttp(new("POST", "/base", [], new(typeof(string)))),
+            typed.WithHttp(new("POST", "/typed", [], new(typeof(string)))) })
+        {
+            var proof = Assert.IsType<ServiceProcessEndpoint<string, string>>(attached);
+            Assert.Equal(api.Echo.Service, proof.Service);
+            Assert.Equal(api.Echo.Process, proof.Process);
+            Assert.Equal("echo", proof.OperationId);
+        }
+    }
+
+    [Fact]
+    public void Multiple_operations_for_same_process_are_rejected_before_storage_preparation()
+    {
+        var process = new EchoProcess();
+        var service = EchoService(process).Operation("other").Run(process.Definition).ExecuteEphemerally(TimeSpan.FromSeconds(2));
+        var api = new ProcessApi(service, process);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceModelBuilder().Implement(api,
+            bindings => bindings.Bind(a => a.Echo, service, process, "test", new IdentityServiceInvocationAuthorization("tenant", new("Tenant")))));
+        Assert.Contains(error.Validation.Diagnostics, item => item.Code == "services.api.operationMismatch");
+    }
+
+    [Fact]
+    public void Failed_contribution_rolls_back_queries_endpoints_and_host_recipes()
+    {
+        var api = new Catalog();
+        var model = new ServiceModelBuilder().Implement(api, First);
+        Assert.Throws<ServiceBindingValidationException>(() => model.Implement(api, bindings =>
+        {
+            Second(bindings);
+            bindings.Bind(a => a.First, Query("discarded"), new("1"), 10, 1000, _ => { });
+        }));
+        model.Implement(api, Second);
+        Assert.Equal(2, model.Plan.QueryDependencies.Queries.Length);
+        var persistence = new Persistence();
+        model.Build(new ServiceCollection(), persistence);
+        Assert.Equal(2, persistence.Prepared);
+    }
+
+    [Fact]
+    public void Document_reference_projects_metadata_without_changing_wire_contract()
+    {
+        var document = new EchoProcess().Definition.Document;
+        Assert.Equal(document.Metadata.DefinitionId, document.Reference.DefinitionId);
+        Assert.Equal(document.Metadata.RevisionId, document.Reference.RevisionId);
+        Assert.Equal(document.Metadata.Fingerprint, document.Reference.Fingerprint);
+        using var serialized = System.Text.Json.JsonDocument.Parse(System.Text.Json.JsonSerializer.Serialize(document));
+        Assert.False(serialized.RootElement.TryGetProperty("Reference", out _));
     }
 
     sealed class Persistence : IServicePersistence

@@ -7,14 +7,16 @@ namespace Cohesive.Api.Execution.Services;
 /// <typeparam name="TRequest">HTTP input.</typeparam><typeparam name="TResponse">HTTP response.</typeparam>
 public sealed class ServiceProcessEndpoint<TRequest, TResponse> : ApiEndpoint<TRequest, TResponse>
 {
-    internal ServiceProcessEndpoint(ApiOperation operation, ExecutionDefinitionDocument service, ExecutionDefinitionReference process)
+    internal ServiceProcessEndpoint(ApiOperation operation, ExecutionDefinitionDocument service, ExecutionDefinitionReference process, string operationId)
         : base(operation)
-    { Service = new(service.Metadata.DefinitionId, service.Metadata.RevisionId, service.Metadata.Fingerprint); Process = process; }
-    ServiceProcessEndpoint(ApiOperation operation, ExecutionDefinitionReference service, ExecutionDefinitionReference process)
-        : base(operation) { Service = service; Process = process; }
+    { Service = service.Reference; Process = process; OperationId = operationId; }
+    ServiceProcessEndpoint(ApiOperation operation, ExecutionDefinitionReference service, ExecutionDefinitionReference process, string operationId)
+        : base(operation) { Service = service; Process = process; OperationId = operationId; }
     /// <summary>Attaches HTTP configuration while retaining the exact projection authorities.</summary>
     /// <param name="http">HTTP projection of this operation.</param><returns>The authority-preserving endpoint.</returns>
-    public override ServiceProcessEndpoint<TRequest, TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http), Service, Process);
+    public override ServiceProcessEndpoint<TRequest, TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http), Service, Process, OperationId);
+    /// <summary>Exact operation selected within the service.</summary>
+    public string OperationId { get; }
     /// <summary>Fingerprint-pinned service authority.</summary>
     public ExecutionDefinitionReference Service { get; }
     /// <summary>Fingerprint-pinned process authority.</summary>
@@ -49,7 +51,7 @@ public sealed class ServiceProcessEndpointBuilder<TInput, TResult>
     /// <summary>Projects the declared terminal outcomes and includes the endpoint in its API.</summary>
     /// <param name="method">HTTP method.</param><param name="template">Route template.</param>
     /// <returns>The typed endpoint handle.</returns>
-    public ApiEndpoint<TInput, TResult> Route(string method, string template) => endpoints.Include(
+    public ServiceProcessEndpoint<TInput, TResult> Route(string method, string template) => endpoints.Include(
         ServiceApiProjection.ProjectEphemeralProcess(service.Build(), operationId, process.Definition,
             new HttpBinding(method, template, [], new(typeof(TInput)))));
 }

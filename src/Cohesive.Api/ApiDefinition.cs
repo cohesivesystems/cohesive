@@ -167,7 +167,7 @@ public class ApiEndpoint
     /// authority references while adding the supplied HTTP projection.
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="http"/> is <see langword="null"/>.</exception>
-    public ApiEndpoint WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
+    public virtual ApiEndpoint WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
 
     /// <inheritdoc />
     public override string ToString() => Id.Value;
@@ -193,7 +193,7 @@ public sealed class ApiEndpoint<TResponse> : ApiEndpoint
     /// <param name="http">Native HTTP projection of the same semantic operation.</param>
     /// <returns>A typed handle retaining identity, contracts, policies and authority references.</returns>
     /// <exception cref="ArgumentNullException">The HTTP binding is null.</exception>
-    public new ApiEndpoint<TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
+    public override ApiEndpoint<TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
 }
 
 /// <summary>A request-and-response-typed view of one canonical API operation.</summary>
@@ -218,7 +218,7 @@ public class ApiEndpoint<TRequest, TResponse> : ApiEndpoint
     /// <returns>A typed handle with the same identity and contracts.</returns>
     /// <exception cref="ArgumentNullException">The HTTP binding is null.</exception>
     /// <exception cref="ArgumentException">The projection conflicts with the request contract.</exception>
-    public new virtual ApiEndpoint<TRequest, TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
+    public override ApiEndpoint<TRequest, TResponse> WithHttp(HttpBinding http) => new(Operation.WithHttp(http));
 }
 
 /// <summary>

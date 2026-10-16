@@ -89,6 +89,10 @@ public sealed record ExecutionDefinitionExtension
 /// </remarks>
 public sealed record ExecutionDefinitionDocument
 {
+    /// <summary>Exact declared identity, revision and fingerprint; this projection does not validate the document.</summary>
+    [JsonIgnore]
+    public ExecutionDefinitionReference Reference => new(Metadata.DefinitionId, Metadata.RevisionId, Metadata.Fingerprint);
+
     ExecutionDefinitionFingerprint? semanticFingerprint;
     object? semanticFingerprintLock;
     ConcurrentDictionary<Type, Lazy<object>>? immutableProjections;

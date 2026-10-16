@@ -231,7 +231,7 @@ public sealed class ServiceOperationBuilder
         ArgumentNullException.ThrowIfNull(document);
         var validation = ProcessDefinitionDocuments.Validate(document);
         if (!validation.IsValid) throw new ServiceBindingValidationException(validation);
-        return new(document.Metadata.DefinitionId, document.Metadata.RevisionId, document.Metadata.Fingerprint);
+        return document.Reference;
     }
 
     void RequireUnselected()
