@@ -120,7 +120,7 @@ public static class IngestionWorkDocuments
     }
 
     static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) =>
-        new(document.Metadata.DefinitionId, document.Metadata.RevisionId, document.Metadata.Fingerprint);
+        document.Reference;
 
     /// <summary>Derives the stable request lookup identity without reading mutable progress or manufacturing a draft request.</summary>
     /// <param name="address">Independent flow/source/destination/partition scope.</param>

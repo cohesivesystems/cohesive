@@ -18,7 +18,7 @@ public static class IngestionLedgerReduction
         ExecutionDefinitionDocument document)
     {
         var advance = IngestionLedgerDocuments.Read(document);
-        var reference = new ExecutionDefinitionReference(document.Metadata.DefinitionId, document.Metadata.RevisionId, document.Metadata.Fingerprint);
+        var reference = document.Reference;
         if (priorReceipt is not null)
         {
             if (priorReceipt.Entry is null || priorReceipt.Advance is null) return IngestionLedgerResult.Conflict("receipt-integrity");

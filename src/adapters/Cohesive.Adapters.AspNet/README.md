@@ -447,4 +447,9 @@ for explicit absence. Reference results retain the null-as-absent default.
 Process binding requires `ServiceProcessEndpoint<TInput,TResult>` from the portable projection, including
 its operation ID. HTTP attachment through a base endpoint reference preserves that proof. Failed
 implementation callbacks contribute nothing. Mapping errors are `ServiceMappingException` (an
-`InvalidOperationException`) with a stable `Code`; admission errors remain contract-validation exceptions.
+`InvalidOperationException`) with structured `Validation` diagnostics; admission errors remain contract-validation exceptions.
+
+The fluent `Endpoints.Process` helper targets the single-operation finite-host profile and rejects larger
+service declarations during authoring. General service declarations support multiple operations; their
+runtime requires complete binding coverage. The multi-operation hosting follow-up is tracked in
+`docs/design/application-composition.md` with its removal condition and required policy-isolation tests.

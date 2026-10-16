@@ -1,3 +1,5 @@
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Api;
 using Microsoft.AspNetCore.Builder;
@@ -65,7 +67,8 @@ public sealed class ServiceMappingException : InvalidOperationException
 {
     /// <summary>Creates a coded mapping failure.</summary>
     /// <param name="code">Stable diagnostic code.</param><param name="message">Actionable explanation.</param>
-    public ServiceMappingException(string code, string message) : base(message) => Code = code;
-    /// <summary>Stable mapping diagnostic code.</summary>
-    public string Code { get; }
+    public ServiceMappingException(string code, string message) : base(message) =>
+        Validation = new([new(code, DiagnosticSeverity.Error, message, "/api/mapping")]);
+    /// <summary>Structured diagnostics, matching the admission failure payload.</summary>
+    public DocumentValidationResult Validation { get; }
 }

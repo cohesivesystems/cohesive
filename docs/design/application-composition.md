@@ -150,3 +150,17 @@ Each `Implement` contribution is atomic: if any registration fails, its endpoint
 API declaration and host recipes are restored. A callback cannot freeze an in-progress contribution.
 Contract admission uses `ServiceBindingValidationException`; route state failures use coded
 `ServiceMappingException : InvalidOperationException`, preserving the prior catch boundary.
+
+
+### Tracked extension: multi-operation finite hosting
+
+The fluent `Endpoints.Process(...)` helper is currently a **single-operation finite-host profile**.
+It rejects multi-operation declarations at authoring, even if the chosen ID exists. General service
+IR still supports multiple operations, and `ServiceRuntime` deliberately requires complete binding coverage.
+Do not implement selection by silently dropping other operations or rewriting the service document.
+The follow-up is a shared host composition that binds every selected operation to one complete runtime,
+retains the original service fingerprint, and tests two operations over the same process with different
+authorization/timeout policies. Remove this authoring restriction when that complete host path is available.
+
+Mapping and admission failures both expose `DocumentValidationResult Validation`; mapping failures retain
+`InvalidOperationException` as their base because repeated/incomplete attachment is a host state error.

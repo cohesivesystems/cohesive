@@ -55,7 +55,10 @@ public sealed class ServiceModelTests
         Assert.Equal(2, persistence.Prepared);
         await using var app = builder.Build();
         app.MapServices(prepared);
-        Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
+        var mappingError = Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
+        var diagnostic = Assert.Single(mappingError.Validation.Diagnostics);
+        Assert.Equal("services.api.alreadyMapped", diagnostic.Code);
+        Assert.Equal("/api/mapping", diagnostic.Location);
         app.Urls.Add("http://127.0.0.1:0");
         await app.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -223,13 +226,11 @@ public sealed class ServiceModelTests
     }
 
     [Fact]
-    public void Multiple_operations_for_same_process_are_rejected_before_storage_preparation()
+    public void Finite_endpoint_authoring_rejects_multiple_operations_for_same_process()
     {
         var process = new EchoProcess();
         var service = EchoService(process).Operation("other").Run(process.Definition).ExecuteEphemerally(TimeSpan.FromSeconds(2));
-        var api = new ProcessApi(service, process);
-        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceModelBuilder().Implement(api,
-            bindings => bindings.Bind(a => a.Echo, service, process, "test", new IdentityServiceInvocationAuthorization("tenant", new("Tenant")))));
+        var error = Assert.Throws<ServiceBindingValidationException>(() => new ProcessApi(service, process));
         Assert.Contains(error.Validation.Diagnostics, item => item.Code == "services.api.operationMismatch");
     }
 

@@ -141,7 +141,7 @@ public sealed class ServiceInfrastructureAssociation
             normalized.Add(operation, [.. selected.OrderBy(id => id.Value, StringComparer.Ordinal)]);
         }
         var document = InfrastructureDefinitionDocument.FromDefinition(infrastructure);
-        return new(new(service.Metadata.DefinitionId, service.Metadata.RevisionId, service.Metadata.Fingerprint),
+        return new(service.Reference,
             document.ToReference(), workload, normalized.ToImmutable());
     }
 }

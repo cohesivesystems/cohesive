@@ -571,10 +571,7 @@ public static class ChannelRealizationPlanValidator
             definition = definitionDocument.GetDefinition<ChannelDefinition>();
         }
 
-        var expectedDefinitionReference = new ExecutionDefinitionReference(
-            definitionDocument.Metadata.DefinitionId,
-            definitionDocument.Metadata.RevisionId,
-            definitionDocument.Metadata.Fingerprint);
+        var expectedDefinitionReference = definitionDocument.Reference;
         if (plan.Definition != expectedDefinitionReference)
         {
             diagnostics.Add(Error(
@@ -856,10 +853,7 @@ public static class ChannelRealizationCompiler
 
         var configuration = SelectedConfiguration(profile, selected);
         return new(
-            definition: new(
-                document.Metadata.DefinitionId,
-                document.Metadata.RevisionId,
-                document.Metadata.Fingerprint),
+            definition: document.Reference,
             profile: profile.ToReference(),
             variant: selected.Variant.Id,
             decisions: selected.Decisions,

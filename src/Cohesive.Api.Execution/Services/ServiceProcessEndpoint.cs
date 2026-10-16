@@ -1,3 +1,4 @@
+using Cohesive.Api.Services;
 using Cohesive.Execution;
 using Cohesive.Processes.Authoring;
 
@@ -26,7 +27,10 @@ public sealed class ServiceProcessEndpoint<TRequest, TResponse> : ApiEndpoint<TR
 /// <summary>Fluent HTTP authoring over separately declared service and process contracts.</summary>
 public static class ServiceProcessEndpointExtensions
 {
-    /// <summary>Selects a terminal ephemeral service operation without constructing runtime bindings.</summary>
+    /// <summary>Selects the sole operation of a finite ephemeral service without constructing runtime bindings.</summary>
+    /// <remarks>This host profile requires one operation. Multi-operation service declarations remain valid for other
+    /// runtimes, but require complete binding coverage and cannot be projected through this finite-host builder.</remarks>
+    /// <exception cref="ServiceBindingValidationException">The service contains more than one operation or the ID does not select its sole operation.</exception>
     /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process output.</typeparam>
     /// <param name="endpoints">Owning API builder.</param><param name="service">Service declaration.</param>
     /// <param name="operationId">Exact operation in that service.</param><param name="process">Typed process authority.</param>
@@ -46,6 +50,10 @@ public sealed class ServiceProcessEndpointBuilder<TInput, TResult>
     internal ServiceProcessEndpointBuilder(ApiBuilder endpoints, ServiceBuilder service, string operationId, ProcessModel<TInput, TResult> process)
     {
         ArgumentNullException.ThrowIfNull(endpoints); ArgumentNullException.ThrowIfNull(service); ArgumentNullException.ThrowIfNull(process);
+        var operations = service.Build().GetDefinition<ServiceDefinition>().Operations;
+        if (operations.Length != 1 || operations[0].Id != operationId)
+            throw ServiceImplementationPlan.Error("services.api.operationMismatch",
+                "This finite endpoint profile requires one service operation, selected by its exact ID. Use complete multi-operation runtime bindings for larger services.");
         this.endpoints = endpoints; this.service = service; this.operationId = operationId; this.process = process;
     }
     /// <summary>Projects the declared terminal outcomes and includes the endpoint in its API.</summary>
