@@ -26,7 +26,7 @@ public static class TransitionExecutionTraceProjector
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(decision);
 
-        var expectedDefinition = Reference(plan.Document);
+        var expectedDefinition = plan.Document.Reference;
         List<DocumentValidationDiagnostic> diagnostics = [];
         if (decision.Evidence.Definition != expectedDefinition)
         {
@@ -96,11 +96,6 @@ public static class TransitionExecutionTraceProjector
                 fallbackSource));
         }
     }
-
-    static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) => new(
-        document.Metadata.DefinitionId,
-        document.Metadata.RevisionId,
-        document.Metadata.Fingerprint);
 
     static string ConventionName<TEnum>(TEnum value)
         where TEnum : struct, Enum =>

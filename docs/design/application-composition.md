@@ -164,3 +164,10 @@ authorization/timeout policies. Remove this authoring restriction when that comp
 
 Mapping and admission failures both expose `DocumentValidationResult Validation`; mapping failures retain
 `InvalidOperationException` as their base because repeated/incomplete attachment is a host state error.
+
+
+Mapping diagnostics locate missing, repeated or foreign operations at `/api/endpoints/{id}` and duplicate
+native routes at `/api/routes/{method}/{template}` (JSON Pointer escaping). Missing API metadata identifies
+the staged endpoint index; repeated mapping identifies `/api/mapping/state`. Coverage failures retain all
+identified endpoint diagnostics instead of a single generic location. Process endpoint authoring retains the
+one service document built during selection and reuses it for HTTP projection.

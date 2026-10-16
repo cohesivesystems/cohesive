@@ -22,22 +22,43 @@ public sealed class ServiceModel
     {
         ArgumentNullException.ThrowIfNull(routes);
         if (Interlocked.Exchange(ref mappingStarted, 1) != 0)
-            throw new ServiceMappingException("services.api.alreadyMapped", "A prepared service model can be mapped once. Build a separate model for another host.");
+            throw new ServiceMappingException("services.api.alreadyMapped", "A prepared service model can be mapped once. Build a separate model for another host.", "/api/mapping/state");
         var staging = new StagedRoutes(routes);
         foreach (var contribution in contributions) contribution.Map(staging);
         var endpoints = staging.DataSources.SelectMany(source => source.Endpoints).ToArray();
-        var implemented = endpoints.Select(endpoint => endpoint.Metadata.GetMetadata<ApiOperation>()?.Id).ToArray();
-        if (implemented.Any(id => id is null) || implemented.Length != Definition.Endpoints.Count
-            || implemented.Distinct().Count() != implemented.Length
-            || Definition.Endpoints.Any(endpoint => !implemented.Contains(endpoint.Id)))
-            throw new ServiceMappingException("services.api.incompleteMapping", "Every declared API endpoint must map exactly once; complete every binding.");
+        var counts = new Dictionary<ApiEndpointId, int>();
+        var errors = new List<DocumentValidationDiagnostic>();
+        for (var index = 0; index < endpoints.Length; index++)
+        {
+            if (endpoints[index].Metadata.GetMetadata<ApiOperation>() is not { } operation)
+            {
+                errors.Add(new("services.api.incompleteMapping", DiagnosticSeverity.Error,
+                    $"Mapped endpoint '{endpoints[index].DisplayName}' has no API operation metadata.", $"/api/mapping/endpoints/{index}"));
+                continue;
+            }
+            counts[operation.Id] = counts.GetValueOrDefault(operation.Id) + 1;
+            if (!Definition.Endpoints.Any(endpoint => endpoint.Id == operation.Id))
+                errors.Add(new("services.api.incompleteMapping", DiagnosticSeverity.Error,
+                    $"Endpoint '{operation.Id}' is not declared by this model.", EndpointLocation(operation.Id)));
+        }
+        foreach (var endpoint in Definition.Endpoints)
+        {
+            var count = counts.GetValueOrDefault(endpoint.Id);
+            if (count != 1) errors.Add(new("services.api.incompleteMapping", DiagnosticSeverity.Error,
+                $"Endpoint '{endpoint.Id}' mapped {count} times; expected exactly once.", EndpointLocation(endpoint.Id)));
+        }
+        if (errors.Count != 0) throw new ServiceMappingException(new([.. errors]));
         var signatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var endpoint in routes.DataSources.SelectMany(source => source.Endpoints).Concat(endpoints).OfType<RouteEndpoint>())
         foreach (var method in endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods ?? ["*"])
             if (!signatures.Add($"{method} {endpoint.RoutePattern.RawText}"))
-                throw new ServiceMappingException("services.api.duplicateRoute", $"Duplicate HTTP route: {method} {endpoint.RoutePattern.RawText}.");
+                throw new ServiceMappingException("services.api.duplicateRoute", $"Duplicate HTTP route: {method} {endpoint.RoutePattern.RawText} (endpoint {endpoint.Metadata.GetMetadata<ApiOperation>()?.Id}).",
+                    $"/api/routes/{Escape(method)}/{Escape(endpoint.RoutePattern.RawText ?? string.Empty)}");
         foreach (var source in staging.DataSources) routes.DataSources.Add(source);
     }
+
+    static string Escape(string value) => value.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
+    static string EndpointLocation(ApiEndpointId id) => $"/api/endpoints/{Escape(id.Value)}";
 
     sealed class StagedRoutes(IEndpointRouteBuilder parent) : IEndpointRouteBuilder
     {
@@ -67,8 +88,19 @@ public sealed class ServiceMappingException : InvalidOperationException
 {
     /// <summary>Creates a coded mapping failure.</summary>
     /// <param name="code">Stable diagnostic code.</param><param name="message">Actionable explanation.</param>
-    public ServiceMappingException(string code, string message) : base(message) =>
-        Validation = new([new(code, DiagnosticSeverity.Error, message, "/api/mapping")]);
+    /// <param name="location">JSON-pointer-style location of the failed endpoint, route or mapping state.</param>
+    public ServiceMappingException(string code, string message, string location)
+        : this(new DocumentValidationResult([new(code, DiagnosticSeverity.Error, message, location)])) { }
+    /// <summary>Creates a mapping failure containing every identified endpoint defect.</summary>
+    /// <param name="validation">Nonempty error diagnostics from mapping validation.</param>
+    public ServiceMappingException(DocumentValidationResult validation) : base(Describe(validation)) => Validation = validation;
+
+    static string Describe(DocumentValidationResult validation)
+    {
+        ArgumentNullException.ThrowIfNull(validation);
+        if (validation.IsValid) throw new ArgumentException("Mapping failure requires error diagnostics.", nameof(validation));
+        return string.Join("; ", validation.Diagnostics.Select(item => $"{item.Code} at {item.Location}: {item.Message}"));
+    }
     /// <summary>Structured diagnostics, matching the admission failure payload.</summary>
     public DocumentValidationResult Validation { get; }
 }

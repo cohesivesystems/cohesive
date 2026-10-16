@@ -44,22 +44,23 @@ public static class ServiceProcessEndpointExtensions
 public sealed class ServiceProcessEndpointBuilder<TInput, TResult>
 {
     readonly ApiBuilder endpoints;
-    readonly ServiceBuilder service;
+    readonly ExecutionDefinitionDocument declaration;
     readonly string operationId;
     readonly ProcessModel<TInput, TResult> process;
     internal ServiceProcessEndpointBuilder(ApiBuilder endpoints, ServiceBuilder service, string operationId, ProcessModel<TInput, TResult> process)
     {
         ArgumentNullException.ThrowIfNull(endpoints); ArgumentNullException.ThrowIfNull(service); ArgumentNullException.ThrowIfNull(process);
-        var operations = service.Build().GetDefinition<ServiceDefinition>().Operations;
+        declaration = service.Build();
+        var operations = declaration.GetDefinition<ServiceDefinition>().Operations;
         if (operations.Length != 1 || operations[0].Id != operationId)
             throw ServiceImplementationPlan.Error("services.api.operationMismatch",
                 "This finite endpoint profile requires one service operation, selected by its exact ID. Use complete multi-operation runtime bindings for larger services.");
-        this.endpoints = endpoints; this.service = service; this.operationId = operationId; this.process = process;
+        this.endpoints = endpoints; this.operationId = operationId; this.process = process;
     }
     /// <summary>Projects the declared terminal outcomes and includes the endpoint in its API.</summary>
     /// <param name="method">HTTP method.</param><param name="template">Route template.</param>
     /// <returns>The typed endpoint handle.</returns>
     public ServiceProcessEndpoint<TInput, TResult> Route(string method, string template) => endpoints.Include(
-        ServiceApiProjection.ProjectEphemeralProcess(service.Build(), operationId, process.Definition,
+        ServiceApiProjection.ProjectEphemeralProcess(declaration, operationId, process.Definition,
             new HttpBinding(method, template, [], new(typeof(TInput)))));
 }

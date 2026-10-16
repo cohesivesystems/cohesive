@@ -58,7 +58,7 @@ public sealed class ServiceModelTests
         var mappingError = Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
         var diagnostic = Assert.Single(mappingError.Validation.Diagnostics);
         Assert.Equal("services.api.alreadyMapped", diagnostic.Code);
-        Assert.Equal("/api/mapping", diagnostic.Location);
+        Assert.Equal("/api/mapping/state", diagnostic.Location);
         app.Urls.Add("http://127.0.0.1:0");
         await app.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -92,7 +92,9 @@ public sealed class ServiceModelTests
         var builder = WebApplication.CreateBuilder();
         var prepared = new ServiceModelBuilder().Implement(api, First).Implement(api, Second).Build(builder.Services, new Persistence());
         await using var app = builder.Build();
-        Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
+        var error = Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
+        Assert.Equal("/api/routes/GET/~1first~1{id}", Assert.Single(error.Validation.Diagnostics).Location);
+        Assert.All(error.Validation.Diagnostics, item => Assert.NotEqual("/api/mapping", item.Location));
         Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
     }
 
@@ -105,7 +107,9 @@ public sealed class ServiceModelTests
             bindings.Bind(a => a.Second, Query("second"), new("1"), 10, 1000, _ => { }))
             .Build(builder.Services, new Persistence());
         await using var app = builder.Build();
-        Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
+        var error = Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
+        Assert.Contains(error.Validation.Diagnostics, item => item.Message.Contains(api.Second.Id.Value) && item.Location == "/api/endpoints/" + api.Second.Id.Value.Replace("~", "~0").Replace("/", "~1"));
+        Assert.All(error.Validation.Diagnostics, item => Assert.NotEqual("/api/mapping", item.Location));
         Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
     }
 

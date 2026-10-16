@@ -360,10 +360,7 @@ public sealed class Process<TInput, TResult>
     public CanonicalProcessDefinition Definition => Document.GetDefinition<CanonicalProcessDefinition>();
 
     /// <summary>Exact identity, revision, and fingerprint reference to this canonical definition.</summary>
-    public ExecutionDefinitionReference Reference => new(
-        Document.Metadata.DefinitionId,
-        Document.Metadata.RevisionId,
-        Document.Metadata.Fingerprint);
+    public ExecutionDefinitionReference Reference => Document.Reference;
 
     /// <summary>Compiles the canonical document using exact linked-definition and interaction evidence.</summary>
     /// <param name="context">Exact linked definitions, interaction contracts, and optional shape evidence.</param>

@@ -60,10 +60,7 @@ public sealed class CompiledProcessPlan
     public ProcessDefinitionLink DefinitionLink { get; }
 
     /// <summary>Exact identity, revision, and semantic fingerprint of the compiled Process.</summary>
-    public ExecutionDefinitionReference DefinitionReference => new(
-        Document.Metadata.DefinitionId,
-        Document.Metadata.RevisionId,
-        Document.Metadata.Fingerprint);
+    public ExecutionDefinitionReference DefinitionReference => Document.Reference;
 
     /// <summary>Resolves one validated canonical node by stable identity.</summary>
     /// <param name="id">Stable node identity from this Process definition.</param>

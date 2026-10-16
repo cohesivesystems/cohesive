@@ -73,13 +73,13 @@ public static class IngestionWorkDocuments
             return prepared is null ? DocumentValidationResult.Valid : Error("lineage", "Prepared work requires its original acquisition evidence.");
         valid = TryRead(acquisition, out var second);
         if (!valid.IsValid) return valid;
-        if (second is not IngestionAcquisitionReceipt acquired || acquired.Request != Reference(request))
+        if (second is not IngestionAcquisitionReceipt acquired || acquired.Request != request.Reference)
             return Error("lineage", "Acquisition must bind the exact original request, including its fingerprint.");
         if (acquired.ObservedAtUtc < selected.SelectedAtUtc) return Error("chronology", "Acquisition cannot precede selection.");
         if (prepared is null) return DocumentValidationResult.Valid;
         valid = TryRead(prepared, out var third);
         if (!valid.IsValid) return valid;
-        if (third is not IngestionPreparedPublication publication || publication.Acquisition != Reference(acquisition))
+        if (third is not IngestionPreparedPublication publication || publication.Acquisition != acquisition.Reference)
             return Error("lineage", "Preparation must bind the exact original acquisition, including its fingerprint.");
         if (publication.Transformation != selected.Transformation)
             return Error("transformation", "Preparation must use the transformation pinned before acquisition.");
@@ -118,9 +118,6 @@ public static class IngestionWorkDocuments
             throw new ArgumentException("Receipt must bind the frozen publication identity and exact prepared bytes.", nameof(receipt));
         return IngestionLedgerDocuments.Create(new(selected.Address, selected.Definition, expected, publication.NextPosition, receipt), provenance);
     }
-
-    static ExecutionDefinitionReference Reference(ExecutionDefinitionDocument document) =>
-        document.Reference;
 
     /// <summary>Derives the stable request lookup identity without reading mutable progress or manufacturing a draft request.</summary>
     /// <param name="address">Independent flow/source/destination/partition scope.</param>

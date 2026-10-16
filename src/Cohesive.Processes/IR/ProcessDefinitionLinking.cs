@@ -330,10 +330,7 @@ public sealed record ProcessDefinitionLink
 
         var definition = document.GetDefinition<CanonicalTransitionDefinition>();
         link = new(
-            new(
-                document.Metadata.DefinitionId,
-                document.Metadata.RevisionId,
-                document.Metadata.Fingerprint),
+            document.Reference,
             ProcessDefinitionLinkKind.Transition,
             definition.Input,
             definition.Outcome);
@@ -368,10 +365,7 @@ public sealed record ProcessDefinitionLink
         ArgumentNullException.ThrowIfNull(definition);
 
         return new(
-            new(
-                document.Metadata.DefinitionId,
-                document.Metadata.RevisionId,
-                document.Metadata.Fingerprint),
+            document.Reference,
             ProcessDefinitionLinkKind.Process,
             definition.Input,
             definition.Result,

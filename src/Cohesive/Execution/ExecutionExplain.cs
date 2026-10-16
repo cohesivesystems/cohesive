@@ -232,10 +232,7 @@ public sealed record ExecutionExplainDefinitionReference
         return new(
             document.Kind,
             document.Metadata.SchemaVersion,
-            new(
-                document.Metadata.DefinitionId,
-                document.Metadata.RevisionId,
-                document.Metadata.Fingerprint),
+            document.Reference,
             document.Metadata.Provenance,
             document.Metadata.SourceMap);
     }

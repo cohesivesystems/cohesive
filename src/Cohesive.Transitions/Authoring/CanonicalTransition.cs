@@ -117,10 +117,7 @@ public sealed class Transition<TEntity, TInput, TOutcome>
     public IR.TransitionDefinition Definition => Document.GetDefinition<IR.TransitionDefinition>();
 
     /// <summary>Exact identity, revision, and fingerprint reference to this canonical definition.</summary>
-    public ExecutionDefinitionReference Reference => new(
-        Document.Metadata.DefinitionId,
-        Document.Metadata.RevisionId,
-        Document.Metadata.Fingerprint);
+    public ExecutionDefinitionReference Reference => Document.Reference;
 
     /// <summary>Compiles the canonical document without an external shape graph.</summary>
     /// <returns>A complete plan when valid and supported, or structured validation and compilation diagnostics.</returns>
