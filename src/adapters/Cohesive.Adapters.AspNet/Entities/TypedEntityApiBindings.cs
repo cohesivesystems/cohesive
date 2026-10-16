@@ -158,6 +158,8 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
         mapped = true;
     }
 
+    internal IReadOnlyList<ApiEndpoint> BoundEndpoints => endpoints;
+
     internal void BeginTransition() { EnsureMutable(); pendingTransitions++; }
     internal void CompleteTransition() => pendingTransitions--;
 

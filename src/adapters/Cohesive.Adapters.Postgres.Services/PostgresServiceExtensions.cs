@@ -19,11 +19,17 @@ public static class PostgresServiceExtensions
     /// <exception cref="RelationQueryPreparationException">A semantic query is invalid.</exception>
     /// <exception cref="PostgresQueryPreparationException">Native compilation fails.</exception>
     public static PostgresPreparedQueryEvidence PrepareService(this PostgresPersistenceBindings bindings,
-        ServiceBuilder service, InfrastructureTargetFacilityId implementation)
+        ServiceBuilder service, InfrastructureTargetFacilityId implementation) => PrepareService(bindings, service.Dependencies, implementation);
+
+    /// <summary>Prepares query evidence from API-derived dependency selections.</summary>
+    /// <param name="bindings">Offline native mappings.</param><param name="service">Selected query requirements.</param>
+    /// <param name="implementation">Target implementation identity.</param><returns>Native prepared evidence.</returns>
+    public static PostgresPreparedQueryEvidence PrepareService(this PostgresPersistenceBindings bindings,
+        ServiceDependencies service, InfrastructureTargetFacilityId implementation)
     {
         ArgumentNullException.ThrowIfNull(bindings); ArgumentNullException.ThrowIfNull(service);
-        foreach (var query in service.Dependencies.Queries) RequireNative(query);
-        return PostgresInfrastructure.Prepare(implementation, bindings, service.Dependencies.Queries.Select(query =>
+        foreach (var query in service.Queries) RequireNative(query);
+        return PostgresInfrastructure.Prepare(implementation, bindings, service.Queries.Select(query =>
             new QuerySnapshotRequirement(query.Reference.DefinitionId.Value, query.Reference.RevisionId.Value, query.Request)).ToArray());
     }
 
@@ -35,10 +41,17 @@ public static class PostgresServiceExtensions
     /// <exception cref="RelationQueryPreparationException">Semantic compilation fails.</exception>
     /// <exception cref="PostgresQueryPreparationException">Native preparation fails.</exception>
     public static PostgresQueryReader<TInput, TResult> Query<TInput, TResult>(this PostgresPersistenceRegistration persistence,
-        ServiceBuilder service, RelationQuery<TInput, TResult> query)
+        ServiceBuilder service, RelationQuery<TInput, TResult> query) => Query(persistence, service.Dependencies, query);
+
+    /// <summary>Prepares a query selected by an API implementation model.</summary>
+    /// <typeparam name="TInput">Input type.</typeparam><typeparam name="TResult">Result type.</typeparam>
+    /// <param name="persistence">Native mappings and data source.</param><param name="service">Selected query bounds and requirements.</param>
+    /// <param name="query">Exact query authority.</param><returns>A prepared reader.</returns>
+    public static PostgresQueryReader<TInput, TResult> Query<TInput, TResult>(this PostgresPersistenceRegistration persistence,
+        ServiceDependencies service, RelationQuery<TInput, TResult> query)
     {
         ArgumentNullException.ThrowIfNull(persistence); ArgumentNullException.ThrowIfNull(service); ArgumentNullException.ThrowIfNull(query);
-        var selected = service.Dependencies.Queries.SingleOrDefault(item =>
+        var selected = service.Queries.SingleOrDefault(item =>
             item.Request.DefinitionDocument.DefinitionFingerprint == query.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
         if (selected is null || Fingerprint(selected.Request) != Fingerprint(query.CompilationRequest))
             throw new ServiceBindingValidationException(new([new(ServiceBindingDiagnosticCodes.QueryUnselected, Cohesive.Model.DiagnosticSeverity.Error,

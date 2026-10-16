@@ -141,7 +141,7 @@ public static class ServiceApiProjection
 
     /// <summary>Projects terminal ephemeral invocation from the exact typed Process contracts without resolving a runtime.</summary>
     /// <exception cref="ArgumentException">The definition, policy or body contract does not match.</exception>
-    public static ApiEndpoint ProjectEphemeralProcess<TInput, TOutput>(ExecutionDefinitionDocument declaration,
+    public static ApiEndpoint<TInput, TOutput> ProjectEphemeralProcess<TInput, TOutput>(ExecutionDefinitionDocument declaration,
         string operationId, Cohesive.Processes.Authoring.Process<TInput, TOutput> process, HttpBinding? http = null,
         IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
     {
@@ -159,7 +159,7 @@ public static class ServiceApiProjection
     /// <returns>The endpoint derived from the declared operation and medium contracts.</returns>
     /// <exception cref="ArgumentException">The operation, Process, or HTTP body is incompatible.</exception>
     /// <exception cref="ServiceBindingValidationException">The declaration or Process is invalid.</exception>
-    public static ApiEndpoint ProjectEphemeralProcess<TRequest, TResponse, TInput, TOutput>(
+    public static ApiEndpoint<TRequest, TResponse> ProjectEphemeralProcess<TRequest, TResponse, TInput, TOutput>(
         ExecutionDefinitionDocument declaration, string operationId,
         Cohesive.Processes.Authoring.Process<TInput, TOutput> process, HttpBinding? http = null,
         IReadOnlyList<ApiScopePolicy>? scopePolicies = null)
@@ -184,7 +184,7 @@ public static class ServiceApiProjection
                 new(ApiResultKind.DomainError, typeof(ApiProblem)),
                 new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);
         if (http is not null) projected = projected.WithHttp(http);
-        return new ApiDefinition([projected]).Endpoints[0];
+        return new ApiEndpoint<TRequest, TResponse>(projected);
     }
 
     static ServiceOperation GetOperation(ExecutionDefinitionDocument declaration, string operationId)

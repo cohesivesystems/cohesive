@@ -31,7 +31,7 @@ public sealed class OrdersApp
     public OrdersApp()
     {
         var model = new FulfillmentApplication();
-        StorageQueries = model.Storage.Bindings.PrepareService(model.Service.Definition, new("example/postgres"));
+        StorageQueries = model.Storage.Bindings.PrepareService(model.StorageQueries, new("example/postgres"));
         Definition = Infrastructure.Define(
             id: new("example/orders"),
             revision: new("4"),

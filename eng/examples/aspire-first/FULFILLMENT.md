@@ -1,3 +1,7 @@
+> Current entry point: `OrderEndpoints.Define(model)` composes partial entity/query/process implementations;
+> `Build(builder.Services, persistence.ForServices(receipts))` resolves their storage and logging;
+> `app.MapServices(prepared)` maps the complete API. The standalone binding APIs below remain available.
+
 # From implied creation to a multi-entity process
 
 `FulfillmentDomain` remains the state authority. Native Aspire owns resources; native PostgreSQL mappings
@@ -5,7 +9,7 @@ attach to the same domain definitions. `FulfillmentProcess.Execute` is authoring
 Process IR, not an async application coordinator. Its class-level `[Process]` declaration generates an instance-owned, cached definition that can be inspected and fingerprinted.
 `FulfillmentApplication` supplies shared instances of the domain, queries, transitions and process.
 `FulfillmentService` uses the existing `Service.Define` builder to select canonical transitions, a typed stock lookup
-and relational queries once. `Definition.Bind(process, orders, inventory).Build(...)` prepares exact links, catalogs
+and relational queries once. `ServiceModelBuilder.Build(..., persistence.ForServices(receipts))` prepares exact links, catalogs
 and the shared runtime at startup, matching repositories against the declared entity contracts. Receipt schema must be bound and validated before constructing receipt-capable repositories.
 The binding phase retains canonical compiler diagnostics;
 applications bind domain operations to repositories without recreating adapters and dispatch catalogs.
@@ -137,7 +141,7 @@ Some explicit declarations carry meaning:
 Aspire association selection sources can default to a deterministic reference, but this example retains
 its real `Source` on both associations. Native project metadata supplies only .NET project execution.
 
-`ordersApp.StorageQueries` is derived by `Bindings.PrepareService(model.Service.Definition, ...)`.
+`ordersApp.StorageQueries` is derived by `Bindings.PrepareService(model.StorageQueries, ...)`.
 The selected query identities, revisions, bounds and consistency live on the service registration, not in a second
 AppHost list. The optional `Cohesive.Adapters.Postgres.Services` integration uses the same offline mappings and native compiler
 as the worker; the returned capabilities drive Infra requirements. Exact required, provenance and binding

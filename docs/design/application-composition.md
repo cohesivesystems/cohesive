@@ -49,12 +49,13 @@ by offline construction. PostgreSQL validation and preparation retain the existi
 
 ## Remaining dependency-ordered composition work
 
-1. Add application service composition with typed instance endpoint selectors, repository resolution through
-   registered entity contracts, and optional extracted modules. Keep unrelated public queries outside a process's
-   dependency closure. Validate missing/duplicate implementations after all contributions are assembled. Reject
-   ambiguity; registration order must not pick a winner. Preserve separate contract/implementation authoring.
-2. Consolidate HTTP mapping and host lifetime/failure logging in the shared adapter. Implementations bind queries,
-   entity operations, transitions and processes. API completion policy constrains selected runtime policy.
+1. Implemented: the ASP.NET ServiceModelBuilder composes typed API selectors and optional modules,
+   preserves separately declared APIs/services, and resolves native storage through IServicePersistence.
+   Public query roots belong to API bindings and project into infrastructure selections; they remain outside
+   the process dependency closure. Coverage is checked after contributions, before route publication.
+2. Implemented: MapServices stages existing entity/query/process HTTP bindings, validates complete mapping
+   and exact method/template collisions, then publishes routes. Build integrates opt-in protected failure logging
+   using the existing host-owned subscription mechanism. Runtime completion still comes from Service IR.
 3. Add explicit accepted-execution receipts and ResultOf-linked polling, then separately consider observation
    streams and callback contracts. Neither SignalR nor SSE implies ordering, replay, retention or durable recovery.
 4. Attach registered storage/execution bindings to native Aspire resources and derive required infrastructure
@@ -79,7 +80,7 @@ startup-speed or end-to-end performance improvement is claimed.
 The optional host composition resolves only explicitly registered types via existing .NET constructor activation.
 It neither scans members nor guesses semantic dependencies. It removes hand-ordered construction and forced
 Definition reads. Generated process attachments now remove the repeated transition/lookup registration list;
-the full API implementation registry and unified endpoint mapping above remain separate work.
+the HTTP implementation registry and unified endpoint mapping now consume those generated attachments.
 
 ## Generated process attachments
 
@@ -103,3 +104,18 @@ execution, or capability evidence for arbitrary native callbacks.
 Service dependency requirements are projected once per immutable ProcessDefinition instance into a weakly keyed, thread-safe cache. Generated-attachment admission and final binding reuse that set; coverage is checked only at final binding, after all contributions are available. The cache retains no repositories or invocation data.
 
 Required dependency preparation uses the shared WeakPreparationCache/PreparationSlot mechanism. Successful projections are retained for the immutable definition lifetime; failed preparation remains retryable. Transition and query references are sorted once by canonical identity, revision and complete fingerprint, and the same arrays drive diagnostics and host attachment.
+
+## HTTP implementation boundary
+
+ServiceModelBuilder lives in the ASP.NET adapter because its recipes select HTTP input, response and native
+route configuration. It is not another portable service IR: ApiDefinition and ServiceDefinition remain authority.
+The generic IServicePersistence contract only resolves canonical observations and bounded query preparations;
+PostgreSQL implements it using existing mappings, repository constructors and native query compilation. Provider
+configuration, schema lifecycle and source disposal remain native. Multi-provider/composed placement must be
+supplied explicitly by a resolver; this batch does not infer federated query plans.
+
+Build is explicit eager host preparation, matching the example's previous startup lifetime. Request inputs,
+authorization and query results remain invocation-scoped. Each Build creates an independently owned prepared
+surface. Route staging prevents partial publication on a failing contribution; native callbacks must be pure
+registration code. Exact template collisions are rejected, while general route-pattern overlap is not solved
+by a competing router. Protected failure logging remains opt-in and uses the existing generic host lifetime.

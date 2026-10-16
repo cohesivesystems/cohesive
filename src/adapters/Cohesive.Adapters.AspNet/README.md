@@ -421,3 +421,17 @@ per-user authentication. Continue to register and use request OperationContext m
 
 For a prepared typed process, `app.MapServiceEphemeralProcess(hosted, route: "/fulfillment")` derives the
 JSON body type from the host. The explicit `HttpBinding` overload remains available for other transports.
+
+## Partial API implementation composition
+
+`ServiceModelBuilder.Implement(api, contribution)` binds instance API selectors to canonical queries, existing
+entity bindings and separately declared ephemeral services. Several modules can contribute to the same API;
+`Implement(catalog, definition, contribution)` also accepts separately authored catalogs. Build resolves the
+selected native storage and validates complete, unique endpoint coverage. `app.MapServices(prepared)` stages
+all native bindings and checks mapping completeness before publication. No provider configuration is wrapped.
+
+Queries record bounded preparation requirements, exposed as QueryDependencies for infrastructure evidence.
+Process endpoints must project the exact service's terminal contract; accepted execution is not silently
+substituted. Optional private failure logging is integrated with the existing generic host subscription lifetime.
+A model maps once; setup errors publish no model routes. Exact method/template duplicates are rejected;
+general ASP.NET route-pattern overlap remains native responsibility.

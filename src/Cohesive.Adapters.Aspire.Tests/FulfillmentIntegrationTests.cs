@@ -47,7 +47,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderEndpoints.Map(app, Model, orders, queryReader, Model.Availability.BindNative(persistence));
+            OrderHttpTestBindings.Map(app, Model, orders, queryReader, Model.Availability.BindNative(persistence, Model.StorageQueries));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };

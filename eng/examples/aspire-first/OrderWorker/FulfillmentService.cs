@@ -9,16 +9,13 @@ public sealed class FulfillmentService
     public ServiceBuilder Definition { get; }
 
     /// <summary>Composes explicit execution policy and exact dependencies.</summary>
-    /// <param name="queries">Independent API query roots.</param>
     /// <param name="process">Generated orchestration.</param>
-    public FulfillmentService(FulfillmentQueries queries, FulfillmentProcess process)
+    public FulfillmentService(FulfillmentProcess process)
     {
         Definition = Service.Define(
             new("fulfillment"), new("1"), process.Provenance)
             .Use(new ServiceDependencies()
-                .Process(process)
-                .Query(queries.OrderDetails, new("1"), maximumRows: 1000, maximumBytes: 1_000_000)
-                .Query(queries.ReservationAvailability, new("1"), maximumRows: 1000, maximumBytes: 1_000_000))
+                .Process(process))
             .Operation("fulfill").Run(process.Definition)
             .ExecuteEphemerally(TimeSpan.FromSeconds(15));
     }

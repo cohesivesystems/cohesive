@@ -23,7 +23,12 @@ public sealed class FulfillmentApplication
         Process = model.Get<FulfillmentProcess>();
         Service = model.Get<FulfillmentService>();
         Availability = model.Get<ReservationAvailabilityQueryBindings>();
+        Services = OrderEndpoints.Define(this);
     }
+    /// <summary>Partial API implementation recipes shared by host and infrastructure preparation.</summary>
+    internal Cohesive.Adapters.AspNet.Services.ServiceModelBuilder Services { get; }
+    /// <summary>Query capability requirements projected from the API implementations.</summary>
+    public Cohesive.Api.Execution.Services.ServiceDependencies StorageQueries => Services.QueryDependencies;
     /// <summary>Public API contract.</summary>
     public OrderApi Api { get; }
     /// <summary>Canonical entity and relationship declarations.</summary>
