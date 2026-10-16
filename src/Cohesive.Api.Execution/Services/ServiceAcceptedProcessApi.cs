@@ -72,6 +72,25 @@ public sealed class ServiceAcceptedProcessApi<TRequest, TResult> : IApiDeclarati
 /// <summary>Authoring of admission and its linked polling contract.</summary>
 public static class ServiceAcceptedProcessApiExtensions
 {
+    /// <summary>Declares and registers a linked process start/result pair in the owning API builder.</summary>
+    /// <typeparam name="TRequest">Command request.</typeparam><typeparam name="TResult">Terminal response view.</typeparam>
+    /// <param name="endpoints">Owning API builder.</param><param name="service">Separate service authority.</param>
+    /// <param name="startOperationId">Admission operation.</param><param name="resultOperationId">Linked result operation.</param>
+    /// <param name="startRoute">POST route.</param><param name="resultRoute">GET route with one {instanceId} parameter.</param>
+    /// <param name="response">Independent response policy; defaults to immediate acknowledgement.</param>
+    /// <returns>The typed pair; both endpoints are already registered without reflection or member discovery.</returns>
+    /// <exception cref="ServiceBindingValidationException">The pair is invalid.</exception>
+    /// <exception cref="InvalidOperationException">The owner is frozen or either endpoint already exists; neither is added.</exception>
+    public static ServiceAcceptedProcessApi<TRequest, TResult> AcceptedProcess<TRequest, TResult>(this ApiBuilder endpoints,
+        ServiceBuilder service, string startOperationId, string resultOperationId, string startRoute, string resultRoute,
+        ServiceProcessResponse? response = null) where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        var pair = service.AcceptedApi<TRequest, TResult>(startOperationId, resultOperationId, startRoute, resultRoute, response);
+        endpoints.Include(pair.Definition);
+        return pair;
+    }
+
     /// <summary>Projects two declared service operations without constructing any executor or storage.</summary>
     /// <typeparam name="TRequest">Command request.</typeparam><typeparam name="TResult">Terminal response view.</typeparam>
     /// <param name="service">Separate service declaration.</param><param name="startOperationId">Admission operation.</param>

@@ -76,6 +76,27 @@ public sealed class ApiBuilder
         });
     }
 
+    /// <summary>Includes a complete separately declared API atomically, retaining its endpoint authorities and order.</summary>
+    /// <param name="api">Existing endpoints to contribute together.</param>
+    /// <returns>The same declaration.</returns>
+    /// <exception cref="InvalidOperationException">The builder is frozen or an identity is already declared; no endpoints are added.</exception>
+    public ApiDefinition Include(ApiDefinition api)
+    {
+        ArgumentNullException.ThrowIfNull(api);
+        return definition.Edit(() =>
+        {
+            foreach (var endpoint in api.Endpoints)
+                if (endpointIds.Contains(endpoint.Id))
+                    throw new InvalidOperationException($"API definition already contains endpoint '{endpoint.Id}'.");
+            foreach (var endpoint in api.Endpoints)
+            {
+                endpointIds.Add(endpoint.Id);
+                endpoints.Add(endpoint);
+            }
+            return api;
+        });
+    }
+
     internal ApiEndpoint Add(ApiOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);

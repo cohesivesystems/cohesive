@@ -587,11 +587,9 @@ the typed process supplies C# input/output contracts while the service remains s
 authorized result operation. `OrderApi` includes both alongside creation, reads, transitions and queries:
 
 ```csharp
-Fulfill = service.Definition.AcceptedApi<FulfillmentRequest, FulfillmentResult>(
+Fulfill = Endpoints.AcceptedProcess<FulfillmentRequest, FulfillmentResult>(service.Definition,
     startOperationId: "fulfill", resultOperationId: "result",
     startRoute: "/fulfillment", resultRoute: "/fulfillment/results/{instanceId}");
-Endpoints.Include(Fulfill.Start);
-Endpoints.Include(Fulfill.Result);
 ```
 
 `OrderEndpoints.Define` binds this pair through `BindHosted`, using the same service and generated process.

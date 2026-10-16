@@ -30,6 +30,43 @@ public sealed class ServiceAcceptedProcessTests
     public sealed record Command(string Id, string Text);
     static readonly ExecutionProvenance Provenance = new(new("tests"), new("tests/accepted"), DocumentOrigin.Generated);
 
+    [Fact]
+    public void Builder_owned_pair_registers_both_exact_handles_and_retains_response_policy()
+    {
+        var fixture = new Fixture();
+        var owner = Cohesive.Api.Api.Define();
+        var response = ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(1));
+        var pair = owner.AcceptedProcess<Command, string>(fixture.Service, "start", "result", "/commands", "/results/{instanceId}", response);
+        var definition = owner.Build();
+        Assert.Equal(2, definition.Endpoints.Count);
+        Assert.Same(pair.Start, definition.Endpoints[0]);
+        Assert.Same(pair.Result, definition.Endpoints[1]);
+        Assert.Same(response, pair.Response);
+        Assert.Equal(pair.Start.Id, pair.Result.Operation.ResultOf);
+        Assert.Equal(fixture.Api.Declaration.Reference, pair.Declaration.Reference);
+    }
+
+    [Fact]
+    public void Pair_registration_is_atomic_when_second_endpoint_already_exists()
+    {
+        var fixture = new Fixture();
+        var owner = Cohesive.Api.Api.Define();
+        owner.Include(fixture.Api.Result);
+        Assert.Throws<InvalidOperationException>(() => owner.AcceptedProcess<Command, string>(
+            fixture.Service, "start", "result", "/commands", "/results/{instanceId}"));
+        Assert.Same(fixture.Api.Result, Assert.Single(owner.Build().Endpoints));
+    }
+
+    [Fact]
+    public void Pair_registration_cannot_mutate_a_frozen_owner()
+    {
+        var fixture = new Fixture();
+        var owner = new PairApi();
+        var frozen = owner.Definition;
+        Assert.Throws<InvalidOperationException>(() => owner.Add(fixture.Service));
+        Assert.Empty(frozen.Endpoints);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -340,6 +377,12 @@ public sealed class ServiceAcceptedProcessTests
     {
         var fixture = new Fixture();
         Assert.Throws<ServiceBindingValidationException>(() => fixture.Service.AcceptedApi<Command, string>("start", "result", "/commands", route));
+    }
+
+    sealed class PairApi : ApiModel
+    {
+        public ServiceAcceptedProcessApi<Command, string> Add(ServiceBuilder service) =>
+            Endpoints.AcceptedProcess<Command, string>(service, "start", "result", "/commands", "/results/{instanceId}");
     }
 
     sealed class Fixture

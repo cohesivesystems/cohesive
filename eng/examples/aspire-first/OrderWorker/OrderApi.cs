@@ -12,11 +12,9 @@ public sealed class OrderApi : ApiModel
     /// <param name="transitions">Order behavior declarations, without runtime bindings.</param>
     public OrderApi(OrderTransitions transitions, FulfillmentService service)
     {
-        Fulfill = service.Definition.AcceptedApi<FulfillmentRequest, FulfillmentResult>(
+        Fulfill = Endpoints.AcceptedProcess<FulfillmentRequest, FulfillmentResult>(service.Definition,
             startOperationId: "fulfill", resultOperationId: "result",
             startRoute: "/fulfillment", resultRoute: "/fulfillment/results/{instanceId}");
-        Endpoints.Include(Fulfill.Start);
-        Endpoints.Include(Fulfill.Result);
         var orders = Endpoints.Entity<Order>();
         Create = orders.Command("Create")
             .Route("POST", "/orders").Build<OrderCreated>(ApiResultKind.Created);

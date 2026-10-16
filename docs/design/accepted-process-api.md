@@ -59,7 +59,7 @@ activation and recovery. The API layer neither compiles a process per request no
 The three-argument `Implement(catalog, definition, configure)` remains for a plain catalog whose contract is
 owned separately; it is not required here.
 The same API can be included in a larger `ApiDefinition.Combine` and implemented alongside entity/query
-endpoints. Existing instance-owned API catalogs can include `api.Start` and `api.Result`; the pair binding
+endpoints. Instance-owned API catalogs use `Endpoints.AcceptedProcess<TRequest, TResult>(service, ...)` to declare and atomically register both endpoints. Standalone `service.AcceptedApi(...)` remains available; `Endpoints.Include(pair.Definition)` composes an already-declared pair. The pair binding
 checks both original operations belong to the contributed definition. Separately declared services remain supported.
 `MapServiceAcceptedProcess` is available for hosts that use native route registration directly.
 
