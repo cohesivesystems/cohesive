@@ -21,23 +21,24 @@ control,005030,Query physical planning,639600
 control,005030,Query realization hashes,533000
 control,005030,Storage content hashes,213200
 control,005030,EDI provenance,106600
-candidate,004010,Observation projection,11505000
-candidate,004010,Protocol JSON,8749416
-candidate,004010,Other EDI compilation,7064416
+candidate,004010,Observation projection,10973960
+candidate,004010,Protocol JSON,8319824
+candidate,004010,Other EDI compilation,7465864
+candidate,004010,Other,6712856
 candidate,004010,Hosted decode,6656008
-candidate,004010,Other,6282872
-candidate,004010,Catalog authoring,1301536
-candidate,004010,Catalog/context,647048
-candidate,004010,Query physical planning,637552
+candidate,004010,Catalog authoring,1203128
+candidate,004010,Query physical planning,748736
+candidate,004010,Catalog/context,650208
 candidate,004010,Query realization hashes,425376
-candidate,004010,Storage content hashes,106600
-candidate,005030,Observation projection,13288144
-candidate,005030,Protocol JSON,10630240
-candidate,005030,Hosted decode,7757432
-candidate,005030,Other EDI compilation,7562272
-candidate,005030,Other,6575736
-candidate,005030,Catalog authoring,1293272
-candidate,005030,Query physical planning,848696
-candidate,005030,Catalog/context,647048
-candidate,005030,Query realization hashes,426400
-candidate,005030,Storage content hashes,318776
+candidate,004010,Storage content hashes,213200
+candidate,005030,Observation projection,13084168
+candidate,005030,Protocol JSON,9242368
+candidate,005030,Other EDI compilation,9061968
+candidate,005030,Hosted decode,7765632
+candidate,005030,Other,6869864
+candidate,005030,Catalog authoring,1219504
+candidate,005030,Catalog/context,650208
+candidate,005030,Query physical planning,637552
+candidate,005030,Query realization hashes,533000
+candidate,005030,Storage content hashes,212176
+candidate,005030,EDI provenance,106600

@@ -76,7 +76,7 @@ BenchmarkDotNet class also completed all four Dry smoke cases; Dry timing is not
 
 Qualification: **4,683 Core tests passed**, 41 environment skips; **1,352 Ari solution tests passed**,
 18 emulator skips. Both X12 graph digests remain unchanged. The checked-in
-[Ari report and raw counters](https://github.com/cohesivesystems/ari/blob/codex/prepared-protocol-projections/docs/performance/x12-prepared-projections.md)
+[Ari report and raw counters](https://github.com/cohesivesystems/ari/blob/07ab81b1e609d17ab0ecd5a55bfa4c0ff7f0908a/docs/performance/x12-prepared-projections.md)
 are the evidence authority, including assembly hashes, trace quality and disjoint remaining allocation budgets.
 Initial observation projection, scalar annotation creation/rehydration and protocol JSON remain substantial;
 this capability does not eliminate those boundaries.
