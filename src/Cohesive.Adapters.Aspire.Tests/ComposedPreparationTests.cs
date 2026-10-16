@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres;
 using Npgsql;
@@ -7,7 +8,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class ComposedPreparationTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
 
     [Fact]
     public void Missing_scope_fails_when_policy_is_declared()

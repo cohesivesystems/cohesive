@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using System.Net;
 using Cohesive.Host.Services;
 using System.Net.Http.Json;
@@ -22,7 +23,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 [Collection("Order PostgreSQL schema")]
 public sealed class FulfillmentProcessIntegrationTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
 
     static ServiceBuilder TerminalService() => Service.Define(new("terminal-test"), new("1"), Model.Process.Provenance)
         .Use(new ServiceDependencies().Process(Model.Process))
@@ -92,7 +93,7 @@ public sealed class FulfillmentProcessIntegrationTests
     public async Task Unified_api_resolves_storage_and_executes_fulfillment_over_http(int stock, int quantity,
         string expectedStatus, int remaining)
     {
-        var model = new FulfillmentApplication();
+        var model = ModelActivator.Create<FulfillmentApplication>();
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")!);
         using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
@@ -110,7 +111,7 @@ public sealed class FulfillmentProcessIntegrationTests
             var builder = WebApplication.CreateBuilder();
             builder.Services.AddRequestOperationContext();
             builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
-            var registered = OrderEndpoints.Define(model).Build(builder.Services, persistence.ForServices(receiptStorage));
+            var registered = model.Endpoints.Build(builder.Services, persistence.ForServices(receiptStorage));
             await using var app = builder.Build();
             app.UseRequestOperationContext();
             app.UseAuthorization();

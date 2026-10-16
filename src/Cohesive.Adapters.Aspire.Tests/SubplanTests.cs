@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Relations.Compilation;
@@ -8,7 +9,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class SubplanTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
 
     [Fact]
     public void Closed_projection_derives_one_native_join_and_only_one_remaining_join()

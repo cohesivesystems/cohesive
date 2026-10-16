@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -8,7 +9,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class OrderTransitionTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
 
     [Theory]
     [InlineData(OrderStatus.Draft, TransitionDecisionKind.Applied, SubmissionOutcome.Submitted)]
