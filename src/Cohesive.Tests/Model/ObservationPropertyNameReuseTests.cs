@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 
 namespace Cohesive.Tests.Model;
 
@@ -7,13 +8,15 @@ public sealed class ObservationPropertyNameReuseTests
     [Fact]
     public void RepeatedNamesShareStringsWithinOneTraversalAndOwnThemAfterDisposal()
     {
+        var name = new string('n', 512);
         ObservationValue value;
-        using (var document = JsonDocument.Parse("[{\"repeated\":1},{\"repeated\":2},{\"repeated\":3}]"))
+        using (var document = JsonDocument.Parse(JsonSerializer.Serialize(Enumerable.Range(1, 3)
+            .Select(i => new Dictionary<string, int> { [name] = i }))))
             value = ObservationValue.FromJsonElement(document.RootElement);
         var names = value.Array.Select(item => item.Fields!.Keys.Single()).ToArray();
         Assert.Same(names[0], names[1]);
         Assert.Same(names[1], names[2]);
-        Assert.Equal(3, value.Array[2].GetProperty("repeated").Int64);
+        Assert.Equal(3, value.Array[2].GetProperty(name).Int64);
     }
 
     [Theory]
@@ -55,6 +58,31 @@ public sealed class ObservationPropertyNameReuseTests
             Assert.Equal(i, value.Array[0].GetProperty("name").Int64);
             Assert.Equal(i + 1, value.Array[1].GetProperty("name").Int64);
         });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void TemporaryTableDoesNotRetainParserAfterSuccessOrFailure(bool fail)
+    {
+        var parser = ProjectAndReleaseParser(fail);
+        for (var i = 0; i < 3 && parser.IsAlive; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+        Assert.False(parser.IsAlive);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static WeakReference ProjectAndReleaseParser(bool fail)
+    {
+        var prefix = "{\"padding\":\"" + new string('x', 1024) + "\",\"name\":1";
+        using var document = JsonDocument.Parse(prefix + (fail ? ",\"\\uD800\":2}" : "}"));
+        if (fail) Assert.Throws<InvalidOperationException>(() => ObservationValue.FromJsonElement(document.RootElement));
+        else ObservationValue.FromJsonElement(document.RootElement);
+        return new WeakReference(document);
     }
 
     [Fact]

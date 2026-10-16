@@ -603,13 +603,14 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     /// <exception cref="InvalidOperationException">Unsupported JsonValueKind.</exception>
     public static ObservationValue FromJsonElement(JsonElement element)
     {
-        if (element.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
+        if (element.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array)
+            || System.Runtime.InteropServices.JsonMarshal.GetRawUtf8Value(element).Length < 1024)
             return FromJsonElement(element, null);
         using var names = new ObservationJsonPropertyNames();
         return FromJsonElement(element, names);
     }
 
-    // Scalar roots need no traversal state; every composite root supplies its owned table.
+    // Scalars and small payloads bypass table preparation; recursive calls share the root decision.
     internal static ObservationValue FromJsonElement(JsonElement element, ObservationJsonPropertyNames? names) => element.ValueKind switch
     {
         JsonValueKind.Undefined => Undefined,
@@ -621,8 +622,8 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         JsonValueKind.Number when TryParseExactJsonDecimal(element.GetRawText(), out var dec) => FromDecimal(dec),
         JsonValueKind.Number when element.TryGetDouble(out var dbl) => FromDouble(dbl),
         JsonValueKind.Number => FromDouble(double.Parse(element.GetRawText(), NumberStyles.Float, CultureInfo.InvariantCulture)),
-        JsonValueKind.Object => ReadObject(element, names!),
-        JsonValueKind.Array => FromImmutableArray(ReadArray(element, names!)),
+        JsonValueKind.Object => ReadObject(element, names),
+        JsonValueKind.Array => FromImmutableArray(ReadArray(element, names)),
         _ => throw new InvalidOperationException($"Unsupported JsonValueKind '{element.ValueKind}'.")
     };
 
@@ -1832,14 +1833,14 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         }
     }
 
-    static ObservationValue ReadObject(JsonElement element, ObservationJsonPropertyNames names)
+    static ObservationValue ReadObject(JsonElement element, ObservationJsonPropertyNames? names)
     {
         var count = element.GetPropertyCount();
         if (count == 0) return FromObject(EmptyObjectValues);
         if (count <= 8) return FromObject(SmallObservationFields.Read(element, count, names));
         var values = new Dictionary<string, ObservationValue>(count, StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
-            values[names.Get(property)] = FromJsonElement(property.Value, names);
+            values[names?.Get(property) ?? property.Name] = FromJsonElement(property.Value, names);
         return FromOwnedObjectInOrdinalOrder(values);
     }
 
@@ -1853,7 +1854,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         return FromOwnedObject(values);
     }
 
-    static ImmutableArray<ObservationValue> ReadArray(JsonElement element, ObservationJsonPropertyNames names)
+    static ImmutableArray<ObservationValue> ReadArray(JsonElement element, ObservationJsonPropertyNames? names)
     {
         var values = ImmutableArray.CreateBuilder<ObservationValue>(element.GetArrayLength());
         foreach (var item in element.EnumerateArray())
