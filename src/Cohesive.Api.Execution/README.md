@@ -388,3 +388,11 @@ resulting registration and repositories remain host-owned. Explicit Transition/L
 available for separately authored contracts; conflicting explicit/generated registrations cannot overwrite each other.
 
 Required dependency preparation uses the shared WeakPreparationCache/PreparationSlot mechanism. Successful projections are retained for the immutable definition lifetime; failed preparation remains retryable. Transition and query references are sorted once by canonical identity, revision and complete fingerprint, and the same arrays drive diagnostics and host attachment.
+
+## Accepted process composition
+
+`ServiceBuilder.AcceptedApi<TRequest, TResult>` declares a 202 native admission receipt and an independently
+authorized polling endpoint. `ServiceModelBuilder` binds the linked pair to a complete `ServiceRuntime`;
+`MapServiceAcceptedProcess` supports direct native routing. Execution remains with the qualified native
+dispatcher and retained-value provider, with no implicit worker activation or automatic retry.
+See [the protocol and binding walkthrough](../../docs/design/accepted-process-api.md) for contracts, examples and limits.

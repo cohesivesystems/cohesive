@@ -19,8 +19,8 @@ Partial contributions must ultimately resolve into one validated model rather th
 - `QueryModel` collects the actual compilation requests while returning the original typed handles. Definition
   is an immutable request collection, not a second query IR or a provider execution plan.
 - `ApiModel` supplies a frozen Definition from ApiBuilder. Existing ApiDefinition.Combine composes separately
-  declared contracts and rejects duplicate endpoint IDs. This does not yet validate all HTTP route conflicts
-  or provide partial implementation registration.
+  declared contracts and rejects duplicate endpoint IDs. Native route collisions and partial implementation registration belong to the separate
+  ServiceModelBuilder/MapServices boundary.
 - PostgreSQL's existing offline bindings gain inline mapping callbacks and a frozen Define recipe. Native table,
   column, key and partition choices stay with the adapter. Bind retains native data-source ownership at the host.
 - `[Process]` on `ProcessModel<TInput, TResult>` generates metadata, provenance and cached definition lowering
@@ -56,8 +56,9 @@ by offline construction. PostgreSQL validation and preparation retain the existi
 2. Implemented: MapServices stages existing entity/query/process HTTP bindings, validates complete mapping
    and exact method/template collisions, then publishes routes. Build integrates opt-in protected failure logging
    using the existing host-owned subscription mechanism. Runtime completion still comes from Service IR.
-3. Add explicit accepted-execution receipts and ResultOf-linked polling, then separately consider observation
-   streams and callback contracts. Neither SignalR nor SSE implies ordering, replay, retention or durable recovery.
+3. Implemented: [accepted execution and ResultOf-linked polling](accepted-process-api.md) compose the native
+   durable admission and protected result-read paths. Production worker selection/qualification remains explicit.
+   Observation streams and callbacks remain separate; SignalR/SSE imply no durable recovery guarantee.
 4. Attach registered storage/execution bindings to native Aspire resources and derive required infrastructure
    capabilities from prepared definitions. Preserve native-only resources and target configuration. Keep declared,
    validated and observed evidence distinct. Do not introduce a second infrastructure inventory.

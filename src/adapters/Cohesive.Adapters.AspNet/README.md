@@ -453,3 +453,11 @@ The fluent `Endpoints.Process` helper targets the single-operation finite-host p
 service declarations during authoring. General service declarations support multiple operations; their
 runtime requires complete binding coverage. The multi-operation hosting follow-up is tracked in
 `docs/design/application-composition.md` with its removal condition and required policy-isolation tests.
+
+## Accepted process composition
+
+`ServiceBuilder.AcceptedApi<TRequest, TResult>` declares a 202 native admission receipt and an independently
+authorized polling endpoint. `ServiceModelBuilder` binds the linked pair to a complete `ServiceRuntime`;
+`MapServiceAcceptedProcess` supports direct native routing. Execution remains with the qualified native
+dispatcher and retained-value provider, with no implicit worker activation or automatic retry.
+See [the protocol and binding walkthrough](../../../docs/design/accepted-process-api.md) for contracts, examples and limits.

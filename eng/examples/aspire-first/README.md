@@ -580,3 +580,12 @@ in the ASP.NET adapter. Wrong or duplicate query/process endpoint handles fail d
 and missing coverage fails before storage resolution. Repeated host preparation reuses the same prepared
 surface. Process endpoint authoring uses `Endpoints.Process(service.Definition, "fulfill", process).Route(...)`;
 the typed process supplies C# input/output contracts while the service remains separately declared.
+
+## Accepted execution as a separate binding
+
+The fulfillment endpoint in this running example still returns terminal ephemeral execution.
+For a declared 202 admission receipt and linked polling endpoint, see the
+[accepted-process composition walkthrough](../../../docs/design/accepted-process-api.md).
+It reuses native admission/result bindings and supports the same unified service model.
+Selecting and qualifying the demo's durable worker and retained-value providers is a separate step;
+changing an HTTP return status alone would not supply those guarantees.

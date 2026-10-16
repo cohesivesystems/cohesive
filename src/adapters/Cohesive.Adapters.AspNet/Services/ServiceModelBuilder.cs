@@ -6,6 +6,8 @@ using Cohesive.Adapters.AspNet.Entities;
 using Cohesive.Execution;
 using Cohesive.Host.Services;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
+using Microsoft.AspNetCore.Http;
 using Cohesive.Prelude;
 using Cohesive.Processes.Authoring;
 using Cohesive.Relations.Authoring;
@@ -146,6 +148,35 @@ public sealed class ServiceApiImplementation<TApi>
         {
             binding.Attach(persistence.Repository(ValueContract.FromShape(entity.Definition.Shape)));
             return new(binding.BoundEndpoints.ToArray(), binding.Map, []);
+        });
+        return this;
+    }
+
+    /// <summary>Binds a declared admission/poll pair to a complete native service runtime.</summary>
+    /// <typeparam name="TRequest">Caller-owned command input.</typeparam><typeparam name="TResult">Terminal response view.</typeparam>
+    /// <param name="select">Linked endpoints belonging to this API contribution.</param>
+    /// <param name="runtime">Complete service runtime; owns admission and protected result reads.</param>
+    /// <param name="bind">Pure input and retry-identity projection.</param><param name="project">Pure authorized terminal projection.</param>
+    /// <returns>This contribution.</returns>
+    /// <exception cref="ServiceBindingValidationException">Endpoints are foreign, duplicated, or reference a different service.</exception>
+    public ServiceApiImplementation<TApi> Bind<TRequest, TResult>(Func<TApi, ServiceAcceptedProcessApi<TRequest, TResult>> select,
+        ServiceRuntime runtime,
+        Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
+            ProcessContinuationIdentity Continuation, ObservationValue Input)> bind, Func<PortableValue, TResult> project)
+        where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(select); ArgumentNullException.ThrowIfNull(runtime);
+        ArgumentNullException.ThrowIfNull(bind); ArgumentNullException.ThrowIfNull(project);
+        var pair = select(api) ?? throw ServiceImplementationPlan.Error("services.api.foreignEndpoint", "Select a linked API contract.");
+        var start = Select(_ => pair.Start);
+        var result = Select(_ => pair.Result);
+        if (runtime.Declaration.Reference != pair.Declaration.Reference)
+            throw ServiceImplementationPlan.Error("services.api.processMismatch", "The linked API and runtime require the same exact service.");
+        model.Plan.Contribute(definition, () =>
+        {
+            model.Plan.Implement(definition, start);
+            model.Plan.Implement(definition, result);
+            model.Add(_ => new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project), []));
         });
         return this;
     }
