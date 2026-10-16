@@ -187,10 +187,12 @@ public sealed class EmptyProcessLocalMutationPlanner : IProcessLocalMutationPlan
 /// <summary>Additional continuation-content evidence retained at durable activation boundaries.</summary>
 public enum ProcessCheckpointVerification
 {
-    /// <summary>Uses atomic receipts, attempt-local sequences, storage revisions and worker fencing.</summary>
-    Standard = 0,
+    /// <summary>No verification policy was supplied; invalid for a worker or receipt.</summary>
+    Unspecified = 0,
+    /// <summary>Uses mandatory clean-start evidence and atomic receipts, revisions and fencing.</summary>
+    Standard = 1,
     /// <summary>Also records and verifies full before/after continuation fingerprints for diagnosis.</summary>
-    Diagnostic = 1
+    Diagnostic = 2
 }
 
 /// <summary>Physical policy for one durable Process runtime worker.</summary>
@@ -233,7 +235,7 @@ public sealed record ProcessDurableRuntimeOptions
                 "At least one physical store-mutation attempt is required.");
         }
 
-        if (!Enum.IsDefined(checkpointVerification))
+        if (checkpointVerification is not (ProcessCheckpointVerification.Standard or ProcessCheckpointVerification.Diagnostic))
             throw new ArgumentOutOfRangeException(nameof(checkpointVerification), checkpointVerification, "Unsupported checkpoint verification policy.");
         CheckpointVerification = checkpointVerification;
         WorkerLease = workerLease;

@@ -5,13 +5,17 @@ using Cohesive.Model;
 using Cohesive.Processes.Execution;
 using Cohesive.Storage.Processes;
 using Cohesive.Storage.Commits;
+using Microsoft.Data.Sqlite;
 
 namespace Cohesive.Adapters.SQLite;
 
 /// <summary>Bounded SQLite persistence for canonical Process aggregates, receipts, inbox, outbox and worker fences.</summary>
 /// <remarks>
 /// Apply Schema explicitly. Each instance occupies one portable document in the shared commit schema. The existing
-/// reference store owns mutation semantics; an immediate SQLite transaction serializes reduction and publication.
+/// reference store owns mutation semantics. Initialization and commit compare retries in a deferred WAL transaction,
+/// reserving the writer only for changed state; other mutations use immediate transactions. Snapshot conflicts
+/// retry at most three times before propagating the native error. Publication remains atomic, and commits
+/// recheck the physical lease after obtaining the writer reservation.
 /// Local values belong to the Process aggregate, not arbitrary application tables. Calls may run concurrently;
 /// SQLite serializes writers. The adapter uses the local system UTC clock for physical lease checks, not the
 /// caller's replay clock. This bounded profile rewrites the complete instance including historical receipts.
@@ -84,7 +88,7 @@ public sealed class SqliteProcessDurableStore : IProcessDurableStore
             operation: (store, providerContext) => store.InitializeAsync(
                 context: providerContext,
                 commitId: commitId,
-                checkpoint: checkpoint));
+                checkpoint: checkpoint), deferWriteLock: true);
     }
 
     /// <inheritdoc />
@@ -167,17 +171,38 @@ public sealed class SqliteProcessDurableStore : IProcessDurableStore
             instanceId: instanceId,
             operation: (store, providerContext) => store.CommitAsync(
                 context: providerContext,
-                commit: commit));
+                commit: commit), deferWriteLock: true, rejectAtCommit: RejectExpiredCommit);
     }
 
     async Task<TResult> AccessAsync<TResult>(OperationContext context, ProcessInstanceId instanceId,
-        Func<InMemoryProcessDurableStore, OperationContext, Task<TResult>> operation, bool mutate = true)
+        Func<InMemoryProcessDurableStore, OperationContext, Task<TResult>> operation, bool mutate = true,
+        bool deferWriteLock = false,
+        Func<ProcessDurableStoreDocument, TResult?>? rejectAtCommit = null)
+    {
+        // A WAL read snapshot allows collision checks without reserving the database writer.
+        // If another writer invalidates a fresh mutation's snapshot, replay the unchanged intent
+        // against a new snapshot. Disposing AccessOnce's transaction rolls back before retry.
+        const int snapshotAttempts = 3;
+        const int sqliteBusySnapshot = 517;
+        for (var attempt = 1; ; attempt++)
+        {
+            try { return await AccessOnceAsync(context, instanceId, operation, mutate, deferWriteLock, rejectAtCommit).ConfigureAwait(false); }
+            catch (SqliteException error) when (deferWriteLock && error.SqliteExtendedErrorCode == sqliteBusySnapshot && attempt < snapshotAttempts)
+            {
+                context.ThrowIfCancellationRequested();
+            }
+        }
+    }
+
+    async Task<TResult> AccessOnceAsync<TResult>(OperationContext context, ProcessInstanceId instanceId,
+        Func<InMemoryProcessDurableStore, OperationContext, Task<TResult>> operation, bool mutate, bool deferWriteLock,
+        Func<ProcessDurableStoreDocument, TResult?>? rejectAtCommit)
     {
         ArgumentNullException.ThrowIfNull(context);
         var address = new StorageCommitAddress(Target, authorityId, instanceId.Value);
         context.ThrowIfCancellationRequested();
         using var connection = database.OpenConnection(context.CancellationToken);
-        using var transaction = connection.BeginTransaction(deferred: !mutate);
+        using var transaction = connection.BeginTransaction(deferred: !mutate || deferWriteLock);
         using var commands = new SqliteCommandScope(database, connection, transaction);
         var item = executor.ReadInTransaction(context, commands, address);
         string? original = null;
@@ -209,9 +234,21 @@ public sealed class SqliteProcessDurableStore : IProcessDurableStore
         var committed = executor.CommitInTransaction(context, commands, intent);
         if (committed.Disposition != StorageCommitDisposition.Committed)
             throw new InvalidDataException("Process aggregate atomic commit was rejected: " + committed.Disposition);
+        // The first write acquired SQLite's writer reservation and may have waited. Recheck the
+        // physical lease now; a rejected result rolls back staged values and the receipt together.
+        if (rejectAtCommit is not null && rejectAtCommit(document) is { } rejected) return rejected;
         context.ThrowIfCancellationRequested();
         transaction.Commit();
         return result;
+    }
+
+    static ProcessStoreMutationResult? RejectExpiredCommit(ProcessDurableStoreDocument original)
+    {
+        var aggregate = original.Aggregates[0];
+        var now = DateTimeOffset.UtcNow;
+        if (aggregate.WorkerLease is { } lease && lease.IsLive(now) && now >= lease.RenewedAtUtc) return null;
+        return new(ProcessStoreMutationDisposition.LeaseExpired,
+            new(aggregate.Checkpoint, aggregate.Revision, aggregate.WorkerLease, aggregate.LocalState));
     }
 
     void RequireBound(string json)

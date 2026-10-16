@@ -1,7 +1,8 @@
 # Immutable continuation fingerprint reuse
 
-The current runtime makes this evidence opt-in through `ProcessCheckpointVerification.Diagnostic`.
-Standard workers use sequence/CAS/fencing evidence. See [durable bookkeeping](../durable-bookkeeping.md).
+The current runtime requires the first activation's clean-start fingerprint in both modes. Recurring
+before/after evidence is opt-in through `ProcessCheckpointVerification.Diagnostic`; Standard workers otherwise
+use sequence/CAS/fencing evidence. See [durable bookkeeping](../durable-bookkeeping.md).
 The measurements below describe the earlier always-hash runtime.
 
 Storage persists several projections of one immutable `ProcessContinuationState`:

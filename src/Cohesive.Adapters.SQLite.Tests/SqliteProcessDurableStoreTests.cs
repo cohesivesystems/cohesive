@@ -200,6 +200,62 @@ public sealed class SqliteProcessDurableStoreTests
         await Assert.ThrowsAsync<InvalidDataException>(() => Open(file.Path).InitializeAsync(Context, new("initialize"), checkpoint));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ReplayDoesNotReserveWriterWhileComparingCheckpoint(bool initialize)
+    {
+        using var file = new DatabaseFixture();
+        var store = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var initialized = await store.InitializeAsync(Context, new("initialize"), checkpoint);
+        var now = DateTimeOffset.UtcNow;
+        var acquired = await store.AcquireWorkerAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId,
+            initialized.Snapshot!.Revision, "worker", TimeSpan.FromMinutes(5), now);
+        var commit = new ProcessDurableCommit(new("commit"), acquired.Snapshot!.Revision, "worker",
+            acquired.Snapshot.WorkerLease!.Fence, WithTime(checkpoint, now), [], now);
+        Assert.Equal(ProcessStoreMutationDisposition.Applied, (await store.CommitAsync(Context, commit)).Disposition);
+        using var connection = Database(file.Path).OpenConnection();
+        using var writer = connection.BeginTransaction(deferred: false);
+        // The writer stays reserved until replay returns. A BEGIN IMMEDIATE replay deadlocks here;
+        // a WAL read snapshot can load, verify and compare the immutable accepted receipt.
+        var replay = Task.Run(() => initialize
+            ? Open(file.Path).InitializeAsync(Context, new("initialize"), checkpoint)
+            : Open(file.Path).CommitAsync(Context, commit));
+        Assert.Equal(ProcessStoreMutationDisposition.Replayed,
+            (await replay.WaitAsync(TimeSpan.FromSeconds(5))).Disposition);
+    }
+
+    [Fact]
+    public async Task ConcurrentIdenticalInitializationsUseOneReceipt()
+    {
+        using var file = new DatabaseFixture();
+        _ = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            Open(file.Path).InitializeAsync(Context, new("initialize"), checkpoint))));
+        Assert.Single(results, result => result.Disposition == ProcessStoreMutationDisposition.Applied);
+        Assert.Equal(7, results.Count(result => result.Disposition == ProcessStoreMutationDisposition.Replayed));
+    }
+
+    [Fact]
+    public async Task ConcurrentIdenticalCommitsUseOneReceipt()
+    {
+        using var file = new DatabaseFixture();
+        var store = Create(file);
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var initialized = await store.InitializeAsync(Context, new("initialize"), checkpoint);
+        var now = DateTimeOffset.UtcNow;
+        var acquired = await store.AcquireWorkerAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId,
+            initialized.Snapshot!.Revision, "worker", TimeSpan.FromMinutes(5), now);
+        var commit = new ProcessDurableCommit(new("commit"), acquired.Snapshot!.Revision, "worker",
+            acquired.Snapshot.WorkerLease!.Fence, WithTime(checkpoint, now), [], now);
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => Open(file.Path).CommitAsync(Context, commit))));
+        Assert.Single(results, result => result.Disposition == ProcessStoreMutationDisposition.Applied);
+        Assert.Equal(7, results.Count(result => result.Disposition == ProcessStoreMutationDisposition.Replayed));
+        Assert.All(results, result => Assert.Equal(results[0].Snapshot!.Revision, result.Snapshot!.Revision));
+    }
+
     internal static ProcessDurableRuntime Runtime(IProcessDurableStore store, ProcessDurabilityTestFixture fixture, IProcessReferenceHost host) =>
         new(store, host, new("worker", TimeSpan.FromMinutes(5)), new Binding(fixture.DurableOperation.Binding),
             storeMutationExceptionClassifier: SqliteProcessStoreMutationExceptionClassifier.Instance);

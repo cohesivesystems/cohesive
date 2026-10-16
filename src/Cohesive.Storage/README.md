@@ -9,10 +9,11 @@ single writes, then invokes one native batch. Per-candidate concurrency tokens u
 `EntityBatchWriteRequest` overload. Unsupported atomicity is rejected instead of silently using independent writes.
 
 Durable Process workers default to `ProcessCheckpointVerification.Standard`: atomic receipts, storage CAS and
-worker fences retain their durability boundaries without before/after continuation hashes. Select `Diagnostic`
-on `ProcessDurableRuntimeOptions` for additional continuation fingerprint checks. Commit retries still reject
-changed content; complete checkpoint comparison runs only on a commit-ID collision. Explicit full commit
-fingerprints remain available lazily. Checkpoint/store wire schemas are intentionally replaced; existing wire
+worker fences retain their durability boundaries. The first activation retains clean-start compatibility evidence;
+later activations omit recurring continuation hashes. Select `Diagnostic` on `ProcessDurableRuntimeOptions` to
+require before/after hashes on every receipt. Each receipt declares its policy, so missing required hashes are
+rejected during admission. Commit retries still reject changed content; complete checkpoint comparison runs only
+on a commit-ID collision. The small intent digest is prepared before entering the provider. Checkpoint/store wire schemas are intentionally replaced; existing wire
 formats are not admitted. See [the contract and qualification](../../docs/performance/durable-bookkeeping.md).
 
 ## Install

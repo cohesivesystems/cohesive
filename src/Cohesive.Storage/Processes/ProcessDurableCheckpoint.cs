@@ -156,21 +156,22 @@ public sealed record ProcessActivationCommitReceipt
     /// <summary>Creates activation commit evidence.</summary>
     /// <param name="sequence">Positive committed activation sequence.</param>
     /// <param name="continuation">Logical Process instance and attempt whose continuation was committed.</param>
-    /// <param name="beforeContinuation">Optional diagnostic fingerprint of the continuation consumed by the activation.</param>
-    /// <param name="afterContinuation">Optional diagnostic fingerprint of the continuation atomically published by the activation.</param>
+    /// <param name="beforeContinuation">Required clean-start fingerprint for sequence one; otherwise Diagnostic-only.</param>
+    /// <param name="afterContinuation">Required Diagnostic fingerprint of the published continuation; absent for Standard.</param>
     /// <param name="activation">Exact activation request.</param>
     /// <param name="disposition">Finite semantic activation disposition.</param>
     /// <param name="evidence">Definition-bound activation trace and safe-point evidence.</param>
     /// <param name="committedAtUtc">UTC physical commit observation.</param>
+    /// <param name="verification">Evidence required on this receipt; retained independently of optional hashes.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="continuation"/>, <paramref name="activation"/>, or <paramref name="evidence"/> is
     /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException">
-    /// <paramref name="sequence"/> is not positive or <paramref name="disposition"/> is unsupported.
+    /// <paramref name="sequence"/> is not positive, or <paramref name="disposition"/> or <paramref name="verification"/> is unsupported.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// A diagnostic fingerprint is empty or missing its pair, activation identity/cause evidence differs, or
+    /// Required evidence for the declared policy is missing or empty, activation identity/cause evidence differs, or
     /// <paramref name="committedAtUtc"/> is not UTC.
     /// </exception>
     [JsonConstructor]
@@ -182,7 +183,8 @@ public sealed record ProcessActivationCommitReceipt
         ProcessActivation activation,
         ProcessActivationDisposition disposition,
         ProcessExecutionEvidence evidence,
-        DateTimeOffset committedAtUtc)
+        DateTimeOffset committedAtUtc,
+        ProcessCheckpointVerification verification)
     {
         if (sequence <= 0)
         {
@@ -201,13 +203,19 @@ public sealed record ProcessActivationCommitReceipt
         ProcessCheckpointRequirements.RequireIdentity(
             continuation.ProcessAttemptId.Value,
             nameof(continuation));
-        if (beforeContinuation.HasValue != afterContinuation.HasValue)
-            throw new ArgumentException("Diagnostic continuation fingerprints must be supplied as a pair.", nameof(afterContinuation));
-        if (beforeContinuation is { } before && afterContinuation is { } after)
-        {
+        if (verification is not (ProcessCheckpointVerification.Standard or ProcessCheckpointVerification.Diagnostic))
+            throw new ArgumentOutOfRangeException(nameof(verification));
+        if (verification == ProcessCheckpointVerification.Diagnostic
+            && (beforeContinuation is null || afterContinuation is null))
+            throw new ArgumentException("Diagnostic continuation fingerprints must both be retained.", nameof(afterContinuation));
+        if (verification == ProcessCheckpointVerification.Standard
+            && (beforeContinuation.HasValue != (sequence == 1) || afterContinuation is not null))
+            throw new ArgumentException("Standard receipts retain the clean-start fingerprint only on the first activation.", nameof(beforeContinuation));
+        if (beforeContinuation is { } before)
             ProcessCheckpointRequirements.RequireIdentity(before.Value, nameof(beforeContinuation));
+        if (afterContinuation is { } after)
             ProcessCheckpointRequirements.RequireIdentity(after.Value, nameof(afterContinuation));
-        }
+        Verification = verification;
         BeforeContinuation = beforeContinuation;
         AfterContinuation = afterContinuation;
         Activation = activation ?? throw new ArgumentNullException(nameof(activation));
@@ -231,16 +239,19 @@ public sealed record ProcessActivationCommitReceipt
         CommittedAtUtc = committedAtUtc;
     }
 
+    /// <summary>Declared evidence policy; required on the wire so deleting Diagnostic hashes cannot downgrade it.</summary>
+    public ProcessCheckpointVerification Verification { get; }
+
     /// <summary>Positive committed activation sequence.</summary>
     public long Sequence { get; }
 
     /// <summary>Logical Process instance and attempt whose continuation was committed.</summary>
     public ProcessContinuationIdentity Continuation { get; }
 
-    /// <summary>Optional diagnostic fingerprint of the continuation consumed by the activation.</summary>
+    /// <summary>Required clean-start fingerprint for sequence one; otherwise Diagnostic-only.</summary>
     public ProcessContinuationFingerprint? BeforeContinuation { get; }
 
-    /// <summary>Optional diagnostic fingerprint of the continuation atomically published by the activation.</summary>
+    /// <summary>Required Diagnostic fingerprint of the published continuation; absent for Standard.</summary>
     public ProcessContinuationFingerprint? AfterContinuation { get; }
 
     /// <summary>Exact activation request.</summary>

@@ -1,7 +1,12 @@
 using System.Text.Json.Nodes;
+using System.Text.Json;
+using System.Text;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
+using Cohesive.Model;
+using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
+using Cohesive.Processes.IR;
 using Cohesive.Storage.Processes;
 
 namespace Cohesive.Tests.ExecutionKernel;
@@ -24,7 +29,8 @@ public sealed class ProcessDurableFingerprintPolicyTests
         Assert.Equal(ProcessDurableRuntimeDisposition.Applied, result.Disposition);
         var receipt = Assert.Single(result.Snapshot!.Checkpoint.Activations);
         Assert.Equal(1, receipt.Sequence);
-        Assert.Equal(verification == ProcessCheckpointVerification.Diagnostic, receipt.BeforeContinuation.HasValue);
+        Assert.NotNull(receipt.BeforeContinuation);
+        Assert.Equal(verification, receipt.Verification);
         Assert.Equal(verification == ProcessCheckpointVerification.Diagnostic, receipt.AfterContinuation.HasValue);
         var restored = new InMemoryProcessDurableStore(ProcessDurableStoreJsonSerializer.Deserialize(
             ProcessDurableStoreJsonSerializer.Serialize(store.CaptureDocument())));
@@ -78,17 +84,17 @@ public sealed class ProcessDurableFingerprintPolicyTests
     }
 
     [Theory]
-    [InlineData(131072)]
-    [InlineData(1048576)]
-    public void FreshCommitConstructionAndInitializationDoNotAllocateWithCheckpointSize(int payloadBytes)
+    [InlineData(1024)]
+    [InlineData(8192)]
+    public void FreshCommitConstructionAndInitializationDoNotAllocateWithCheckpointSize(int fields)
     {
         var fixture = ProcessDurabilityTestFixture.Create();
-        var checkpoint = Initial(fixture, new string('x', payloadBytes));
+        var checkpoint = StructuredInitial(fixture, fields);
         var context = Context(checkpoint.UpdatedAtUtc);
         Action construct = () => GC.KeepAlive(Commit(checkpoint, new("1"), new("1")));
         Action initialize = () => GC.KeepAlive(new InMemoryProcessDurableStore()
             .InitializeAsync(context, new("initialize"), checkpoint).GetAwaiter().GetResult());
-        Assert.InRange(MedianAllocation(construct), 0, 2048);
+        Assert.InRange(MedianAllocation(construct), 0, 3072);
         Assert.InRange(MedianAllocation(initialize), 0, 3072);
     }
 
@@ -99,7 +105,54 @@ public sealed class ProcessDurableFingerprintPolicyTests
             checkpointVerification: (ProcessCheckpointVerification)99));
         var receipt = Assert.Single(ProcessDurabilityTestFixture.Create().Checkpoint.Activations);
         Assert.Throws<ArgumentException>(() => new ProcessActivationCommitReceipt(receipt.Sequence, receipt.Continuation,
-            receipt.BeforeContinuation, null, receipt.Activation, receipt.Disposition, receipt.Evidence, receipt.CommittedAtUtc));
+            receipt.BeforeContinuation, null, receipt.Activation, receipt.Disposition, receipt.Evidence, receipt.CommittedAtUtc, ProcessCheckpointVerification.Diagnostic));
+    }
+
+    [Theory]
+    [InlineData("beforeContinuation")]
+    [InlineData("afterContinuation")]
+    [InlineData("both")]
+    [InlineData("verification")]
+    public void DiagnosticEvidenceCannotBeDeleted(string member)
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var json = JsonNode.Parse(ProcessDurableCheckpointJsonSerializer.Serialize(fixture.Checkpoint))!;
+        var receipt = json["activations"]![0]!.AsObject();
+        if (member == "both")
+        {
+            receipt.Remove("beforeContinuation");
+            receipt.Remove("afterContinuation");
+        }
+        else receipt.Remove(member);
+        Assert.False(ProcessDurableCheckpointJsonSerializer.TryDeserialize(json.ToJsonString(), fixture.Plan, out _).IsValid);
+    }
+
+    [Fact]
+    public void CommitIntentV2HasPinnedCanonicalBytesAndDigest()
+    {
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var commit = Commit(checkpoint, new("1"), new("1"));
+        const string expected = """{"expectedRevision":"1","fence":"1","id":"commit","localMutations":[],"observedAtUtc":"2026-07-29T12:02:00+00:00","owner":"worker/policy"}""";
+        Assert.Equal(expected, Encoding.UTF8.GetString(StrictDocumentJson.GetCanonicalBytes(
+            ProcessDurableCommitFingerprinter.CreateIntentContent(commit), ProcessDurableCheckpointJsonSerializer.CreateOptions())));
+        Assert.Equal("sha256-intent-v2:4dc93b657a292726d44ccdfa7e334ceec9ea9f293c7272ee367f14a8470bc21f", commit.IntentFingerprint.Value);
+    }
+
+    static ProcessDurableCheckpoint StructuredInitial(ProcessDurabilityTestFixture fixture, int fields)
+    {
+        ValueContract contract = new(new JsonTypeRef(JsonTypeKind.Object));
+        var definition = new ProcessDefinition(contract, contract, new("return"),
+            [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))], ProcessRecoveryPolicy.ContinueAttempt);
+        var document = ProcessDefinitionDocuments.Create(new("test/structured-checkpoint"), new("1"), definition,
+            fixture.Plan.Document.Metadata.Provenance);
+        var plan = ProcessStaticCompiler.Compile(document, fixture.Plan.ValidationContext).Plan!;
+        var source = fixture.Start.Request;
+        var input = PortableValue.Concrete(contract, ObservationValue.FromObject(Enumerable.Range(0, fields)
+            .ToDictionary(index => $"field{index:D5}", _ => ObservationValue.FromString(new string('x', 128)))));
+        var start = new ProcessStartReceipt(new(source.SchemaVersion, plan.DefinitionReference, source.Context,
+            source.InitialContinuation, input), fixture.Start.AcceptedAtUtc);
+        return new(ProcessDurableCheckpoint.CurrentSchemaVersion, start, ProcessReferenceInterpreter.Create(plan, start),
+            start.CreateInitialState(), createdAtUtc: start.AcceptedAtUtc, updatedAtUtc: start.AcceptedAtUtc);
     }
 
     static long MedianAllocation(Action action)

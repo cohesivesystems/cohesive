@@ -532,9 +532,10 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
                 activation.Activation,
                 RejectingHost.Instance);
             Assert.Equal(activation.Disposition, decision.Disposition);
-            Assert.Equal(
-                activation.AfterContinuation,
-                ProcessStorageContentFingerprints.Continuation(decision.State));
+            if (activation.Verification == ProcessCheckpointVerification.Diagnostic)
+                Assert.Equal(activation.AfterContinuation, ProcessStorageContentFingerprints.Continuation(decision.State));
+            else
+                Assert.Null(activation.AfterContinuation);
             reference = decision.State;
         }
         Assert.Equal(

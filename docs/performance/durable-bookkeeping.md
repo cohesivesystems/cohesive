@@ -8,13 +8,15 @@ receipts. This change extends those existing boundaries; it adds no Ari-owned du
 A worker defaults to `ProcessCheckpointVerification.Standard`. Activations advance their exact attempt by one
 sequence; the reducer creates the receipt and continuation together. The store checks receipt chronology,
 retained evidence, legal successors, expected storage revision and live worker fencing before atomic publication.
-It does not fingerprint the before/after continuation for each activation. This deliberately removes the extra
-content-chain check on that path; sequences alone do not prove that an arbitrary continuation has the expected
-content. Persisted checkpoints still undergo schema, contract, plan, receipt and ledger admission validation.
+Both modes require the first activation's before-continuation fingerprint. Restart admission compares it with the
+clean continuation for the pinned definition and input, including after that attempt has progressed. Standard
+omits recurring before/after content-chain checks; sequences alone do not prove arbitrary continuation content.
+Persisted checkpoints still undergo schema, contract, plan, receipt and ledger admission validation.
 
-`ProcessCheckpointVerification.Diagnostic` additionally records and checks paired before/after continuation
-fingerprints. Declared diagnostic evidence is checked when loading a checkpoint regardless of the worker's
-current policy. Switching policy affects future receipts; it cannot reconstruct evidence omitted by earlier
+`ProcessCheckpointVerification.Diagnostic` additionally requires before/after continuation fingerprints on every
+receipt. Each receipt declares its policy independently of the hashes; missing policy or required evidence is
+rejected, including deletion of both Diagnostic hashes. Admission checks the retained policy regardless of the
+worker's current options. Switching policy affects future receipts; it cannot reconstruct evidence omitted by
 Standard activations. Both modes use identical persistence boundaries, CAS, fences and retry-conflict semantics.
 There is no checkpoint interval setting and no new exactly-once guarantee for external side effects.
 
@@ -32,15 +34,21 @@ repeated large payloads. Every successful initialization also hashed the initial
 
 Normal initialization now retains its accepted snapshot without hashing it. A normal commit retains a
 `sha256-intent-v2` digest of ID, expected revision, owner, fence, local mutations and observation time, excluding
-the checkpoint. This metadata can still be large when local mutations contain large values. The existing replay
+the checkpoint. Construction computes this digest once, before the provider gate or transaction; there is no Lazy
+wrapper. A named record with explicit JSON names defines the persisted digest, pinned by golden canonical bytes
+and a literal digest test. This metadata can still be large when local mutations contain large values. The existing replay
 snapshot retains the exact accepted checkpoint; no additional copy or historical checkpoint cache is introduced.
 
 Only an ID collision compares the incoming checkpoint against the retained accepted snapshot, plus the retained
 intent digest for non-initialization commits. Exact retries return the original snapshot even after later commits;
 changed content returns `IdentityConflict`. Different-ID writes must still pass current revision, fence and lease
-checks. The provider-neutral receipt document preserves this evidence across restart. The SQLite adapter delegates
-to the same semantics inside its transaction. Full `ProcessDurableCommit.Fingerprint` evidence remains available
-lazily for explicit diagnostics; reading that property intentionally incurs full hashing.
+checks. The provider-neutral receipt document preserves this evidence across restart. The in-memory store captures
+immutable, append-only replay evidence under its gate and compares checkpoint content after releasing the gate.
+SQLite uses a deferred WAL read transaction for initialization and commit: replay comparison does not reserve
+the writer. A changed mutation upgrades to a write transaction; an invalidated snapshot rolls back and retries
+against fresh state, at most three attempts. The commit rechecks the physical lease after obtaining the writer
+reservation and rolls back staged state and receipt if the lease expired. Other mutations retain immediate
+transactions. Full commit hashing is an internal reference operation for tests and benchmarks, not a public API.
 
 Safe-point and activation commit identities use instance, attempt, activation ID and the prior activation count.
 Affinity commits use their control revision and slot; operation-ledger commits use operation ID and storage
@@ -52,11 +60,14 @@ compatibility reader or package publication is included in this change.
 
 ## Qualification
 
-The regression suite covers both policies, retained Diagnostic tampering checks, paired evidence, restart and
-later-commit collisions, altered checkpoint/metadata/local mutations, plus fixed median-of-seven allocation
-ceilings for fresh commit construction and initialization with 128 KiB and 1 MiB scalar inputs. Existing crash,
-stale-fence, lease, cancellation, replay and malformed-checkpoint tests remain authoritative. Materialization
-conformance tests explicitly select Diagnostic mode when comparing retained continuation hash chains.
+The regression suite covers both policies, retained Diagnostic tampering and deletion checks, missing policy,
+clean-start compatibility after restart, later-commit collisions, altered checkpoint/metadata/local mutations,
+and the named intent digest contract. Median-of-seven allocation ceilings cover construction and
+initialization (3 KiB each) with 1,024 and 8,192 fields of 128 characters each. Existing crash, stale-fence, lease,
+cancellation, replay and malformed-checkpoint tests remain authoritative. Materialization conformance defaults
+to Standard, exercises crash/replay in both modes, and always compares final state with the reference interpreter.
+SQLite tests also cover replay while another writer reservation remains held and eight concurrent identical
+initializations/commits.
 
 The opt-in structured workload uses 1,024 and 8,192 four-field object rows. Setup and compilation are outside the
 measurement. Full-hash preparation is an explicit same-build reference, not a claim of historical timing equivalence:
@@ -75,26 +86,26 @@ unmerged packages; it is not a deployment mechanism. No source-substitution targ
 Measured on 2026-10-15, Apple M5 Max / Arm64, macOS 27.0.1, .NET SDK 10.0.201 / runtime 10.0.5.
 Control: Cohesive `7622449150b3f272463481b4fa5645b33625b4ab`. Candidate: this change on that parent.
 Ari: `e1104c9013eb7b6a38f66672f2283b70b2739d2a` (the alpha.140 upgrade source; no Ari code edits).
-Both harnesses use matched source assemblies; candidate Core, Processes, Relations and Storage DLL hashes were
-checked against the qualified build outputs. Five alternating fresh-process pairs per X12 case measure cumulative
+Both harnesses are isolated copies of their respective source builds. Five alternating fresh-process pairs per
+X12 case measure cumulative
 process-wide allocations, including fixture/seed setup, preview, compilation, execution and assertions. This is
 neither retained heap nor one isolated compiler invocation. MB below means decimal megabytes.
 
 | X12 case | Cold control | Cold candidate | Repeated control | Repeated candidate |
 |---|---:|---:|---:|---:|
-| 004010 204 | 233.96 MB | 194.42 MB | 50.95 MB | 50.59 MB |
-| 005030 204 | 240.02 MB | 200.43 MB | 58.07 MB | 57.71 MB |
+| 004010 204 | 234.24 MB | 194.60 MB | 50.96 MB | 50.60 MB |
+| 005030 204 | 239.95 MB | 200.43 MB | 58.01 MB | 57.75 MB |
 
-Median cold allocation falls 39.54 / 39.59 MB (16.9% / 16.5%). Repeated allocation falls only 0.37 / 0.36 MB
-(0.72% / 0.62%). Removing hashing reduces cold temporary-buffer demand, but much of its warm buffer demand was
+Median cold allocation falls 39.64 / 39.53 MB (16.9% / 16.5%). Repeated allocation falls only 0.36 / 0.26 MB
+(0.70% / 0.45%). Removing hashing reduces cold temporary-buffer demand, but much of its warm buffer demand was
 already pooled; warm allocation is still dominated by other work. No total-case latency or CPU-share reduction
 is claimed from the five process samples. Both pinned X12 graph content digests remain identical to control.
 
-The isolated structured-row run allocates 624 B to construct a commit and 1,376 B to initialize a store at both
-sizes. Explicit full hashing allocates about 49.9 KB / 509.0 KB. BenchmarkDotNet ShortRun measured full-hash
-preparation at 3.02 / 24.22 ms versus about 53 ns for commit construction. These are different amounts of work;
-this demonstrates removal of the traversal, not an equally cheap replacement content hash. Total execution still
-scales with its input and explicit admission.
+The isolated structured-row run allocates 1,568 B to construct a commit, including its small eager intent digest,
+and 1,376 B to initialize a store at both sizes. Explicit full hashing allocates about 50.8 KB / 509.9 KB.
+BenchmarkDotNet ShortRun measured full-hash preparation at 3.04 / 24.51 ms versus about 898 / 916 ns for commit
+construction. These are different amounts of work; this demonstrates removal of the full traversal, not an equally
+cheap replacement content hash. Total execution still scales with its input and explicit admission.
 
 Evidence: [alternating X12 samples](evidence/durable-bookkeeping/x12-matched.csv),
 [structured allocation samples](evidence/durable-bookkeeping/scaling.csv),
@@ -102,10 +113,10 @@ Evidence: [alternating X12 samples](evidence/durable-bookkeeping/x12-matched.csv
 Use `eng/runtime-performance/durable-bookkeeping/compare-ari.py --baseline <control/ProtocolPreparation.dll>
 --candidate <candidate/ProtocolPreparation.dll> --output <samples.csv>` for the same pairing procedure.
 
-Validation: solution command 4,644 passed / 41 environment skips; native SQLite 220 passed; Ari engine source
-qualification 936 passed / 18 emulator skips. Restoring eager hash preparation temporarily makes both allocation
-regressions fail at 3,552 B against the 2,048 B construction cap; optimized code passes. The old mechanism is
-restored only for that counterexample, never in the final build.
+Validation: solution command 4,651 passed / 41 environment skips; native SQLite 224 passed; Ari engine source
+qualification 936 passed / 18 emulator skips. Temporarily restoring eager commit hashing fails both sized
+construction cases at 4,448 B against the 3,072 B ceiling; restoring initialization hashing fails both sized
+initialization cases at 4,160 B against the same ceiling. Optimized source passes after restoration.
 
 ## Remaining work
 

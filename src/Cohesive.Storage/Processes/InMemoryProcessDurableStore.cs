@@ -109,41 +109,45 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
         context.ThrowIfCancellationRequested();
         var instanceId = checkpoint.ContinuationIdentity.ProcessInstanceId;
 
+        (StoredCommitReceipt Receipt, ProcessDurableStoreSnapshot Current) replay;
         lock (gate)
         {
             if (aggregates.TryGetValue(instanceId, out var existing))
             {
                 if (existing.CommitReceipts.TryGetValue(commitId, out var prior))
                 {
-                    return Task.FromResult(prior.IntentFingerprint is null
-                        && CanonicalEquals(prior.Snapshot.Checkpoint, checkpoint)
-                        ? new ProcessStoreMutationResult(
-                            ProcessStoreMutationDisposition.Replayed,
-                            prior.Snapshot)
-                        : Result(ProcessStoreMutationDisposition.IdentityConflict, existing));
+                    replay = (prior, existing.Snapshot());
                 }
-
-                return Task.FromResult(Result(ProcessStoreMutationDisposition.AlreadyExists, existing));
+                else
+                    return Task.FromResult(Result(ProcessStoreMutationDisposition.AlreadyExists, existing));
             }
-
-            var revision = ProcessStorageRevision.Initial;
-            var created = new StoredAggregate(
-                checkpoint,
-                revision,
-                WorkerLease: null,
-                LatestWorkerFence: 0,
-                LocalState: [],
-                LocalMutationFingerprints: [],
-                CommitReceipts: []);
-            created = created with
+            else
             {
-                CommitReceipts = created.CommitReceipts.Add(
-                    commitId,
-                    new(null, created.Snapshot()))
-            };
-            Publish(instanceId, ProcessStoreMutationKind.Initialize, created);
-            return Task.FromResult(Result(ProcessStoreMutationDisposition.Applied, created));
+                var revision = ProcessStorageRevision.Initial;
+                var created = new StoredAggregate(
+                    checkpoint,
+                    revision,
+                    WorkerLease: null,
+                    LatestWorkerFence: 0,
+                    LocalState: [],
+                    LocalMutationFingerprints: [],
+                    CommitReceipts: []);
+                created = created with
+                {
+                    CommitReceipts = created.CommitReceipts.Add(
+                        commitId,
+                        new(null, created.Snapshot()))
+                };
+                Publish(instanceId, ProcessStoreMutationKind.Initialize, created);
+                return Task.FromResult(Result(ProcessStoreMutationDisposition.Applied, created));
+            }
         }
+        // Receipts are append-only and snapshots immutable. This read linearizes at the lookup above;
+        // expensive content comparison must not block unrelated instances behind the store gate.
+        var same = replay.Receipt.IntentFingerprint is null
+            && CanonicalEquals(replay.Receipt.Snapshot.Checkpoint, checkpoint);
+        return Task.FromResult(new ProcessStoreMutationResult(same ? ProcessStoreMutationDisposition.Replayed
+            : ProcessStoreMutationDisposition.IdentityConflict, same ? replay.Receipt.Snapshot : replay.Current));
     }
 
     /// <inheritdoc />
@@ -360,6 +364,7 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
         context.ThrowIfCancellationRequested();
         var instanceId = commit.Checkpoint.ContinuationIdentity.ProcessInstanceId;
 
+        (StoredCommitReceipt Receipt, ProcessDurableStoreSnapshot Current) replay;
         lock (gate)
         {
             if (!aggregates.TryGetValue(instanceId, out var aggregate))
@@ -369,65 +374,66 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
 
             if (aggregate.CommitReceipts.TryGetValue(commit.Id, out var priorCommit))
             {
-                return Task.FromResult(priorCommit.IntentFingerprint == commit.IntentFingerprint
-                    && CanonicalEquals(priorCommit.Snapshot.Checkpoint, commit.Checkpoint)
-                    ? new ProcessStoreMutationResult(
-                        ProcessStoreMutationDisposition.Replayed,
-                        priorCommit.Snapshot)
-                    : Result(ProcessStoreMutationDisposition.IdentityConflict, aggregate));
+                replay = (priorCommit, aggregate.Snapshot());
             }
-
-            if (aggregate.Revision != commit.ExpectedRevision)
+            else
             {
-                return Task.FromResult(Result(ProcessStoreMutationDisposition.RevisionConflict, aggregate));
+                if (aggregate.Revision != commit.ExpectedRevision)
+                {
+                    return Task.FromResult(Result(ProcessStoreMutationDisposition.RevisionConflict, aggregate));
+                }
+
+                if (aggregate.WorkerLease is not { } lease
+                    || lease.Fence != commit.Fence
+                    || !string.Equals(lease.Owner, commit.Owner, StringComparison.Ordinal))
+                {
+                    return Task.FromResult(Result(ProcessStoreMutationDisposition.StaleFence, aggregate));
+                }
+
+                var physicalObservedAtUtc = context.UtcNow;
+                if (!lease.IsLive(physicalObservedAtUtc)
+                    || physicalObservedAtUtc < lease.RenewedAtUtc
+                    || commit.ObservedAtUtc < lease.RenewedAtUtc)
+                {
+                    return Task.FromResult(Result(ProcessStoreMutationDisposition.LeaseExpired, aggregate));
+                }
+
+                if (!IsValidSuccessor(aggregate.Checkpoint, commit.Checkpoint))
+                {
+                    return Task.FromResult(Result(ProcessStoreMutationDisposition.IdentityConflict, aggregate));
+                }
+
+                if (!TryApplyLocalMutations(
+                        aggregate,
+                        commit.LocalMutations,
+                        out var localState,
+                        out var mutationFingerprints))
+                {
+                    return Task.FromResult(Result(ProcessStoreMutationDisposition.LocalMutationConflict, aggregate));
+                }
+
+                var revision = aggregate.Revision.Next();
+                var updated = aggregate with
+                {
+                    Checkpoint = commit.Checkpoint,
+                    Revision = revision,
+                    LocalState = localState,
+                    LocalMutationFingerprints = mutationFingerprints
+                };
+                updated = updated with
+                {
+                    CommitReceipts = updated.CommitReceipts.Add(
+                        commit.Id,
+                        new(commit.IntentFingerprint, updated.Snapshot()))
+                };
+                Publish(instanceId, ProcessStoreMutationKind.AggregateCommit, updated);
+                return Task.FromResult(Result(ProcessStoreMutationDisposition.Applied, updated));
             }
-
-            if (aggregate.WorkerLease is not { } lease
-                || lease.Fence != commit.Fence
-                || !string.Equals(lease.Owner, commit.Owner, StringComparison.Ordinal))
-            {
-                return Task.FromResult(Result(ProcessStoreMutationDisposition.StaleFence, aggregate));
-            }
-
-            var physicalObservedAtUtc = context.UtcNow;
-            if (!lease.IsLive(physicalObservedAtUtc)
-                || physicalObservedAtUtc < lease.RenewedAtUtc
-                || commit.ObservedAtUtc < lease.RenewedAtUtc)
-            {
-                return Task.FromResult(Result(ProcessStoreMutationDisposition.LeaseExpired, aggregate));
-            }
-
-            if (!IsValidSuccessor(aggregate.Checkpoint, commit.Checkpoint))
-            {
-                return Task.FromResult(Result(ProcessStoreMutationDisposition.IdentityConflict, aggregate));
-            }
-
-            if (!TryApplyLocalMutations(
-                    aggregate,
-                    commit.LocalMutations,
-                    out var localState,
-                    out var mutationFingerprints))
-            {
-                return Task.FromResult(Result(ProcessStoreMutationDisposition.LocalMutationConflict, aggregate));
-            }
-
-            var revision = aggregate.Revision.Next();
-            var updated = aggregate with
-            {
-                Checkpoint = commit.Checkpoint,
-                Revision = revision,
-                LocalState = localState,
-                LocalMutationFingerprints = mutationFingerprints
-            };
-            updated = updated with
-            {
-                CommitReceipts = updated.CommitReceipts.Add(
-                    commit.Id,
-                    new(commit.IntentFingerprint, updated.Snapshot()))
-            };
-            Publish(instanceId, ProcessStoreMutationKind.AggregateCommit, updated);
-            return Task.FromResult(Result(ProcessStoreMutationDisposition.Applied, updated));
         }
+        var same = replay.Receipt.IntentFingerprint == commit.IntentFingerprint
+            && CanonicalEquals(replay.Receipt.Snapshot.Checkpoint, commit.Checkpoint);
+        return Task.FromResult(new ProcessStoreMutationResult(same ? ProcessStoreMutationDisposition.Replayed
+            : ProcessStoreMutationDisposition.IdentityConflict, same ? replay.Receipt.Snapshot : replay.Current));
     }
 
     void Publish(

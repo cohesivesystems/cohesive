@@ -1,3 +1,4 @@
+using System.Reflection;
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Running;
 using Cohesive.Execution;
@@ -19,7 +20,7 @@ if (args.Contains("--allocations"))
         Measure(rows, "construct_commit", () => GC.KeepAlive(benchmark.ConstructCommit()));
         Measure(rows, "construct_and_hash_whole_commit", () => GC.KeepAlive(benchmark.ConstructAndHashWholeCommit()));
         Measure(rows, "initialize", () => GC.KeepAlive(benchmark.Fixture.Initialize()));
-        foreach (var mode in Enum.GetValues<ProcessCheckpointVerification>())
+        foreach (var mode in new[] { ProcessCheckpointVerification.Standard, ProcessCheckpointVerification.Diagnostic })
             Measure(rows, $"execute_{mode}", () => GC.KeepAlive(benchmark.Fixture.Execute(mode)));
     }
     return;
@@ -46,10 +47,18 @@ public class CommitPreparationBenchmarks
     [Params(1024, 8192)]
     public int Rows { get; set; }
     internal BookkeepingFixture Fixture { get; private set; } = null!;
+    Func<ProcessDurableCommit, ProcessCommitFingerprint> fullFingerprint = null!;
     [GlobalSetup]
-    public void Setup() => Fixture = new(Rows);
+    public void Setup()
+    {
+        Fixture = new(Rows);
+        fullFingerprint = typeof(InMemoryProcessDurableStore).Assembly
+            .GetType("Cohesive.Storage.Processes.ProcessDurableCommitFingerprinter", throwOnError: true)!
+            .GetMethod("Compute", BindingFlags.Static | BindingFlags.NonPublic)!
+            .CreateDelegate<Func<ProcessDurableCommit, ProcessCommitFingerprint>>();
+    }
     [Benchmark(Baseline = true)]
-    public ProcessCommitFingerprint ConstructAndHashWholeCommit() => ConstructCommit().Fingerprint;
+    public ProcessCommitFingerprint ConstructAndHashWholeCommit() => fullFingerprint(ConstructCommit());
     [Benchmark]
     public ProcessDurableCommit ConstructCommit() => new(new("commit/benchmark"), new("1"), "worker/benchmark", new("1"),
         Fixture.Checkpoint, [], Fixture.Checkpoint.UpdatedAtUtc);

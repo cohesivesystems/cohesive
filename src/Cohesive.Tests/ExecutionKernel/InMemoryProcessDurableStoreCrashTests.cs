@@ -570,7 +570,7 @@ public sealed class InMemoryProcessDurableStoreCrashTests
             activation,
             decision.Disposition,
             decision.Evidence,
-            committedAtUtc);
+            committedAtUtc, ProcessCheckpointVerification.Diagnostic);
 
         var inputReceipt = Assert.Single(decision.State.InputReceipts, receipt =>
             receipt.Emission == fixture.PendingReply.Envelope.Context.EmissionId);

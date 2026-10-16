@@ -1052,7 +1052,7 @@ public static class ProcessCheckpointCompatibilityValidator
             var firstReceipt = checkpoint.Activations.FirstOrDefault(receipt =>
                 receipt.Continuation.ProcessAttemptId == attempt.AttemptId
                 && receipt.Sequence == 1);
-            if (firstReceipt?.BeforeContinuation is null)
+            if (firstReceipt is null)
             {
                 continue;
             }

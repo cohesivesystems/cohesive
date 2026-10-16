@@ -29,7 +29,7 @@ static class ProcessDurableCheckpointReducer
         ArgumentNullException.ThrowIfNull(control);
         ArgumentNullException.ThrowIfNull(bindingResolver);
 
-        if (!Enum.IsDefined(verification))
+        if (verification is not (ProcessCheckpointVerification.Standard or ProcessCheckpointVerification.Diagnostic))
             throw new ArgumentOutOfRangeException(nameof(verification));
         if (decision.State.Continuation != checkpoint.ContinuationIdentity
             || decision.State.CompletedActivationCount != checked(checkpoint.Continuation.CompletedActivationCount + 1))
@@ -61,11 +61,11 @@ static class ProcessDurableCheckpointReducer
         }
 
         ProcessContinuationFingerprint? before = null, after = null;
-        if (verification == ProcessCheckpointVerification.Diagnostic)
-        {
+        // Clean-attempt admission is required in both modes; only recurring hash-chain evidence is optional.
+        if (checkpoint.Continuation.CompletedActivationCount == 0 || verification == ProcessCheckpointVerification.Diagnostic)
             before = ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation);
+        if (verification == ProcessCheckpointVerification.Diagnostic)
             after = ProcessStorageContentFingerprints.Continuation(decision.State);
-        }
         var receipt = new ProcessActivationCommitReceipt(
             decision.State.CompletedActivationCount,
             decision.State.Continuation,
@@ -74,7 +74,8 @@ static class ProcessDurableCheckpointReducer
             activation,
             decision.Disposition,
             decision.Evidence,
-            committedAtUtc);
+            committedAtUtc,
+            verification);
         replacement = new(
             checkpoint.SchemaVersion,
             checkpoint.Start,

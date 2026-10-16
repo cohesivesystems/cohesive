@@ -1,6 +1,6 @@
 # Strict document hashing without canonical output buffers
 
-The current Process runtime makes whole-state bookkeeping hashes lazy or diagnostic-only; see
+The current Process runtime omits eager whole-commit hashing and makes recurring continuation hashes Diagnostic-only; see
 [durable bookkeeping](durable-bookkeeping.md). The canonical hash implementation qualified below remains available.
 
 

@@ -54,7 +54,7 @@ public sealed partial class ProcessDurableRuntimeTests
 
         Assert.Equal(checkpoint.ContinuationIdentity, activation.Continuation);
         Assert.Equal(fixture.Activation, activation.Activation);
-        Assert.Null(activation.BeforeContinuation);
+        Assert.NotNull(activation.BeforeContinuation);
         Assert.Null(activation.AfterContinuation);
         Assert.Equal(checkpoint.Continuation.CompletedActivationCount, activation.Sequence);
         Assert.Equal(fixture.OperationResult, operation.Result);
@@ -2243,7 +2243,7 @@ public sealed partial class ProcessDurableRuntimeTests
             OperationContext context,
             ProcessDurableCommit commit)
         {
-            Commits.Add((commit.Id, commit.Fingerprint));
+            Commits.Add((commit.Id, ProcessDurableCommitFingerprinter.Compute(commit)));
             if (mutation == ProviderCancellationMutation.Commit && !thrown)
             {
                 thrown = true;
