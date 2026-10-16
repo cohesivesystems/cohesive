@@ -50,9 +50,12 @@ SQLite uses a deferred WAL read transaction for initialization and commit: repla
 the writer. A changed mutation upgrades to a write transaction; an invalidated snapshot rolls back and retries
 against fresh state, at most three attempts. This covers primary `SQLITE_BUSY` (5) and `SQLITE_LOCKED` (6),
 including their extended variants such as `BUSY_SNAPSHOT` (517). Each attempt uses the configured native busy
-timeout; cancellation is checked before retry and unrelated native failures propagate immediately. The commit
-rechecks the physical lease after obtaining the writer reservation and rolls back staged state and receipt if the lease expired. Other mutations retain immediate
-transactions. Full commit hashing is an internal reference operation for tests and benchmarks, not a public API.
+timeout. Three saturated upgrade waits deliberately allow about 15 seconds of lock waiting at the default
+five seconds per attempt, plus transaction work; this is not an end-to-end deadline. Cancellation is checked
+before retry and cannot interrupt a native busy wait already in progress. Unrelated native failures propagate
+immediately. The commit rechecks the physical lease after obtaining the writer reservation and rolls back
+staged state and receipt if the lease expired. Other mutations retain immediate transactions. Full commit hashing
+is an internal reference operation for tests and benchmarks, not a public API.
 A source audit of Cohesive and the qualifying Ari checkout found no production or diagnostic consumer;
 `StorageExecutionTelemetry` and the durable status projector consume checkpoint state without this digest.
 
@@ -74,7 +77,9 @@ cancellation, replay and malformed-checkpoint tests remain authoritative. Materi
 to Standard, exercises crash/replay in both modes, and always compares final state with the reference interpreter.
 SQLite tests also cover replay while another writer reservation remains held and eight concurrent identical
 initializations/commits. Injected native failures at the transaction boundary cover busy/locked variants,
-fresh-state retries, exhaustion, cancellation, and propagation of unrelated failures without retry.
+fresh-state retries, exhaustion, cancellation, and propagation of unrelated failures without retry. These tests
+call the existing internal transaction boundary through a friend assembly, with compile-checked arguments; no
+private-method reflection or extra runtime injection hook is required.
 
 The opt-in structured workload uses 1,024 and 8,192 four-field object rows. Setup and compilation are outside the
 measurement. Full-hash preparation is an explicit same-build reference, not a claim of historical timing equivalence:

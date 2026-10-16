@@ -174,7 +174,7 @@ public sealed class SqliteProcessDurableStore : IProcessDurableStore
                 commit: commit), deferWriteLock: true, rejectAtCommit: RejectExpiredCommit);
     }
 
-    async Task<TResult> AccessAsync<TResult>(OperationContext context, ProcessInstanceId instanceId,
+    internal async Task<TResult> AccessAsync<TResult>(OperationContext context, ProcessInstanceId instanceId,
         Func<InMemoryProcessDurableStore, OperationContext, Task<TResult>> operation, bool mutate = true,
         bool deferWriteLock = false,
         Func<ProcessDurableStoreDocument, TResult?>? rejectAtCommit = null)

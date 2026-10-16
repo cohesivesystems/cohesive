@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Reflection;
 using Microsoft.Data.Sqlite;
 using Cohesive.Model.Serialization;
 using Cohesive.Execution;
@@ -282,7 +281,8 @@ public sealed class SqliteProcessDurableStoreTests
             return result;
         }
 
-        var pending = InvokeAccess(store, Context, checkpoint, Operation, deferred);
+        var pending = store.AccessAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId, Operation,
+            mutate: true, deferWriteLock: deferred);
         if (retry)
         {
             Assert.Equal(ProcessStoreMutationDisposition.Applied, (await pending).Disposition);
@@ -318,22 +318,13 @@ public sealed class SqliteProcessDurableStoreTests
             throw error;
         }
 
-        var pending = InvokeAccess(store, context, checkpoint, Operation, deferred: true);
+        var pending = store.AccessAsync(context, checkpoint.ContinuationIdentity.ProcessInstanceId, Operation,
+            mutate: true, deferWriteLock: true);
         if (cancel) await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
         else Assert.Same(error, await Assert.ThrowsAsync<SqliteException>(() => pending));
         Assert.Equal(cancel ? 1 : 3, attempts);
         Assert.Null(await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId));
     }
-
-    // Inject native failures into the existing transaction boundary without adding a production test hook.
-    // The real writer-reservation and concurrent-publication tests above qualify native WAL behavior.
-    static Task<ProcessStoreMutationResult> InvokeAccess(SqliteProcessDurableStore store, OperationContext context,
-        ProcessDurableCheckpoint checkpoint,
-        Func<InMemoryProcessDurableStore, OperationContext, Task<ProcessStoreMutationResult>> operation, bool deferred) =>
-        (Task<ProcessStoreMutationResult>)typeof(SqliteProcessDurableStore)
-            .GetMethod("AccessAsync", BindingFlags.Instance | BindingFlags.NonPublic)!
-            .MakeGenericMethod(typeof(ProcessStoreMutationResult))
-            .Invoke(store, [context, checkpoint.ContinuationIdentity.ProcessInstanceId, operation, true, deferred, null])!;
 
     internal static ProcessDurableRuntime Runtime(IProcessDurableStore store, ProcessDurabilityTestFixture fixture, IProcessReferenceHost host) =>
         new(store, host, new("worker", TimeSpan.FromMinutes(5)), new Binding(fixture.DurableOperation.Binding),
