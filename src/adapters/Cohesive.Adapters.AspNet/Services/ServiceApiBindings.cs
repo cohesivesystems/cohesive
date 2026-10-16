@@ -9,11 +9,11 @@ using Microsoft.AspNetCore.Routing;
 namespace Cohesive.Adapters.AspNet.Services;
 
 /// <summary>Prepared host bindings for one complete API surface; native resources remain caller-owned.</summary>
-public sealed class ServiceModel
+public sealed class ServiceApiBindings
 {
     readonly PreparedApiContribution[] contributions;
     int mappingStarted;
-    internal ServiceModel(ApiDefinition definition, PreparedApiContribution[] contributions)
+    internal ServiceApiBindings(ApiDefinition definition, PreparedApiContribution[] contributions)
     { Definition = definition; this.contributions = contributions; }
     /// <summary>The combined original API contracts.</summary>
     public ApiDefinition Definition { get; }
@@ -69,13 +69,13 @@ public sealed class ServiceModel
 }
 
 /// <summary>Publishes a prepared API implementation through native ASP.NET routing.</summary>
-public static class ServiceModelEndpointExtensions
+public static class ServiceApiBindingsEndpointExtensions
 {
     /// <summary>Validates all staged routes before publishing any of them to this host.</summary>
     /// <param name="routes">Native host or route group.</param><param name="model">Prepared service model.</param>
     /// <returns>The native route builder.</returns>
     /// <exception cref="ServiceMappingException">Mapping is repeated, incomplete or duplicates a route.</exception>
-    public static IEndpointRouteBuilder MapServices(this IEndpointRouteBuilder routes, ServiceModel model)
+    public static IEndpointRouteBuilder MapServices(this IEndpointRouteBuilder routes, ServiceApiBindings model)
     {
         ArgumentNullException.ThrowIfNull(model);
         model.Map(routes);

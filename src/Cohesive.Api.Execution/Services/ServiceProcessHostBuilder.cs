@@ -2,6 +2,7 @@ using Cohesive.Api.Services;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Processes.Authoring;
+using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using Cohesive.Processes.IR;
 using Cohesive.Relations.Authoring;
@@ -28,7 +29,7 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
     readonly List<ProcessDefinitionLink> links = [];
     readonly List<ProcessRelationHandlerRegistration> queries = [];
 
-    internal ServiceProcessHostBuilder(ServiceOperationBuilder operation, string operationId, Process<TInput, TResult> process, InteractionContractCatalog? contracts)
+    internal ServiceProcessHostBuilder(ServiceOperationBuilder? operation, string operationId, Process<TInput, TResult> process, InteractionContractCatalog? contracts)
     {
         this.operation = operation;
         this.operationId = operationId;
@@ -43,7 +44,7 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
 
     internal ServiceProcessHostBuilder(ExecutionDefinitionDocument declaration, ServiceProcessOperation operation,
         Process<TInput, TResult> process, InteractionContractCatalog? contracts)
-        : this(null!, operation.Id, process, contracts)
+        : this(null, operation.Id, process, contracts)
     { declared = declaration; declaredTimeout = operation.Execution!.Timeout; }
 
     internal void Use(ServiceDependencies dependencies, Func<ValueContract, IEntityRepository> repositories) =>
@@ -137,17 +138,25 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
         TimeSpan timeout, IServiceInvocationAuthorization authorization)
     {
         ArgumentNullException.ThrowIfNull(authorization);
-        var compilation = process.Compile(new ProcessDefinitionValidationContext(links));
-        var plan = compilation.Plan ?? throw new ServiceBindingValidationException(compilation.Validation);
+        var prepared = Prepare();
         if (declaredTimeout is { } expected && expected != timeout)
             throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.ExecutionMismatch, "Binding cannot override the declared timeout.", "/bindings/process/timeout");
-        var declaration = declared ?? operation!.Run(plan).ExecuteEphemerally(timeout).Build();
+        var declaration = declared ?? operation!.Run(prepared.Plan).ExecuteEphemerally(timeout).Build();
+        return new(declaration, new ServiceRuntime(declaration,
+            [new ServiceEphemeralProcessBinding(operationId, prepared.Plan, authority, (_, _) => prepared.Host)], authorization), prepared.Adapter, operationId, process);
+    }
+    /// <summary>Compiles native dependencies once without selecting an execution lifetime or starting work.</summary>
+    /// <returns>Exact plan and operation bindings for a separate execution provider.</returns>
+    public PreparedServiceProcess Prepare()
+    {
+        var compilation = process.Compile(new ProcessDefinitionValidationContext(links, interactionContracts: contracts));
+        var plan = compilation.Plan ?? throw new ServiceBindingValidationException(compilation.Validation);
         var deployed = new Dictionary<ExecutionDefinitionReference, ProcessTransitionOperationBinding>(transitions);
         var adapter = new EntityTransitionProcessOperationAdapter(invocation => deployed.GetValueOrDefault(invocation.Definition));
         var host = new RegisteredAsyncProcessReferenceHost(new ProcessRelationHandlerCatalog(queries), adapter.ExecuteAsync);
-        return new(declaration, new ServiceRuntime(declaration,
-            [new ServiceEphemeralProcessBinding(operationId, plan, authority, (_, _) => host)], authorization), adapter, operationId, process);
+        return new(plan, host, contracts, adapter);
     }
+
 }
 
 /// <summary>Canonical service declaration and its host-lifetime native realization.</summary>
@@ -188,4 +197,24 @@ public sealed class HostedServiceProcess<TInput, TResult> : HostedServiceProcess
     public string OperationId { get; }
     /// <summary>Exact process used to compile the runtime.</summary>
     public Process<TInput, TResult> Process { get; }
+}
+
+/// <summary>Prepared exact process dependencies for attachment to an execution provider.</summary>
+/// <remarks>Contains no invocation state, receipt registry, scheduling loop or storage lifetime.</remarks>
+public sealed class PreparedServiceProcess
+{
+    internal PreparedServiceProcess(CompiledProcessPlan plan, IAsyncProcessReferenceHost host,
+        InteractionContractCatalog contracts, EntityTransitionProcessOperationAdapter adapter)
+    { Plan = plan; Host = host; Contracts = contracts; Adapter = adapter; }
+    /// <summary>Compiled canonical process.</summary>
+    public CompiledProcessPlan Plan { get; }
+    /// <summary>Exact native query and transition bindings.</summary>
+    public IAsyncProcessReferenceHost Host { get; }
+    /// <summary>Interaction contracts used when preparing native operation bindings.</summary>
+    public InteractionContractCatalog Contracts { get; }
+    internal EntityTransitionProcessOperationAdapter Adapter { get; }
+    /// <summary>Subscribes to private transition failures scoped to this prepared host.</summary>
+    /// <param name="observer">Thread-safe operator callback; never a public response projection.</param>
+    /// <returns>A disposable subscription.</returns>
+    public IDisposable SubscribeTransitionFailures(Action<EntityTransitionFailureDiagnostic> observer) => Adapter.SubscribeTransitionFailures(observer);
 }

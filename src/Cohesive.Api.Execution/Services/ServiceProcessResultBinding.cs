@@ -56,6 +56,17 @@ public sealed class ServiceProcessResultBinding : ServiceBinding
 
 public sealed partial class ServiceRuntime
 {
+    /// <summary>Validates a declared API wait policy against the result provider without reading any execution.</summary>
+    /// <param name="operationId">Selected result operation.</param>
+    /// <exception cref="ServiceBindingValidationException">The selected binding does not support bounded completion waiting.</exception>
+    public void RequireProcessResultWaiting(string operationId)
+    {
+        if (!operations.TryGetValue(operationId, out var linked)
+            || linked.Binding is not ServiceProcessResultBinding { Values: IProcessExecutionCompletionWaiter })
+            throw ServiceBindingValidationException.Error("services.binding.resultWaitingUnsupported",
+                "The result provider must support bounded completion waiting for this API response policy.", "/bindings/" + operationId);
+    }
+
     /// <summary>Reads the original canonical terminal value without executing the Process or consulting current entities.</summary>
     /// <remarks>Admission precedes protected reads. Optional provider-native waiting is bounded and followed by
     /// reauthorization. Requirements authorize the entire Process output in the admitted scope; use a separately

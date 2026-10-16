@@ -1,4 +1,5 @@
 using System.Net;
+using Cohesive.Host.Services;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Builder;
 using Cohesive.Adapters.AspNet;
@@ -22,6 +23,10 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class FulfillmentProcessIntegrationTests
 {
     static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+
+    static ServiceBuilder TerminalService() => Service.Define(new("terminal-test"), new("1"), Model.Process.Provenance)
+        .Use(new ServiceDependencies().Process(Model.Process))
+        .Operation("fulfill").Run(Model.Process.Definition).ExecuteEphemerally(TimeSpan.FromSeconds(15));
 
     [PostgresTheory]
     [InlineData(OrderStatus.Draft, 5, 2, "Submitted", 3)]
@@ -48,7 +53,7 @@ public sealed class FulfillmentProcessIntegrationTests
             // Same ID in another partition must not confuse the trusted process read binding.
             var foreign = await orders.Upsert(context, new Order(orderId, "other", OrderStatus.Draft));
             await inventory.Upsert(context, new InventoryItem(sku, FulfillmentDemo.LocalPartition, stock));
-            var binding = Model.Service.Definition.Bind(Model.Process.Definition, orders, inventory)
+            var binding = TerminalService().Bind(Model.Process.Definition, orders, inventory)
                 .Build("aspire-first", new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
             var identity = new ProcessContinuationIdentity(new("test/" + orderId), new("attempt/1"));
             var input = ObservationValue.FromObject(new FulfillOrder(orderId, sku, quantity));
@@ -61,7 +66,7 @@ public sealed class FulfillmentProcessIntegrationTests
             Assert.Equal(foreign, await orders.TryGet(context, orderId, new(partitionKey: "other")));
             var beforeReplay = await inventory.TryGet(context, sku, new(partitionKey: FulfillmentDemo.LocalPartition));
             // Recreate all preparation to prove receipts are native durable evidence, not an in-memory cache.
-            var replay = await Model.Service.Definition.Bind(Model.Process.Definition, orders, inventory)
+            var replay = await TerminalService().Bind(Model.Process.Definition, orders, inventory)
                 .Build("aspire-first", new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField))).Runtime.ExecuteProcessAsync(context, "fulfill", identity, input);
             Assert.Equal(ApiResultKind.Success, replay.Kind);
             Assert.Equal(output, replay.Outcome!.Decision.State.Terminal.Detail!.Value!.Value);
@@ -108,6 +113,7 @@ public sealed class FulfillmentProcessIntegrationTests
             var registered = OrderEndpoints.Define(model).Build(builder.Services, persistence.ForServices(receiptStorage));
             await using var app = builder.Build();
             app.UseRequestOperationContext();
+            app.UseAuthorization();
             app.MapServices(registered);
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
@@ -115,7 +121,17 @@ public sealed class FulfillmentProcessIntegrationTests
             var created = await client.PostAsync("/orders", null);
             Assert.Equal(HttpStatusCode.Created, created.StatusCode);
             orderId = (await created.Content.ReadFromJsonAsync<OrderCreated>())!.Id;
-            var response = await client.PostAsJsonAsync("/fulfillment", new FulfillOrder(orderId, sku, quantity));
+            var invalid = await client.PostAsJsonAsync("/fulfillment", new ServiceProcessCommand<FulfillOrder>("", orderId, orderId, "1", new(orderId, sku, quantity)));
+            Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+            var response = await client.PostAsJsonAsync("/fulfillment", new ServiceProcessCommand<FulfillOrder>(orderId, orderId, orderId, "1", new(orderId, sku, quantity)));
+            Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+            var receipt = await response.Content.ReadFromJsonAsync<ServiceProcessReceipt>();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            do
+            {
+                response = await client.GetAsync(receipt!.ResultLocation, deadline.Token);
+                if (response.StatusCode == HttpStatusCode.Accepted) await Task.Delay(50, deadline.Token);
+            } while (response.StatusCode == HttpStatusCode.Accepted);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Contains(expectedStatus, await response.Content.ReadAsStringAsync());
             Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentDemo.LocalPartition)))!.Available);

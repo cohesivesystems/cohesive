@@ -424,7 +424,7 @@ JSON body type from the host. The explicit `HttpBinding` overload remains availa
 
 ## Partial API implementation composition
 
-`ServiceModelBuilder.Implement(api, contribution)` binds instance API selectors to canonical queries, existing
+`ServiceApiBindingsBuilder.Implement(api, contribution)` binds instance API selectors to canonical queries, existing
 entity bindings and separately declared ephemeral services. Several modules can contribute to the same API;
 `Implement(catalog, definition, contribution)` also accepts separately authored catalogs. Build validates complete, unique endpoint coverage before resolving the
 selected native storage. `app.MapServices(prepared)` stages
@@ -437,7 +437,7 @@ A model maps once; setup errors publish no model routes. Exact method/template d
 general ASP.NET route-pattern overlap remains native responsibility.
 
 
-Service composition validates portable endpoint coverage through `ServiceModelBuilder.Plan.Definition`
+Service composition validates portable endpoint coverage through `ServiceApiBindingsBuilder.Plan.Definition`
 before resolving persistence. Repeated `Build` for the same host scope returns the same prepared model;
 create a separate builder for a different host. Missing, foreign, duplicate and process-mismatched
 implementations report `ServiceBindingValidationException` with `services.api.*` codes.
@@ -453,3 +453,19 @@ The fluent `Endpoints.Process` helper targets the single-operation finite-host p
 service declarations during authoring. General service declarations support multiple operations; their
 runtime requires complete binding coverage. The multi-operation hosting follow-up is tracked in
 `docs/design/application-composition.md` with its removal condition and required policy-isolation tests.
+
+## Accepted process composition
+
+`ServiceBuilder.AcceptedApi<TRequest, TResult>` declares a 202 native admission receipt and an independently
+authorized polling endpoint. `ServiceApiBindingsBuilder` binds the linked pair to a complete `ServiceRuntime`;
+`MapServiceAcceptedProcess` supports direct native routing. Execution remains with the qualified native
+dispatcher and retained-value provider, with no implicit worker activation or automatic retry.
+See [the protocol and binding walkthrough](../../../docs/design/accepted-process-api.md) for contracts, examples and limits.
+
+For colocated process APIs with `ServiceProcessCommand<TInput>`, `BindHosted(select, authority, authorization,
+maximumExecutions)` supplies typed input/result projection from the declared process contracts. It preserves
+caller-owned retry identities and rejects malformed envelopes before admission. Default host-local HTTP
+policies invoke the same authorization object as runtime admission, with separate operation scope and no
+capability-name collisions. Supplying `authorizationPolicyResolver` explicitly retains native policy ownership.
+Identity acquisition and authentication remain host responsibilities. Custom transport contracts retain the
+explicit `bind`/`project` overloads. No additional encoding or compilation is introduced per request.

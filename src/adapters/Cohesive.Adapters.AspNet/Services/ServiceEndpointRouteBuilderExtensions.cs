@@ -18,7 +18,7 @@ using Microsoft.AspNetCore.Routing;
 namespace Cohesive.Adapters.AspNet.Services;
 
 /// <summary>HTTP projection of shared service invocation; domain loading and authority remain runtime-owned.</summary>
-public static class ServiceEndpointRouteBuilderExtensions
+public static partial class ServiceEndpointRouteBuilderExtensions
 {
     static readonly JsonSerializerOptions OutcomeJson = CreateJsonOptions();
 

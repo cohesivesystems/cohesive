@@ -9,10 +9,12 @@ public static class OrderEndpoints
 {
     /// <summary>Contributes entity, query and process implementations to the same public API.</summary>
     /// <param name="model">Canonical application declarations.</param><returns>Offline implementation recipes.</returns>
-    public static ServiceModelBuilder Define(FulfillmentApplication model) => new ServiceModelBuilder()
+    public static ServiceApiBindingsBuilder Define(FulfillmentApplication model) => new ServiceApiBindingsBuilder()
         .Implement(model.Api, bindings => ConfigureOrders(bindings, model))
-        .Implement(model.Api, bindings => bindings.Bind(api => api.Fulfill, model.Service.Definition, model.Process,
+        .Implement(model.Api, bindings => bindings.BindHosted(
+            api => api.Fulfill,
             authority: "aspire-first", authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
+            maximumExecutions: 1000,
             logPrivateFailures: true));
 
     /// <summary>Contributes order operations independently of fulfillment execution.</summary>

@@ -1,4 +1,5 @@
 using Cohesive.Identity;
+using Cohesive.Prelude;
 
 namespace AspireFirst.Orders;
 
@@ -14,6 +15,6 @@ public static class FulfillmentDemoIdentity
         var scope = new ScopeRef(FulfillmentDemo.LocalPartition, "demo", PartitionKey: FulfillmentDemo.LocalPartition);
         return new IdentityContext(actor,
             EffectiveScope: new([scope], ScopeSelectionMode.Single, ScopeSelectionSource.Ambient),
-            Grants: [new(actor, scope, ["fulfillment.write"], "local-example")]);
+            Grants: [new(actor, scope, ["fulfillment.write", "fulfillment.read"], "local-example")]);
     }
 }

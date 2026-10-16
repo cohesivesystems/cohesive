@@ -23,7 +23,15 @@ public sealed class ServiceImplementationPlan
         var errors = definition.Endpoints.Where(endpoint => !supplied.Contains(endpoint.Id))
             .Select(endpoint => new DocumentValidationDiagnostic("services.api.missingImplementation", DiagnosticSeverity.Error,
                 $"Endpoint '{endpoint.Id}' has no implementation.", "/api/implementations")).ToArray();
-        if (errors.Length != 0) throw new ServiceBindingValidationException(new([.. errors]));
+        var links = definition.Operations.Where(operation => operation.ResultOf is not null)
+            .Where(operation => operation.Kind != ApiOperationKind.Query
+                || !definition.TryGetOperation(operation.ResultOf!.Value, out var command)
+                || command.Kind != ApiOperationKind.Command || command.PrimaryResult.Kind != ApiResultKind.Accepted)
+            .Select(operation => new DocumentValidationDiagnostic("services.api.resultLinkInvalid", DiagnosticSeverity.Error,
+                $"Result endpoint '{operation.Id}' must link to a declared admission command.",
+                $"/api/endpoints/{operation.Id.Value.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal)}/resultOf"));
+        var diagnostics = errors.Concat(links).ToArray();
+        if (diagnostics.Length != 0) throw new ServiceBindingValidationException(new([.. diagnostics]));
         return definition;
     });
 
