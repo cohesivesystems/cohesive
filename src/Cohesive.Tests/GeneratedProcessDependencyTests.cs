@@ -182,6 +182,33 @@ public sealed class GeneratedProcessDependencyTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Host_attaches_transitions_in_canonical_reference_order(bool reverseRegistration)
+    {
+        var domain = new DomainModelBuilder();
+        var a = domain.Entity<Item>("ordered/a");
+        var z = domain.Entity<Item>("ordered/z");
+        var first = a.Transition<string, string>(new("ordered/a"), new("1"), builder => builder.Return("a"));
+        var last = z.Transition<string, string>(new("ordered/z"), new("1"), builder => builder.Return("z"));
+        var process = new StatementTransitionProcess(last, first);
+        var dependencies = reverseRegistration
+            ? new ServiceDependencies().Transition(last).Transition(first)
+            : new ServiceDependencies().Transition(first).Transition(last);
+        var service = Service.Define(new("ordered/service"), new("1"), RunControlFixture.Provenance)
+            .Use(dependencies).Operation("run").Run(process.Definition).ExecuteEphemerally(TimeSpan.FromSeconds(1));
+        var attached = new List<Cohesive.Model.ValueContract>();
+        _ = service.Bind(process.Definition, contract =>
+        {
+            attached.Add(contract);
+            var entity = contract == first.Definition.Observation ? a : z;
+            return new Cohesive.Storage.InMemoryEntityOutboxRepository(entity.Definition,
+                Cohesive.Storage.EntityPartitionKeyPolicy.FromField(nameof(Item.Partition)));
+        });
+        Assert.Equal(new[] { first.Definition.Observation, last.Definition.Observation }, attached);
+    }
+
     sealed class Receiver : IProcessDependencyReceiver
     {
         public object? TransitionAuthority { get; private set; }

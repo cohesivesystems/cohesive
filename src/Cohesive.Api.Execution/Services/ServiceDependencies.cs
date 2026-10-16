@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using Cohesive.Model.Serialization;
 using System.Collections.Immutable;
 using Cohesive.Execution;
@@ -153,16 +152,15 @@ public sealed class ServiceDependencies
         return new(transitions, lookups, Queries.Add(new(reference, query.CompilationRequest, maximumRows, maximumBytes, consistency)));
     }
 
-    // Weak identity keys bound retention to immutable definition lifetimes. Lazy prevents duplicate
-    // graph preparation when ConditionalWeakTable invokes competing value factories.
-    static readonly ConditionalWeakTable<ProcessDefinition, Lazy<RequiredDependencies>> requiredByDefinition = new();
+    // Shared preparation slots retain successful projections only for the definition's lifetime.
+    static readonly WeakPreparationCache<ProcessDefinition, RequiredDependencies> requiredByDefinition = new();
     static RequiredDependencies Required(ProcessDefinition definition) =>
-        requiredByDefinition.GetValue(definition, static value => new(() => new RequiredDependencies(value))).Value;
+        requiredByDefinition.Get(definition, static value => new RequiredDependencies(value));
 
     sealed class RequiredDependencies
     {
-        internal ImmutableHashSet<ExecutionDefinitionReference> Transitions { get; }
-        internal ImmutableHashSet<ExecutionDefinitionReference> Queries { get; }
+        internal ImmutableArray<ExecutionDefinitionReference> Transitions { get; }
+        internal ImmutableArray<ExecutionDefinitionReference> Queries { get; }
         internal RequiredDependencies(ProcessDefinition definition)
         {
             var transitions = ImmutableHashSet.CreateBuilder<ExecutionDefinitionReference>();
@@ -172,8 +170,9 @@ public sealed class ServiceDependencies
                 if (node is InvokeTransitionProcessNode transition) transitions.Add(transition.Transition);
                 if (node is EvaluateRelationProcessNode query) queries.Add(query.Relation);
             }
-            Transitions = transitions.ToImmutable();
-            Queries = queries.ToImmutable();
+            var order = Comparer<ExecutionDefinitionReference>.Create(ExecutionDefinitionReference.CompareCanonical);
+            Transitions = transitions.OrderBy(reference => reference, order).ToImmutableArray();
+            Queries = queries.OrderBy(reference => reference, order).ToImmutableArray();
         }
     }
 
@@ -187,9 +186,7 @@ public sealed class ServiceDependencies
         void Collect(IEnumerable<ExecutionDefinitionReference> references, Func<ExecutionDefinitionReference, bool> registered,
             string code, string kind)
         {
-            foreach (var reference in references.OrderBy(item => item.DefinitionId.Value, StringComparer.Ordinal)
-                         .ThenBy(item => item.RevisionId.Value, StringComparer.Ordinal)
-                         .ThenBy(item => item.Fingerprint.Value, StringComparer.Ordinal))
+            foreach (var reference in references)
             {
                 if (registered(reference)) continue;
                 var exact = $"{reference.DefinitionId.Value}@{reference.RevisionId.Value} [{reference.Fingerprint.Algorithm}/{reference.Fingerprint.Canonicalization}:{reference.Fingerprint.Value}]";

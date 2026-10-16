@@ -101,3 +101,5 @@ as dependencies of Fulfill. Generated attachment inference does not complete API
 execution, or capability evidence for arbitrary native callbacks.
 
 Service dependency requirements are projected once per immutable ProcessDefinition instance into a weakly keyed, thread-safe cache. Generated-attachment admission and final binding reuse that set; coverage is checked only at final binding, after all contributions are available. The cache retains no repositories or invocation data.
+
+Required dependency preparation uses the shared WeakPreparationCache/PreparationSlot mechanism. Successful projections are retained for the immutable definition lifetime; failed preparation remains retryable. Transition and query references are sorted once by canonical identity, revision and complete fingerprint, and the same arrays drive diagnostics and host attachment.

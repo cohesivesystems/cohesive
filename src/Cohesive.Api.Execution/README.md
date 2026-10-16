@@ -386,3 +386,5 @@ is independent. All missing exact references are reported together with identity
 The required set is prepared once per immutable definition and weakly retained, shared by admission and binding. Compilation is cached by the
 resulting registration and repositories remain host-owned. Explicit Transition/Lookup registrations remain
 available for separately authored contracts; conflicting explicit/generated registrations cannot overwrite each other.
+
+Required dependency preparation uses the shared WeakPreparationCache/PreparationSlot mechanism. Successful projections are retained for the immutable definition lifetime; failed preparation remains retryable. Transition and query references are sorted once by canonical identity, revision and complete fingerprint, and the same arrays drive diagnostics and host attachment.
