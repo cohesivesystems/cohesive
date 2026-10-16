@@ -110,7 +110,6 @@ public sealed class FulfillmentProcessIntegrationTests
             var builder = WebApplication.CreateBuilder();
             builder.Services.AddRequestOperationContext();
             builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
-            FulfillmentDemoIdentity.AddHttpPolicies(builder.Services, model.Api.Fulfill.Declaration);
             var registered = OrderEndpoints.Define(model).Build(builder.Services, persistence.ForServices(receiptStorage));
             await using var app = builder.Build();
             app.UseRequestOperationContext();
@@ -122,7 +121,9 @@ public sealed class FulfillmentProcessIntegrationTests
             var created = await client.PostAsync("/orders", null);
             Assert.Equal(HttpStatusCode.Created, created.StatusCode);
             orderId = (await created.Content.ReadFromJsonAsync<OrderCreated>())!.Id;
-            var response = await client.PostAsJsonAsync("/fulfillment", new FulfillmentRequest(orderId, orderId, orderId, "1", new(orderId, sku, quantity)));
+            var invalid = await client.PostAsJsonAsync("/fulfillment", new ServiceProcessCommand<FulfillOrder>("", orderId, orderId, "1", new(orderId, sku, quantity)));
+            Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+            var response = await client.PostAsJsonAsync("/fulfillment", new ServiceProcessCommand<FulfillOrder>(orderId, orderId, orderId, "1", new(orderId, sku, quantity)));
             Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
             var receipt = await response.Content.ReadFromJsonAsync<ServiceProcessReceipt>();
             using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));

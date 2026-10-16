@@ -583,7 +583,7 @@ and explicit service/process host binding.
 selected process; no separate service class or manually constructed dependency catalog is needed:
 
 ```csharp
-Fulfill = Endpoints.Process(process).Accepted<FulfillmentRequest>(
+Fulfill = Endpoints.Process(process).Accepted<ServiceProcessCommand<FulfillOrder>>(
     id: new("fulfillment"), revision: new("2"),
     configure: service => service
         .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
@@ -618,3 +618,25 @@ host provider rejects that policy rather than pretending its in-memory state is 
 
 See [FULFILLMENT.md](FULFILLMENT.md) for the runnable request and the
 [linked-process design](../../../docs/design/accepted-process-api.md) for protocol and failure details.
+
+### Typed process host binding
+
+The standard `ServiceProcessCommand<TInput>` carries command/idempotency/instance/attempt IDs plus input.
+Clients retain all five fields across retries; the adapter never generates replacement IDs. Its JSON shape is
+unchanged from the former demo-specific request. Missing identities or input fail with HTTP 400 before admission.
+
+```csharp
+bindings.BindHosted(api => api.Fulfill,
+    authority: "aspire-first",
+    authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
+    maximumExecutions: 1000,
+    logPrivateFailures: true);
+```
+
+This overload converts input through the existing observation representation and decodes the terminal value
+against the selected process result contract. `Build` prepares host-local HTTP policies using the same
+`IServiceInvocationAuthorization` as native admission; start and result remain independently authorized.
+Policies are scoped to the registration, so repeated capability names do not overwrite another service's policy.
+The application still supplies authenticated identity (the demo supplies an explicitly synthetic identity),
+request OperationContext, and `UseAuthorization`. Custom request/result projections and existing native policy
+resolvers remain available through the explicit binding overload.

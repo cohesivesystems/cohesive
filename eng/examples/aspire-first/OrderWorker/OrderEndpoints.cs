@@ -1,7 +1,6 @@
 using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Storage;
-using Cohesive.Model;
 
 namespace AspireFirst.Orders;
 
@@ -16,17 +15,7 @@ public static class OrderEndpoints
             api => api.Fulfill,
             authority: "aspire-first", authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
             maximumExecutions: 1000,
-            bind: (_, command) => (
-                new(command.CommandId), new(command.IdempotencyKey),
-                new(new(command.InstanceId), new(command.AttemptId)),
-                ObservationValue.FromObject(command.Input)),
-            project: value =>
-            {
-                var decoded = Cohesive.Relations.Execution.HostedQueryValueAdapter.Decode<FulfillmentResult>(
-                    value, model.Process.Definition.Definition.Result);
-                return decoded.Type == Cohesive.Prelude.ResultType.Success ? decoded.Success!
-                    : throw new InvalidOperationException("The retained fulfillment result cannot be projected.");
-            }, logPrivateFailures: true, authorizationPolicyResolver: (_, requirement) => requirement.Id));
+            logPrivateFailures: true));
 
     /// <summary>Contributes order operations independently of fulfillment execution.</summary>
     /// <param name="bindings">Shared API implementation contribution.</param><param name="model">Canonical application declarations.</param>

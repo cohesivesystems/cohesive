@@ -19,7 +19,7 @@ public sealed class CompositionModelTests
             .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
             .ReturnAfterAdmission(ProcessExecutionLifetime.Host)
             .Operation("result").Require(new("fulfillment.read")).ReadResultOf(process.Definition)
-            .AcceptedApi<FulfillmentRequest, FulfillmentResult>("fulfill", "result", "/fulfillment", "/fulfillment/results/{instanceId}");
+            .AcceptedApi<ServiceProcessCommand<FulfillOrder>, FulfillmentResult>("fulfill", "result", "/fulfillment", "/fulfillment/results/{instanceId}");
         Assert.Equal(separate.Declaration.Reference, model.Api.Fulfill.Declaration.Reference);
         Assert.Equal(separate.Start.Id, model.Api.Fulfill.Start.Id);
         Assert.Equal(separate.Result.Id, model.Api.Fulfill.Result.Id);

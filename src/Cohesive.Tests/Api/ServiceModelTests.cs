@@ -213,6 +213,52 @@ public sealed class ServiceModelTests
         Assert.Empty(owner.Build().Endpoints);
     }
 
+    sealed class StandardProcessApi : ApiModel
+    {
+        public StandardProcessApi(string id)
+        {
+            var process = new EchoProcess();
+            Pair = Endpoints.Process(process).Accepted<ServiceProcessCommand<string>>(new(id), new("1"),
+                service => service.Operation("start").Require(new("shared")).Run(process.Definition)
+                    .ReturnAfterAdmission(ProcessExecutionLifetime.Host)
+                    .Operation("result").Require(new("shared")).ReadResultOf(process.Definition),
+                "start", "result", "/" + id, "/" + id + "/{instanceId}");
+        }
+        public ColocatedProcessApi<ServiceProcessCommand<string>, string, string> Pair { get; }
+    }
+    sealed class SelectedAuthorization(string allowedOperation) : IServiceInvocationAuthorization
+    {
+        public ValueTask<Cohesive.Identity.ScopeRef?> AdmitAsync(OperationContext context, Cohesive.Api.Services.ServiceOperation operation) =>
+            ValueTask.FromResult<Cohesive.Identity.ScopeRef?>(operation.Id == allowedOperation ? new("tenant", "tenant", PartitionKey: "tenant") : null);
+        public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, Cohesive.Api.Services.ServiceOperation operation,
+            EntitySnapshot snapshot) => ValueTask.FromResult(false);
+    }
+
+    [Fact]
+    public async Task Default_http_policies_keep_operations_and_services_isolated_despite_shared_requirement_ids()
+    {
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddSingleton(OperationContext.Create());
+        var model = new ServiceApiBindingsBuilder()
+            .Implement(new StandardProcessApi("first"), b => b.BindHosted(api => api.Pair, "test", new SelectedAuthorization("start"), 2))
+            .Implement(new StandardProcessApi("second"), b => b.BindHosted(api => api.Pair, "test", new SelectedAuthorization("result"), 2));
+        var prepared = model.Build(builder.Services, new Persistence());
+        await using var app = builder.Build();
+        app.MapServices(prepared);
+        var authorization = app.Services.GetRequiredService<Microsoft.AspNetCore.Authorization.IAuthorizationService>();
+        var http = new Microsoft.AspNetCore.Http.DefaultHttpContext { RequestServices = app.Services };
+        var endpoints = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).Cast<RouteEndpoint>().ToArray();
+        Assert.Equal(4, endpoints.Length);
+        var names = new HashSet<string>();
+        foreach (var endpoint in endpoints)
+        {
+            var policy = Assert.Single(endpoint.Metadata.GetOrderedMetadata<Microsoft.AspNetCore.Authorization.IAuthorizeData>()).Policy!;
+            Assert.True(names.Add(policy));
+            var result = await authorization.AuthorizeAsync(new System.Security.Claims.ClaimsPrincipal(), http, policy);
+            Assert.Equal(endpoint.RoutePattern.RawText is "/first" or "/second/{instanceId}", result.Succeeded);
+        }
+    }
+
     sealed class EchoProcess(string id = "echo") : ProcessModel<string, string>
     {
         protected override ProcessAuthoringMetadata Metadata => new(new(id), new("1"), new("return"),

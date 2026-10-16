@@ -13,7 +13,7 @@ public sealed class OrderApi : ApiModel
     /// <param name="transitions">Order behavior declarations, without runtime bindings.</param>
     public OrderApi(OrderTransitions transitions, FulfillmentProcess process)
     {
-        Fulfill = Endpoints.Process(process).Accepted<FulfillmentRequest>(
+        Fulfill = Endpoints.Process(process).Accepted<ServiceProcessCommand<FulfillOrder>>(
             id: new("fulfillment"), revision: new("2"),
             configure: service => service
                 .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
@@ -38,7 +38,7 @@ public sealed class OrderApi : ApiModel
     }
 
     /// <summary>Acknowledges fulfillment and exposes its independently authorized result.</summary>
-    public ColocatedProcessApi<FulfillmentRequest, FulfillOrder, FulfillmentResult> Fulfill { get; }
+    public ColocatedProcessApi<ServiceProcessCommand<FulfillOrder>, FulfillOrder, FulfillmentResult> Fulfill { get; }
     /// <summary>Creates a fresh order.</summary>
     public ApiEndpoint<OrderCreated> Create { get; }
     /// <summary>Reads an existing order.</summary>

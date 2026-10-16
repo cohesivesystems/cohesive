@@ -461,3 +461,11 @@ authorized polling endpoint. `ServiceApiBindingsBuilder` binds the linked pair t
 `MapServiceAcceptedProcess` supports direct native routing. Execution remains with the qualified native
 dispatcher and retained-value provider, with no implicit worker activation or automatic retry.
 See [the protocol and binding walkthrough](../../../docs/design/accepted-process-api.md) for contracts, examples and limits.
+
+For colocated process APIs with `ServiceProcessCommand<TInput>`, `BindHosted(select, authority, authorization,
+maximumExecutions)` supplies typed input/result projection from the declared process contracts. It preserves
+caller-owned retry identities and rejects malformed envelopes before admission. Default host-local HTTP
+policies invoke the same authorization object as runtime admission, with separate operation scope and no
+capability-name collisions. Supplying `authorizationPolicyResolver` explicitly retains native policy ownership.
+Identity acquisition and authentication remain host responsibilities. Custom transport contracts retain the
+explicit `bind`/`project` overloads. No additional encoding or compilation is introduced per request.

@@ -183,6 +183,38 @@ public sealed class ServiceApiImplementation<TApi>
         return this;
     }
 
+    /// <summary>Binds a standard typed command envelope and decodes the declared process result automatically.</summary>
+    /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Declared process result.</typeparam>
+    /// <param name="select">Colocated API pair using the standard command envelope.</param>
+    /// <param name="authority">Execution authority.</param><param name="authorization">Shared HTTP and runtime admission policy.</param>
+    /// <param name="maximumExecutions">Bound on retained host instances.</param>
+    /// <param name="logPrivateFailures">Opt in to scoped private operator diagnostics.</param>
+    /// <param name="authorizationPolicyResolver">Optional existing native policies; otherwise scoped policies use authorization.</param>
+    /// <returns>This contribution; preparation remains host-scoped.</returns>
+    public ServiceApiImplementation<TApi> BindHosted<TInput, TResult>(
+        Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult>> select,
+        string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
+        bool logPrivateFailures = false, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(select);
+        var pair = select(api) ?? throw ServiceImplementationPlan.Error("services.api.foreignEndpoint", "Select a linked API contract.");
+        var resultContract = pair.Process.Definition.Definition.Result;
+        return BindHosted(_ => pair, authority, authorization, maximumExecutions,
+            bind: (_, command) =>
+            {
+                if (string.IsNullOrWhiteSpace(command.CommandId) || string.IsNullOrWhiteSpace(command.IdempotencyKey)
+                    || string.IsNullOrWhiteSpace(command.InstanceId) || string.IsNullOrWhiteSpace(command.AttemptId) || command.Input is null)
+                    throw new BadHttpRequestException("A process command requires retry identities and input.");
+                return (new(command.CommandId), new(command.IdempotencyKey), new(new(command.InstanceId), new(command.AttemptId)),
+                    ObservationValue.FromObject(command.Input));
+            }, project: value =>
+            {
+                var decoded = Cohesive.Relations.Execution.HostedQueryValueAdapter.Decode<TResult>(value, resultContract);
+                return decoded.Type == ResultType.Success ? decoded.Success!
+                    : throw new InvalidOperationException("The retained process result does not match its declared result contract.");
+            }, logPrivateFailures, authorizationPolicyResolver);
+    }
+
     /// <summary>Binds a colocated process API using its retained service and generated dependency recipe.</summary>
     /// <typeparam name="TRequest">HTTP command.</typeparam><typeparam name="TInput">Process input.</typeparam>
     /// <typeparam name="TResult">Process result.</typeparam>
@@ -247,7 +279,8 @@ public sealed class ServiceApiImplementation<TApi>
                 if (logPrivateFailures) services.AddCohesiveTransitionFailureLogging(prepared);
                 var worker = services.AddCohesiveHostProcessWorker(prepared, maximumExecutions);
                 var runtime = worker.Bind(declaration, authority, authorization);
-                return new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project, authorizationPolicyResolver), []);
+                var policies = authorizationPolicyResolver ?? ServiceProcessHttpAuthorization.Register(services, pair, authorization);
+                return new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project, policies), []);
             });
         });
         return this;
