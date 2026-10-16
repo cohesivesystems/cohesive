@@ -90,10 +90,19 @@ public sealed record AnnotationValue
     {
         if (ReferenceEquals(this, other)) return true;
         if (other is null) return false;
-        if (TryGetString(out var text))
-            return other.TryGetString(out var otherText) && string.Equals(text, otherText, StringComparison.Ordinal);
-        return !other.TryGetString(out _) && JsonElement.DeepEquals(Value, other.Value);
+        var left = Volatile.Read(ref textOrView);
+        var right = Volatile.Read(ref other.textOrView);
+        if (left is string text)
+            return right is string otherText ? string.Equals(text, otherText, StringComparison.Ordinal)
+                : MatchesString(other.Snapshot(right), text);
+        if (right is string native) return MatchesString(Snapshot(left), native);
+        return JsonElement.DeepEquals(Snapshot(left), other.Snapshot(right));
     }
+
+    JsonElement Snapshot(object? view) => view is JsonElement element ? element : snapshot;
+
+    static bool MatchesString(JsonElement element, string text) =>
+        element.ValueKind == JsonValueKind.String && element.ValueEquals(text);
 
     /// <summary>Computes a hash aligned with structural JSON equality, including exact numeric equivalence.</summary>
     public override int GetHashCode()

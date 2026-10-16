@@ -89,6 +89,31 @@ public sealed class NativeStringAnnotationTests
         }
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void StringEqualityDoesNotAllocateDecodedCopies(bool nativeLeft, bool nativeRight)
+    {
+        var text = new string('x', 1024) + "é 😀";
+        var left = nativeLeft ? AnnotationValue.FromString(text) : new AnnotationValue(JsonSerializer.SerializeToElement(text));
+        var right = nativeRight ? AnnotationValue.FromString(text) : new AnnotationValue(JsonSerializer.SerializeToElement(text));
+        for (var warm = 0; warm < 20; warm++) Assert.True(left.Equals(right));
+        var samples = new long[7];
+        for (var run = 0; run < samples.Length; run++)
+        {
+            var equal = true;
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < 128; index++) equal &= left.Equals(right);
+            samples[run] = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(equal);
+        }
+        Array.Sort(samples);
+        Assert.InRange(samples[3], 0, 128 * 16);
+        Assert.NotEqual(left, AnnotationValue.FromString(text + "different"));
+    }
+
     [Fact]
     public void ParsedStringsRetainOriginalOwnedJsonSnapshot()
     {
