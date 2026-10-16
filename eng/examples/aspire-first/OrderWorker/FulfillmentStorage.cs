@@ -12,7 +12,26 @@ public sealed class FulfillmentStorage : StorageModel
     public FulfillmentStorage(FulfillmentDomain domain)
     {
         Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
-            new(FulfillmentResources.DatabaseName), storage => Configure(domain, storage)));
+            new(FulfillmentResources.DatabaseName), storage =>
+            {
+                storage.Entity(domain.Orders, order => order
+                    .Table("public", "cohesive_orders")
+                    .Identity(value => value.Id, "order_id")
+                    .Partition(value => value.Partition, "partition_key")
+                    .Column(value => value.Status, "status"));
+                storage.Entity(domain.Reservations, reservation => reservation
+                    .Table("public", "cohesive_reservations")
+                    .Identity(value => value.Id, "reservation_id")
+                    .Partition(value => value.Partition, "partition_key")
+                    .Column(value => value.OrderId, "order_id")
+                    .Column(value => value.Sku, "sku")
+                    .Column(value => value.Quantity, "quantity"));
+                storage.Entity(domain.Inventory, item => item
+                    .Table("public", "cohesive_inventory")
+                    .Identity(value => value.Sku, "sku")
+                    .Partition(value => value.Partition, "partition_key")
+                    .Column(value => value.Available, "available"));
+            }));
         InventoryBindings = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentResources.InventoryDatabaseName),
             storage => storage.Entity(domain.Inventory, Bindings.Mapping(domain.Inventory))));
     }
@@ -22,32 +41,6 @@ public sealed class FulfillmentStorage : StorageModel
 
     /// <summary>Only inventory for the independently placed remote source.</summary>
     public PostgresPersistenceBindings InventoryBindings { get; }
-
-    /// <summary>Contributes native mappings; the same recipe can be applied inline.</summary>
-    /// <param name="domain">Canonical entity declarations.</param>
-    /// <param name="storage">Caller-owned PostgreSQL authoring builder.</param>
-    public static void Configure(FulfillmentDomain domain, PostgresPersistenceBindings storage)
-    {
-        storage.Entity(domain.Orders, order => order
-            .Table("public", "cohesive_orders")
-            .Identity(value => value.Id, "order_id")
-            .Partition(value => value.Partition, "partition_key")
-            .Column(value => value.Status, "status"));
-        storage.Entity(domain.Reservations, reservation => reservation
-            .Table("public", "cohesive_reservations")
-            .Identity(value => value.Id, "reservation_id")
-            .Partition(value => value.Partition, "partition_key")
-            .Column(value => value.OrderId, "order_id")
-            .Column(value => value.Sku, "sku")
-            .Column(value => value.Quantity, "quantity"));
-        ConfigureInventory(domain, storage);
-    }
-
-    static void ConfigureInventory(FulfillmentDomain domain, PostgresPersistenceBindings storage) => storage.Entity(domain.Inventory, item => item
-        .Table("public", "cohesive_inventory")
-        .Identity(value => value.Sku, "sku")
-        .Partition(value => value.Partition, "partition_key")
-        .Column(value => value.Available, "available"));
 
     /// <summary>Attaches the configured native data source; ownership remains with the caller.</summary>
     /// <param name="database">Native data source.</param><returns>A runtime persistence registration.</returns>
