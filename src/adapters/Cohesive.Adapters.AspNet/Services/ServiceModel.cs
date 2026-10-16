@@ -1,3 +1,4 @@
+using Cohesive.Api.Execution.Services;
 using Cohesive.Api;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -19,7 +20,7 @@ public sealed class ServiceModel
     {
         ArgumentNullException.ThrowIfNull(routes);
         if (Interlocked.Exchange(ref mappingStarted, 1) != 0)
-            throw new InvalidOperationException("A prepared service model can be mapped once. Build a separate model for another host.");
+            throw ServiceImplementationPlan.Error("services.api.alreadyMapped", "A prepared service model can be mapped once. Build a separate model for another host.");
         var staging = new StagedRoutes(routes);
         foreach (var contribution in contributions) contribution.Map(staging);
         var endpoints = staging.DataSources.SelectMany(source => source.Endpoints).ToArray();
@@ -27,12 +28,12 @@ public sealed class ServiceModel
         if (implemented.Any(id => id is null) || implemented.Length != Definition.Endpoints.Count
             || implemented.Distinct().Count() != implemented.Length
             || Definition.Endpoints.Any(endpoint => !implemented.Contains(endpoint.Id)))
-            throw new InvalidOperationException("Every declared API endpoint must map exactly once; complete every binding.");
+            throw ServiceImplementationPlan.Error("services.api.incompleteMapping", "Every declared API endpoint must map exactly once; complete every binding.");
         var signatures = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var endpoint in routes.DataSources.SelectMany(source => source.Endpoints).Concat(endpoints).OfType<RouteEndpoint>())
         foreach (var method in endpoint.Metadata.GetMetadata<IHttpMethodMetadata>()?.HttpMethods ?? ["*"])
             if (!signatures.Add($"{method} {endpoint.RoutePattern.RawText}"))
-                throw new InvalidOperationException($"Duplicate HTTP route: {method} {endpoint.RoutePattern.RawText}.");
+                throw ServiceImplementationPlan.Error("services.api.duplicateRoute", $"Duplicate HTTP route: {method} {endpoint.RoutePattern.RawText}.");
         foreach (var source in staging.DataSources) routes.DataSources.Add(source);
     }
 
@@ -50,7 +51,7 @@ public static class ServiceModelEndpointExtensions
     /// <summary>Validates all staged routes before publishing any of them to this host.</summary>
     /// <param name="routes">Native host or route group.</param><param name="model">Prepared service model.</param>
     /// <returns>The native route builder.</returns>
-    /// <exception cref="InvalidOperationException">Mapping is repeated, incomplete or duplicates a route.</exception>
+    /// <exception cref="ServiceBindingValidationException">Mapping is repeated, incomplete or duplicates a route.</exception>
     public static IEndpointRouteBuilder MapServices(this IEndpointRouteBuilder routes, ServiceModel model)
     {
         ArgumentNullException.ThrowIfNull(model);

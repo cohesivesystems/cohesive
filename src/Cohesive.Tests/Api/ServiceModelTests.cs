@@ -1,3 +1,7 @@
+using Cohesive.Processes.Authoring;
+using Cohesive.Processes.IR;
+using Cohesive.Execution;
+using Cohesive.Model.Serialization;
 using System.Net.Http.Json;
 using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Api;
@@ -46,12 +50,12 @@ public sealed class ServiceModelTests
         var builder = WebApplication.CreateBuilder();
         var persistence = new Persistence();
         var model = new ServiceModelBuilder().Implement(api, Second).Implement(api, First);
-        Assert.Equal(2, model.QueryDependencies.Queries.Length);
+        Assert.Equal(2, model.Plan.QueryDependencies.Queries.Length);
         var prepared = model.Build(builder.Services, persistence);
         Assert.Equal(2, persistence.Prepared);
         await using var app = builder.Build();
         app.MapServices(prepared);
-        Assert.Throws<InvalidOperationException>(() => app.MapServices(prepared));
+        Assert.Throws<ServiceBindingValidationException>(() => app.MapServices(prepared));
         app.Urls.Add("http://127.0.0.1:0");
         await app.StartAsync();
         using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -74,7 +78,7 @@ public sealed class ServiceModelTests
     public void Selectors_cannot_capture_another_api_instance()
     {
         var api = new Catalog(); var other = new Catalog();
-        Assert.Throws<ArgumentException>(() => new ServiceModelBuilder().Implement(api, bindings =>
+        Assert.Throws<ServiceBindingValidationException>(() => new ServiceModelBuilder().Implement(api, bindings =>
             bindings.Bind(_ => other.First, Query("first"), new("1"), 10, 1000, _ => { })));
     }
 
@@ -85,7 +89,7 @@ public sealed class ServiceModelTests
         var builder = WebApplication.CreateBuilder();
         var prepared = new ServiceModelBuilder().Implement(api, First).Implement(api, Second).Build(builder.Services, new Persistence());
         await using var app = builder.Build();
-        Assert.Throws<InvalidOperationException>(() => app.MapServices(prepared));
+        Assert.Throws<ServiceBindingValidationException>(() => app.MapServices(prepared));
         Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
     }
 
@@ -98,7 +102,7 @@ public sealed class ServiceModelTests
             bindings.Bind(a => a.Second, Query("second"), new("1"), 10, 1000, _ => { }))
             .Build(builder.Services, new Persistence());
         await using var app = builder.Build();
-        Assert.Throws<InvalidOperationException>(() => app.MapServices(prepared));
+        Assert.Throws<ServiceBindingValidationException>(() => app.MapServices(prepared));
         Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
     }
 
@@ -118,8 +122,8 @@ public sealed class ServiceModelTests
         var query = Query("first");
         void Contribute(ServiceApiImplementation<Catalog> bindings) => bindings.Bind(a => a.First, query, new("1"), 10, 1000,
             binding => binding.FromRoute<string>("id", value => value).OkOrNotFound());
-        var builder = new ServiceModelBuilder().Implement(api, Contribute).Implement(api, Contribute).Implement(api, Second);
-        var error = Assert.Throws<ServiceBindingValidationException>(() => builder.Build(new ServiceCollection(), new Persistence()));
+        var builder = new ServiceModelBuilder().Implement(api, Contribute);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => builder.Implement(api, Contribute));
         Assert.Contains(error.Validation.Diagnostics, item => item.Code == "services.api.duplicateImplementation");
     }
 
@@ -129,7 +133,77 @@ public sealed class ServiceModelTests
         var api = new Catalog();
         var query = Query("shared");
         var model = new ServiceModelBuilder().Implement(api, bindings => bindings.Bind(a => a.First, query, new("1"), 10, 1000, _ => { }));
-        Assert.Throws<ArgumentException>(() => model.Implement(api, bindings => bindings.Bind(a => a.Second, query, new("1"), 11, 1000, _ => { })));
+        Assert.Throws<ServiceBindingValidationException>(() => model.Implement(api, bindings => bindings.Bind(a => a.Second, query, new("1"), 11, 1000, _ => { })));
+    }
+
+    [Fact]
+    public void Coverage_is_checked_without_preparing_persistence()
+    {
+        var model = new ServiceModelBuilder().Implement(new Catalog(), First);
+        var persistence = new Persistence();
+        Assert.Throws<ServiceBindingValidationException>(() => model.Plan.Definition);
+        Assert.Throws<ServiceBindingValidationException>(() => model.Build(new ServiceCollection(), persistence));
+        Assert.Equal(0, persistence.Prepared);
+    }
+
+    [Fact]
+    public void Repeated_build_returns_same_preparation_and_does_not_register_more_services()
+    {
+        var model = new ServiceModelBuilder().Implement(new Catalog(), bindings => { First(bindings); Second(bindings); });
+        var services = new ServiceCollection();
+        var persistence = new Persistence();
+        var first = model.Build(services, persistence);
+        var count = services.Count;
+        Assert.Same(first, model.Build(services, persistence));
+        Assert.Equal(2, persistence.Prepared);
+        Assert.Equal(count, services.Count);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => model.Build(new ServiceCollection(), persistence));
+        Assert.Contains(error.Validation.Diagnostics, item => item.Code == "services.api.hostMismatch");
+    }
+
+    sealed class EchoProcess : ProcessModel<string, string>
+    {
+        protected override ProcessAuthoringMetadata Metadata => new(new("echo"), new("1"), new("return"),
+            ProcessRecoveryPolicy.ContinueAttempt, new(new("tests"), new("tests/echo"), DocumentOrigin.Generated));
+        protected override Process<string, string> CreateDefinition() => ProcessAuthoring.Create<string, string>(Metadata,
+            builder => builder.Return(new("return"), builder.Input.Value));
+        protected override ProcessTask<string> Execute(ProcessContext process, string input) => throw new NotSupportedException();
+    }
+    sealed class ProcessApi : ApiModel
+    {
+        public ProcessApi(ServiceBuilder service, EchoProcess process) => Echo = Endpoints.Process(service, "echo", process).Route("POST", "/echo");
+        public ApiEndpoint<string, string> Echo { get; }
+    }
+    static ServiceBuilder EchoService(EchoProcess process, string id = "echo-service") =>
+        Service.Define(new(id), new("1"), process.Provenance).Operation("echo").Run(process.Definition).ExecuteEphemerally(TimeSpan.FromSeconds(2));
+
+    [Fact]
+    public async Task Process_binding_and_logging_build_without_a_database()
+    {
+        var process = new EchoProcess(); var service = EchoService(process); var api = new ProcessApi(service, process);
+        var builder = WebApplication.CreateBuilder();
+        var persistence = new Persistence();
+        var model = new ServiceModelBuilder().Implement(api, bindings => bindings.Bind(a => a.Echo, service, process,
+            "test", new IdentityServiceInvocationAuthorization("tenant", new("Tenant")), logPrivateFailures: true));
+        Assert.Single(model.Plan.Definition.Endpoints);
+        var prepared = model.Build(builder.Services, persistence);
+        var count = builder.Services.Count;
+        Assert.Same(prepared, model.Build(builder.Services, persistence));
+        Assert.Equal(count, builder.Services.Count);
+        Assert.Equal(0, persistence.Prepared);
+        await using var app = builder.Build();
+        app.MapServices(prepared);
+        Assert.Single(((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints));
+    }
+
+    [Fact]
+    public void Process_mismatch_is_rejected_during_implementation_without_persistence()
+    {
+        var process = new EchoProcess(); var api = new ProcessApi(EchoService(process), process);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceModelBuilder().Implement(api,
+            bindings => bindings.Bind(a => a.Echo, EchoService(process, "another-service"), process,
+                "test", new IdentityServiceInvocationAuthorization("tenant", new("Tenant")))));
+        Assert.Contains(error.Validation.Diagnostics, item => item.Code == "services.api.processMismatch");
     }
 
     sealed class Persistence : IServicePersistence

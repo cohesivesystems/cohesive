@@ -184,7 +184,7 @@ public static class ServiceApiProjection
                 new(ApiResultKind.DomainError, typeof(ApiProblem)),
                 new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);
         if (http is not null) projected = projected.WithHttp(http);
-        return new ApiEndpoint<TRequest, TResponse>(projected);
+        return new ServiceProcessEndpoint<TRequest, TResponse>(projected, declaration, process.Reference);
     }
 
     static ServiceOperation GetOperation(ExecutionDefinitionDocument declaration, string operationId)

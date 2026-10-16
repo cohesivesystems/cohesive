@@ -426,12 +426,20 @@ JSON body type from the host. The explicit `HttpBinding` overload remains availa
 
 `ServiceModelBuilder.Implement(api, contribution)` binds instance API selectors to canonical queries, existing
 entity bindings and separately declared ephemeral services. Several modules can contribute to the same API;
-`Implement(catalog, definition, contribution)` also accepts separately authored catalogs. Build resolves the
-selected native storage and validates complete, unique endpoint coverage. `app.MapServices(prepared)` stages
+`Implement(catalog, definition, contribution)` also accepts separately authored catalogs. Build validates complete, unique endpoint coverage before resolving the
+selected native storage. `app.MapServices(prepared)` stages
 all native bindings and checks mapping completeness before publication. No provider configuration is wrapped.
 
-Queries record bounded preparation requirements, exposed as QueryDependencies for infrastructure evidence.
+Queries record bounded preparation requirements, owned by the portable `ServiceImplementationPlan` and exposed as `Plan.QueryDependencies` for infrastructure evidence.
 Process endpoints must project the exact service's terminal contract; accepted execution is not silently
 substituted. Optional private failure logging is integrated with the existing generic host subscription lifetime.
 A model maps once; setup errors publish no model routes. Exact method/template duplicates are rejected;
 general ASP.NET route-pattern overlap remains native responsibility.
+
+
+Service composition validates portable endpoint coverage through `ServiceModelBuilder.Plan.Definition`
+before resolving persistence. Repeated `Build` for the same host scope returns the same prepared model;
+create a separate builder for a different host. Missing, foreign, duplicate and process-mismatched
+implementations report `ServiceBindingValidationException` with `services.api.*` codes.
+Query response bindings support `Ok()` for value/collection results and `OkOrNotFound(predicate)`
+for explicit absence. Reference results retain the null-as-absent default.

@@ -23,6 +23,7 @@ public static class PostgresServicePersistenceExtensions
     sealed class ServicePersistence(PostgresPersistenceRegistration persistence, PostgresTransitionReceiptStorage? receipts) : IServicePersistence
     {
         readonly Dictionary<ValueContract, IEntityRepository> repositories = [];
+        readonly Dictionary<object, Dictionary<(int Rows, long Bytes), object>> queries = new(ReferenceEqualityComparer.Instance);
         public IEntityRepository Repository(ValueContract observation)
         {
             lock (repositories)
@@ -33,6 +34,17 @@ public static class PostgresServicePersistenceExtensions
             }
         }
         public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query,
-            int maximumRows, long maximumBytes) => persistence.Query(query, maximumRows, maximumBytes);
+            int maximumRows, long maximumBytes)
+        {
+            ArgumentNullException.ThrowIfNull(query);
+            lock (queries)
+            {
+                if (!queries.TryGetValue(query, out var bounded)) queries.Add(query, bounded = []);
+                var key = (maximumRows, maximumBytes);
+                if (!bounded.TryGetValue(key, out var reader))
+                    bounded.Add(key, reader = persistence.Query(query, maximumRows, maximumBytes));
+                return (IRelationQueryReader<TInput, TResult>)reader;
+            }
+        }
     }
 }

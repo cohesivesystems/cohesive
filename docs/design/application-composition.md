@@ -115,7 +115,25 @@ configuration, schema lifecycle and source disposal remain native. Multi-provide
 supplied explicitly by a resolver; this batch does not infer federated query plans.
 
 Build is explicit eager host preparation, matching the example's previous startup lifetime. Request inputs,
-authorization and query results remain invocation-scoped. Each Build creates an independently owned prepared
-surface. Route staging prevents partial publication on a failing contribution; native callbacks must be pure
+authorization and query results remain invocation-scoped. Repeated Build on the same builder, service collection and persistence scope returns the same prepared
+surface, including logging registrations; using a different scope is a coded setup error. Route staging prevents partial publication on a failing contribution; native callbacks must be pure
 registration code. Exact template collisions are rejected, while general route-pattern overlap is not solved
 by a competing router. Protected failure logging remains opt-in and uses the existing generic host lifetime.
+
+
+`ServiceImplementationPlan` in `Cohesive.Api.Execution` owns endpoint authority, unique coverage and
+bounded query selections. `Plan.Definition` validates coverage without resolving persistence. Query and
+process endpoints are admitted at `Implement`; entity callbacks collect their endpoint bindings before
+repository attachment. The ASP.NET builder retains only native attachment recipes and delegates portable
+admission to that plan. AppHost consumes `Plan.QueryDependencies` through the portable contract.
+
+Process endpoints use `Endpoints.Process(service, "fulfill", process).Route("POST", "/fulfillment")`.
+The typed process argument supplies input/output types that an untyped, separately declared service document
+cannot provide through C# inference. The projected handle retains exact service and process references;
+implementation checks those references before storage access, without projecting a second contract or
+maintaining a parallel field comparison. Generic HTTP attachment preserves the retained proof.
+
+The PostgreSQL service resolver owns a thread-safe query cache keyed by query instance and row/byte bounds,
+for the resolver lifetime. It holds no input, authorization or result state. Repeated endpoint selections share
+the prepared reader; a different bound produces a different preparation. `Ok()` supports value and collection
+results; `OkOrNotFound(predicate)` requires explicit absence semantics for value types.

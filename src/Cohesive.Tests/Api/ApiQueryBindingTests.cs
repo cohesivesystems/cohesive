@@ -29,6 +29,32 @@ public sealed class ApiQueryBindingTests
         await app.StopAsync();
     }
 
+    [Fact]
+    public async Task Value_results_support_success_and_explicit_absence()
+    {
+        await using var app = WebApplication.CreateBuilder().Build();
+        var api = Cohesive.Api.Api.Define();
+        var count = api.Query("Count").Route("GET", "/count/{id}").RouteParameter<int>("id").Build<int>();
+        var optional = api.Query("Optional").Route("GET", "/optional/{id}").RouteParameter<int>("id")
+            .Result(ApiResultKind.NotFound).Build<int>();
+        app.MapApiQuery(count, new CountReader()).FromRoute<int>("id", id => id).Ok();
+        var binding = app.MapApiQuery(optional, new CountReader()).FromRoute<int>("id", id => id);
+        Assert.Throws<InvalidOperationException>(() => binding.OkOrNotFound());
+        binding.OkOrNotFound(value => value < 0);
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+        Assert.Equal(0, await client.GetFromJsonAsync<int>("/count/0"));
+        Assert.Equal(0, await client.GetFromJsonAsync<int>("/optional/0"));
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/optional/-1")).StatusCode);
+        await app.StopAsync();
+    }
+    sealed class CountReader : IRelationQueryReader<int, int>
+    {
+        public RelationQuery<int, int> Definition => throw new NotSupportedException("Transport only.");
+        public Task<int> ReadAsync(int input, CancellationToken cancellationToken = default) => Task.FromResult(input);
+    }
+
     sealed class SearchReader : IRelationQueryReader<Search, Detail?>
     {
         public RelationQuery<Search, Detail?> Definition => throw new NotSupportedException("The transport never compiles the reader.");

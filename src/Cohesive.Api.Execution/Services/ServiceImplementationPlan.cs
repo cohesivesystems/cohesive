@@ -1,0 +1,78 @@
+using Cohesive.Execution;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
+using Cohesive.Prelude;
+using Cohesive.Relations.Authoring;
+
+namespace Cohesive.Api.Execution.Services;
+
+/// <summary>Portable endpoint coverage and query selections, independent of a host or persistence provider.</summary>
+/// <remarks>Author on one thread. Reading Definition freezes the plan and validates complete coverage.</remarks>
+public sealed class ServiceImplementationPlan
+{
+    readonly List<ApiDefinition> definitions = [];
+    readonly HashSet<ApiEndpointId> supplied = [];
+    readonly AuthoringState<ApiDefinition> state;
+    ServiceDependencies queries = new();
+
+    /// <summary>Starts an empty portable implementation plan.</summary>
+    public ServiceImplementationPlan() => state = new(() =>
+    {
+        var definition = ApiDefinition.Combine(definitions);
+        var errors = definition.Endpoints.Where(endpoint => !supplied.Contains(endpoint.Id))
+            .Select(endpoint => new DocumentValidationDiagnostic("services.api.missingImplementation", DiagnosticSeverity.Error,
+                $"Endpoint '{endpoint.Id}' has no implementation.", "/api/implementations")).ToArray();
+        if (errors.Length != 0) throw new ServiceBindingValidationException(new([.. errors]));
+        return definition;
+    });
+
+    /// <summary>Registers a contract authority. Repeated contributions to the same instance are supported.</summary>
+    /// <param name="definition">Original API definition.</param>
+    public void Declare(ApiDefinition definition)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        state.Edit(() => { if (!definitions.Contains(definition)) definitions.Add(definition); return this; });
+    }
+
+    /// <summary>Admits one implementation against its exact endpoint authority, without resolving storage.</summary>
+    /// <param name="definition">Declared API authority.</param><param name="endpoint">Original endpoint handle.</param>
+    /// <exception cref="ServiceBindingValidationException">The endpoint is foreign or already implemented.</exception>
+    public void Implement(ApiDefinition definition, ApiEndpoint endpoint)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint);
+        state.Edit(() =>
+        {
+            if (!definitions.Contains(definition) || !definition.Endpoints.Any(item => ReferenceEquals(item.Operation, endpoint.Operation)))
+                throw Error("services.api.foreignEndpoint", $"Endpoint '{endpoint.Id}' is not from the declared API.");
+            if (!supplied.Add(endpoint.Id))
+                throw Error("services.api.duplicateImplementation", $"Endpoint '{endpoint.Id}' has competing implementations.");
+            return this;
+        });
+    }
+
+    /// <summary>Records one bounded query selection for runtime and infrastructure preparation.</summary>
+    /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Query result.</typeparam>
+    /// <param name="query">Canonical query authority.</param><param name="revision">Semantic revision.</param>
+    /// <param name="rows">Maximum result rows.</param><param name="bytes">Maximum decoded bytes.</param>
+    /// <exception cref="ServiceBindingValidationException">The same query has competing bounds or revisions.</exception>
+    public void Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes) =>
+        state.Edit(() =>
+        {
+            var existing = queries.Queries.FirstOrDefault(item => ReferenceEquals(item.Request, query.CompilationRequest));
+            if (existing is null) queries = queries.Query(query, revision, rows, bytes);
+            else if (existing.Reference.RevisionId != revision || existing.MaximumRows != rows || existing.MaximumBytes != bytes)
+                throw Error("services.api.querySelectionMismatch", "One query authority must have one revision and preparation bound.");
+            return this;
+        });
+
+    /// <summary>Freezes and validates complete coverage, without any persistence or host.</summary>
+    public ApiDefinition Definition => state.Value;
+    /// <summary>Portable query requirements derived from admitted implementations.</summary>
+    public ServiceDependencies QueryDependencies { get { _ = Definition; return queries; } }
+
+    /// <summary>Creates a coded implementation diagnostic shared by admission and host attachment.</summary>
+    /// <param name="code">Stable diagnostic code.</param><param name="message">Actionable non-secret explanation.</param>
+    /// <returns>The structured validation exception.</returns>
+    public static ServiceBindingValidationException Error(string code, string message) =>
+        new(new([new(code, DiagnosticSeverity.Error, message, "/api/implementations")]));
+}

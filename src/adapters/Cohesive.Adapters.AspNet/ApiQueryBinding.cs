@@ -22,7 +22,7 @@ public static class ApiQueryBindingExtensions
     /// <exception cref="ArgumentException">Operation kind, body or response contract differs.</exception>
     public static ApiQueryBinding<TInput, TResult> MapApiQuery<TInput, TResult>(this IEndpointRouteBuilder endpoints,
         ApiEndpoint<TResult> endpoint, IRelationQueryReader<TInput, TResult?> query,
-        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : class =>
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) =>
         new(endpoints, endpoint, query, authorizationPolicyResolver);
     /// <summary>Binds an explicitly typed query-string request to a prepared query with the same input contract.</summary>
     /// <typeparam name="TInput">Declared query DTO and reader input.</typeparam>
@@ -34,7 +34,7 @@ public static class ApiQueryBindingExtensions
     /// <returns>A binding with query input configured, ready for its response policy.</returns>
     public static ApiQueryBinding<TInput, TResult> MapApiQuery<TInput, TResult>(this IEndpointRouteBuilder endpoints,
         ApiEndpoint<TInput, TResult> endpoint, IRelationQueryReader<TInput, TResult?> query,
-        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : class
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         if (endpoint.Operation.Http?.Query?.QueryType != typeof(TInput))
@@ -47,7 +47,7 @@ public static class ApiQueryBindingExtensions
 /// <summary>Registration-local query binding. Complete once; it is not safe for concurrent mutation.</summary>
 /// <typeparam name="TInput">Query input type.</typeparam>
 /// <typeparam name="TResult">API response type.</typeparam>
-public sealed class ApiQueryBinding<TInput, TResult> where TResult : class
+public sealed class ApiQueryBinding<TInput, TResult>
 {
     readonly IEndpointRouteBuilder endpoints;
     readonly ApiEndpoint endpoint;
@@ -102,15 +102,28 @@ public sealed class ApiQueryBinding<TInput, TResult> where TResult : class
     /// <summary>Completes the binding: a null query result returns the declared 404; other results return typed 200 JSON.</summary>
     /// <returns>The native route handler for further ASP.NET configuration.</returns>
     /// <exception cref="InvalidOperationException">Input is absent, binding already completed, or 404 is not declared.</exception>
-    public RouteHandlerBuilder OkOrNotFound()
+    /// <param name="isMissing">Explicit absence rule; required for value results, defaults to null detection for reference results.</param>
+    public RouteHandlerBuilder OkOrNotFound(Func<TResult?, bool>? isMissing = null)
     {
-        if (completed || input is null || !endpoint.Operation.Results.Any(result => result.Kind == ApiResultKind.NotFound && result.BodyType == typeof(void)))
-            throw new InvalidOperationException("An unbound query, configured input and declared NotFound result are required.");
+        if (!endpoint.Operation.Results.Any(result => result.Kind == ApiResultKind.NotFound && result.BodyType == typeof(void)))
+            throw new InvalidOperationException("A declared NotFound result is required.");
+        if (typeof(TResult).IsValueType && isMissing is null)
+            throw new InvalidOperationException("Value results require an explicit absence predicate.");
+        return Complete(result => (isMissing?.Invoke(result) ?? result is null) ? Results.NotFound() : Results.Ok(result));
+    }
+
+    /// <summary>Returns every result as typed 200 JSON, including value types and collections.</summary>
+    /// <returns>The native route handler.</returns>
+    public RouteHandlerBuilder Ok() => Complete(result => Results.Ok(result));
+
+    RouteHandlerBuilder Complete(Func<TResult?, IResult> respond)
+    {
+        if (completed || input is null) throw new InvalidOperationException("An unbound query and configured input are required.");
         var readInput = input;
         var route = endpoints.MapApiEndpoint(endpoint, async (HttpContext context) =>
         {
             var result = await query.ReadAsync(readInput(context), context.RequestAborted).ConfigureAwait(false);
-            return result is null ? Results.NotFound() : Results.Ok(result);
+            return respond(result);
         }, authorizationPolicyResolver: authorizationPolicyResolver);
         completed = true;
         return route;

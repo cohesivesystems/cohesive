@@ -572,3 +572,11 @@ model belongs to one route builder; build another model for another host. Native
 Fulfill declares terminal completion (HTTP 200 after execution), not acceptance for a background job. The typed
 endpoint is projected from the exact service declaration and included in OrderApi; binding checks its process,
 request/result contracts and policies. Accepted receipts, polling and durable workers remain out of this batch.
+
+
+Endpoint implementation coverage is inspectable offline through `model.Services.Plan.Definition`.
+The portable plan in `Cohesive.Api.Execution` owns query selections used by AppHost; HTTP recipes attach
+in the ASP.NET adapter. Wrong or duplicate query/process endpoint handles fail during contribution,
+and missing coverage fails before storage resolution. Repeated host preparation reuses the same prepared
+surface. Process endpoint authoring uses `Endpoints.Process(service.Definition, "fulfill", process).Route(...)`;
+the typed process supplies C# input/output contracts while the service remains separately declared.

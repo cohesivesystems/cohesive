@@ -19,10 +19,15 @@ namespace Cohesive.Adapters.AspNet.Services;
 /// remain authorities. Native route configuration is retained as host attachment, never portable semantics.</remarks>
 public sealed class ServiceModelBuilder
 {
-    readonly List<ApiDefinition> definitions = [];
+    /// <summary>Portable admission and query evidence; can be inspected without persistence.</summary>
+    public ServiceImplementationPlan Plan { get; } = new();
+    readonly object buildGate = new();
+    ServiceModel? built;
+    IServiceCollection? builtServices;
+    IServicePersistence? builtPersistence;
     readonly List<Func<IServicePersistence, PreparedApiContribution>> contributions = [];
     readonly AuthoringState<ServiceModelBuilder> state;
-    ServiceDependencies queries = new();
+
     /// <summary>Starts an empty, host-local implementation composition.</summary>
     public ServiceModelBuilder() => state = new(() => this);
 
@@ -45,26 +50,13 @@ public sealed class ServiceModelBuilder
         ArgumentNullException.ThrowIfNull(api); ArgumentNullException.ThrowIfNull(definition); ArgumentNullException.ThrowIfNull(configure);
         return state.Edit(() =>
         {
-            if (!definitions.Contains(definition)) definitions.Add(definition);
+            Plan.Declare(definition);
             configure(new(this, api, definition));
             return this;
         });
     }
 
     internal void Add(Func<IServicePersistence, PreparedApiContribution> prepare) => state.Edit(() => { contributions.Add(prepare); return this; });
-    internal void Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes) =>
-        state.Edit(() =>
-        {
-            var existing = queries.Queries.FirstOrDefault(item => ReferenceEquals(item.Request, query.CompilationRequest));
-            if (existing is null) queries = queries.Query(query, revision, rows, bytes);
-            else if (existing.Reference.RevisionId != revision || existing.MaximumRows != rows || existing.MaximumBytes != bytes)
-                throw new ArgumentException("One query authority must have one revision and preparation bound in a service model.");
-            return this;
-        });
-
-    /// <summary>Offline query selections derived from endpoint implementations, for native capability preparation.</summary>
-    public ServiceDependencies QueryDependencies { get { _ = state.Value; return queries; } }
-
     /// <summary>Freezes all contributions, resolves storage once and checks complete, unique implementation coverage.</summary>
     /// <param name="services">Host services owning optional logging subscriptions.</param>
     /// <param name="persistence">Native storage resolution; resources remain caller-owned.</param>
@@ -74,24 +66,21 @@ public sealed class ServiceModelBuilder
     {
         ArgumentNullException.ThrowIfNull(services); ArgumentNullException.ThrowIfNull(persistence);
         _ = state.Value;
-        var definition = ApiDefinition.Combine(definitions);
-        var prepared = contributions.Select(prepare => prepare(persistence)).ToArray();
-        var supplied = new HashSet<ApiEndpointId>();
-        var errors = new List<Cohesive.Model.Serialization.DocumentValidationDiagnostic>();
-        foreach (var contribution in prepared)
-        foreach (var endpoint in contribution.Endpoints)
+        lock (buildGate)
         {
-            if (!definition.Endpoints.Any(item => ReferenceEquals(item.Operation, endpoint.Operation)))
-                errors.Add(new("services.api.foreignEndpoint", DiagnosticSeverity.Error, $"Endpoint '{endpoint.Id}' is not from the declared API.", "/api/implementations"));
-            if (!supplied.Add(endpoint.Id)) errors.Add(new("services.api.duplicateImplementation", DiagnosticSeverity.Error,
-                $"Endpoint '{endpoint.Id}' has competing implementations.", "/api/implementations"));
+            if (built is not null)
+            {
+                if (!ReferenceEquals(services, builtServices) || !ReferenceEquals(persistence, builtPersistence))
+                    throw ServiceImplementationPlan.Error("services.api.hostMismatch", "Build a separate model for a different host or persistence scope.");
+                return built;
+            }
+            var definition = Plan.Definition;
+            var prepared = contributions.Select(prepare => prepare(persistence)).ToArray();
+            foreach (var process in prepared.SelectMany(item => item.LoggedProcesses)) services.AddCohesiveTransitionFailureLogging(process);
+            builtServices = services;
+            builtPersistence = persistence;
+            return built = new(definition, prepared);
         }
-        foreach (var endpoint in definition.Endpoints)
-            if (!supplied.Contains(endpoint.Id)) errors.Add(new("services.api.missingImplementation", DiagnosticSeverity.Error,
-                $"Endpoint '{endpoint.Id}' has no implementation.", "/api/implementations"));
-        if (errors.Count != 0) throw new ServiceBindingValidationException(new([.. errors]));
-        foreach (var process in prepared.SelectMany(item => item.LoggedProcesses)) services.AddCohesiveTransitionFailureLogging(process);
-        return new(definition, prepared);
     }
 }
 
@@ -111,25 +100,26 @@ public sealed class ServiceApiImplementation<TApi>
     TEndpoint Select<TEndpoint>(Func<TApi, TEndpoint> select) where TEndpoint : ApiEndpoint
     {
         ArgumentNullException.ThrowIfNull(select);
-        var endpoint = select(api) ?? throw new ArgumentException("Endpoint selector returned null.", nameof(select));
+        var endpoint = select(api) ?? throw ServiceImplementationPlan.Error("services.api.foreignEndpoint", "Endpoint selector returned null.");
         if (!definition.Endpoints.Any(item => ReferenceEquals(item.Operation, endpoint.Operation)))
-            throw new ArgumentException("Select an endpoint belonging to this API instance.", nameof(select));
+            throw ServiceImplementationPlan.Error("services.api.foreignEndpoint", "Select an endpoint belonging to this API instance.");
         return endpoint;
     }
 
     /// <summary>Binds a typed query and records its bounded storage requirement once.</summary>
-    /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Nullable reference result.</typeparam>
+    /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Declared result.</typeparam>
     /// <param name="select">Typed API endpoint selector.</param><param name="query">Canonical query.</param>
     /// <param name="revision">Semantic query revision.</param><param name="maximumRows">Result row bound.</param>
     /// <param name="maximumBytes">Decoded-value bound.</param><param name="configure">Native input and result binding.</param>
     /// <returns>This contribution.</returns>
     public ServiceApiImplementation<TApi> Bind<TInput, TResult>(Func<TApi, ApiEndpoint<TResult>> select,
         RelationQuery<TInput, TResult?> query, ExecutionRevisionId revision, int maximumRows, long maximumBytes,
-        Action<ApiQueryBinding<TInput, TResult>> configure) where TResult : class
+        Action<ApiQueryBinding<TInput, TResult>> configure)
     {
         ArgumentNullException.ThrowIfNull(configure);
         var endpoint = Select(select);
-        model.Query(query, revision, maximumRows, maximumBytes);
+        model.Plan.Query(query, revision, maximumRows, maximumBytes);
+        model.Plan.Implement(definition, endpoint);
         model.Add(persistence =>
         {
             var reader = persistence.Query(query, maximumRows, maximumBytes);
@@ -147,13 +137,12 @@ public sealed class ServiceApiImplementation<TApi>
         Action<TApi, TypedEntityApiBindings<TEntity>> configure) where TEntity : notnull
     {
         ArgumentNullException.ThrowIfNull(entity); ArgumentNullException.ThrowIfNull(configure);
+        var binding = new TypedEntityApiBindings<TEntity>(entity.Definition, partition);
+        configure(api, binding);
+        foreach (var endpoint in binding.BoundEndpoints) model.Plan.Implement(definition, endpoint);
         model.Add(persistence =>
         {
-            var binding = new TypedEntityApiBindings<TEntity>(entity.Definition,
-                persistence.Repository(ValueContract.FromShape(entity.Definition.Shape)), partition);
-            configure(api, binding);
-            if (binding.BoundEndpoints.Any(endpoint => !definition.Endpoints.Any(item => ReferenceEquals(item.Operation, endpoint.Operation))))
-                throw new ArgumentException("Entity contribution must use endpoints from its declared API instance.");
+            binding.Attach(persistence.Repository(ValueContract.FromShape(entity.Definition.Shape)));
             return new(binding.BoundEndpoints.ToArray(), binding.Map, []);
         });
         return this;
@@ -172,18 +161,15 @@ public sealed class ServiceApiImplementation<TApi>
     {
         ArgumentNullException.ThrowIfNull(service); ArgumentNullException.ThrowIfNull(process);
         var endpoint = Select(select);
+        var declaration = service.Build();
+        var reference = new ExecutionDefinitionReference(declaration.Metadata.DefinitionId, declaration.Metadata.RevisionId, declaration.Metadata.Fingerprint);
+        if (endpoint is not ServiceProcessEndpoint<TInput, TResult> projected || projected.Service != reference || projected.Process != process.Definition.Reference)
+            throw ServiceImplementationPlan.Error("services.api.processMismatch", "Endpoint must project this exact service and process authority.");
+        var http = endpoint.Operation.Http ?? throw ServiceImplementationPlan.Error("services.api.httpMissing", "Process endpoint requires HTTP binding.");
+        model.Plan.Implement(definition, endpoint);
         model.Add(persistence =>
         {
             var hosted = service.Bind(process.Definition, persistence.Repository).Build(authority, authorization);
-            var http = endpoint.Operation.Http ?? throw new ArgumentException("Process endpoint requires HTTP binding.");
-            var projected = ServiceApiProjection.ProjectEphemeralProcess(hosted.Declaration, hosted.OperationId, hosted.Process, http,
-                endpoint.Operation.ScopePolicies);
-            if (projected.Id != endpoint.Id || endpoint.Operation.RequestType != typeof(TInput) || endpoint.Operation.ResponseType != typeof(TResult)
-                || !projected.Operation.AuthorizationRequirements.SequenceEqual(endpoint.Operation.AuthorizationRequirements)
-                || !projected.Operation.SemanticReferences.SequenceEqual(endpoint.Operation.SemanticReferences)
-                || !projected.Operation.Results.Select(result => (result.Kind, result.BodyType, result.Http?.StatusCode, result.IsPrimary))
-                    .SequenceEqual(endpoint.Operation.Results.Select(result => (result.Kind, result.BodyType, result.Http?.StatusCode, result.IsPrimary))))
-                throw new ArgumentException("Endpoint must declare the exact terminal service operation and its result contracts.");
             return new([endpoint], routes => routes.MapServiceEphemeralProcess(hosted, http,
                 scopePolicies: endpoint.Operation.ScopePolicies), logPrivateFailures ? [hosted] : []);
         });

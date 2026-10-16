@@ -21,3 +21,8 @@ process bindings against real PostgreSQL, including receipt replay and cross-par
 Process observation contracts select a unique registered entity mapping; no entity/repository list is repeated
 at each service binding. Repositories are shared within this resolver's host lifetime. Native query preparation
 still receives explicit complete-result bounds. The resolver owns no data sources and performs no schema IO.
+
+
+`ForServices` shares repository instances by observation contract and query readers by exact query instance
+and row/byte bounds within one resolver. Preparation is synchronized and successful readers are retained
+for that host scope; failed preparation is not cached. Inputs and results remain invocation-scoped.
