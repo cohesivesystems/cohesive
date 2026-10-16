@@ -69,9 +69,20 @@ public static class PortableExecutionValidator
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
     public static DocumentValidationResult Validate(PortableValue value, ShapeGraph? graph = null)
     {
+        return ValidateValue(value, graph, 0, out _);
+    }
+
+    // Collect CLR-JSON compatibility during the existing admission walk, never in a second traversal.
+    internal static DocumentValidationResult ValidateForClrProjection(PortableValue value, int jsonDepthLimit,
+        out bool requiresJsonRoundTrip) => ValidateValue(value, null, jsonDepthLimit, out requiresJsonRoundTrip);
+
+    static DocumentValidationResult ValidateValue(PortableValue value, ShapeGraph? graph, int jsonDepthLimit,
+        out bool requiresJsonRoundTrip)
+    {
         ArgumentNullException.ThrowIfNull(value);
-        var context = new ValidationContext(graph);
+        var context = new ValidationContext(graph, jsonDepthLimit);
         context.ValidatePortableValue(value, location: context.Root);
+        requiresJsonRoundTrip = context.RequiresJsonRoundTrip;
         return context.ToResult();
     }
 
@@ -121,8 +132,9 @@ public static class PortableExecutionValidator
         Unresolved
     }
 
-    sealed class ValidationContext(ShapeGraph? graph)
+    sealed class ValidationContext(ShapeGraph? graph, int jsonDepthLimit = 0)
     {
+        public bool RequiresJsonRoundTrip { get; private set; }
         const int MaximumValueCompatibilityDepth = 64;
         public Location Root { get; } = new([], 0);
 
@@ -913,8 +925,12 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateObservation(ObservationValue value, Location location)
+        void ValidateObservation(ObservationValue value, Location location, int depth = 0)
         {
+            if (jsonDepthLimit > 0 && (value.Kind == ObservationValueKind.Bytes
+                || value.Kind is ObservationValueKind.Array or ObservationValueKind.Object && depth >= jsonDepthLimit
+                || value.Kind == ObservationValueKind.String && RequiresJsonNormalization(value.String)))
+                RequiresJsonRoundTrip = true;
             switch (value.Kind)
             {
                 case ObservationValueKind.Undefined:
@@ -964,7 +980,7 @@ public static class PortableExecutionValidator
                         MalformedObservation(value.Kind, location);
                         break;
                     }
-                    var visitor = new ObservationFieldValidator(this, location);
+                    var visitor = new ObservationFieldValidator(this, location, depth + 1);
                     ObservationFieldTraversal.Visit(value.Fields, ref visitor);
                     break;
                 case ObservationValueKind.Array:
@@ -974,7 +990,7 @@ public static class PortableExecutionValidator
                         break;
                     }
                     for (var index = 0; index < value.Array.Length; index++)
-                        ValidateObservation(value.Array[index], Index(location, index));
+                        ValidateObservation(value.Array[index], Index(location, index), depth + 1);
                     break;
                 default:
                     Error(
@@ -985,14 +1001,14 @@ public static class PortableExecutionValidator
             }
         }
 
-        readonly struct ObservationFieldValidator(ValidationContext context, Location location) : IObservationFieldVisitor
+        readonly struct ObservationFieldValidator(ValidationContext context, Location location, int depth) : IObservationFieldVisitor
         {
             public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
                 where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
-                => context.ValidateObservationFields(fields, location, canonical);
+                => context.ValidateObservationFields(fields, location, canonical, depth);
         }
 
-        void ValidateObservationFields<TEnumerator>(TEnumerator fields, Location location, bool canonical)
+        void ValidateObservationFields<TEnumerator>(TEnumerator fields, Location location, bool canonical, int depth)
             where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
         {
             List<(string Name, int Start, int Count)>? failures = null;
@@ -1002,7 +1018,7 @@ public static class PortableExecutionValidator
                 {
                     var field = fields.Current;
                     var start = diagnostics.Count;
-                    ValidateObservationField(field, location);
+                    ValidateObservationField(field, location, depth);
                     if (!canonical && diagnostics.Count != start)
                         (failures ??= []).Add((field.Key, start, diagnostics.Count - start));
                 }
@@ -1036,14 +1052,30 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateObservationField(KeyValuePair<string, ObservationValue> field, Location location)
+        void ValidateObservationField(KeyValuePair<string, ObservationValue> field, Location location, int depth)
         {
             if (string.IsNullOrWhiteSpace(field.Key))
                 Error(
                     PortableExecutionDiagnosticCodes.MalformedObservation,
                     "Object observation property names must be non-empty.",
                     location);
-            ValidateObservation(field.Value, Child(location, field.Key));
+            if (jsonDepthLimit > 0 && RequiresJsonNormalization(field.Key)) RequiresJsonRoundTrip = true;
+            ValidateObservation(field.Value, Child(location, field.Key), depth);
+        }
+
+        static bool RequiresJsonNormalization(string? text)
+        {
+            if (text is null) return false;
+            var source = text.AsSpan();
+            for (var index = 0; index < source.Length; index++)
+            {
+                if (char.IsHighSurrogate(source[index]))
+                {
+                    if (++index >= source.Length || !char.IsLowSurrogate(source[index])) return true;
+                }
+                else if (char.IsLowSurrogate(source[index])) return true;
+            }
+            return false;
         }
 
         void MalformedObservation(ObservationValueKind kind, Location location) =>

@@ -6,7 +6,7 @@ namespace Cohesive.Model.Serialization;
 /// Portable JSON document envelope for a <see cref="ShapeGraph"/>.
 /// </summary>
 [PortableJsonValue(JsonTypeKind.Object)]
-public sealed record ShapeGraphDocument
+public sealed record ShapeGraphDocument : IImmutableObservationProjection
 {
     /// <summary>
     /// Current shape graph document schema version.

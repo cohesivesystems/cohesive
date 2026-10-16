@@ -109,7 +109,8 @@ public static class ObservationMaterializer
 {
     /// <summary>Prepares one CLR projection using the plain JSON contract of ObservationValue.Deserialize.</summary>
     /// <typeparam name="T">CLR result contract.</typeparam>
-    /// <returns>A reusable thread-safe converter producing independent CLR results.</returns>
+    /// <returns>A reusable thread-safe converter producing independent mutable CLR results. Explicitly
+    /// immutable projections may be shared by their owning observation payload.</returns>
     /// <remarks>
     /// This interprets already-admitted portable values; it does not establish shape admission or cache results.
     /// Conventional scalar, array and constructor projections are compiled once. Customized JSON contracts and

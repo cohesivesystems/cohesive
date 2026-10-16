@@ -53,6 +53,9 @@ SHA-256 digest; the consuming block owns its fingerprint profile and prefix. See
 Declared converter/polymorphic values project directly into owned observations without a mutable
 JSON tree. See [typed projection qualification](../../docs/performance/hosted-value-projection.md).
 `ObservationValue.Deserialize<T>` uses pooled UTF-8 storage; results own retained JSON data.
+Explicit `IImmutableObservationProjection` types (including `ShapeGraphDocument`) can reuse decoded
+interpretations of the same immutable payload under the same frozen serializer profile and binary encoding.
+Mutable results remain independent. Reuse conveys no validation or admission evidence.
 `CanonicalJsonWriter.GetCanonicalSequenceText` returns owned text using the same explicit profile, encoder and exclusions as streaming canonical output.
 `AnnotationMapJsonConverter` optionally shares owned backing for annotation maps up to 64 KiB of encoded JSON; use it for buffered messages and budget for parsing the complete map (including parser metadata).
 See [decoding contracts and allocation budgets](../../docs/performance/pooled-observation-decoding.md).
