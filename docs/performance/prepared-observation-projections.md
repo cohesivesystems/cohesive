@@ -58,3 +58,25 @@ The consumer dependency order is: merge this capability, publish it, then upgrad
 markers. Source-assembly substitution is qualification only, using the existing durable-bookkeeping target;
 it is not a production dependency or an Ari-local fallback. The companion Ari branch records the exact
 commands and paired allocation evidence.
+
+### Measured results (October 16, 2026)
+
+The original X12 repeated cases allocate **50.26 → 45.96 MB (8.6%)** for 004010 and
+**57.34 → 52.28 MB (8.8%)** for 005030. Cold cases improve by 1.6% / 1.8%.
+Five alternating fresh-process pairs use precise process allocation counters, Release, Apple M5 Max arm64,
+macOS 27.0.1, .NET SDK 10.0.201/runtime 10.0.5. These are cumulative allocations, not retained heap or
+an application latency claim. Candidate code is Core `8147168a15c6eaf5fb68a8b12eee11a720197000`
+and Ari `16df2b59103cb754e60fe10744d5af645339e774`; the control contains merged Ari #226 on public alpha.141.
+
+The real hosted-adapter counter harness (fresh admission included, median seven after four warm calls)
+falls from 288,056 to 57,672 bytes for 1,024 mutable rows, and 1,472 to 384 bytes for one row. The micro
+control uses the same entry point with frozen public-alpha.141 runtime DLLs; it is a runtime comparison,
+not a separate package project rebuild. This 80% row saving is not an 80% X12 saving. The new opt-in
+BenchmarkDotNet class also completed all four Dry smoke cases; Dry timing is not performance evidence.
+
+Qualification: **4,683 Core tests passed**, 41 environment skips; **1,352 Ari solution tests passed**,
+18 emulator skips. Both X12 graph digests remain unchanged. The checked-in
+[Ari report and raw counters](https://github.com/cohesivesystems/ari/blob/codex/prepared-protocol-projections/docs/performance/x12-prepared-projections.md)
+are the evidence authority, including assembly hashes, trace quality and disjoint remaining allocation budgets.
+Initial observation projection, scalar annotation creation/rehydration and protocol JSON remain substantial;
+this capability does not eliminate those boundaries.
