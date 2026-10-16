@@ -1,0 +1,11 @@
+rows,operation,allocated_bytes
+1024,construct_commit,624
+1024,construct_and_hash_whole_commit,49864
+1024,initialize,1376
+1024,execute_Standard,198542
+1024,execute_Diagnostic,273662
+8192,construct_commit,624
+8192,construct_and_hash_whole_commit,508986
+8192,initialize,1376
+8192,execute_Standard,1345552
+8192,execute_Diagnostic,2109563

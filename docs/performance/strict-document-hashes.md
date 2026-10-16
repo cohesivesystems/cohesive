@@ -1,5 +1,9 @@
 # Strict document hashing without canonical output buffers
 
+The current Process runtime makes whole-state bookkeeping hashes lazy or diagnostic-only; see
+[durable bookkeeping](durable-bookkeeping.md). The canonical hash implementation qualified below remains available.
+
+
 `StrictDocumentJson.ComputeCanonicalSha256` computes SHA-256 over exactly the bytes returned by
 `GetCanonicalBytes`, without retaining that canonical output for case-sensitive contracts. It
 serializes through the same declared type/options into invocation-owned immutable JSON, uses the

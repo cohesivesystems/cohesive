@@ -184,6 +184,15 @@ public sealed class EmptyProcessLocalMutationPlanner : IProcessLocalMutationPlan
     }
 }
 
+/// <summary>Additional continuation-content evidence retained at durable activation boundaries.</summary>
+public enum ProcessCheckpointVerification
+{
+    /// <summary>Uses atomic receipts, attempt-local sequences, storage revisions and worker fencing.</summary>
+    Standard = 0,
+    /// <summary>Also records and verifies full before/after continuation fingerprints for diagnosis.</summary>
+    Diagnostic = 1
+}
+
 /// <summary>Physical policy for one durable Process runtime worker.</summary>
 public sealed record ProcessDurableRuntimeOptions
 {
@@ -194,16 +203,18 @@ public sealed record ProcessDurableRuntimeOptions
     /// Positive total number of attempts allowed for one unchanged ambiguous store-mutation intent, including the
     /// first.
     /// </param>
+    /// <param name="checkpointVerification">Optional additional content verification; durability boundaries are unchanged.</param>
     /// <exception cref="ArgumentNullException"><paramref name="workerId"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="workerId"/> is empty or white-space.</exception>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="workerLease"/> is not positive or <paramref name="maxAmbiguousStoreMutationAttempts"/> is less
-    /// than one.
+    /// than one, or <paramref name="checkpointVerification"/> is unsupported.
     /// </exception>
     public ProcessDurableRuntimeOptions(
         string workerId,
         TimeSpan workerLease,
-        int maxAmbiguousStoreMutationAttempts = 3)
+        int maxAmbiguousStoreMutationAttempts = 3,
+        ProcessCheckpointVerification checkpointVerification = ProcessCheckpointVerification.Standard)
     {
         WorkerId = Guard.RequireNotNullOrWhiteSpace(workerId);
         if (workerLease <= TimeSpan.Zero)
@@ -222,6 +233,9 @@ public sealed record ProcessDurableRuntimeOptions
                 "At least one physical store-mutation attempt is required.");
         }
 
+        if (!Enum.IsDefined(checkpointVerification))
+            throw new ArgumentOutOfRangeException(nameof(checkpointVerification), checkpointVerification, "Unsupported checkpoint verification policy.");
+        CheckpointVerification = checkpointVerification;
         WorkerLease = workerLease;
         MaxAmbiguousStoreMutationAttempts = maxAmbiguousStoreMutationAttempts;
     }
@@ -231,6 +245,9 @@ public sealed record ProcessDurableRuntimeOptions
 
     /// <summary>Process aggregate ownership lifetime.</summary>
     public TimeSpan WorkerLease { get; }
+
+    /// <summary>Additional continuation-content verification; never changes persistence frequency or fencing.</summary>
+    public ProcessCheckpointVerification CheckpointVerification { get; }
 
     /// <summary>Total bounded attempts for one unchanged ambiguous store-mutation intent.</summary>
     public int MaxAmbiguousStoreMutationAttempts { get; }

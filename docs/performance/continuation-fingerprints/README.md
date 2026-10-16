@@ -1,5 +1,9 @@
 # Immutable continuation fingerprint reuse
 
+The current runtime makes this evidence opt-in through `ProcessCheckpointVerification.Diagnostic`.
+Standard workers use sequence/CAS/fencing evidence. See [durable bookkeeping](../durable-bookkeeping.md).
+The measurements below describe the earlier always-hash runtime.
+
 Storage persists several projections of one immutable `ProcessContinuationState`:
 activation evidence, checkpoint state, and commit proposals. In Ari's nine canonical
 compilation cases, a temporary identity counter observed 315 fingerprint calls for

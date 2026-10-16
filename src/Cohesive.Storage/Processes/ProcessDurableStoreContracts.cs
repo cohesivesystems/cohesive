@@ -182,7 +182,8 @@ public sealed class ProcessDurableCommit
             .OrderBy(static mutation => mutation.Resource, StringComparer.Ordinal)
             .ToImmutableArray();
         ObservedAtUtc = observedAtUtc;
-        Fingerprint = ProcessDurableCommitFingerprinter.Compute(this);
+        fingerprint = new(() => ProcessDurableCommitFingerprinter.Compute(this));
+        intentFingerprint = new(() => ProcessDurableCommitFingerprinter.ComputeIntent(this));
     }
 
     /// <summary>Stable commit identity reused after an ambiguous outcome.</summary>
@@ -206,8 +207,14 @@ public sealed class ProcessDurableCommit
     /// <summary>UTC commit-boundary observation.</summary>
     public DateTimeOffset ObservedAtUtc { get; }
 
-    /// <summary>Deterministic fingerprint of the entire commit intent.</summary>
-    public ProcessCommitFingerprint Fingerprint { get; }
+    readonly Lazy<ProcessCommitFingerprint> fingerprint;
+    readonly Lazy<ProcessCommitFingerprint> intentFingerprint;
+
+    /// <summary>Computes full commit content evidence on demand for explicit diagnostics.</summary>
+    /// <remarks>Normal persistence uses a small intent digest and compares checkpoint content only on an identity collision.</remarks>
+    public ProcessCommitFingerprint Fingerprint => fingerprint.Value;
+
+    internal ProcessCommitFingerprint IntentFingerprint => intentFingerprint.Value;
 }
 
 /// <summary>Immutable view of one atomically stored Process aggregate.</summary>
@@ -410,10 +417,17 @@ static class ProcessDurableCommitFingerprinter
         return new($"sha256-v1:{Convert.ToHexStringLower(digest)}");
     }
 
-    internal static ProcessCommitFingerprint ComputeCheckpoint(ProcessDurableCheckpoint checkpoint)
+    // The accepted snapshot already retains the exact checkpoint. Only the remaining intent fields
+    // need eager content evidence; replay compares the retained checkpoint on an identity collision.
+    internal static ProcessCommitFingerprint ComputeIntent(ProcessDurableCommit commit)
     {
-        var digest = StrictDocumentJson.ComputeCanonicalSha256(checkpoint, Options);
-        return new($"sha256-v1:{Convert.ToHexStringLower(digest)}");
+        var content = new
+        {
+            commit.Id, commit.ExpectedRevision, commit.Owner, commit.Fence,
+            commit.LocalMutations, commit.ObservedAtUtc
+        };
+        var digest = StrictDocumentJson.ComputeCanonicalSha256(content, Options);
+        return new($"sha256-intent-v2:{Convert.ToHexStringLower(digest)}");
     }
 
     sealed record ProcessDurableCommitContent(

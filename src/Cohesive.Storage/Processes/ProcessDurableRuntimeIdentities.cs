@@ -20,24 +20,24 @@ static class ProcessDurableRuntimeIdentities
     internal static ProcessSafePointId SafePoint(
         ProcessContinuationIdentity continuation,
         ProcessActivation activation,
-        ProcessContinuationFingerprint beforeContinuation) =>
+        long beforeSequence) =>
         new(Derive(
             "safe-point",
             continuation.ProcessInstanceId.Value,
             continuation.ProcessAttemptId.Value,
             activation.Id.Value,
-            beforeContinuation.Value));
+            beforeSequence.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
     internal static ProcessCommitId ActivationCommit(
         ProcessContinuationIdentity continuation,
         ProcessActivation activation,
-        ProcessContinuationFingerprint beforeContinuation) =>
+        long beforeSequence) =>
         new(Derive(
             "activation-commit",
             continuation.ProcessInstanceId.Value,
             continuation.ProcessAttemptId.Value,
             activation.Id.Value,
-            beforeContinuation.Value));
+            beforeSequence.ToString(System.Globalization.CultureInfo.InvariantCulture)));
 
     internal static ProcessCommitId ControlCommit(
         ProcessInstanceId instanceId,
@@ -67,8 +67,7 @@ static class ProcessDurableRuntimeIdentities
             continuation.ProcessInstanceId.Value,
             continuation.ProcessAttemptId.Value,
             beforeRevision.Value,
-            affinity.Slot.Value,
-            ProcessStorageContentFingerprints.Value(affinity).Value));
+            affinity.Slot.Value));
 
     internal static OperationAttemptId OperationAttempt(EmissionId operationId, int ordinal) =>
         DurableOperationIdentities.Attempt(operationId, ordinal);
@@ -79,23 +78,23 @@ static class ProcessDurableRuntimeIdentities
     internal static InteractionIdempotencyKey OperationReplyIdempotency(EmissionId operationId) =>
         DurableOperationIdentities.ReplyIdempotency(operationId);
 
-    internal static ProcessCommitId OperationLedgerCommit(DurableOperationState operation) =>
+    internal static ProcessCommitId OperationLedgerCommit(DurableOperationState operation, ProcessStorageRevision beforeRevision) =>
         new(Derive(
             "operation-ledger-commit",
             operation.OperationId.Value,
-            ProcessStorageContentFingerprints.Value(operation).Value));
+            beforeRevision.Value));
 
     static string Derive(string purpose, params string[] components)
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, "cohesive.processes.runtime/v1");
+        Append(hash, "cohesive.processes.runtime/v2");
         Append(hash, purpose);
         foreach (var component in components)
         {
             Append(hash, component);
         }
 
-        return $"{purpose}/sha256-v1:{Convert.ToHexStringLower(hash.GetHashAndReset())}";
+        return $"{purpose}/sha256-v2:{Convert.ToHexStringLower(hash.GetHashAndReset())}";
     }
 
     static void Append(IncrementalHash hash, string value)

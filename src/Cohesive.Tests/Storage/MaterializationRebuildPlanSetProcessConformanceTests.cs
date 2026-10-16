@@ -278,7 +278,8 @@ public sealed partial class MaterializationRebuildProcessConformanceTests
         int maxAmbiguousStoreMutationAttempts = 3) => new(
         workerId,
         workerLease: TimeSpan.FromMinutes(5),
-        maxAmbiguousStoreMutationAttempts);
+        maxAmbiguousStoreMutationAttempts,
+        checkpointVerification: ProcessCheckpointVerification.Diagnostic);
 
     static ProcessStartReceipt PlanSetStart(
         MaterializationRebuildPlanSet planSet,

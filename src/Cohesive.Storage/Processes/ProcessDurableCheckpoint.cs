@@ -156,8 +156,8 @@ public sealed record ProcessActivationCommitReceipt
     /// <summary>Creates activation commit evidence.</summary>
     /// <param name="sequence">Positive committed activation sequence.</param>
     /// <param name="continuation">Logical Process instance and attempt whose continuation was committed.</param>
-    /// <param name="beforeContinuation">Fingerprint of the exact continuation consumed by the activation.</param>
-    /// <param name="afterContinuation">Fingerprint of the exact continuation atomically published by the activation.</param>
+    /// <param name="beforeContinuation">Optional diagnostic fingerprint of the continuation consumed by the activation.</param>
+    /// <param name="afterContinuation">Optional diagnostic fingerprint of the continuation atomically published by the activation.</param>
     /// <param name="activation">Exact activation request.</param>
     /// <param name="disposition">Finite semantic activation disposition.</param>
     /// <param name="evidence">Definition-bound activation trace and safe-point evidence.</param>
@@ -170,15 +170,15 @@ public sealed record ProcessActivationCommitReceipt
     /// <paramref name="sequence"/> is not positive or <paramref name="disposition"/> is unsupported.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// A continuation fingerprint is empty, activation identity/cause evidence differs, or
+    /// A diagnostic fingerprint is empty or missing its pair, activation identity/cause evidence differs, or
     /// <paramref name="committedAtUtc"/> is not UTC.
     /// </exception>
     [JsonConstructor]
     public ProcessActivationCommitReceipt(
         long sequence,
         ProcessContinuationIdentity continuation,
-        ProcessContinuationFingerprint beforeContinuation,
-        ProcessContinuationFingerprint afterContinuation,
+        ProcessContinuationFingerprint? beforeContinuation,
+        ProcessContinuationFingerprint? afterContinuation,
         ProcessActivation activation,
         ProcessActivationDisposition disposition,
         ProcessExecutionEvidence evidence,
@@ -201,12 +201,13 @@ public sealed record ProcessActivationCommitReceipt
         ProcessCheckpointRequirements.RequireIdentity(
             continuation.ProcessAttemptId.Value,
             nameof(continuation));
-        ProcessCheckpointRequirements.RequireIdentity(
-            beforeContinuation.Value,
-            nameof(beforeContinuation));
-        ProcessCheckpointRequirements.RequireIdentity(
-            afterContinuation.Value,
-            nameof(afterContinuation));
+        if (beforeContinuation.HasValue != afterContinuation.HasValue)
+            throw new ArgumentException("Diagnostic continuation fingerprints must be supplied as a pair.", nameof(afterContinuation));
+        if (beforeContinuation is { } before && afterContinuation is { } after)
+        {
+            ProcessCheckpointRequirements.RequireIdentity(before.Value, nameof(beforeContinuation));
+            ProcessCheckpointRequirements.RequireIdentity(after.Value, nameof(afterContinuation));
+        }
         BeforeContinuation = beforeContinuation;
         AfterContinuation = afterContinuation;
         Activation = activation ?? throw new ArgumentNullException(nameof(activation));
@@ -236,11 +237,11 @@ public sealed record ProcessActivationCommitReceipt
     /// <summary>Logical Process instance and attempt whose continuation was committed.</summary>
     public ProcessContinuationIdentity Continuation { get; }
 
-    /// <summary>Fingerprint of the exact continuation consumed by the activation.</summary>
-    public ProcessContinuationFingerprint BeforeContinuation { get; }
+    /// <summary>Optional diagnostic fingerprint of the continuation consumed by the activation.</summary>
+    public ProcessContinuationFingerprint? BeforeContinuation { get; }
 
-    /// <summary>Fingerprint of the exact continuation atomically published by the activation.</summary>
-    public ProcessContinuationFingerprint AfterContinuation { get; }
+    /// <summary>Optional diagnostic fingerprint of the continuation atomically published by the activation.</summary>
+    public ProcessContinuationFingerprint? AfterContinuation { get; }
 
     /// <summary>Exact activation request.</summary>
     public ProcessActivation Activation { get; }
@@ -491,7 +492,7 @@ public sealed class ProcessDurableCheckpoint
 {
     /// <summary>Current exact physical checkpoint schema.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-process-durable-checkpoint/v6");
+        new("cohesive-process-durable-checkpoint/v7");
 
     /// <summary>Creates a complete validated physical Process checkpoint.</summary>
     /// <param name="schemaVersion">Exact physical checkpoint schema.</param>
@@ -791,7 +792,7 @@ public sealed class ProcessDurableCheckpoint
             .ToImmutableArray();
         HashSet<(ProcessAttemptId Attempt, ActivationId Activation)> identities = [];
         Dictionary<ProcessAttemptId, long> sequenceByAttempt = [];
-        Dictionary<ProcessAttemptId, ProcessContinuationFingerprint> afterContinuationByAttempt = [];
+        Dictionary<ProcessAttemptId, ProcessContinuationFingerprint?> afterContinuationByAttempt = [];
         foreach (var receipt in normalized)
         {
             RequireKnownAttempt(receipt.Continuation, nameof(values));
@@ -812,6 +813,8 @@ public sealed class ProcessDurableCheckpoint
             if (afterContinuationByAttempt.TryGetValue(
                     receipt.Continuation.ProcessAttemptId,
                     out var priorAfterContinuation)
+                && priorAfterContinuation is not null
+                && receipt.BeforeContinuation is not null
                 && receipt.BeforeContinuation != priorAfterContinuation)
             {
                 throw new ArgumentException(
@@ -838,8 +841,8 @@ public sealed class ProcessDurableCheckpoint
         }
 
         if (currentSequence > 0
-            && afterContinuationByAttempt[ContinuationIdentity.ProcessAttemptId]
-                != ProcessStorageContentFingerprints.Continuation(Continuation))
+            && afterContinuationByAttempt[ContinuationIdentity.ProcessAttemptId] is { } lastFingerprint
+            && lastFingerprint != ProcessStorageContentFingerprints.Continuation(Continuation))
         {
             throw new ArgumentException(
                 "The current attempt's final activation receipt must publish the exact checkpoint continuation.",

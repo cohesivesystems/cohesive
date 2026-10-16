@@ -49,7 +49,7 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
                     CommitReceipts: aggregate.CommitReceipts.ToImmutableDictionary(
                         static receipt => receipt.Id,
                         static receipt => new StoredCommitReceipt(
-                            Fingerprint: receipt.Fingerprint,
+                            IntentFingerprint: receipt.IntentFingerprint,
                             Snapshot: receipt.Snapshot))));
         }
     }
@@ -108,7 +108,6 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
         ProcessCheckpointRequirements.RequireIdentity(commitId.Value, nameof(commitId));
         context.ThrowIfCancellationRequested();
         var instanceId = checkpoint.ContinuationIdentity.ProcessInstanceId;
-        var fingerprint = ProcessDurableCommitFingerprinter.ComputeCheckpoint(checkpoint);
 
         lock (gate)
         {
@@ -116,7 +115,8 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             {
                 if (existing.CommitReceipts.TryGetValue(commitId, out var prior))
                 {
-                    return Task.FromResult(prior.Fingerprint == fingerprint
+                    return Task.FromResult(prior.IntentFingerprint is null
+                        && CanonicalEquals(prior.Snapshot.Checkpoint, checkpoint)
                         ? new ProcessStoreMutationResult(
                             ProcessStoreMutationDisposition.Replayed,
                             prior.Snapshot)
@@ -139,7 +139,7 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             {
                 CommitReceipts = created.CommitReceipts.Add(
                     commitId,
-                    new(fingerprint, created.Snapshot()))
+                    new(null, created.Snapshot()))
             };
             Publish(instanceId, ProcessStoreMutationKind.Initialize, created);
             return Task.FromResult(Result(ProcessStoreMutationDisposition.Applied, created));
@@ -369,7 +369,8 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
 
             if (aggregate.CommitReceipts.TryGetValue(commit.Id, out var priorCommit))
             {
-                return Task.FromResult(priorCommit.Fingerprint == commit.Fingerprint
+                return Task.FromResult(priorCommit.IntentFingerprint == commit.IntentFingerprint
+                    && CanonicalEquals(priorCommit.Snapshot.Checkpoint, commit.Checkpoint)
                     ? new ProcessStoreMutationResult(
                         ProcessStoreMutationDisposition.Replayed,
                         priorCommit.Snapshot)
@@ -422,7 +423,7 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             {
                 CommitReceipts = updated.CommitReceipts.Add(
                     commit.Id,
-                    new(commit.Fingerprint, updated.Snapshot()))
+                    new(commit.IntentFingerprint, updated.Snapshot()))
             };
             Publish(instanceId, ProcessStoreMutationKind.AggregateCommit, updated);
             return Task.FromResult(Result(ProcessStoreMutationDisposition.Applied, updated));
@@ -892,16 +893,15 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
             if (replacement.Continuation.CompletedActivationCount
                 == current.Continuation.CompletedActivationCount)
             {
-                return ProcessStorageContentFingerprints.Continuation(current.Continuation)
-                    == ProcessStorageContentFingerprints.Continuation(replacement.Continuation);
+                return CanonicalEquals(current.Continuation, replacement.Continuation);
             }
 
             var firstAppendedReceipt = replacement.Activations.FirstOrDefault(receipt =>
                 receipt.Continuation == current.ContinuationIdentity
                 && receipt.Sequence == current.Continuation.CompletedActivationCount + 1);
             return firstAppendedReceipt is not null
-                && firstAppendedReceipt.BeforeContinuation
-                    == ProcessStorageContentFingerprints.Continuation(current.Continuation);
+                && (firstAppendedReceipt.BeforeContinuation is not { } fingerprint
+                    || fingerprint == ProcessStorageContentFingerprints.Continuation(current.Continuation));
         }
 
         if (replacement.Control.Attempts.Length != current.Control.Attempts.Length + 1
@@ -1240,7 +1240,7 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
     }
 
     sealed record StoredCommitReceipt(
-        ProcessCommitFingerprint Fingerprint,
+        ProcessCommitFingerprint? IntentFingerprint,
         ProcessDurableStoreSnapshot Snapshot);
 
     sealed record StoredAggregate(
@@ -1275,7 +1275,7 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
                     .OrderBy(static item => item.Key.Value, StringComparer.Ordinal)
                     .Select(static item => new ProcessDurableCommitReceiptDocument(
                         id: item.Key,
-                        fingerprint: item.Value.Fingerprint,
+                        intentFingerprint: item.Value.IntentFingerprint,
                         snapshot: item.Value.Snapshot))]);
     }
 }

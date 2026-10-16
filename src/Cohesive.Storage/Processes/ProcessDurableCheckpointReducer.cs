@@ -19,7 +19,8 @@ static class ProcessDurableCheckpointReducer
         IDurableRequestBindingResolver bindingResolver,
         DateTimeOffset committedAtUtc,
         out ProcessDurableCheckpoint? replacement,
-        out ImmutableArray<DocumentValidationDiagnostic> diagnostics)
+        out ImmutableArray<DocumentValidationDiagnostic> diagnostics,
+        ProcessCheckpointVerification verification = ProcessCheckpointVerification.Standard)
     {
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(checkpoint);
@@ -27,6 +28,17 @@ static class ProcessDurableCheckpointReducer
         ArgumentNullException.ThrowIfNull(decision);
         ArgumentNullException.ThrowIfNull(control);
         ArgumentNullException.ThrowIfNull(bindingResolver);
+
+        if (!Enum.IsDefined(verification))
+            throw new ArgumentOutOfRangeException(nameof(verification));
+        if (decision.State.Continuation != checkpoint.ContinuationIdentity
+            || decision.State.CompletedActivationCount != checked(checkpoint.Continuation.CompletedActivationCount + 1))
+        {
+            replacement = null;
+            diagnostics = [Error(ProcessCheckpointDiagnosticCodes.ActivationReceiptIncompatible,
+                "An activation must advance its exact continuation by one committed sequence.", "/continuation/completedActivationCount")];
+            return false;
+        }
 
         List<DocumentValidationDiagnostic> failures = [];
         var inbox = ApplyInbox(checkpoint, activation, decision, failures);
@@ -48,8 +60,12 @@ static class ProcessDurableCheckpointReducer
             return false;
         }
 
-        var before = ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation);
-        var after = ProcessStorageContentFingerprints.Continuation(decision.State);
+        ProcessContinuationFingerprint? before = null, after = null;
+        if (verification == ProcessCheckpointVerification.Diagnostic)
+        {
+            before = ProcessStorageContentFingerprints.Continuation(checkpoint.Continuation);
+            after = ProcessStorageContentFingerprints.Continuation(decision.State);
+        }
         var receipt = new ProcessActivationCommitReceipt(
             decision.State.CompletedActivationCount,
             decision.State.Continuation,

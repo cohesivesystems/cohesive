@@ -1,0 +1,15 @@
+<Project>
+  <!-- Qualification only: compile consumers against the same source assemblies used at runtime.
+       Set CohesiveSourceAssemblyDirectory to a built Cohesive.Tests output directory.
+       Do not use this as a package publication or deployment mechanism. -->
+  <Target Name="UseMeasuredCohesiveSourceAssemblies" AfterTargets="ResolveReferences">
+    <Error Condition="'$(CohesiveSourceAssemblyDirectory)' == ''" Text="Set CohesiveSourceAssemblyDirectory to the source assembly directory." />
+    <ItemGroup>
+      <MeasuredSourceReference Include="@(ReferencePath)" Condition="Exists('$(CohesiveSourceAssemblyDirectory)/%(ReferencePath.Filename)%(ReferencePath.Extension)') and $([System.String]::Copy('%(ReferencePath.Filename)').StartsWith('Cohesive'))" />
+      <ReferencePath Remove="@(MeasuredSourceReference)" />
+      <ReferencePath Include="@(MeasuredSourceReference->'$(CohesiveSourceAssemblyDirectory)/%(Filename)%(Extension)')" />
+      <ReferenceCopyLocalPaths Remove="@(MeasuredSourceReference)" />
+      <ReferenceCopyLocalPaths Include="@(MeasuredSourceReference->'$(CohesiveSourceAssemblyDirectory)/%(Filename)%(Extension)')" />
+    </ItemGroup>
+  </Target>
+</Project>

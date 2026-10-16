@@ -30,7 +30,7 @@ public sealed class ProcessDurableCheckpointContractTests
         Assert.Equal(expected, commit.Fingerprint.Value);
         var checkpointExpected = "sha256-v1:" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
             ProcessDurableCheckpointJsonSerializer.GetCanonicalBytes(checkpoint)));
-        Assert.Equal(checkpointExpected, ProcessDurableCommitFingerprinter.ComputeCheckpoint(checkpoint).Value);
+        Assert.Equal(checkpointExpected, ProcessStorageContentFingerprints.Value(checkpoint).Value);
     }
 
     [Fact]
