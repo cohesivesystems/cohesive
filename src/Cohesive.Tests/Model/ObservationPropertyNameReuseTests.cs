@@ -1,5 +1,5 @@
-using System.Text.Json;
 using System.Runtime.CompilerServices;
+using System.Text.Json;
 
 namespace Cohesive.Tests.Model;
 
@@ -61,11 +61,13 @@ public sealed class ObservationPropertyNameReuseTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void TemporaryTableDoesNotRetainParserAfterSuccessOrFailure(bool fail)
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void TemporaryTableDoesNotRetainParserAfterSuccessOrFailure(bool fail, bool uniqueNames)
     {
-        var parser = ProjectAndReleaseParser(fail);
+        var parser = ProjectAndReleaseParser(fail, uniqueNames);
         for (var i = 0; i < 3 && parser.IsAlive; i++)
         {
             GC.Collect();
@@ -76,9 +78,10 @@ public sealed class ObservationPropertyNameReuseTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static WeakReference ProjectAndReleaseParser(bool fail)
+    static WeakReference ProjectAndReleaseParser(bool fail, bool uniqueNames)
     {
         var prefix = "{\"padding\":\"" + new string('x', 1024) + "\",\"name\":1";
+        if (uniqueNames) prefix += string.Concat(Enumerable.Range(0, 40).Select(i => $",\"field{i}\":{i}"));
         using var document = JsonDocument.Parse(prefix + (fail ? ",\"\\uD800\":2}" : "}"));
         if (fail) Assert.Throws<InvalidOperationException>(() => ObservationValue.FromJsonElement(document.RootElement));
         else ObservationValue.FromJsonElement(document.RootElement);

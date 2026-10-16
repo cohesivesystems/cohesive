@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 
@@ -19,9 +20,12 @@ internal sealed class ObservationJsonPropertyNames : IDisposable
         internal string? Name;
     }
 
-    internal string Get(JsonProperty property)
+    // Keep the abandoned-table branch inline; unique keys should resume the ordinary parser path.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal string Get(JsonProperty property) => misses == MissLimit ? property.Name : GetPrepared(property);
+
+    string GetPrepared(JsonProperty property)
     {
-        if (misses == MissLimit) return property.Name;
         var raw = JsonMarshal.GetRawUtf8PropertyName(property);
         HashCode hash = new();
         hash.AddBytes(raw);
