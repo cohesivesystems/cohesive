@@ -7,6 +7,8 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class ComposedPreparationTests
 {
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+
     [Fact]
     public void Missing_scope_fails_when_policy_is_declared()
     {
@@ -21,15 +23,15 @@ public sealed class ComposedPreparationTests
     public void Invalid_registration_fails_without_opening_a_database(string failure)
     {
         using var db = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test;Timeout=1");
-        var orders = FulfillmentStorage.Bind(db);
+        var orders = Model.Storage.Bind(db);
         var remote = failure == "missing-mapping"
-            ? new PostgresPersistenceBindings(new("inventory")).Bind(new(new("inventory"), db, "test"))
-            : FulfillmentStorage.BindInventory(db);
+            ? PostgresPersistenceBindings.Define(new("inventory"), _ => { }).Bind(new(new("inventory"), db, "test"))
+            : Model.Storage.BindInventory(db);
         var scope = new PostgresRelationQueryPartitionScope(new("local"),
             failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition);
         var policy = new PostgresRelationQueryComposedPolicy(
             ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000, scope);
-        var error = Record.Exception(() => orders.QueryComposed(FulfillmentQueries.ReservationAvailability, FulfillmentQueries.ReservationDemandProjection, remote, policy));
+        var error = Record.Exception(() => orders.QueryComposed(Model.Queries.ReservationAvailability, Model.Queries.ReservationDemandProjection, remote, policy));
         var preparation = Assert.IsType<RelationQueryPreparationException>(error);
         Assert.Equal(failure switch {
             "missing-mapping" => "postgres.composed.remoteMappingMissing",

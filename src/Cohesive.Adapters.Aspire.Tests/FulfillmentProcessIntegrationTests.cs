@@ -15,6 +15,8 @@ namespace Cohesive.Adapters.Aspire.Tests;
 [Collection("Order PostgreSQL schema")]
 public sealed class FulfillmentProcessIntegrationTests
 {
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+
     [PostgresTheory]
     [InlineData(OrderStatus.Draft, 5, 2, "Submitted", 3)]
     [InlineData(OrderStatus.Submitted, 5, 2, "Rejected", 5)]
@@ -28,9 +30,9 @@ public sealed class FulfillmentProcessIntegrationTests
         var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentDemo.LocalPartition);
         await using (var command = database.CreateCommand(receipts.SchemaSql)) await command.ExecuteNonQueryAsync();
         var receiptStorage = await receipts.BindAsync(database);
-        var persistence = FulfillmentStorage.Bind(database);
-        var orders = persistence.Repository(FulfillmentDomain.Orders, transitionReceipts: receiptStorage);
-        var inventory = persistence.Repository(FulfillmentDomain.Inventory, transitionReceipts: receiptStorage);
+        var persistence = Model.Storage.Bind(database);
+        var orders = persistence.Repository(Model.Domain.Orders, transitionReceipts: receiptStorage);
+        var inventory = persistence.Repository(Model.Domain.Inventory, transitionReceipts: receiptStorage);
         var orderId = Guid.NewGuid().ToString("D");
         var sku = "sku-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create().WithIdentityContext(FulfillmentDemoIdentity.Context);
@@ -40,7 +42,7 @@ public sealed class FulfillmentProcessIntegrationTests
             // Same ID in another partition must not confuse the trusted process read binding.
             var foreign = await orders.Upsert(context, new Order(orderId, "other", OrderStatus.Draft));
             await inventory.Upsert(context, new InventoryItem(sku, FulfillmentDemo.LocalPartition, stock));
-            var binding = FulfillmentService.Definition.Bind(FulfillmentProcess.Definition, orders, inventory)
+            var binding = Model.Service.Definition.Bind(Model.Process.Definition, orders, inventory)
                 .Build("aspire-first", new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
             var identity = new ProcessContinuationIdentity(new("test/" + orderId), new("attempt/1"));
             var input = ObservationValue.FromObject(new FulfillOrder(orderId, sku, quantity));
@@ -53,7 +55,7 @@ public sealed class FulfillmentProcessIntegrationTests
             Assert.Equal(foreign, await orders.TryGet(context, orderId, new(partitionKey: "other")));
             var beforeReplay = await inventory.TryGet(context, sku, new(partitionKey: FulfillmentDemo.LocalPartition));
             // Recreate all preparation to prove receipts are native durable evidence, not an in-memory cache.
-            var replay = await FulfillmentService.Definition.Bind(FulfillmentProcess.Definition, orders, inventory)
+            var replay = await Model.Service.Definition.Bind(Model.Process.Definition, orders, inventory)
                 .Build("aspire-first", new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField))).Runtime.ExecuteProcessAsync(context, "fulfill", identity, input);
             Assert.Equal(ApiResultKind.Success, replay.Kind);
             Assert.Equal(output, replay.Outcome!.Decision.State.Terminal.Detail!.Value!.Value);

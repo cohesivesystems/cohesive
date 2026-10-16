@@ -65,3 +65,11 @@ only to that counter does not enable execution telemetry on other paths.
 process; repeated starts while active do not duplicate delivery. This service lifecycle does not promise
 that every native host or its other hosted services support restarting. Generic-host tests cover startup,
 stop/start, disposal without stop, duplicate registration, disabled logging and independent hosts.
+
+## Offline application composition
+
+`ApplicationModelBuilder` composes explicitly registered declaration types by their constructors, independent of
+registration order. `Build()` constructs each once, completes `IAuthoringModel` instances, and validates documents
+from `IExecutionDefinitionModel` through the canonical execution catalog. Duplicate revisions, cycles and missing
+dependencies fail at setup. Models must not own disposable resources or perform IO; native connections remain
+separate runtime attachments. Completed models are resolved by `model.Get<T>()`. Preparation failures are cached.

@@ -13,6 +13,7 @@ namespace Cohesive.Analyzers;
 [Generator]
 public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
 {
+    const string ProcessAttributeName = "Cohesive.Processes.Authoring.ProcessAttribute";
     const string AttributeName = "Cohesive.Processes.Authoring.GenerateProcessDefinitionAttribute";
     const string ContextName = "Cohesive.Processes.Authoring.ProcessContext";
     const string TaskName = "Cohesive.Processes.Authoring.ProcessTask<TResult>";
@@ -91,9 +92,16 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     (INamedTypeSymbol)attributeContext.TargetSymbol))
             .Collect();
 
+        var models = context.SyntaxProvider.ForAttributeWithMetadataName(
+            fullyQualifiedMetadataName: ProcessAttributeName,
+            predicate: static (node, _) => node is ClassDeclarationSyntax,
+            transform: static (attributeContext, _) => new Candidate(
+                (ClassDeclarationSyntax)attributeContext.TargetNode,
+                (INamedTypeSymbol)attributeContext.TargetSymbol)).Collect();
+
         context.RegisterSourceOutput(
-            context.CompilationProvider.Combine(candidates),
-            static (productionContext, pair) => Generate(pair.Left, pair.Right, productionContext));
+            context.CompilationProvider.Combine(candidates.Combine(models)),
+            static (productionContext, pair) => Generate(pair.Left, pair.Right.Left.AddRange(pair.Right.Right), productionContext));
     }
 
     static void Generate(
@@ -149,11 +157,48 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             return;
         }
 
-        var attribute = candidate.Symbol.GetAttributes()
-            .Single(static item => item.AttributeClass?.ToDisplayString() == AttributeName);
-        var methodName = attribute.ConstructorArguments.Length == 1
-            ? attribute.ConstructorArguments[0].Value as string
-            : null;
+        var attributes = candidate.Symbol.GetAttributes().Where(static item =>
+            item.AttributeClass?.ToDisplayString() is AttributeName or ProcessAttributeName).ToArray();
+        if (attributes.Length != 1)
+        {
+            Report(productionContext, UnsupportedMethodShape, candidate.Syntax.Identifier.GetLocation(),
+                candidate.Symbol.Name, "select either [Process] or [GenerateProcessDefinition], not both");
+            return;
+        }
+        var attribute = attributes[0];
+        var isModel = attribute.AttributeClass?.ToDisplayString() == ProcessAttributeName;
+        if (isModel && (!SymbolEqualityComparer.Default.Equals(candidate.Symbol.BaseType?.OriginalDefinition,
+                compilation.GetTypeByMetadataName("Cohesive.Processes.Authoring.ProcessModel`2"))
+            || attribute.ConstructorArguments.Length < 2
+            || attribute.ConstructorArguments[0].Value is not string id || string.IsNullOrWhiteSpace(id)
+            || attribute.ConstructorArguments[1].Value is not string revision || string.IsNullOrWhiteSpace(revision)))
+        {
+            Report(productionContext, UnsupportedMethodShape, candidate.Syntax.Identifier.GetLocation(),
+                candidate.Symbol.Name, "[Process] requires ProcessModel<TInput, TResult> and nonempty semantic id and revision");
+            return;
+        }
+        if (isModel && (candidate.Symbol.GetMembers("Metadata").Length != 0
+            || candidate.Symbol.GetMembers("CreateDefinition").Length != 0
+            || candidate.Symbol.GetMembers("CreateDependencies").Length != 0
+            || candidate.Symbol.GetMembers("__processMetadata").Length != 0))
+        {
+            Report(productionContext, UnsupportedMethodShape, candidate.Syntax.Identifier.GetLocation(),
+                candidate.Symbol.Name, "Metadata, CreateDefinition and CreateDependencies are supplied by the process generator");
+            return;
+        }
+        if (isModel)
+        {
+            var recovery = attribute.ConstructorArguments[2];
+            if (recovery.Value is not int value || value == 0
+                || recovery.Type is not INamedTypeSymbol recoveryType
+                || !recoveryType.GetMembers().OfType<IFieldSymbol>().Any(field => field.HasConstantValue && Equals(field.ConstantValue, value)))
+            {
+                Report(productionContext, UnsupportedMethodShape, candidate.Syntax.Identifier.GetLocation(),
+                    candidate.Symbol.Name, "the recovery policy must be a declared, non-unspecified ProcessRecoveryPolicy");
+                return;
+            }
+        }
+        var methodName = isModel ? "Execute" : attribute.ConstructorArguments[0].Value as string;
         var methods = string.IsNullOrWhiteSpace(methodName)
             ? []
             : candidate.Symbol.GetMembers(methodName!).OfType<IMethodSymbol>()
@@ -222,11 +267,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         inputParameter = null!;
         resultType = null!;
         string? failure = null;
-        if (!method.IsStatic)
-        {
-            failure = "the method must be static";
-        }
-        else if (!syntax.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.AsyncKeyword)))
+        if (!syntax.Modifiers.Any(static modifier => modifier.IsKind(SyntaxKind.AsyncKeyword)))
         {
             failure = "the method must be async";
         }
@@ -292,14 +333,16 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             builder.Append("static ");
         }
 
+        var factoryVisibility = candidate.Symbol.GetAttributes().Any(item => item.AttributeClass?.ToDisplayString() == ProcessAttributeName) ? "private " : "public ";
+        var factoryModifier = method.Modifiers.Any(modifier => modifier.IsKind(SyntaxKind.StaticKeyword)) ? "static " : "";
         builder.Append("partial class ").Append(candidate.Symbol.Name).AppendLine()
             .AppendLine("{")
-            .Append("    public static global::Cohesive.Processes.Authoring.Process<")
+            .Append("    ").Append(factoryVisibility).Append(factoryModifier).Append("global::Cohesive.Processes.Authoring.Process<")
             .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType))
             .AppendLine("> Define(global::Cohesive.Processes.Authoring.ProcessAuthoringMetadata metadata)")
             .AppendLine("        => DefineCore(metadata, inputContract: null, resultContract: null);")
             .AppendLine()
-            .Append("    public static global::Cohesive.Processes.Authoring.Process<")
+            .Append("    ").Append(factoryVisibility).Append(factoryModifier).Append("global::Cohesive.Processes.Authoring.Process<")
             .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType))
             .AppendLine("> Define(")
             .AppendLine("        global::Cohesive.Processes.Authoring.ProcessAuthoringMetadata metadata,")
@@ -311,7 +354,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             .AppendLine("        return DefineCore(metadata, inputContract, resultContract);")
             .AppendLine("    }")
             .AppendLine()
-            .Append("    private static global::Cohesive.Processes.Authoring.Process<")
+            .Append("    private ").Append(factoryModifier).Append("global::Cohesive.Processes.Authoring.Process<")
             .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType))
             .AppendLine("> DefineCore(")
             .AppendLine("        global::Cohesive.Processes.Authoring.ProcessAuthoringMetadata metadata,")
@@ -369,8 +412,35 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             .Append("                sourceFile: ").Append(Literal(location.File)).AppendLine(",")
             .Append("                sourceLine: ").Append(location.Line.ToString(CultureInfo.InvariantCulture)).AppendLine(",")
             .Append("                sourceMember: ").Append(Literal(method.Identifier.ValueText)).AppendLine(");")
-            .AppendLine("    }")
-            .AppendLine("}");
+            .AppendLine("    }");
+        var modelAttribute = candidate.Symbol.GetAttributes().FirstOrDefault(item => item.AttributeClass?.ToDisplayString() == ProcessAttributeName);
+        if (modelAttribute is not null)
+        {
+            var id = (string)modelAttribute.ConstructorArguments[0].Value!;
+            var revision = (string)modelAttribute.ConstructorArguments[1].Value!;
+            var recovery = Convert.ToInt32(modelAttribute.ConstructorArguments[2].Value, CultureInfo.InvariantCulture);
+            builder.AppendLine("    private static readonly global::Cohesive.Processes.Authoring.ProcessAuthoringMetadata __processMetadata = new(")
+                .Append("        new(").Append(Literal(id)).Append("), new(").Append(Literal(revision)).AppendLine("),")
+                .Append("        (global::Cohesive.Processes.IR.ProcessRecoveryPolicy)").Append(recovery).AppendLine(",")
+                .Append("        new(new(\"cohesive/csharp-process-model\", \"1\"), new(")
+                .Append(Literal(id))
+                .AppendLine("), global::Cohesive.Model.Serialization.DocumentOrigin.Generated));")
+                .AppendLine("    /// <inheritdoc />")
+                .AppendLine("    protected override global::Cohesive.Processes.Authoring.ProcessAuthoringMetadata Metadata => __processMetadata;")
+                .AppendLine("    /// <inheritdoc />")
+                .Append("    protected override global::Cohesive.Processes.Authoring.Process<")
+                .Append(FormatType(inputType)).Append(", ").Append(FormatType(resultType)).AppendLine("> CreateDefinition() => Define(Metadata);");
+        }
+        if (modelAttribute is not null)
+        {
+            builder.AppendLine("    /// <inheritdoc />")
+                .AppendLine("    protected override global::System.Collections.Immutable.ImmutableArray<global::Cohesive.Processes.Authoring.ProcessDependency> CreateDependencies() =>")
+                .AppendLine("    [");
+            foreach (var dependency in body.Dependencies)
+                builder.Append("        ").Append(dependency).AppendLine(",");
+            builder.AppendLine("    ];");
+        }
+        builder.AppendLine("}");
         return builder.ToString();
     }
 
@@ -3196,6 +3266,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         readonly Dictionary<string, string> emittedExactTerminals = new(StringComparer.Ordinal);
         readonly Dictionary<FlowIdentity, string> protocolByRequestIdentity = [];
         readonly List<string> builderStatements = [];
+        readonly List<string> dependencies = [];
         readonly HashSet<ILocalSymbol> resolvingPureLocals = new(SymbolEqualityComparer.Default);
         int valueOrdinal;
 
@@ -3502,6 +3573,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 [.. identities],
                 outputs,
                 [.. builderStatements],
+                [.. dependencies.Distinct(StringComparer.Ordinal)],
                 entry);
             return true;
         }
@@ -4218,8 +4290,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                             action.Syntax,
                             "Transition requires an exact definition, portable subject and input, and a stable continuation role");
                     }
-                    if (IsTypedCanonicalTransitionHandle(transition.Parameter?.Type))
-                        transitionReference = $"{transitionReference}.Reference";
+                    transitionReference = AttachTransition(transition.Parameter?.Type, transitionReference);
                     builderStatements.Add(
                         $"__builder.InvokeTransition(id: {action.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {transitionInputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {action.Identity.Variable}, role: {transitionRole}, target: {successor}, {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)}), {SourceArguments(action.Source, method.Name)});");
                     return true;
@@ -5029,13 +5100,21 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
-            if (IsTypedCanonicalRelationQueryHandle(relation.Parameter?.Type))
+            if (IsEntityPointRead(relation.Parameter?.Type))
+            {
+                dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.PointRead({relationReference})");
+                relationReference = $"{relationReference}.Reference";
+            }
+            else if (IsTypedCanonicalRelationQueryHandle(relation.Parameter?.Type))
                 relationReference = $"{relationReference}.Reference";
 
             builderStatements.Add(
                 $"__builder.EvaluateRelation(id: {awaited.Identity.Variable}, relation: {relationReference}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
             return true;
         }
+
+        static bool IsEntityPointRead(ITypeSymbol? type) => type is INamedTypeSymbol { Name: "EntityPointRead", Arity: 3 } named
+            && named.ContainingNamespace.ToDisplayString() == "Cohesive.Processes.Authoring";
 
         static bool IsTypedCanonicalRelationQueryHandle(ITypeSymbol? type) =>
             type is INamedTypeSymbol
@@ -5078,8 +5157,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             if (input is null && noInput)
                 inputValue = $"__builder.CanonicalValue<global::Cohesive.Prelude.Unit>(global::Cohesive.Model.Expr.Const(global::Cohesive.Model.ObservationValue.FromObject(global::Cohesive.Prelude.Unit.Value)), {transitionReference}.Definition.Input, {SourceArguments(awaited.Source, method.Name)})";
 
-            if (IsTypedCanonicalTransitionHandle(transition.Parameter?.Type))
-                transitionReference = $"{transitionReference}.Reference";
+            transitionReference = AttachTransition(transition.Parameter?.Type, transitionReference);
 
             var withReceipt = awaited.Kind == AwaitKind.TransitionWithReceipt;
             var invocationMethod = withReceipt ? "InvokeTransitionWithReceipt" : "InvokeTransition";
@@ -5087,6 +5165,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             builderStatements.Add(
                 $"__builder.{invocationMethod}(id: {awaited.Identity.Variable}, transition: {transitionReference}, subject: {subjectValue}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {receiptArgument}{SourceArguments(awaited.Source, method.Name)});");
             return true;
+        }
+
+        string AttachTransition(ITypeSymbol? type, string reference)
+        {
+            if (!IsTypedCanonicalTransitionHandle(type)) return reference;
+            dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.Transition({reference})");
+            return $"{reference}.Reference";
         }
 
         bool TryEmitEffect(AwaitFlow awaited, string successor)
@@ -6607,6 +6692,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         ImmutableArray<string> IdentityDeclarations,
         ImmutableArray<string> OutputDeclarations,
         ImmutableArray<string> BuilderStatements,
+        ImmutableArray<string> Dependencies,
         string EntryIdentity);
 
     readonly record struct ProjectedObjectMember(

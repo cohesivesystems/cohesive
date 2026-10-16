@@ -12,17 +12,17 @@ waits and volume configuration in native Aspire. It adds no second deployment in
    `AddDatabase`, `AddProject<Projects.OrderWorker>`, `WithReference` and `WaitFor`.
 3. `AspireInfrastructureAssociation.Attach` associates those **same** database/project
    objects with the canonical nodes. PostgreSQL evidence comes from prepared queries over
-   `FulfillmentStorage.Bindings`; project execution comes from native Aspire metadata. Native names
+   `model.Storage.Bindings`; project execution comes from native Aspire metadata. Native names
    supply physical identities; there is no repeated physical-name table. The PostgreSQL
    server, its password parameter and an illustrative Redis container remain Aspire-only.
 4. The existing target-deployment compiler matches requirements against evidence and
    checks canonical coverage. The AppHost refuses to start if the plan is incomplete.
 5. Once the user starts the AppHost, ordinary Aspire runs the database and application.
    `OrderWorker/FulfillmentDomain.cs` declares `Order`, `InventoryItem` and `Reservation`
-   once with `DomainModelBuilder.Entity<T>()`. Typed handles retain those exact definitions
+   once through the instance `DomainModel` and its existing `DomainModelBuilder`. Typed handles retain those exact definitions
    for relationships, storage and queries. `FulfillmentStorage` attaches
-   fluent PostgreSQL mappings (`For(entity).Table().Identity().Partition().Build()`)
-   and bind the Aspire-supplied data source through
+   fluent PostgreSQL mappings (`storage.Entity(entity, mapping => ...)`)
+   and binds the Aspire-supplied data source through
    `PostgresNpgsqlRuntimeBinding`. Creation uses atomic `Create(..., EntityCreationPolicy.IfAbsent)`; reads use `TryGet`,
    implemented by the existing `Cohesive.Adapters.Postgres` repository.
    `JsonPropertyName` preserves the canonical `id`/`partition` names; writes use the
@@ -40,6 +40,39 @@ waits and volume configuration in native Aspire. It adds no second deployment in
 The example demonstrates persistence, guarded transitions, joined queries, and a finite multi-entity Process.
 It is not yet a CQRS/ES implementation. Event-authoritative state, reconstitution, durable process recovery,
 and audit retention remain separate capabilities. See the [fulfillment walkthrough](FULFILLMENT.md).
+
+
+## Instance composition
+
+Both programs create their own `FulfillmentApplication`. It connects one `FulfillmentDomain` instance
+with `FulfillmentQueries`, `FulfillmentStorage`, transitions, `OrderApi` and a generated `FulfillmentProcess`.
+There is no global singleton. The AppHost prepares offline evidence from this recipe; the worker attaches
+Aspire's connection configuration to its own equivalent recipe. They share source declarations, not runtime objects.
+
+```csharp
+var model = new FulfillmentApplication();
+var persistence = model.Storage.Bind(database);
+var orders = persistence.Repository(model.Domain.Orders);
+var details = persistence.Query(model.Service.Definition, model.Queries.OrderDetails);
+```
+
+`DomainModel`, `QueryModel` and `ApiModel` provide their immutable definitions automatically. Reading
+`ApplicationModelBuilder` resolves the explicitly registered declaration types by constructor dependency and freezes
+their catalogs during Build. No hand-ordered construction or forced Definition reads are required. Missing or cyclic
+dependencies and duplicate process revisions fail at setup. Direct builders remain supported.
+PostgreSQL `Define(databaseId, configure)` accepts extracted configuration methods or inline lambdas through
+the same native builder and freezes the resulting mappings. The inventory-only placement uses the same
+inventory configuration method without carrying unrelated orders/reservations mappings.
+
+`[Process(id: "fulfillment/submit", revision: "3")]` now tags the complete process type. Its protected
+`Execute` method is syntax-only; the existing generator lowers it into the cached `Definition`. The source
+method is never used as an application coordinator. Generated provenance and node source locations remain
+inspectable. A new revision records the entry-method/provenance migration; no persisted-instance upgrade is claimed.
+
+This is the declaration-foundation slice of [application composition](../../../docs/design/application-composition.md).
+Service dependencies and runtime endpoint wiring are still explicit. Automatic dependency collection,
+partial implementation contributions, unified `MapApi`, and linked acceptance/polling are subsequent work.
+It does not implement SignalR, Cosmos registration, event sourcing or durable execution in this example.
 
 ## Build and run
 
@@ -71,7 +104,7 @@ curl -X POST "$WORKER_URL/orders/$ORDER_ID/submit"
 POST creates a fresh server-generated ID in `Draft`; GET returns the ID and status, or 404.
 Creation no longer accepts a caller-selected ID, preventing the old upsert route from resetting a
 submitted order. Creation retries create distinct orders; this example does not promise idempotent creation.
-`OrderTransitions.Submit` uses conventional node IDs and provenance, keeping only the contract ID
+`model.Orders.Submit` uses conventional node IDs and provenance, keeping only the contract ID
 and revision explicit. Inserting or reordering implicit steps changes their IDs; explicit IDs remain
 available when editing stability is required. It declares the POCO-authored `Draft → Submitted` rule. `OrderEndpoints`
 selects the subject from the route. `TransitionAuthoring.Create<Order, SubmitOrderResult>` declares no
@@ -171,7 +204,7 @@ handles; the existing query author captures a relationship in its catalog when t
 query schema is inferred: `entity.QueryShape(author)` imports the entity's exact canonical state graph.
 The domain model itself remains the entity catalog, not a new orchestration or persistence engine.
 
-`FulfillmentQueries.OrderDetails` selects an order by a bound parameter and the local partition, traverses the
+`model.Queries.OrderDetails` selects an order by a bound parameter and the local partition, traverses the
 inverse reservation/order relationship, then traverses reservation/inventory. Both traversals are
 left joins, so an order without reservations remains present. The declaration exposes
 `RelationQuery<string, OrderDetails?>` and uses `SingleOrDefault<OrderDetails>()` to map each parent and
@@ -181,7 +214,7 @@ from that declaration; no `OrderDetailRow` DTO or handwritten result callback is
 Query authoring accepts domain entities and bound nodes directly:
 
 ```csharp
-var orders = query.Source(FulfillmentDomain.Orders).Where(
+var orders = query.Source(model.Domain.Orders).Where(
     order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
 // After the declared relationship traversals:
 query.SingleOrDefault<OrderDetails>()
@@ -200,14 +233,14 @@ remain explicit. `SingleOrDefault<T>()` exposes only `From`; the returned mappin
 `Identity`, `Field`, `Collection` and `Build`. Calling a mapping method before `From` is a compile error.
 Completed-builder reuse and foreign-session/visibility checks remain runtime authoring checks.
 
-`FulfillmentStorage.Bind` attaches each entity and its native mapping once. The host uses that same
+`model.Storage.Bind` attaches each entity and its native mapping once. The host uses that same
 registration for repositories and queries; there is no separate per-query infrastructure catalog:
 
 ```csharp
-var persistence = FulfillmentStorage.Bind(database);
-var orders = persistence.Repository(FulfillmentDomain.Orders);
+var persistence = model.Storage.Bind(database);
+var orders = persistence.Repository(model.Domain.Orders);
 var details = persistence.Query(
-    FulfillmentQueries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
+    model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
 ```
 
 Query preparation discovers consumed source and traversal shapes from the canonical plan and resolves
@@ -216,7 +249,7 @@ binding in its SQL artifact, even though the persistence registration also knows
 physical columns, scope and bounds remain explicit. Native versus composed placement is still a host choice.
 
 Relationship handles created by `DomainEntity.References` retain exact endpoint documents. Traversing
-one imports its endpoints automatically, so `FulfillmentQueries.OrderDetails` starts with the order shape and needs no
+one imports its endpoints automatically, so `model.Queries.OrderDetails` starts with the order shape and needs no
 standalone reservation/inventory `QueryShape` calls. Explicit imports remain supported; conflicting
 registrations fail rather than silently inferring another CLR schema.
 
@@ -311,13 +344,13 @@ and the reference interpreter, using the same declaration and shared nested asse
 
 ### Native joins inside composed execution
 
-The companion `FulfillmentQueries.ReservationAvailability` declares a semantic `ReservationDemand` projection between
+The companion `model.Queries.ReservationAvailability` declares a semantic `ReservationDemand` projection between
 order/reservation matching and inventory enrichment. `ReservationAvailabilityQueryBindings` can bind that
 **same graph** in either of two ways:
 
 ```csharp
-var orders = FulfillmentStorage.Bind(ordersDatabase);
-var inventory = FulfillmentStorage.BindInventory(inventoryDatabase);
+var orders = model.Storage.Bind(ordersDatabase);
+var inventory = model.Storage.BindInventory(inventoryDatabase);
 var native = ReservationAvailabilityQueryBindings.BindNative(orders);
 var composed = ReservationAvailabilityQueryBindings.BindComposed(orders, inventory);
 var availability = await composed.ReadAsync(orderId, cancellationToken);
@@ -408,7 +441,7 @@ PostgreSQL registration. `FulfillmentDemo` owns the local partition policy. `Ful
 immutable typed declarations directly, without per-query `Definition` wrappers or an inheritance hierarchy.
 
 Bind each database once at host composition. Repositories preserve the POCO contract:
-`IEntityRepository<Order> orders = persistence.Repository(FulfillmentDomain.Orders)`.
+`IEntityRepository<Order> orders = persistence.Repository(model.Domain.Orders)`.
 This reuses `TypedEntityRepository<T>` and preserves native batch/concurrency capabilities. The default typed
 identity selector is compiled at registration from the mapping's canonical identity field, using the same
 `FieldPath`/JSON-name rules as mapping authoring. Inventory therefore uses `Sku` without a second selector.
@@ -507,3 +540,12 @@ round-trip tests. Rejected submission now has problem code `orders.submit.NotDra
 worker. It declares topology names, not domain semantics. SQL remains explicit in this batch: schema
 projection, requirement-derived infrastructure admission, an inspectable system artifact and selecting
 composed placement in the running host are subsequent work. No shared snapshot is implied across databases.
+
+### Generated process dependencies
+
+FulfillmentService now calls `.Use(new ServiceDependencies().Process(process)...)` instead of repeating Reserve,
+Release, Submit and the stock lookup. The generator retains typed invocations from Execute; host binding checks
+exact canonical references. The stock lookup declares its entity/key/result recipe once beside its hosted-query
+contract. Public OrderDetails and ReservationAvailability selections remain explicit API roots with bounds;
+neither is falsely included in the fulfillment process's dependency closure. Separately declared services and raw
+references still support explicit bindings. No durable execution or new runtime capability is implied.

@@ -118,6 +118,16 @@ public sealed class ProcessContext
         where TResult : notnull =>
         throw SyntaxOnly();
 
+    /// <summary>Declares a point read with its explicit native entity attachment.</summary>
+    /// <typeparam name="TEntity">Entity state.</typeparam><typeparam name="TInput">Input.</typeparam><typeparam name="TResult">Result.</typeparam>
+    /// <param name="query">Exact query and point-read recipe.</param><param name="input">Portable invocation input.</param>
+    /// <param name="id">Optional node identity.</param><param name="nextRole">Continuation role.</param><param name="outputRole">Output role.</param>
+    /// <returns>A syntax-only query result.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if invoked at runtime.</exception>
+    public ProcessAwaitable<TResult> Query<TEntity, TInput, TResult>(EntityPointRead<TEntity, TInput, TResult> query,
+        TInput input, ExecutionNodeId? id = null, string nextRole = "next", string outputRole = "result")
+        where TEntity : class where TInput : notnull where TResult : notnull => throw SyntaxOnly();
+
     /// <summary>
     /// Declares an entity read represented by an exact Relation or Query definition and binds its result.
     /// </summary>
@@ -246,7 +256,7 @@ public sealed class ProcessContext
         ExecutionNodeId? id = null,
         string nextRole = "next",
         string outputRole = "result")
-        where TEntity : Entity =>
+        where TEntity : notnull =>
         throw SyntaxOnly();
 
     /// <summary>Invokes a typed no-input transition on the selected subject.</summary>

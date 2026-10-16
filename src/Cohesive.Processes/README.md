@@ -17,6 +17,25 @@ dotnet add package Cohesive.Analyzers
 `Cohesive.Analyzers` supplies the expression-first C# source generator. Add it as an analyzer reference when using
 project references.
 
+## One process per instance
+
+Tag a partial `ProcessModel<TInput, TResult>` subtype with `[Process(id: "orders/fulfill", revision: "1")]`
+and override `protected async ProcessTask<TResult> Execute(ProcessContext process, TInput input)`.
+The existing generator lowers this syntax-only method, supplies metadata/provenance, and the inherited
+`Definition` prepares once on first access. Constructor-supplied immutable declarations may be referenced
+through fields/properties; invocation input may not select an exact dependency. Complete construction before
+accessing Definition. Faulted preparation is cached. A process type must not also carry GenerateProcessDefinition.
+The class-level attribute declares recovery policy; ephemeral/durable runtime selection remains a separate binding.
+
+`Dependencies` retains typed transitions and explicit `EntityPointRead<TEntity,TInput,TResult>` recipes invoked
+by Execute, including discarded statement-form transition results. Both transition forms share attachment lowering.
+Dependencies use the same freeze-once AuthoringState lifetime as Definition, caching success or failure per instance. Native hosting can consume them
+through `IProcessDependencyReceiver`; no repository is resolved during generation. Raw references and arbitrary
+hosted queries remain explicit adapter obligations. The point-read recipe retains an existing hosted-query
+contract and explicit entity/key/result attachments; it does not infer cardinality from a method name.
+
+The standalone factory style below remains supported and uses the same lowering path.
+
 ## Author a Process
 
 Human-written Processes use ordinary asynchronous structure. Local node identities are deterministic conventions and

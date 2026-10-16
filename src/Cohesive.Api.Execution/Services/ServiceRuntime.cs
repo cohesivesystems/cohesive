@@ -34,6 +34,10 @@ public interface IServiceInvocationAuthorization
 /// <summary>Stable diagnostics shared by direct and process-hosted entity bindings.</summary>
 public static class ServiceBindingDiagnosticCodes
 {
+    /// <summary>A generated typed attachment differs from its canonical process reference.</summary>
+    public const string GeneratedDependencyMismatch = "services.binding.generatedDependencyMismatch";
+    /// <summary>One exact generated dependency has competing declaration or attachment authorities.</summary>
+    public const string GeneratedDependencyAmbiguous = "services.binding.generatedDependencyAmbiguous";
     /// <summary>The transition observation differs from entity authority.</summary>
     public const string ObservationMismatch = "services.binding.observationMismatch";
     /// <summary>The native repository cannot commit entity state and receipt atomically.</summary>

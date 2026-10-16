@@ -1,8 +1,9 @@
 # From implied creation to a multi-entity process
 
 `FulfillmentDomain` remains the state authority. Native Aspire owns resources; native PostgreSQL mappings
-attach to the same domain definitions. `FulfillmentProcess.Run` is authoring syntax compiled into canonical
-Process IR, not an async application coordinator. Its generated definition can be inspected and fingerprinted.
+attach to the same domain definitions. `FulfillmentProcess.Execute` is authoring syntax compiled into canonical
+Process IR, not an async application coordinator. Its class-level `[Process]` declaration generates an instance-owned, cached definition that can be inspected and fingerprinted.
+`FulfillmentApplication` supplies shared instances of the domain, queries, transitions and process.
 `FulfillmentService` uses the existing `Service.Define` builder to select canonical transitions, a typed stock lookup
 and relational queries once. `Definition.Bind(process, orders, inventory).Build(...)` prepares exact links, catalogs
 and the shared runtime at startup, matching repositories against the declared entity contracts. Receipt schema must be bound and validated before constructing receipt-capable repositories.
@@ -82,7 +83,7 @@ reconstitution, state checkpoints and read projections. Those are not inferred f
 
 ### Operator failure details
 
-`FulfillmentService.Definition.Bind(...).Build(...)` returns the prepared `HostedServiceProcess` directly; `Program` maps
+`model.Service.Definition.Bind(...).Build(...)` returns the prepared `HostedServiceProcess` directly; `Program` maps
 its single route through the native ASP.NET extension and opts into `AddCohesiveTransitionFailureLogging(fulfillment)`; route mapping has no
 subscription or lifetime wiring. The generic-host integration in `Cohesive.Host` subscribes at native host startup and releases the
 subscription on stop or disposal, including disposal without stopping. An unstarted host never subscribes.
@@ -101,7 +102,7 @@ revision-1 receipts are not reinterpreted as revision-2 evidence.
 
 ### Authoring and binding boundaries
 
-Start transitions at their entity: `FulfillmentDomain.Orders.Transition<SubmitOrderResult>(...)`
+Start transitions at their entity: `model.Domain.Orders.Transition<SubmitOrderResult>(...)`
 uses the exact declared order shape and the shared Unit input contract. Payload-bearing transitions use
 `Inventory.Transition<FulfillOrder, StockResult>(...)`. Both delegate to `TransitionAuthoring`; they do
 not introduce a second transition model or compile on invocation.
@@ -117,17 +118,18 @@ not be used as a substitute for authenticated per-user identities.
 
 Some explicit declarations carry meaning:
 
-- `FulfillmentStorage.Bind` places the full model in one database. `BindInventory` places only inventory
+- `model.Storage.Bind` places the full model in one database. `BindInventory` places only inventory
   in the remote database for composed execution. Sharing the mapping objects avoids schema duplication;
   registering all entities in the remote database would falsely describe its authority.
 - `ReservationDemandProjection` identifies the optional closed prefix used by composed availability
   execution. Details currently has no composed placement, so it needs no corresponding cut. The cut is
   placement advice, not a second query. A future named-subplan authoring seam should retain it with its
   exact query rather than infer it from node order or CLR result types.
-- `StockPointRead` is a native hosted observation. Its binding performs `TryGetEntity` for one SKU in
-  the receipt partition. Its name documents that implementation; the hosted-query IR currently declares
-  observation semantics, not a portable keyed-read operator. Removing the declaration would hide a
-  process dependency. The subsequent reserve transition remains the authority on stock availability.
+- `StockPointRead` is an `EntityPointRead` attaching the existing observational query to inventory,
+  an SKU selector and an absence-aware result projection. The generator retains it because Execute invokes it.
+  `ServiceDependencies.Process(process)` supplies its binding and the invoked transitions automatically.
+  The native lookup uses the repository's trusted partition; the reserve transition remains authoritative.
+  Key/result delegates remain explicit host code, not portable keyed-read IR.
 - `Provenance` attributes generated process/query/service artifacts to their producer and source. It is
   not runtime configuration. Convention-derived provenance can reduce authoring, but must still be
   materialized in those artifacts rather than dropped.
@@ -135,7 +137,7 @@ Some explicit declarations carry meaning:
 Aspire association selection sources can default to a deterministic reference, but this example retains
 its real `Source` on both associations. Native project metadata supplies only .NET project execution.
 
-`OrdersApp.StorageQueries` is derived by `Bindings.PrepareService(FulfillmentService.Definition, ...)`.
+`ordersApp.StorageQueries` is derived by `Bindings.PrepareService(model.Service.Definition, ...)`.
 The selected query identities, revisions, bounds and consistency live on the service registration, not in a second
 AppHost list. The optional `Cohesive.Adapters.Postgres.Services` integration uses the same offline mappings and native compiler
 as the worker; the returned capabilities drive Infra requirements. Exact required, provenance and binding

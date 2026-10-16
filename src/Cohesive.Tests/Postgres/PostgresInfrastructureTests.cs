@@ -17,8 +17,8 @@ public sealed class PostgresInfrastructureTests
     public sealed record Row(string Id);
     static readonly DomainEntity<Item> Entity = new DomainModelBuilder().Entity<Item>("test/item");
     static PostgresPersistenceBindings Bindings(string database = "orders", string table = "items") =>
-        new PostgresPersistenceBindings(new(database)).Entity(Entity, PostgresEntityRepositoryMapping.For(Entity)
-            .Table("public", table).Identity(item => item.Id, "id").Partition(item => item.Partition, "partition").Build());
+        PostgresPersistenceBindings.Define(new(database), bindings => bindings.Entity(Entity, PostgresEntityRepositoryMapping.For(Entity)
+            .Table("public", table).Identity(item => item.Id, "id").Partition(item => item.Partition, "partition").Build()));
 
     static RelationQuery<string, Row[]> Query(string id = "query/items")
     {
@@ -75,7 +75,7 @@ public sealed class PostgresInfrastructureTests
     [Fact]
     public void Missing_mapping_and_mismatched_runtime_fail_before_io()
     {
-        Assert.Throws<InvalidOperationException>(() => new PostgresPersistenceBindings(new("orders")).Prepare(Query().CompilationRequest));
+        Assert.Throws<InvalidOperationException>(() => PostgresPersistenceBindings.Define(new("orders"), _ => { }).Prepare(Query().CompilationRequest));
         using var data = NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
         Assert.Throws<ArgumentException>(() => Bindings().Bind(new(new("other"), data, "test")));
     }
@@ -92,15 +92,13 @@ public sealed class PostgresInfrastructureTests
     }
 
     [Fact]
-    public void Runtime_binding_is_a_snapshot_of_offline_mappings()
+    public void Runtime_binding_retains_frozen_offline_mappings()
     {
-        var bindings = new PostgresPersistenceBindings(new("orders"));
+        var bindings = Bindings();
         using var data = NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
         var runtime = bindings.Bind(new(new("orders"), data, "test"));
-        bindings.Entity(Entity, PostgresEntityRepositoryMapping.For(Entity).Table("public", "items")
-            .Identity(item => item.Id, "id").Partition(item => item.Partition, "partition").Build());
-        Assert.Throws<InvalidOperationException>(() => runtime.Repository(Entity));
-        Assert.NotNull(bindings.Prepare(Query().CompilationRequest));
+        Assert.Throws<InvalidOperationException>(() => bindings.Entity(Entity, bindings.Mapping(Entity)));
+        Assert.NotNull(runtime.Repository(Entity));
     }
     [Fact]
     public void Requirement_identity_is_explicit_and_independent_of_plan_compilation()

@@ -10,6 +10,50 @@ namespace Cohesive.Tests.Analyzers;
 /// <summary>Compile-time coverage for C# Process computation-expression generation.</summary>
 public sealed class ProcessComputationGeneratorCompileTimeTests
 {
+    [Fact]
+    public void Type_tag_generates_an_instance_definition_using_instance_declarations()
+    {
+        var source = """
+            using Cohesive.Execution;
+            using Cohesive.Processes.Authoring;
+            [Process(id: "test/instance", revision: "1")]
+            public sealed partial class InstanceProcess : ProcessModel<string, string>
+            {
+                readonly ExecutionDefinitionReference query;
+                public InstanceProcess(ExecutionDefinitionReference query) { this.query = query; }
+                protected override async ProcessTask<string> Execute(ProcessContext process, string input)
+                {
+                    var result = await process.Query<string>(query, input);
+                    return result;
+                }
+            }
+            """;
+        var result = RunGenerator(CreateCompilation(source), out var compilation);
+        Assert.Empty(result.Diagnostics.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error));
+        Assert.Empty(compilation.GetDiagnostics().Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error));
+        Assert.Contains("CreateDefinition() => Define(Metadata)", result.Results.Single().GeneratedSources.Single().SourceText.ToString());
+    }
+
+    [Theory]
+    [InlineData("[Process(id: \"test\", revision: \"1\", recovery: (Cohesive.Processes.IR.ProcessRecoveryPolicy)99)]")]
+    [InlineData("[Process(id: \"\", revision: \"1\")]")]
+    [InlineData("[Process(id: \"test\", revision: \"\")]")]
+    [InlineData("[Process(id: \"test\", revision: \"1\")][GenerateProcessDefinition(nameof(Execute))]")]
+    public void Type_tag_rejects_invalid_or_ambiguous_identity(string attribute)
+    {
+        var source = $$"""
+            using Cohesive.Processes.Authoring;
+            {{attribute}}
+            public sealed partial class InvalidProcess : ProcessModel<string, string>
+            {
+                protected override async ProcessTask<string> Execute(ProcessContext process, string input) { return input; }
+            }
+            """;
+        var result = RunGenerator(CreateCompilation(source), out _);
+        Assert.Contains(result.Diagnostics, d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+        Assert.All(result.Results, generator => Assert.Null(generator.Exception));
+    }
+
     [Theory]
     [InlineData("return process.Constant(input);", "cannot depend on runtime bindings")]
     [InlineData("var result = await process.TransitionWithReceipt<bool, string>(Transition, input, input, receiptRole: \"result\"); return result.Receipt;", "distinct binding roles")]

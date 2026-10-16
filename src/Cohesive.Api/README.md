@@ -1,5 +1,9 @@
 # Cohesive.Api
 
+## Instance composition
+
+`ApiModel` optionally groups typed endpoint properties on an instance. Author with the protected `Endpoints` builder; inherited `Definition` freezes and caches the contract. Existing `ApiDefinition.Combine` composes independent contract contributions and rejects duplicate endpoint IDs. Runtime implementation composition remains separate.
+
 Semantic API declaration primitives for describing operations, endpoints, pagination, scope policies, and generated API artifacts.
 
 This package is host-neutral. HTTP bindings describe portable API intent; they do not reference ASP.NET Core or map

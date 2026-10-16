@@ -1,3 +1,4 @@
+using Cohesive.Prelude;
 using Cohesive.Model;
 using Cohesive.Execution;
 using Cohesive.Transitions.Model;
@@ -23,9 +24,11 @@ public sealed class ApiBuilder
     readonly List<ApiEndpoint> endpoints = [];
     readonly HashSet<ApiEndpointId> endpointIds = [];
     readonly string? name;
+    readonly AuthoringState<ApiDefinition> definition;
 
     internal ApiBuilder(string? name = null)
     {
+        definition = new(() => new ApiDefinition(endpoints));
         this.name = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
     }
 
@@ -60,12 +63,14 @@ public sealed class ApiBuilder
     internal ApiEndpoint Add(ApiOperation operation)
     {
         ArgumentNullException.ThrowIfNull(operation);
-        var endpoint = new ApiEndpoint(operation);
-        if (!endpointIds.Add(endpoint.Id))
-            throw new InvalidOperationException($"API definition already contains endpoint '{endpoint.Id}'.");
-
-        endpoints.Add(endpoint);
-        return endpoint;
+        return definition.Edit(() =>
+        {
+            var endpoint = new ApiEndpoint(operation);
+            if (!endpointIds.Add(endpoint.Id))
+                throw new InvalidOperationException($"API definition already contains endpoint '{endpoint.Id}'.");
+            endpoints.Add(endpoint);
+            return endpoint;
+        });
     }
 
     internal ApiEndpointId CreateEndpointId(string operationName, EntityTypeName? entity)
@@ -83,6 +88,9 @@ public sealed class ApiBuilder
     /// Builds the immutable API definition.
     /// </summary>
     public ApiDefinition Build() => new(endpoints);
+
+    internal ApiDefinition Freeze() => definition.Value;
+
 }
 
 /// <summary>

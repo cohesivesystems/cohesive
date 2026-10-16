@@ -1,3 +1,4 @@
+using Cohesive.Model.Serialization;
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -35,6 +36,50 @@ public sealed class ServiceDependencies
 
     /// <summary>Explicit relational query roots selected for this service's transports.</summary>
     public ImmutableArray<ServiceQuerySelection> Queries { get; }
+
+    /// <summary>Includes typed attachments generated from a process's actual direct invocations.</summary>
+    /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process result.</typeparam>
+    /// <param name="model">Completed process authoring instance.</param>
+    /// <returns>A new registration set; compilation and repository resolution remain deferred to binding.</returns>
+    /// <exception cref="ArgumentNullException">Model is null.</exception>
+    /// <exception cref="ServiceBindingValidationException">An attachment differs from the canonical graph, competing recipes claim one exact dependency.</exception>
+    /// <exception cref="ArgumentException">An exact dependency is already explicitly registered.</exception>
+    /// <remarks>Raw exact references and arbitrary hosted queries require explicit bindings by final host binding, in any registration order. No handler is
+    /// inferred from a query name. Independently declared services can use this method or register each binding.</remarks>
+    public ServiceDependencies Process<TInput, TResult>(ProcessModel<TInput, TResult> model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var required = Required(model.Definition.Definition);
+        var contributed = new Dictionary<ExecutionDefinitionReference, ProcessDependency>();
+        var receiver = new DependencyReceiver(this);
+        foreach (var dependency in model.Dependencies)
+        {
+            var reference = dependency.Reference;
+            if (!required.Transitions.Contains(reference) && !required.Queries.Contains(reference))
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.GeneratedDependencyMismatch,
+                    "A generated attachment does not match an exact dependency in the canonical process.", "/bindings/process/dependencies");
+            if (contributed.TryGetValue(reference, out var previous))
+            {
+                if (!previous.HasSameAuthority(dependency))
+                    throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.GeneratedDependencyAmbiguous,
+                        "One exact dependency has more than one declaration or host recipe.", "/bindings/process/dependencies");
+                continue;
+            }
+            contributed.Add(reference, dependency);
+            dependency.Contribute(receiver);
+        }
+        return receiver.Dependencies;
+    }
+
+    sealed class DependencyReceiver(ServiceDependencies dependencies) : IProcessDependencyReceiver
+    {
+        internal ServiceDependencies Dependencies { get; private set; } = dependencies;
+        public void Transition<TEntity, TInput, TResult>(Transition<TEntity, TInput, TResult> transition) where TEntity : notnull =>
+            Dependencies = Dependencies.Transition(transition);
+        public void PointRead<TEntity, TInput, TResult>(EntityPointRead<TEntity, TInput, TResult> read)
+            where TEntity : class where TInput : notnull where TResult : notnull =>
+            Dependencies = Dependencies.Lookup(read.Query, read.Entity, read.Key, read.Result);
+    }
 
     /// <summary>Registers canonical transition behavior, without choosing a repository manually.</summary>
     /// <typeparam name="TEntity">State projection.</typeparam><typeparam name="TInput">Command projection.</typeparam><typeparam name="TResult">Outcome projection.</typeparam>
@@ -107,20 +152,62 @@ public sealed class ServiceDependencies
         return new(transitions, lookups, Queries.Add(new(reference, query.CompilationRequest, maximumRows, maximumBytes, consistency)));
     }
 
+    // Shared preparation slots retain successful projections only for the definition's lifetime.
+    static readonly WeakPreparationCache<ProcessDefinition, RequiredDependencies> requiredByDefinition = new();
+    static RequiredDependencies Required(ProcessDefinition definition) =>
+        requiredByDefinition.Get(definition, static value => new RequiredDependencies(value));
+
+    sealed class RequiredDependencies
+    {
+        internal ImmutableArray<ExecutionDefinitionReference> Transitions { get; }
+        internal ImmutableArray<ExecutionDefinitionReference> Queries { get; }
+        internal RequiredDependencies(ProcessDefinition definition)
+        {
+            var transitions = ImmutableHashSet.CreateBuilder<ExecutionDefinitionReference>();
+            var queries = ImmutableHashSet.CreateBuilder<ExecutionDefinitionReference>();
+            foreach (var node in definition.Nodes)
+            {
+                if (node is InvokeTransitionProcessNode transition) transitions.Add(transition.Transition);
+                if (node is EvaluateRelationProcessNode query) queries.Add(query.Relation);
+            }
+            var order = Comparer<ExecutionDefinitionReference>.Create(ExecutionDefinitionReference.CompareCanonical);
+            Transitions = transitions.OrderBy(reference => reference, order).ToImmutableArray();
+            Queries = queries.OrderBy(reference => reference, order).ToImmutableArray();
+        }
+    }
+
+    void RequireDependencies(RequiredDependencies required)
+    {
+        var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>();
+        Collect(required.Transitions, transitions.ContainsKey, ServiceBindingDiagnosticCodes.TransitionMissing, "transitions");
+        Collect(required.Queries, lookups.ContainsKey, ServiceBindingDiagnosticCodes.QueryMissing, "queries");
+        if (diagnostics.Count != 0) throw new ServiceBindingValidationException(new(diagnostics.ToImmutable()));
+
+        void Collect(IEnumerable<ExecutionDefinitionReference> references, Func<ExecutionDefinitionReference, bool> registered,
+            string code, string kind)
+        {
+            foreach (var reference in references)
+            {
+                if (registered(reference)) continue;
+                var exact = $"{reference.DefinitionId.Value}@{reference.RevisionId.Value} [{reference.Fingerprint.Algorithm}/{reference.Fingerprint.Canonicalization}:{reference.Fingerprint.Value}]";
+                diagnostics.Add(new(code, DiagnosticSeverity.Error, $"Missing exact dependency: {exact}.",
+                    $"/bindings/{kind}/{Uri.EscapeDataString(exact)}"));
+            }
+        }
+    }
+
     internal void Apply<TInput, TResult>(ServiceProcessHostBuilder<TInput, TResult> host, Process<TInput, TResult> process,
         Func<ValueContract, IEntityRepository> resolve, InteractionContractCatalog contracts)
     {
-        foreach (var reference in process.Definition.Nodes.OfType<InvokeTransitionProcessNode>().Select(node => node.Transition).Distinct())
+        var required = Required(process.Definition);
+        RequireDependencies(required);
+        foreach (var reference in required.Transitions)
         {
-            if (!transitions.TryGetValue(reference, out var create))
-                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.TransitionMissing, "An exact transition dependency is not registered.", "/bindings/transitions");
-            host.Transition(create(resolve, contracts));
+            host.Transition(transitions[reference](resolve, contracts));
         }
-        foreach (var reference in process.Definition.Nodes.OfType<EvaluateRelationProcessNode>().Select(node => node.Relation).Distinct())
+        foreach (var reference in required.Queries)
         {
-            if (!lookups.TryGetValue(reference, out var create))
-                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryMissing, "An exact hosted query dependency is not registered.", "/bindings/queries");
-            var binding = create(resolve);
+            var binding = lookups[reference](resolve);
             host.Query(binding.Link, binding.Handler);
         }
     }

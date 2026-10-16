@@ -12,27 +12,29 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class NestedResultTests
 {
-    static NestedQueryResultAssembly Assembly => ((QueryDefinition)FulfillmentQueries.OrderDetails.CompilationRequest.DefinitionDocument.Definition).Assembly!;
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+
+    static NestedQueryResultAssembly Assembly => ((QueryDefinition)Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.Definition).Assembly!;
 
     [Fact]
     public void Single_declaration_handles_absence_distinct_children_ordering_and_conflicts()
     {
-        Assert.Null(FulfillmentQueries.OrderDetails.AssembleResult([]));
-        Assert.Empty(FulfillmentQueries.OrderDetails.AssembleResult([Row(null)])!.Reservations);
+        Assert.Null(Model.Queries.OrderDetails.AssembleResult([]));
+        Assert.Empty(Model.Queries.OrderDetails.AssembleResult([Row(null)])!.Reservations);
         var row = Row("b");
-        var result = FulfillmentQueries.OrderDetails.AssembleResult([row, Row("a"), row])!;
+        var result = Model.Queries.OrderDetails.AssembleResult([row, Row("a"), row])!;
         Assert.Equal("order", result.Id);
         Assert.Equal(new[] { "a", "b" }, result.Reservations.Select(child => child.Id));
         Assert.All(result.Reservations, child => Assert.Equal(8, child.AvailableStock));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult([row, Row("b", quantity: 99)]));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult([row, Row("b", parent: "another")]));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult([row, Row("a", status: "Submitted")]));
+        Assert.Throws<InvalidOperationException>(() => Model.Queries.OrderDetails.AssembleResult([row, Row("b", quantity: 99)]));
+        Assert.Throws<InvalidOperationException>(() => Model.Queries.OrderDetails.AssembleResult([row, Row("b", parent: "another")]));
+        Assert.Throws<InvalidOperationException>(() => Model.Queries.OrderDetails.AssembleResult([row, Row("a", status: "Submitted")]));
     }
 
     [Fact]
     public void Assembly_is_persisted_fingerprinted_and_rejects_unknown_slots()
     {
-        var document = FulfillmentQueries.OrderDetails.CompilationRequest.DefinitionDocument;
+        var document = Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument;
         var roundtrip = RelationQueryJsonSerializer.Deserialize(RelationQueryJsonSerializer.Serialize(document));
         Assert.Equal(document.DefinitionFingerprint, roundtrip.DefinitionFingerprint);
         var definition = (QueryDefinition)roundtrip.Definition;
@@ -48,7 +50,7 @@ public sealed class NestedResultTests
     [Fact]
     public void Assembly_rejects_incomplete_shapes_invalid_scalars_and_cancellation()
     {
-        var request = FulfillmentQueries.OrderDetails.CompilationRequest;
+        var request = Model.Queries.OrderDetails.CompilationRequest;
         var definition = (QueryDefinition)request.DefinitionDocument.Definition;
         var invalid = definition with { Assembly = Assembly with { Fields = [Assembly.Fields[0]] } };
         var compilation = RelationQueryStaticCompiler.Compile(new(RelationQueryDocument.FromDefinition(invalid),
@@ -56,9 +58,9 @@ public sealed class NestedResultTests
         Assert.False(compilation.IsSuccessful);
         Assert.Contains(compilation.Diagnostics, diagnostic => diagnostic.Code == "relationQuery.query.assemblyInvalid");
         Assert.Throws<OperationCanceledException>(() => NestedQueryResultAssembler.Assemble(Assembly, [], new(true)));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult(
+        Assert.Throws<InvalidOperationException>(() => Model.Queries.OrderDetails.AssembleResult(
             [Row("a").WithField(Assembly.Fields[1].Source, ObservationValue.Null)]));
-        Assert.Throws<InvalidOperationException>(() => FulfillmentQueries.OrderDetails.AssembleResult(
+        Assert.Throws<InvalidOperationException>(() => Model.Queries.OrderDetails.AssembleResult(
             [Row("a").WithField(Assembly.Identity, ObservationValue.FromObject(42))]));
     }
 
@@ -78,10 +80,10 @@ public sealed class NestedResultTests
         {
             var author = RelationQuery.Expression();
             var id = author.Parameter<string>("id");
-            var source = useNodes ? author.Source(FulfillmentDomain.Orders)
-                : author.Source(FulfillmentDomain.Orders.QueryShape(author));
+            var source = useNodes ? author.Source(Model.Domain.Orders)
+                : author.Source(Model.Domain.Orders.QueryShape(author));
             var orders = author.Where(source, order => order.Id == id.Value);
-            var reservations = author.TraverseInverse(orders, FulfillmentDomain.ReservationOrder);
+            var reservations = author.TraverseInverse(orders, Model.Domain.ReservationOrder);
             var start = author.SingleOrDefault<OrderHeader>();
             var result = useNodes ? start.From(reservations, orders, order => order.Id)
                 : start.From(reservations, orders.Binding, order => order.Id);
@@ -105,12 +107,12 @@ public sealed class NestedResultTests
         Assert.Equal(Assembly.Identity, Assembly.Fields.Single(field => field.Target.ToString() == "Id").Source);
         var child = Assert.Single(Assembly.Collections);
         Assert.Equal(child.Identity, child.Fields.Single(field => field.Target.ToString() == "Id").Source);
-        var definition = (QueryDefinition)FulfillmentQueries.OrderDetails.CompilationRequest.DefinitionDocument.Definition;
+        var definition = (QueryDefinition)Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.Definition;
         Assert.Equal(6, definition.Body.Nodes.OfType<ProjectQueryNode>().Single().Assignments.Length);
 
         var author = RelationQuery.Expression();
-        var order = author.Source(FulfillmentDomain.Orders);
-        var foreign = RelationQuery.Expression().Source(FulfillmentDomain.Orders);
+        var order = author.Source(Model.Domain.Orders);
+        var foreign = RelationQuery.Expression().Source(Model.Domain.Orders);
         Assert.Throws<ArgumentException>(() => author.SingleOrDefault<OrderHeader>().From(order, foreign, value => value.Id));
         var result = author.SingleOrDefault<OrderHeader>().From(order, order, value => value.Id);
         Assert.Throws<ArgumentException>(() => result.Field(header => header.Status, foreign, value => value.Status));
