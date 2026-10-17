@@ -1,0 +1,12 @@
+[
+  {
+    "assembly": "Cohesive.Storage.dll",
+    "control_sha256": "264a758adf6fe48b8055dc4f80ebace73caa69c2ba82ad2e2a90aef347e14934",
+    "candidate_sha256": "d7bb9d4365d9ad0d2bc25b775aad667f72b3cf62e21f3fb93079979f38308ab9"
+  },
+  {
+    "assembly": "Cohesive.dll",
+    "control_sha256": "34632ff813bccc65ad658bb62e1ab38ed7a2319f363fdb0d457b859204892dba",
+    "candidate_sha256": "51a6e3bda2ec4ce74f7720c34e663e1bfc1330d21bffcce9f9d81be28bea9bef"
+  }
+]
