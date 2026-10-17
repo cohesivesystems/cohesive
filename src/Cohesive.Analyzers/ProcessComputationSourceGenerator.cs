@@ -5236,7 +5236,11 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             Dictionary<SyntaxNode, SyntaxNode> replacements = [];
             foreach (var candidate in SelfAndDescendants(operation))
             {
-                if (candidate is IParameterReferenceOperation)
+                if (candidate is IParameterReferenceOperation parameter
+                    && !(parameter.Parameter.ContainingSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor } constructor
+                        && SymbolEqualityComparer.Default.Equals(constructor.ContainingType, method.ContainingType)
+                        && parameter.Parameter.DeclaringSyntaxReferences.Any(reference =>
+                            reference.GetSyntax() is ParameterSyntax { Parent.Parent: TypeDeclarationSyntax })))
                 {
                     expression = string.Empty;
                     return StatementFailure(

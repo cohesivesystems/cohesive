@@ -155,25 +155,15 @@ public sealed class InventoryTransitions
 }
 
 /// <summary>Canonical multi-entity sequence. This syntax is compiled into Process IR, never executed as C#.</summary>
+/// <param name="domain">Inventory authority used by the native point-read contract.</param>
+/// <param name="inventory">Stock transitions.</param>
+/// <param name="orders">Submission transition.</param>
 [Process(id: "fulfillment/submit", revision: "5")]
-public sealed partial class FulfillmentProcess : ProcessModel<FulfillOrder, FulfillmentResult>
+public sealed partial class FulfillmentProcess(
+    FulfillmentDomain domain,
+    InventoryTransitions inventory,
+    OrderTransitions orders) : ProcessModel<FulfillOrder, FulfillmentResult>
 {
-    readonly FulfillmentDomain domain;
-
-    readonly InventoryTransitions inventory;
-    readonly OrderTransitions orders;
-
-    /// <summary>Attaches immutable declarations before lazy process lowering.</summary>
-    /// <param name="domain">Inventory authority used by the native point-read contract.</param>
-    /// <param name="inventory">Stock transitions.</param>
-    /// <param name="orders">Submission transition.</param>
-    public FulfillmentProcess(FulfillmentDomain domain, InventoryTransitions inventory, OrderTransitions orders)
-    {
-        this.inventory = inventory;
-        this.orders = orders;
-        this.domain = domain;
-    }
-
     /// <inheritdoc />
     protected override async ProcessTask<FulfillmentResult> Execute(ProcessContext process, FulfillOrder input)
     {
