@@ -1,0 +1,20 @@
+{
+  "qualification": "source-qualified two-assembly candidate, not a published package",
+  "control": "public Cohesive alpha.144",
+  "cohesive_base": "dc7863c216d71212bad8bfdbda94f94059289326",
+  "ari_commit": "ae0a336f2da95008b01b81d827fed7586eb5f29b",
+  "runtime_patch_sha256": "607e5012a7c08b1b70c5c837e1c40441837baccba26641451a689341c526000c",
+  "harness_sha256": "be32651cdde8834d050a0471ee31952421f0d5543c7f2307ea95039df7239489",
+  "candidate_harness_identical": true,
+  "environment": {
+    "cpu": "Apple M5 Max arm64",
+    "os": "macOS 27.0.1",
+    "sdk": "10.0.402",
+    "runtime": "10.0.13",
+    "configuration": "Release"
+  },
+  "counter_runs": "five alternating fresh-process pairs per source; cold plus second invocation",
+  "trace_runs": "three fresh candidate processes per source, both phases",
+  "overlap": "no task build/test/benchmark overlapped counters or traces",
+  "raw_traces": "/tmp/entity-transition-fingerprint-profile/traces"
+}

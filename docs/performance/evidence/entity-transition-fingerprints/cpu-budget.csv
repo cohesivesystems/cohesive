@@ -1,0 +1,49 @@
+source,phase,category,managed_samples,share_of_managed_samples_pct
+004010,cold,Catalog authoring,187,5.32
+004010,cold,Catalog/context,20,0.57
+004010,cold,Commit/checkpoint hash,12,0.34
+004010,cold,EDI provenance,1,0.03
+004010,cold,Hosted decode,351,9.98
+004010,cold,Observation projection,178,5.06
+004010,cold,Other,2044,58.12
+004010,cold,Other EDI compilation,81,2.3
+004010,cold,Protocol JSON,220,6.26
+004010,cold,Protocol hashes,71,2.02
+004010,cold,Query physical planning,77,2.19
+004010,cold,Query realization hashes,25,0.71
+004010,cold,Storage content hashes,250,7.11
+004010,repeated,Catalog authoring,10,1.52
+004010,repeated,Catalog/context,6,0.91
+004010,repeated,Hosted decode,104,15.76
+004010,repeated,Observation projection,118,17.88
+004010,repeated,Other,193,29.24
+004010,repeated,Other EDI compilation,28,4.24
+004010,repeated,Protocol JSON,66,10.0
+004010,repeated,Protocol hashes,61,9.24
+004010,repeated,Query physical planning,7,1.06
+004010,repeated,Query realization hashes,4,0.61
+004010,repeated,Storage content hashes,63,9.55
+005030,cold,Catalog authoring,173,5.05
+005030,cold,Catalog/context,22,0.64
+005030,cold,Commit/checkpoint hash,13,0.38
+005030,cold,EDI provenance,1,0.03
+005030,cold,Hosted decode,338,9.87
+005030,cold,Observation projection,187,5.46
+005030,cold,Other,1937,56.54
+005030,cold,Other EDI compilation,87,2.54
+005030,cold,Protocol JSON,248,7.24
+005030,cold,Protocol hashes,81,2.36
+005030,cold,Query physical planning,80,2.34
+005030,cold,Query realization hashes,29,0.85
+005030,cold,Storage content hashes,230,6.71
+005030,repeated,Catalog authoring,9,1.15
+005030,repeated,Catalog/context,6,0.77
+005030,repeated,Hosted decode,119,15.18
+005030,repeated,Observation projection,128,16.33
+005030,repeated,Other,249,31.76
+005030,repeated,Other EDI compilation,30,3.83
+005030,repeated,Protocol JSON,80,10.2
+005030,repeated,Protocol hashes,70,8.93
+005030,repeated,Query physical planning,9,1.15
+005030,repeated,Query realization hashes,2,0.26
+005030,repeated,Storage content hashes,82,10.46

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
+using Cohesive.Model;
 using Cohesive.Prelude;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Execution;
@@ -231,7 +232,6 @@ public sealed record EntityTransitionOperationRequest
         Subject = subject ?? throw new ArgumentNullException(nameof(subject));
         Input = RequireMaterialized(input, nameof(input), "Transition input");
         Fingerprint = EntityTransitionOperationFingerprints.Request(this);
-        IntentFingerprint = EntityTransitionOperationFingerprints.Intent(this);
     }
 
     /// <summary>Exact Process operation occurrence.</summary>
@@ -258,9 +258,10 @@ public sealed record EntityTransitionOperationRequest
     /// <remarks>
     /// Entity-creation repositories use this derived identity only after proving that the subject was created by
     /// the atomic Transition-receipt protocol. It is not general upsert or update-replay authority.
+    /// Prepared on demand for creation replay or persistence, once per live immutable request; failures are retryable.
     /// </remarks>
     [JsonIgnore]
-    public ProcessCommitFingerprint IntentFingerprint { get; }
+    public ProcessCommitFingerprint IntentFingerprint => EntityTransitionOperationFingerprints.Intent(this);
 
     /// <summary>Input-free exact receipt locator derived from this canonical request.</summary>
     [JsonIgnore]
@@ -399,7 +400,6 @@ public sealed record EntityTransitionOperationCommit
         SubjectCondition = subjectCondition;
         DecisionKind = decisionKind;
         PublicationAuthority = EntityTransitionEmissionPublicationAuthority.ProcessOutbox;
-        Fingerprint = EntityTransitionOperationFingerprints.Commit(this);
     }
 
     /// <summary>Exact replay lookup identity.</summary>
@@ -428,7 +428,9 @@ public sealed record EntityTransitionOperationCommit
     public EntityTransitionEmissionPublicationAuthority PublicationAuthority { get; }
 
     /// <summary>Canonical fingerprint of the complete atomic commit intent.</summary>
-    public ProcessCommitFingerprint Fingerprint { get; }
+    /// <remarks>Prepared on demand for content comparison or persistence, once per live immutable commit.
+    /// Fresh fenced commits returning this same object need no full-content digest. Failed preparation is retryable.</remarks>
+    public ProcessCommitFingerprint Fingerprint => EntityTransitionOperationFingerprints.Commit(this);
 
     static void ValidateEmissions(
         EntityTransitionOperationRequest request,
@@ -912,6 +914,10 @@ public static class EntityTransitionOperationRepositoryExtensions
 static class EntityTransitionOperationFingerprints
 {
     static readonly System.Text.Json.JsonSerializerOptions EntityOptions = EntityStorageJson.CreateOptions();
+    // Derived evidence stays outside record equality and is retained only while its immutable owner is live.
+    // The shared preparation primitive publishes successes once and leaves failed factories retryable.
+    static readonly WeakPreparationCache<EntityTransitionOperationRequest, ProcessCommitFingerprint> Intents = new();
+    static readonly WeakPreparationCache<EntityTransitionOperationCommit, ProcessCommitFingerprint> Commits = new();
     internal static ProcessCommitFingerprint Request(EntityTransitionOperationRequest request) =>
         ProcessStorageContentFingerprints.Value(new RequestContent(
             request.Operation,
@@ -921,24 +927,24 @@ static class EntityTransitionOperationFingerprints
             request.Input));
 
     internal static ProcessCommitFingerprint Intent(EntityTransitionOperationRequest request) =>
-        ProcessStorageContentFingerprints.Value(new IntentContent(
-            request.AuthorityScope,
-            request.Transition,
-            request.Subject,
-            request.Input));
+        Intents.Get(request, static owner => ProcessStorageContentFingerprints.Value(new IntentContent(
+            owner.AuthorityScope,
+            owner.Transition,
+            owner.Subject,
+            owner.Input)));
 
     internal static ProcessCommitFingerprint Commit(EntityTransitionOperationCommit commit) =>
-        ProcessStorageContentFingerprints.Value(new CommitContent(
-            commit.Request,
-            commit.Write,
-            commit.SubjectCondition == EntityTransitionSubjectCondition.MustExist
+        Commits.Get(commit, static owner => ProcessStorageContentFingerprints.Value(new CommitContent(
+            owner.Request,
+            owner.Write,
+            owner.SubjectCondition == EntityTransitionSubjectCondition.MustExist
                 ? null
-                : commit.SubjectCondition,
-            commit.DecisionKind,
-            commit.Result,
-            commit.GuaranteeDemands,
-            commit.Evidence,
-            commit.PublicationAuthority), EntityOptions, profile: "sha256-entity-v2");
+                : owner.SubjectCondition,
+            owner.DecisionKind,
+            owner.Result,
+            owner.GuaranteeDemands,
+            owner.Evidence,
+            owner.PublicationAuthority), EntityOptions, profile: "sha256-entity-v2"));
 
     sealed record RequestContent(
         ProcessOperationOccurrence Operation,
