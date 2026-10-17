@@ -34,20 +34,38 @@ through `IProcessDependencyReceiver`; no repository is resolved during generatio
 hosted queries remain explicit adapter obligations. The point-read recipe retains an existing hosted-query
 contract and explicit entity/key/result attachments; it does not infer cardinality from a method name.
 
-For the common key-based read, use the entity declaration directly:
+For the common key-based read, use the entity declaration at the process call site:
 
 ```csharp
-readStock = domain.Inventory.PointRead(
-    id: new("fulfillment/stock"), revision: new("2"),
-    result: item => new InventoryAvailability(item is not null, item?.Available ?? 0));
-// Inside the generated process:
-var stock = await process.Query(readStock, input.Sku);
+var stock = await process.PointRead(domain.Inventory, input.Sku,
+    policy: new ProcessReadPolicy(timeout: TimeSpan.FromSeconds(2)));
+if (stock.Entity == null)
+    return new FulfillmentResult("Rejected", "Inventory does not exist.");
 ```
 
-The library derives the hosted-query configuration, implementation reference and producer provenance.
-The explicit revision covers the result projection; change it when behavior changes. The projection
-handles absence explicitly. Hosting resolves the repository and trusted partition through the existing
-generated dependency path, without embedding persistence in the process.
+No read field, result delegate, or hand-authored query metadata is needed. The library derives a stable
+entity-named read identity and a revision from the canonical entity definition plus read protocol version.
+Preparation is cached for the entity handle's lifetime. A concrete `EntityPointReadResult<T>` envelope
+carries nullable `Entity`, so absence is a successful observation, not an exception or retry condition.
+Projection and absence handling are ordinary authored process expressions. The generator retains the
+exact read dependency; hosting still checks repository identity and its fixed trusted partition.
+Independently declared hosted-query attachments remain available through `EntityPointRead`.
+
+`ProcessReadPolicy` is canonical call-site data. Its timeout is a **total cooperative deadline** across
+all attempts and delays. The asynchronous interpreter uses the operation context's time provider and
+cancellation, and awaits host quiescence. It does not abandon ongoing work or promise forced termination.
+A policy with `maxAttempts > 1` must explicitly list `retryableFailureCodes`; only returned structured
+adapter failures with those codes are retried. For example, a binding that classifies temporary unavailability
+as `inventory.busy` can select that code with a finite budget and `retryDelay`. Exceptions, cancellation,
+and unselected failures propagate without retry. Repository SDK exceptions are not automatically classified.
+Retries never apply to transitions or requests merely because they follow this read.
+
+The final observation is materialized once per occurrence during activation re-entry. Retry counters and
+delays are **activation-local**, not persisted restart recovery. Durable retry progress remains the durable
+Request machinery's responsibility. Synchronous evidence ports must explicitly declare policy support
+(or supply policy-compliant retained evidence); otherwise the plan is rejected before any host operation.
+The ephemeral target's usual no-automatic-retry guarantee still applies to mutations; explicit read policies
+are the bounded observational exception.
 
 The standalone factory style below remains supported and uses the same lowering path.
 

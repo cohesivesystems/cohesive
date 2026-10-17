@@ -14,6 +14,7 @@ namespace Cohesive.Processes.Compilation;
 public sealed class CompiledProcessPlan
 {
     readonly IReadOnlyDictionary<ExecutionNodeId, CanonicalProcessNode> nodes;
+    internal bool RequiresReadPolicy { get; }
 
     internal CompiledProcessPlan(
         ExecutionDefinitionDocument document,
@@ -24,6 +25,7 @@ public sealed class CompiledProcessPlan
     {
         Document = document;
         Definition = definition;
+        RequiresReadPolicy = definition.Nodes.Any(node => node is EvaluateRelationProcessNode { Policy: not null });
         ValidationContext = validationContext;
         Options = options;
         EffectSummary = effectSummary;

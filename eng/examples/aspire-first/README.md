@@ -29,6 +29,21 @@ process and API are compiled once in `Orders.Model` and referenced by both worke
 4. **Run:** `FulfillmentInfrastructure` and `PostgresCosmosFulfillmentInfrastructure` each supply its worker's connection references and readiness dependencies.
    Native resource options remain ordinary Aspire calls.
 
+The process reads inventory directly:
+
+```csharp
+var stock = await process.PointRead(domain.Inventory, input.Sku,
+    policy: new ProcessReadPolicy(timeout: TimeSpan.FromSeconds(2)));
+if (stock.Entity == null)
+    return new FulfillmentResult("Rejected", "Inventory does not exist.");
+```
+
+The entity declaration supplies the read contract and generated dependency. The result envelope makes
+absence explicit; subsequent transitions remain responsible for concurrency and stock validation.
+The optional deadline is cooperative and covers the whole read. Classified-failure retries can also
+be selected with `ProcessReadPolicy`; this example does not claim adapter exception classification or
+durable retry progress. See [process policy semantics](../../../src/Cohesive.Processes/README.md).
+
 A `StorageModel` can own multiple providers. `StorageModelBuilder` is available directly; the base
 class is optional authoring convenience. Binding recipes never open connections during activation.
 The workers explicitly initialize local schemas before preparing runtime API bindings.

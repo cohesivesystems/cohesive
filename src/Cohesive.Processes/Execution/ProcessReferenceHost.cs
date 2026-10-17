@@ -43,6 +43,7 @@ public sealed record ProcessTransitionInvocation(
 /// <param name="StartContext">Optional retained, server-admitted start command context. Durable runtimes
 /// project this from their start receipt, independently of the current worker identity. It is attribution
 /// evidence, not a new authorization grant or proof of continuing permission. Direct interpreters leave it null.</param>
+/// <param name="Policy">Activation-local read budget from the canonical node.</param>
 public sealed record ProcessRelationEvaluation(
     ExecutionDefinitionReference Definition,
     PortableValue Input,
@@ -53,7 +54,8 @@ public sealed record ProcessRelationEvaluation(
     long Occurrence,
     DateTimeOffset ObservedAtUtc,
     ProcessActivationContext Context,
-    ProcessControlCommandContext? StartContext = null)
+    ProcessControlCommandContext? StartContext = null,
+    Cohesive.Processes.IR.ProcessReadPolicy? Policy = null)
 {
     /// <summary>Projects retained admission attribution for this instance and authority, replacing any supplied context.</summary>
     /// <remarks>The caller must obtain this evidence from the authoritative retained start receipt. This projection
@@ -286,6 +288,11 @@ public sealed record ProcessSignalTargetResult
 /// </remarks>
 public interface IProcessReferenceHost
 {
+    /// <summary>Whether this port enforces read policies or supplies previously materialized policy-compliant evidence.</summary>
+    /// <remarks>The default rejects policy-bearing plans before any operation. Physical asynchronous hosts
+    /// should use ActivateAsync, whose driver enforces the policy before materializing evidence.</remarks>
+    bool SupportsReadPolicies => false;
+
     /// <summary>Invokes one exact canonical Transition.</summary>
     /// <param name="invocation">Complete semantic invocation context.</param>
     /// <returns>Typed outcome, produced interactions, or structured failure evidence.</returns>

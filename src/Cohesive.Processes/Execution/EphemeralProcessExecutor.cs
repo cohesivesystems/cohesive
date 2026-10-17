@@ -11,7 +11,7 @@ namespace Cohesive.Processes.Execution;
 /// <summary>Prepared, invocation-local execution of a finite Process through the canonical interpreter.</summary>
 /// <remarks>
 /// The executor retains only immutable preparation. Each invocation owns its continuation and host evidence;
-/// there is no scheduler, checkpoint store, retry, or recovery after interruption. Entity writes performed by
+/// there is no scheduler, checkpoint store, mutation retry, or recovery after interruption. Entity writes performed by
 /// the host are real writes and are not rolled back by cancellation or a later failure. Hosts must enforce
 /// authorization and conditional commits and must not produce interaction emissions. Whole-definition atomicity
 /// requires a different, qualified realization and is rejected here before invoking a host.
@@ -56,7 +56,7 @@ public sealed class EphemeralProcessExecutor
         evidence.Add(new(new("ephemeral/replay"), ProcessInterpreterGuarantees.DeterministicReplay,
             CapabilityRealizationKind.Constrained, operatingBoundaries: [new("activation-local-materialization/no-restart")]));
         evidence.Add(new(new("ephemeral/effects"), ProcessInterpreterGuarantees.ExternalEffectDelivery,
-            CapabilityRealizationKind.Constrained, operatingBoundaries: [new("host/no-interaction-emissions"), new("invocation/no-automatic-retry")]));
+            CapabilityRealizationKind.Constrained, operatingBoundaries: [new("host/no-interaction-emissions"), new("invocation/no-automatic-mutation-retry")]));
         evidence.Add(new(new("ephemeral/payloads"), ProcessInterpreterGuarantees.SensitiveAndOversizedPayloads,
             CapabilityRealizationKind.Constrained, operatingBoundaries: [new("invocation/protected-in-memory-evidence")]));
         return new(new("cohesive.processes/ephemeral/v1"), new("cohesive.processes/ephemeral"), [.. evidence]);
@@ -147,14 +147,17 @@ public sealed class EphemeralProcessExecutor
         public async ValueTask<ProcessOperationResult> EvaluateRelationAsync(OperationContext context, ProcessRelationEvaluation evaluation)
         {
             InFlight = evaluation.Node;
-            return Observe(evaluation.Node, await inner.EvaluateRelationAsync(context, evaluation).ConfigureAwait(false));
+            return Observe(evaluation.Node, await inner.EvaluateRelationAsync(context, evaluation).ConfigureAwait(false), replaceFailedRead: evaluation.Policy is { MaxAttempts: > 1 });
         }
 
-        ProcessOperationResult Observe(ExecutionNodeId node, ProcessOperationResult result)
+        ProcessOperationResult Observe(ExecutionNodeId node, ProcessOperationResult result, bool replaceFailedRead = false)
         {
             if (result is null || !result.IsValidOutcome())
                 throw new InvalidOperationException("The ephemeral host returned invalid operation evidence.");
-            Results.Add(node, result);
+            if (replaceFailedRead && Results.TryGetValue(node, out var previous) && !previous.IsSuccessful)
+                Results[node] = result;
+            else
+                Results.Add(node, result);
             InFlight = null;
             if (!result.Emissions.IsEmpty)
                 throw new InvalidOperationException("The ephemeral host produced interactions without a qualified delivery boundary; writes may already have committed.");
@@ -171,7 +174,8 @@ public sealed class EphemeralProcessExecutor
 /// <summary>Invocation-local host evidence shared by terminal results and physical interruptions.</summary>
 /// <param name="Definition">Exact Process authority.</param>
 /// <param name="Continuation">Invocation identity; not a durable checkpoint.</param>
-/// <param name="CompletedOperations">Returned canonical outcomes, including authoritative receipt locators.</param>
+/// <param name="CompletedOperations">Last returned canonical outcome per node, including authoritative receipt locators.
+/// For a retried read this is the last returned attempt; InterruptedOperation may identify a later interrupted attempt.</param>
 /// <param name="InterruptedOperation">Host call entered without returned evidence; effects may be uncertain.</param>
 /// <remarks>This evidence may contain private data. It requires resource authorization and must not be exported
 /// as telemetry labels or a public exception payload. Missing evidence never proves absence of a commit.</remarks>

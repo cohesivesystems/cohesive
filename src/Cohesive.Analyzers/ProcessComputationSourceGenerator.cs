@@ -896,6 +896,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 "Query" => AwaitKind.Query,
                 "Read" => AwaitKind.Read,
+                "PointRead" => AwaitKind.PointRead,
                 "Transition" => AwaitKind.Transition,
                 "TransitionWithReceipt" => AwaitKind.TransitionWithReceipt,
                 "Effect" => AwaitKind.Effect,
@@ -5073,6 +5074,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             {
                 case AwaitKind.Query:
                 case AwaitKind.Read:
+                case AwaitKind.PointRead:
                     return TryEmitRelation(awaited, successor);
                 case AwaitKind.Transition:
                 case AwaitKind.TransitionWithReceipt:
@@ -5087,8 +5089,9 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         bool TryEmitRelation(AwaitFlow awaited, string successor)
         {
             var relation = Argument(awaited.Invocation, "relation")
-                ?? Argument(awaited.Invocation, "query");
-            var input = Argument(awaited.Invocation, "input");
+                ?? Argument(awaited.Invocation, "query")
+                ?? Argument(awaited.Invocation, "entity");
+            var input = Argument(awaited.Invocation, "input") ?? Argument(awaited.Invocation, "key");
             if (relation is null || input is null || !TryEmitValue(input.Value, input.Value.Type!, awaited.Source, out var inputValue))
             {
                 return StatementFailure(awaited.Syntax, "Query and Read require an exact relation and a portable input");
@@ -5100,7 +5103,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return false;
             }
 
-            if (IsEntityPointRead(relation.Parameter?.Type))
+            if (awaited.Kind == AwaitKind.PointRead)
+            {
+                var read = $"global::Cohesive.Processes.Authoring.EntityPointReadAuthoring.PointRead({relationReference})";
+                dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.PointRead({read})");
+                relationReference = $"{read}.Reference";
+            }
+            else if (IsEntityPointRead(relation.Parameter?.Type))
             {
                 dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.PointRead({relationReference})");
                 relationReference = $"{relationReference}.Reference";
@@ -5108,8 +5117,13 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
             else if (IsTypedCanonicalRelationQueryHandle(relation.Parameter?.Type))
                 relationReference = $"{relationReference}.Reference";
 
+            var policyExpression = "null";
+            var policyArgument = Argument(awaited.Invocation, "policy");
+            if (policyArgument is { IsImplicit: false } && !TryEmitExactArgument(policyArgument, awaited.Syntax, out policyExpression))
+                return false;
+
             builderStatements.Add(
-                $"__builder.EvaluateRelation(id: {awaited.Identity.Variable}, relation: {relationReference}, input: {inputValue}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
+                $"__builder.EvaluateRelation(id: {awaited.Identity.Variable}, relation: {relationReference}, input: {inputValue}, policy: {policyExpression}, continuation: __builder.Continuation(edge: __builder.Edge(owner: {awaited.Identity.Variable}, role: {nextRole}, target: {successor}, {SourceArguments(awaited.Source, method.Name)}), output: {awaited.OutputVariable}, {SourceArguments(awaited.Source, method.Name)}), {SourceArguments(awaited.Source, method.Name)});");
             return true;
         }
 
@@ -6706,7 +6720,8 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
         Read = 2,
         Transition = 3,
         Effect = 4,
-        TransitionWithReceipt = 5
+        TransitionWithReceipt = 5,
+        PointRead = 6
     }
 
     enum RequestAuthoringKind

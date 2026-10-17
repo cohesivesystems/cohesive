@@ -118,6 +118,21 @@ public sealed class ProcessContext
         where TResult : notnull =>
         throw SyntaxOnly();
 
+    /// <summary>Reads one declared entity by identity in its configured repository's trusted partition.</summary>
+    /// <typeparam name="TEntity">Entity state.</typeparam>
+    /// <param name="entity">Canonical entity declaration; the generator derives and retains its read dependency.</param>
+    /// <param name="key">Portable invocation-time entity key.</param>
+    /// <param name="policy">Optional activation-local deadline and classified-failure retry budget.</param>
+    /// <param name="id">Optional explicit process step identity.</param>
+    /// <param name="nextRole">Continuation role.</param>
+    /// <param name="outputRole">Result binding role.</param>
+    /// <returns>An observational result whose Entity is null when absent; no write or snapshot guarantee is implied.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if this syntax-only method executes.</exception>
+    public ProcessAwaitable<EntityPointReadResult<TEntity>> PointRead<TEntity>(
+        Cohesive.Transitions.Authoring.DomainEntity<TEntity> entity, string key,
+        ProcessReadPolicy? policy = null, ExecutionNodeId? id = null, string nextRole = "next", string outputRole = "result")
+        where TEntity : class => throw SyntaxOnly();
+
     /// <summary>Declares a point read with its explicit native entity attachment.</summary>
     /// <typeparam name="TEntity">Entity state.</typeparam><typeparam name="TInput">Input.</typeparam><typeparam name="TResult">Result.</typeparam>
     /// <param name="query">Exact query and point-read recipe.</param><param name="input">Portable invocation input.</param>

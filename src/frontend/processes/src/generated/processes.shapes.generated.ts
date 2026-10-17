@@ -283,6 +283,7 @@ export interface InvokeTransitionProcessNode {
 }
 
 export interface EvaluateRelationProcessNode {
+  policy?: ProcessReadPolicy | null;
   relation: ExecutionDefinitionReference;
   input: Expr;
   continuation: ProcessContinuation;
@@ -701,6 +702,13 @@ export interface ProcessContinuation {
 export interface ProcessOutputBinding {
   binding: ValueBindingId;
   contract: ValueContract;
+}
+
+export interface ProcessReadPolicy {
+  timeout?: TimeSpan | null;
+  maxAttempts: number;
+  retryDelay: TimeSpan;
+  retryableFailureCodes: string[];
 }
 
 export interface RequestContractReference {

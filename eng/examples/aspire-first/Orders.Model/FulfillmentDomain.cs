@@ -121,7 +121,6 @@ public sealed record FulfillOrder(string OrderId, string Sku, int Quantity);
 /// <summary>Public terminal outcome; physical interruption instead returns an uncertain-effect error.</summary>
 public sealed record FulfillmentResult(string Status, string Reason);
 /// <summary>Stock observation; the reservation transition remains authoritative for availability.</summary>
-public sealed record InventoryAvailability(bool Exists, int Available);
 /// <summary>Pure stock mutation outcome.</summary>
 public sealed record StockResult(bool Accepted, string Reason);
 
@@ -156,10 +155,10 @@ public sealed class InventoryTransitions
 }
 
 /// <summary>Canonical multi-entity sequence. This syntax is compiled into Process IR, never executed as C#.</summary>
-[Process(id: "fulfillment/submit", revision: "4")]
+[Process(id: "fulfillment/submit", revision: "5")]
 public sealed partial class FulfillmentProcess : ProcessModel<FulfillOrder, FulfillmentResult>
 {
-    readonly EntityPointRead<InventoryItem, string, InventoryAvailability> readStock;
+    readonly FulfillmentDomain domain;
 
     readonly InventoryTransitions inventory;
     readonly OrderTransitions orders;
@@ -172,17 +171,15 @@ public sealed partial class FulfillmentProcess : ProcessModel<FulfillOrder, Fulf
     {
         this.inventory = inventory;
         this.orders = orders;
-        readStock = domain.Inventory.PointRead(
-            id: new("fulfillment/stock"),
-            revision: new("2"),
-            result: item => new InventoryAvailability(item is not null, item?.Available ?? 0));
+        this.domain = domain;
     }
 
     /// <inheritdoc />
     protected override async ProcessTask<FulfillmentResult> Execute(ProcessContext process, FulfillOrder input)
     {
-        var stock = await process.Query(readStock, input.Sku);
-        if (!stock.Exists)
+        var stock = await process.PointRead(domain.Inventory, input.Sku,
+            policy: new ProcessReadPolicy(timeout: TimeSpan.FromSeconds(2)));
+        if (stock.Entity == null)
             return new FulfillmentResult("Rejected", "Inventory does not exist.");
         // The query is advisory. A retry may observe less stock after its own prior reservation;
         // exact operation replay and the authoritative transition decide whether to mutate.
