@@ -43,7 +43,7 @@ public sealed record ProcessTransitionInvocation(
 /// <param name="StartContext">Optional retained, server-admitted start command context. Durable runtimes
 /// project this from their start receipt, independently of the current worker identity. It is attribution
 /// evidence, not a new authorization grant or proof of continuing permission. Direct interpreters leave it null.</param>
-/// <param name="Policy">Activation-local read budget from the canonical node.</param>
+/// <param name="Policy">Read budget and required progress retention from the canonical node.</param>
 public sealed record ProcessRelationEvaluation(
     ExecutionDefinitionReference Definition,
     PortableValue Input,
@@ -292,6 +292,9 @@ public interface IProcessReferenceHost
     /// <remarks>The default rejects policy-bearing plans before any operation. Physical asynchronous hosts
     /// should use ActivateAsync, whose driver enforces the policy before materializing evidence.</remarks>
     bool SupportsReadPolicies => false;
+
+    /// <summary>Whether materialized read evidence retains attempts and deadlines across durable replay.</summary>
+    bool SupportsDurableReadProgress => false;
 
     /// <summary>Invokes one exact canonical Transition.</summary>
     /// <param name="invocation">Complete semantic invocation context.</param>

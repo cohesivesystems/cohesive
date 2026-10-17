@@ -204,13 +204,15 @@ public sealed record DurableTaskProcessHostOperation
     /// <param name="kind">Selected operation family.</param>
     /// <param name="transition">Exact Transition invocation for <see cref="DurableTaskProcessHostOperationKind.Transition"/>.</param>
     /// <param name="relationQuery">Exact evaluation for <see cref="DurableTaskProcessHostOperationKind.RelationQuery"/>.</param>
+    /// <param name="readDeadlineUtc">Original history-pinned deadline for a read attempt; never reset on redelivery.</param>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
-    /// <exception cref="ArgumentException">The selected family does not contain exactly its required payload.</exception>
+    /// <exception cref="ArgumentException">The selected family does not contain exactly its required payload, or a deadline is non-UTC or has no timed read policy.</exception>
     [JsonConstructor]
     public DurableTaskProcessHostOperation(
         DurableTaskProcessHostOperationKind kind,
         ProcessTransitionInvocation? transition = null,
-        ProcessRelationEvaluation? relationQuery = null)
+        ProcessRelationEvaluation? relationQuery = null,
+        DateTimeOffset? readDeadlineUtc = null)
     {
         if (!Enum.IsDefined(kind) || kind == DurableTaskProcessHostOperationKind.Unspecified)
         {
@@ -222,6 +224,9 @@ public sealed record DurableTaskProcessHostOperation
             throw new ArgumentException("A host operation must carry exactly the payload selected by its kind.");
         }
 
+        if (readDeadlineUtc is { } deadline && (deadline.Offset != TimeSpan.Zero || relationQuery?.Policy?.Timeout is null))
+            throw new ArgumentException("A UTC deadline requires a read with a timeout policy.", nameof(readDeadlineUtc));
+        ReadDeadlineUtc = readDeadlineUtc;
         Kind = kind;
         Transition = transition;
         RelationQuery = relationQuery;
@@ -235,6 +240,9 @@ public sealed record DurableTaskProcessHostOperation
 
     /// <summary>Exact Relation or Query evaluation when <see cref="Kind"/> is RelationQuery.</summary>
     public ProcessRelationEvaluation? RelationQuery { get; }
+
+    /// <summary>History-pinned total read deadline, including activity queue and retry delays.</summary>
+    public DateTimeOffset? ReadDeadlineUtc { get; }
 
     internal static DurableTaskProcessHostOperation For(ProcessTransitionInvocation invocation) =>
         new(DurableTaskProcessHostOperationKind.Transition, transition: invocation);

@@ -122,7 +122,7 @@ public sealed class ProcessContext
     /// <typeparam name="TEntity">Entity state.</typeparam>
     /// <param name="entity">Canonical entity declaration; the generator derives and retains its read dependency.</param>
     /// <param name="key">Portable invocation-time entity key.</param>
-    /// <param name="policy">Optional activation-local deadline and classified-failure retry budget.</param>
+    /// <param name="policy">Optional deadline, classified-failure retry budget and required progress retention.</param>
     /// <param name="id">Optional explicit process step identity.</param>
     /// <param name="nextRole">Continuation role.</param>
     /// <param name="outputRole">Result binding role.</param>

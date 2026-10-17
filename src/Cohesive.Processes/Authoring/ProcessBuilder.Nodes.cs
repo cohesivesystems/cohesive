@@ -81,7 +81,7 @@ public sealed partial class ProcessBuilder<TInput, TResult>
     /// <param name="relation">Exact Relation or Query definition revision and fingerprint.</param>
     /// <param name="input">Typed query input expression.</param>
     /// <param name="continuation">Continuation selected after the query result is available.</param>
-    /// <param name="policy">Optional activation-local read budget.</param>
+    /// <param name="policy">Optional read budget and required progress retention.</param>
     /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
     /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
     /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>

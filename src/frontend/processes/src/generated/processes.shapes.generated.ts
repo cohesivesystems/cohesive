@@ -705,6 +705,7 @@ export interface ProcessOutputBinding {
 }
 
 export interface ProcessReadPolicy {
+  progress: ProcessReadProgress;
   timeout?: TimeSpan | null;
   maxAttempts: number;
   retryDelay: TimeSpan;
@@ -1042,6 +1043,18 @@ export const executionTokenDispositionLabels: Record<ExecutionTokenDisposition, 
   Failed: 'Failed',
   Cancelled: 'Cancelled',
   Pending: 'Pending',
+};
+
+export type ProcessReadProgress = 'ActivationLocal' | 'Durable';
+
+export const processReadProgresses = {
+  activationLocal: 'ActivationLocal',
+  durable: 'Durable',
+} as const satisfies Record<string, ProcessReadProgress>;
+
+export const processReadProgressLabels: Record<ProcessReadProgress, string> = {
+  ActivationLocal: 'ActivationLocal',
+  Durable: 'Durable',
 };
 
 export type RequestTerminalOutcomeId = string;

@@ -23,6 +23,7 @@ public sealed class GeneratedProcessDependencyTests
         var controlled = new PolicyPointReadProcess(Entity);
         var node = Assert.Single(controlled.Definition.Definition.Nodes.OfType<EvaluateRelationProcessNode>());
         Assert.Equal(3, node.Policy!.MaxAttempts);
+        Assert.Equal(ProcessReadProgress.Durable, node.Policy.Progress);
         Assert.Equal(TimeSpan.FromSeconds(2), node.Policy.Timeout);
         Assert.Equal("storage.busy", Assert.Single(node.Policy.RetryableFailureCodes));
         Assert.Equal(Entity.PointRead().Reference, node.Relation);
@@ -419,7 +420,7 @@ internal sealed partial class PolicyPointReadProcess : ProcessModel<string, bool
     {
         var found = await process.PointRead(entity, input, policy: new ProcessReadPolicy(
             timeout: TimeSpan.FromSeconds(2), maxAttempts: 3,
-            retryableFailureCodes: ["storage.busy"]));
+            retryableFailureCodes: ["storage.busy"], progress: ProcessReadProgress.Durable));
         return found.Entity != null;
     }
 }

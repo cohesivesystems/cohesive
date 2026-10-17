@@ -15,6 +15,7 @@ public sealed class CompiledProcessPlan
 {
     readonly IReadOnlyDictionary<ExecutionNodeId, CanonicalProcessNode> nodes;
     internal bool RequiresReadPolicy { get; }
+    internal bool RequiresDurableReadProgress { get; }
 
     internal CompiledProcessPlan(
         ExecutionDefinitionDocument document,
@@ -25,6 +26,7 @@ public sealed class CompiledProcessPlan
     {
         Document = document;
         Definition = definition;
+        RequiresDurableReadProgress = definition.Nodes.Any(node => node is EvaluateRelationProcessNode { Policy.Progress: ProcessReadProgress.Durable });
         RequiresReadPolicy = definition.Nodes.Any(node => node is EvaluateRelationProcessNode { Policy: not null });
         ValidationContext = validationContext;
         Options = options;

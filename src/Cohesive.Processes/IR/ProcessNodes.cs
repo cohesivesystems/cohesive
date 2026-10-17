@@ -125,7 +125,7 @@ public sealed record EvaluateRelationProcessNode : ProcessNode
     /// <param name="relation">Exact Relation or Query definition revision and fingerprint.</param>
     /// <param name="input">Portable typed query input expression.</param>
     /// <param name="continuation">Typed continuation receiving the query result when requested.</param>
-    /// <param name="policy">Optional activation-local read execution policy.</param>
+    /// <param name="policy">Optional read execution policy, including its required progress retention.</param>
     [JsonConstructor]
     public EvaluateRelationProcessNode(
         ExecutionNodeId id,

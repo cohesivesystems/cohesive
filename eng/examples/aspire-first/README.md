@@ -41,8 +41,9 @@ if (stock.Entity == null)
 The entity declaration supplies the read contract and generated dependency. The result envelope makes
 absence explicit; subsequent transitions remain responsible for concurrency and stock validation.
 The optional deadline is cooperative and covers the whole read. Classified-failure retries can also
-be selected with `ProcessReadPolicy`; this example does not claim adapter exception classification or
-durable retry progress. See [process policy semantics](../../../src/Cohesive.Processes/README.md).
+be selected with `ProcessReadPolicy`; this host-memory example does not enable adapter exception classification or
+durable retry progress. The Durable Task interpreter supports an explicit `ProcessReadProgress.Durable`
+demand; selecting it with the ephemeral executor fails at setup. See [process policy semantics](../../../src/Cohesive.Processes/README.md).
 
 A `StorageModel` can own multiple providers. `StorageModelBuilder` is available directly; the base
 class is optional authoring convenience. Binding recipes never open connections during activation.

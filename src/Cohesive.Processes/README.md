@@ -60,12 +60,30 @@ as `inventory.busy` can select that code with a finite budget and `retryDelay`. 
 and unselected failures propagate without retry. Repository SDK exceptions are not automatically classified.
 Retries never apply to transitions or requests merely because they follow this read.
 
-The final observation is materialized once per occurrence during activation re-entry. Retry counters and
-delays are **activation-local**, not persisted restart recovery. Durable retry progress remains the durable
-Request machinery's responsibility. Synchronous evidence ports must explicitly declare policy support
-(or supply policy-compliant retained evidence); otherwise the plan is rejected before any host operation.
-The ephemeral target's usual no-automatic-retry guarantee still applies to mutations; explicit read policies
-are the bounded observational exception.
+The final observation is materialized once per occurrence during activation re-entry. By default,
+`progress: ProcessReadProgress.ActivationLocal` retains attempts only in memory. To require restart recovery:
+
+```csharp
+var stock = await process.PointRead(domain.Inventory, input.Sku,
+    policy: new ProcessReadPolicy(timeout: TimeSpan.FromSeconds(20), maxAttempts: 3,
+        retryDelay: TimeSpan.FromSeconds(2), retryableFailureCodes: ["inventory.busy"],
+        progress: ProcessReadProgress.Durable));
+```
+
+This demand is part of the fingerprint and target capability inventory. Ephemeral execution rejects it at
+setup. Durable Task realizes it using its existing activity history and durable timers: replay reconstructs
+the attempt count and original deadline, consumes recorded failures and observations, and resumes backoff.
+It does not replay an already completed database read against newer data. An interrupted activity can be
+redelivered before its completion is recorded; this is observational at-least-once access, not an exactly-once
+physical-read guarantee. `maxAttempts` bounds logical attempts, not provider calls caused by redelivery.
+
+The durable deadline includes queue time. An expired activity does no database IO; a running read receives
+cooperative cancellation and is awaited until it quiesces. The timeout is therefore not a guaranteed wall-clock
+completion time. Deadline exhaustion yields `processes.read.deadlineExceeded`; worker shutdown still uses the
+scheduler's activity-redelivery path. Arbitrary exceptions are not semantic retry decisions. The attempt protocol
+retains scheduler history rather than creating a second repository or reusing mutation receipts.
+Synchronous evidence ports must explicitly declare policy support (and durable progress support when demanded),
+or the plan is rejected before any host operation. These read policies never enable automatic mutation retry.
 
 The standalone factory style below remains supported and uses the same lowering path.
 

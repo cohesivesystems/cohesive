@@ -87,11 +87,13 @@ public sealed class ProcessReadPolicyTests
         Assert.Equal(1, host.Calls);
     }
 
-    [Fact]
-    public void Policy_round_trips_as_canonical_process_data()
+    [Theory]
+    [InlineData(ProcessReadProgress.ActivationLocal)]
+    [InlineData(ProcessReadProgress.Durable)]
+    public void Policy_round_trips_as_canonical_process_data(ProcessReadProgress progress)
     {
         var original = Plan(new(timeout: TimeSpan.FromSeconds(1), maxAttempts: 2,
-            retryableFailureCodes: ["storage.busy"])).Document;
+            retryableFailureCodes: ["storage.busy"], progress: progress)).Document;
         Assert.True(ExecutionDefinitionJsonSerializer.TryDeserialize(
             ExecutionDefinitionJsonSerializer.Serialize(original), out var restored).IsValid);
         var recompiled = ProcessStaticCompiler.Compile(restored!,
@@ -99,6 +101,7 @@ public sealed class ProcessReadPolicyTests
         Assert.True(recompiled.IsSuccessful);
         var policy = Assert.Single(recompiled.Plan!.Definition.Nodes.OfType<EvaluateRelationProcessNode>()).Policy!;
         Assert.Equal(2, policy.MaxAttempts);
+        Assert.Equal(progress, policy.Progress);
         Assert.Equal(TimeSpan.FromSeconds(1), policy.Timeout);
         Assert.Equal(original.Metadata.Fingerprint, restored!.Metadata.Fingerprint);
     }
@@ -124,6 +127,14 @@ public sealed class ProcessReadPolicyTests
         public ProcessOperationResult EvaluateRelation(ProcessRelationEvaluation evaluation) { Calls++; return Success(); }
         public ProcessOperationResult InvokeTransition(ProcessTransitionInvocation invocation) => throw new InvalidOperationException();
         public ProcessSignalTargetResult ResolveSignalTarget(ProcessSignalTargetResolution resolution) => throw new InvalidOperationException();
+    }
+
+    [Fact]
+    public void Ephemeral_executor_rejects_durable_progress_during_setup()
+    {
+        var plan = Plan(new(progress: ProcessReadProgress.Durable));
+        Assert.False(EphemeralProcessExecutor.Validate(plan).IsValid);
+        Assert.Throws<ArgumentException>(() => new EphemeralProcessExecutor(plan));
     }
 
     [Fact]

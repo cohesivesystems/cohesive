@@ -309,6 +309,8 @@ public static partial class ProcessReferenceInterpreter
         ArgumentNullException.ThrowIfNull(host);
         if (plan.RequiresReadPolicy && !host.SupportsReadPolicies)
             throw new ArgumentException("processes.read.policy.unsupported: Host must enforce read policy or supply materialized evidence.", nameof(host));
+        if (plan.RequiresDurableReadProgress && !host.SupportsDurableReadProgress)
+            throw new ArgumentException("processes.read.progress.unsupported: Host cannot retain read progress across restarts.", nameof(host));
         return new Engine(plan, state, activation, host).Run();
     }
 

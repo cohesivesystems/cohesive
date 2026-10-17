@@ -723,7 +723,9 @@ public sealed class DurableTaskProcessHostOperationActivity
                 DurableTaskProcessHostOperationKind.Transition =>
                     host.InvokeTransitionAsync(operationContext, input.Transition!),
                 DurableTaskProcessHostOperationKind.RelationQuery =>
-                    host.EvaluateRelationAsync(operationContext, input.RelationQuery!),
+                    input.RelationQuery!.Policy is null
+                        ? host.EvaluateRelationAsync(operationContext, input.RelationQuery)
+                        : DurableTaskProcessReadExecution.EvaluateAttemptAsync(operationContext, input, host),
                 _ => throw new ArgumentOutOfRangeException(
                     nameof(input),
                     input.Kind,
