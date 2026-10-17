@@ -1,5 +1,6 @@
 using System.Buffers.Text;
 using System.Collections;
+using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
@@ -91,10 +92,24 @@ static class DefaultObservationValueConverterCache
             }
         }
 
-        Expression? BuildExpression(Type targetType, Expression value)
+        Expression? BuildExpression(Type targetType, Expression value, bool prepareImmutable = true)
         {
-            if (options is not null && typeof(IImmutableObservationProjection).IsAssignableFrom(targetType))
-                return null; // The owning payload caches only explicit deeply immutable interpretations.
+            if (prepareImmutable && options is not null && typeof(IImmutableObservationProjection).IsAssignableFrom(targetType))
+            {
+                // Build the interpretation once; its result still belongs to the exact observation/profile.
+                // Unsupported roots must use the independent serializer, not recurse into this cache.
+                var body = BuildExpression(targetType, value, prepareImmutable: false)
+                    ?? Expression.Call(GetGenericMethod(nameof(DeserializeIndependent)).MakeGenericMethod(targetType),
+                        value, Expression.Constant(options));
+                var reader = Expression.Lambda(ConverterType(targetType), body, (ParameterExpression)value).Compile();
+                return Expression.Call(GetGenericMethod(nameof(ReadImmutable)).MakeGenericMethod(targetType),
+                    value, Expression.Constant(options), Expression.Constant(reader, ConverterType(targetType)));
+            }
+
+            if (options is not null && targetType == typeof(ImmutableDictionary<AnnotationKey, AnnotationValue>)
+                && CanReadAnnotations(options))
+                return StrictContainer(targetType, value, Expression.Call(typeof(ConverterBuilder),
+                    nameof(ReadAnnotations), null, value, Expression.Constant(options)), ObservationValueKind.Object);
             if (options is not null && targetType.IsEnum && SerializedEnumMemberCatalog.TryCreate(targetType,
                 out var members, out _, out _))
             {
@@ -113,6 +128,30 @@ static class DefaultObservationValueConverterCache
                 return Expression.Call(GetGenericMethod(nameof(ReadPreparedEnum)).MakeGenericMethod(targetType),
                     value, Expression.Constant(literals, typeof(IReadOnlyDictionary<string, object>)),
                     Expression.Constant(options));
+            }
+
+            // Use the owning serializer's discriminator declarations, never a parallel union catalog.
+            // Custom converters and conflicting metadata names keep the complete serializer path.
+            if (options is not null && options.ReferenceHandler is null && options.AllowOutOfOrderMetadataProperties
+                && options.GetTypeInfo(targetType).PolymorphismOptions is { } polymorphism
+                && polymorphism.DerivedTypes.Count > 0
+                && polymorphism.DerivedTypes.All(derived => derived.TypeDiscriminator is string
+                    && options.GetTypeInfo(derived.DerivedType).Kind == System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object
+                    && !options.GetTypeInfo(derived.DerivedType).Properties.Any(property =>
+                        property.Name == polymorphism.TypeDiscriminatorPropertyName)))
+            {
+                var readers = new Dictionary<string, Delegate>(StringComparer.Ordinal);
+                foreach (var derived in polymorphism.DerivedTypes)
+                    if (Build(derived.DerivedType) is { } reader)
+                    {
+                        var argument = Expression.Parameter(typeof(ObservationValue));
+                        readers.Add((string)derived.TypeDiscriminator!, Expression.Lambda(ConverterType(targetType),
+                            Expression.Convert(Expression.Invoke(Expression.Constant(reader), argument), targetType), argument).Compile());
+                    }
+                if (readers.Count == polymorphism.DerivedTypes.Count)
+                    return Expression.Call(GetGenericMethod(nameof(ReadPolymorphic)).MakeGenericMethod(targetType), value,
+                        Expression.Constant(FieldPath.FromField(polymorphism.TypeDiscriminatorPropertyName)), Expression.Constant(readers),
+                        Expression.Constant(options));
             }
 
             if (targetType == typeof(ObservationValue)) return strict ? null : value;
@@ -197,6 +236,15 @@ static class DefaultObservationValueConverterCache
             if (strict && targetType.IsGenericType && !HasJsonContractCustomization(targetType))
             {
                 var definition = targetType.GetGenericTypeDefinition();
+                if (definition == typeof(ImmutableArray<>))
+                {
+                    var element = targetType.GetGenericArguments()[0];
+                    var converter = Build(element);
+                    if (converter is not null)
+                        return StrictContainer(targetType, value, Expression.Call(
+                            GetGenericMethod(nameof(ReadImmutableArray)).MakeGenericMethod(element), value,
+                            ConverterConstant(element, converter)), ObservationValueKind.Array);
+                }
                 if (definition == typeof(List<>) || definition == typeof(IReadOnlyList<>)
                     || definition == typeof(IReadOnlyCollection<>) || definition == typeof(IList<>)
                     || definition == typeof(ICollection<>) || definition == typeof(IEnumerable<>))
@@ -441,6 +489,72 @@ static class DefaultObservationValueConverterCache
             JsonSerializerOptions options) where TEnum : struct, Enum =>
             value.Kind == ObservationValueKind.String && value.String is { } text && literals.TryGetValue(text, out var literal)
                 ? (TEnum)literal : value.Deserialize<TEnum>(options);
+
+        static T? ReadPolymorphic<T>(ObservationValue value, FieldPath discriminator, Dictionary<string, Delegate> readers,
+            JsonSerializerOptions options)
+        {
+            if (value.Kind == ObservationValueKind.Object && value.TryGetField(discriminator, out var tag)
+                && tag.Kind == ObservationValueKind.String && readers.TryGetValue(tag.String!, out var reader))
+                return ((Func<ObservationValue, T?>)reader)(value.WithoutField(discriminator));
+            // A marked root can already be inside its projection slot; re-entering Deserialize would recurse.
+            return value.DeserializeIndependent<T>(options);
+        }
+
+        static T? ReadImmutable<T>(ObservationValue value, JsonSerializerOptions options, Func<ObservationValue, T?> read) =>
+            value.Kind == ObservationValueKind.Object && value.Fields is { Count: > 0 } && options.IsReadOnly
+                ? ImmutableObservationProjectionCache.Read(value, options, ObservationBytesJsonEncoding.Throw, read)
+                : read(value);
+
+        static T? DeserializeIndependent<T>(ObservationValue value, JsonSerializerOptions options) =>
+            value.DeserializeIndependent<T>(options);
+
+        static bool CanReadAnnotations(JsonSerializerOptions options) => options.ReferenceHandler is null
+            && options.GetConverter(typeof(ImmutableDictionary<AnnotationKey, AnnotationValue>)) is AnnotationMapJsonConverter
+            && options.GetConverter(typeof(AnnotationKey)) is AnnotationKeyJsonConverter
+            && options.GetConverter(typeof(AnnotationValue)) is AnnotationValueJsonConverter
+            && options.GetConverter(typeof(JsonElement)).GetType() == JsonSerializerOptions.Default.GetConverter(typeof(JsonElement)).GetType()
+            && options.GetConverter(typeof(JsonDocument)).GetType() == JsonSerializerOptions.Default.GetConverter(typeof(JsonDocument)).GetType();
+
+        static ImmutableDictionary<AnnotationKey, AnnotationValue>? ReadAnnotations(ObservationValue value, JsonSerializerOptions options)
+        {
+            if (value.Kind == ObservationValueKind.Null) return null;
+            if (value.Fields!.Count == 0) return ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty;
+            var values = ImmutableDictionary.CreateBuilder<AnnotationKey, AnnotationValue>();
+            var visitor = new AnnotationVisitor(values, options);
+            ObservationFieldTraversal.Visit(value.Fields, ref visitor);
+            return values.ToImmutable();
+        }
+
+        struct AnnotationVisitor(ImmutableDictionary<AnnotationKey, AnnotationValue>.Builder values,
+            JsonSerializerOptions options) : IObservationFieldVisitor
+        {
+            public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+                where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+            {
+                using (fields)
+                    while (fields.MoveNext())
+                    {
+                        var field = fields.Current;
+                        if (string.IsNullOrWhiteSpace(field.Key)) throw new JsonException("Annotation key property names must be non-empty.");
+                        values[new(field.Key)] = field.Value.Kind switch
+                        {
+                            ObservationValueKind.Null => null!,
+                            // The observation's JSON writer already owns string normalization. Structured values
+                            // retain serializer-created snapshots, including their numeric spelling.
+                            ObservationValueKind.String => AnnotationValue.FromString(field.Value.String!),
+                            _ => new AnnotationValue(field.Value.Deserialize<JsonElement>(options))
+                        };
+                    }
+            }
+        }
+
+        static ImmutableArray<T> ReadImmutableArray<T>(ObservationValue value, Func<ObservationValue, T> read)
+        {
+            var items = value.EnumerateArray();
+            var result = ImmutableArray.CreateBuilder<T>(items.Length);
+            foreach (var item in items) result.Add(read(item));
+            return result.MoveToImmutable();
+        }
 
         static T DeserializeStrict<T>(ObservationValue value, JsonSerializerOptions? options) => value.Deserialize<T>(options)!;
 

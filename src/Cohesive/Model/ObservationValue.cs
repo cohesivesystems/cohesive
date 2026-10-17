@@ -617,7 +617,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         JsonValueKind.Null => Null,
         JsonValueKind.True => FromBool(true),
         JsonValueKind.False => FromBool(false),
-        JsonValueKind.String => FromString(element.GetString()),
+        JsonValueKind.String => FromString(names?.GetString(element) ?? element.GetString()),
         JsonValueKind.Number when element.TryGetInt64(out var int64) => FromInt64(int64),
         JsonValueKind.Number when TryParseExactJsonDecimal(element.GetRawText(), out var dec) => FromDecimal(dec),
         JsonValueKind.Number when element.TryGetDouble(out var dbl) => FromDouble(dbl),

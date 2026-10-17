@@ -26,14 +26,16 @@ internal static class ImmutableObservationProjectionCache
     }
     readonly record struct Key(Type Type, ObservationBytesJsonEncoding BytesEncoding);
 
-    internal static T? Read<T>(ObservationValue value, JsonSerializerOptions? options, ObservationBytesJsonEncoding bytesEncoding)
+    internal static T? Read<T>(ObservationValue value, JsonSerializerOptions? options, ObservationBytesJsonEncoding bytesEncoding,
+        Func<ObservationValue, T?>? materialize = null)
     {
         options ??= JsonSerializerOptions.Default;
         var profiles = Owners.GetValue(value.Fields!, static _ => new()).Profiles;
         var entries = profiles.GetValue(options, static _ => new());
         var key = new Key(typeof(T), bytesEncoding);
         var slot = entries.GetOrAdd(key, static _ => new());
-        return (T?)slot.Get((value, options, bytesEncoding), static context =>
-            context.value.DeserializeIndependent<T>(context.options, context.bytesEncoding));
+        return (T?)slot.Get((value, options, bytesEncoding, materialize), static context =>
+            context.materialize is { } read ? read(context.value)
+                : context.value.DeserializeIndependent<T>(context.options, context.bytesEncoding));
     }
 }
