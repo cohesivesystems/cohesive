@@ -10,6 +10,8 @@ public sealed class FulfillmentDomain : DomainModel
 {
     /// <summary>Canonical order identity field.</summary>
     public const string OrderIdField = "id";
+    /// <summary>Inventory identity represented by the Cosmos observation ID.</summary>
+    public const string InventoryIdField = "sku";
     /// <summary>Canonical partition field shared by the example entities.</summary>
     public const string PartitionField = "partition";
     /// <summary>Declares the shared entities and their canonical references.</summary>
@@ -39,7 +41,7 @@ public sealed class FulfillmentDomain : DomainModel
 /// <param name="Partition">Explicit local-demo partition.</param>
 /// <param name="Available">Current available quantity, constrained nonnegative by the native schema.</param>
 public sealed record InventoryItem(
-    [property: JsonPropertyName("sku")] string Sku,
+    [property: JsonPropertyName(FulfillmentDomain.InventoryIdField)] string Sku,
     [property: JsonPropertyName("partition")] string Partition,
     [property: JsonPropertyName("available")] int Available);
 
@@ -53,7 +55,7 @@ public sealed record Reservation(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("partition")] string Partition,
     [property: JsonPropertyName("orderId")] string OrderId,
-    [property: JsonPropertyName("sku")] string Sku,
+    [property: JsonPropertyName(FulfillmentDomain.InventoryIdField)] string Sku,
     [property: JsonPropertyName("quantity")] int Quantity);
 
 /// <summary>POCO authoring source for the canonical order state.</summary>

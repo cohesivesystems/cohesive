@@ -13,7 +13,7 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
     public void Remote_inventory_registration_prepares_its_declared_key_without_an_Id_convention()
     {
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var remote = Model.Storage.BindInventory(database);
+        var remote = PostgresSplitFixture.BindInventory(Model, database);
         Cohesive.Storage.IEntityRepository<InventoryItem> inventory = remote.Repository(Model.Domain.Inventory);
         Assert.Same(Model.Domain.Inventory.Definition, inventory.EntityDefinition);
         Assert.Throws<InvalidOperationException>(() => remote.Repository(Model.Domain.Orders));

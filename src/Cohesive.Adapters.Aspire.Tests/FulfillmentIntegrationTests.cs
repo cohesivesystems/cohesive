@@ -47,7 +47,7 @@ public sealed partial class OrderStorageIntegrationTests
             builder.Services.AddRequestOperationContext();
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderHttpTestBindings.Map(app, Model, orders, queryReader, Model.Availability.BindNative(persistence, Model.StorageQueries));
+            OrderHttpTestBindings.Map(app, Model, orders, queryReader, new ReservationAvailabilityQueryBindings(Model.Queries).BindNative(persistence, Model.StorageQueries));
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -91,6 +91,7 @@ public sealed partial class OrderStorageIntegrationTests
                 .Set(Model.Queries.OrderDetails.Parameter, ObservationValue.FromString(id)).Build();
             var outcome = await evaluator.EvaluateAsync(evaluation);
             Assert.True(outcome.IsSuccessful, string.Join("; ", (outcome.PhysicalExecution?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Result?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Diagnostics.Select(diagnostic => diagnostic.Message))));
+            Assert.Throws<InvalidOperationException>(() => Model.Queries.OrderDetails.AssembleResult(outcome, maximumBytes: 1));
             var composed = Model.Queries.OrderDetails.AssembleResult(outcome)!;
             Assert.Equal(joined.Id, composed.Id);
             Assert.Equal(joined.Status, composed.Status);

@@ -27,7 +27,7 @@ public sealed class ComposedPreparationTests
         var orders = Model.Storage.Bind(db);
         var remote = failure == "missing-mapping"
             ? PostgresPersistenceBindings.Define(new("inventory"), _ => { }).Bind(new(new("inventory"), db, "test"))
-            : Model.Storage.BindInventory(db);
+            : PostgresSplitFixture.BindInventory(Model, db);
         var scope = new PostgresRelationQueryPartitionScope(new("local"),
             failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition);
         var policy = new PostgresRelationQueryComposedPolicy(

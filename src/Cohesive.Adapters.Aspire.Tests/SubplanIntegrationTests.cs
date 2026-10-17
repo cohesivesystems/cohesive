@@ -25,14 +25,14 @@ public sealed partial class OrderStorageIntegrationTests
         var sku = "subplan-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create();
         var persistence = Model.Storage.Bind(orders);
-        var inventoryPersistence = Model.Storage.BindInventory(inventoryDatabase);
+        var inventoryPersistence = PostgresSplitFixture.BindInventory(Model, inventoryDatabase);
         var orderRepository = persistence.Repository(Model.Domain.Orders);
         var reservations = persistence.Repository(Model.Domain.Reservations);
         try
         {
             await orderRepository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, Guid.Parse(id)));
-            var native = Model.Availability.BindNative(persistence, Model.StorageQueries);
-            var composed = Model.Availability.BindComposed(persistence, inventoryPersistence);
+            var native = new ReservationAvailabilityQueryBindings(Model.Queries).BindNative(persistence, Model.StorageQueries);
+            var composed = new ReservationAvailabilityQueryBindings(Model.Queries).BindComposed(persistence, inventoryPersistence);
             var emptyNative = await native.ReadAsync(id);
             var emptyComposed = await composed.ReadAsync(id);
             Assert.Equal(emptyNative, emptyComposed);

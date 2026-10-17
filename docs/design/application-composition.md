@@ -191,3 +191,10 @@ native routes at `/api/routes/{method}/{template}` (JSON Pointer escaping). Miss
 the staged endpoint index; repeated mapping identifies `/api/mapping/state`. Coverage failures retain all
 identified endpoint diagnostics instead of a single generic location. Process endpoint authoring retains the
 one service document built during selection and reuses it for HTTP projection.
+
+
+The Aspire example now has two explicit executable compositions over `Orders.Model`: the default
+PostgreSQL-only worker and the PostgreSQL/Cosmos worker. Model activation shares semantic instances within
+each composition; no provider selection enters the domain/API catalogs. Native table mappings can be reused
+without placing every mapped entity in PostgreSQL. Service persistence selections bind exact entity contracts
+and query instances, cache preparation by requested bounds, and preserve per-backend receipt capabilities.

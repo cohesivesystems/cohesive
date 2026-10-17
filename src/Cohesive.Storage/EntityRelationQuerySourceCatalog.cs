@@ -202,7 +202,14 @@ public sealed class EntityRelationQuerySourceCatalog
             id: new($"source/cohesive.storage/supplied/{inputKey}"));
     }
 
-    static void Configure(
+    /// <summary>Contributes one registered source's selectors to a plan-scoped input.</summary>
+    /// <param name="binding">Placement input to configure.</param>
+    /// <param name="registration">Canonical source and native selectors.</param>
+    /// <param name="fields">Fields demanded by this exact input.</param>
+    /// <param name="input">Input identity for selector diagnostics.</param>
+    /// <param name="relationshipReference">Inverse traversal key, if needed.</param>
+    /// <param name="diagnostics">Receives invalid native selector diagnostics.</param>
+    public static void Configure(
         RelationQueryPlacementInputBuilder binding,
         EntityRelationQuerySourceRegistration registration,
         ImmutableArray<RelationQueryFieldInputContract> fields,
@@ -210,6 +217,9 @@ public sealed class EntityRelationQuerySourceCatalog
         FieldPath? relationshipReference,
         ICollection<RelationQueryArtifactAuthoringDiagnostic> diagnostics)
     {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentNullException.ThrowIfNull(registration);
+        ArgumentNullException.ThrowIfNull(diagnostics);
         if (registration.Reader.Descriptor.PartitionBinding is { } partition)
             binding.Partition(partition.SourceSelector);
 

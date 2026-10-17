@@ -222,3 +222,13 @@ connections and results remain invocation-scoped; no query-result cache or globa
 
 Optional [Cohesive.Adapters.Postgres.Infra](../Cohesive.Adapters.Postgres.Infra/README.md) projects prepared
 artifacts into exact infrastructure evidence without adding an Infra dependency to the base adapter.
+
+
+### Heterogeneous composed reads
+
+`QueryComposed(query, EntityRelationQuerySourceCatalog, policy, projection)` accepts canonical remote sources
+such as Cosmos. An optional closed projection is pushed down as a single PostgreSQL prefix; without a cut,
+the physical executor acquires local PostgreSQL and registered remote inputs. A shape cannot be placed both
+locally and remotely. Partition identity and source selectors are validated before IO. Both paths prepare
+once and enforce complete-result row/scalar-byte bounds; neither asserts a cross-source snapshot.
+See `eng/examples/aspire-first/PostgresCosmosWorker` for the running consumer.

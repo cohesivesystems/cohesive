@@ -57,6 +57,8 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
     readonly RelationQuerySourceReaderDescriptor cutDescriptor;
     readonly RelationQuery<TInput, TResult> remainderResult;
     readonly ShapeGraph cutGraph;
+    readonly int maximumResultRows;
+    readonly long maximumResultBytes;
     readonly Shape cutShape;
     readonly long maximumPrefixRows;
     readonly bool prefixUsesParameter;
@@ -72,13 +74,19 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
     /// <param name="policy">Explicit row, fan-out, batch and concurrency limits.</param>
     /// <param name="remainingReaders">Creates provider readers once from the exact prepared remaining physical plan.</param>
     /// <param name="logicalPartition">Explicit host-attested scope shared by both phases; the host must enforce it in the native prefix.</param>
+    /// <param name="maximumResultRows">Complete flat result row bound.</param>
+    /// <param name="maximumResultBytes">Complete decoded scalar payload bound, as defined by typed result assembly.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">Plan, placement, reader or partition affinity is invalid.</exception>
     public RelationQuerySubplanReader(RelationQuery<TInput, TResult> definition, RelationQuerySubplan plan,
         IRelationQueryRowsReader prefix, RelationQuerySourcePlacement placement, RelationQueryPhysicalPlanningPolicy policy,
         Func<CompiledRelationQueryPhysicalPlan, IEnumerable<IRelationQuerySourceReader>> remainingReaders,
-        RelationQueryLogicalPartitionIdentity logicalPartition)
+        RelationQueryLogicalPartitionIdentity logicalPartition, int maximumResultRows = int.MaxValue, long maximumResultBytes = long.MaxValue)
     {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumResultRows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumResultBytes);
+        this.maximumResultRows = maximumResultRows;
+        this.maximumResultBytes = maximumResultBytes;
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(prefix);
@@ -184,7 +192,7 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
     public async Task<TResult> ReadAsync(TInput input, CancellationToken cancellationToken = default)
     {
         var outcome = await EvaluateAsync(input, new("subplan/" + Guid.NewGuid().ToString("N")), cancellationToken).ConfigureAwait(false);
-        return remainderResult.AssembleResult(outcome.Remainder);
+        return remainderResult.AssembleResult(outcome.Remainder, maximumResultRows, maximumResultBytes);
     }
 
     sealed class ProjectedRowsReader(ImmutableArray<ObservationValue> rows, RelationQuerySourceReaderDescriptor descriptor,

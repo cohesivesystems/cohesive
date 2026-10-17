@@ -51,6 +51,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     /// <param name="partitionKeyPolicy">
     /// Explicit read/write partition policy. It is mutually exclusive with either legacy partition selector.
     /// </param>
+    /// <param name="identityField">Optional canonical identity field for typed repository selection; null retains Id/Key conventions.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="entityDefinition"/> or <paramref name="container"/> is <see langword="null"/>.
     /// </exception>
@@ -65,16 +66,25 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         Func<string, string?>? pointReadPartitionKeySelector = null,
         Func<EntityObservationSnapshot, string>? itemIdSelector = null,
         CosmosObservationOutboxRepositoryOptions? options = null,
-        EntityPartitionKeyPolicy? partitionKeyPolicy = null
+        EntityPartitionKeyPolicy? partitionKeyPolicy = null,
+        string? identityField = null
         )
     {
         this.entityDefinition = Guard.RequireNotNull(entityDefinition);
+        if (identityField is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(identityField);
+            if (!entityDefinition.Fields.Any(field => field.MatchesName(identityField)))
+                throw new ArgumentException("Identity field is not declared by the entity.", nameof(identityField));
+        }
+        IdentityField = identityField;
         this.observationType = entityDefinition.Shape.Id.Value;
         this.container = Guard.RequireNotNull(container);
         this.partitionKeyPolicy = ResolvePartitionKeyPolicy(
             partitionKeyPolicy,
             partitionKeySelector,
             pointReadPartitionKeySelector);
+        TransitionOperationCapabilities = new(true, this.partitionKeyPolicy.FixedPartitionKey);
         this.itemIdSelector = itemIdSelector ?? DefaultItemIdSelector;
         this.options = CosmosObservationOutboxRepositoryOptions.RequireValid(options ?? new());
     }
@@ -91,14 +101,13 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     public string EntityDocumentKind => options.EntityDocumentKind;
 
     /// <inheritdoc />
-    public EntityTransitionOperationCapabilities TransitionOperationCapabilities { get; } =
-        EntityTransitionOperationCapabilities.AtomicStateAndReceipt;
+    public EntityTransitionOperationCapabilities TransitionOperationCapabilities { get; }
 
     /// <inheritdoc />
     public EntityDefinition EntityDefinition => entityDefinition;
 
     /// <inheritdoc />
-    public string? IdentityField => null;
+    public string? IdentityField { get; }
 
     /// <inheritdoc />
     public string EntityType => observationType;

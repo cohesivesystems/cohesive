@@ -36,20 +36,59 @@ public sealed class RelationQuery<TInput, TResult>
 
     /// <summary>Projects a complete composed evaluation without discarding or replacing its retained evidence.</summary>
     /// <param name="outcome">Evaluation of this exact compilation request; the caller retains the full outcome.</param>
+    /// <param name="maximumRows">Maximum complete flat rows before typed assembly.</param>
+    /// <param name="maximumBytes">Maximum decoded scalar payload bytes across rows: UTF-8 strings, raw binary,
+    /// one-byte booleans, eight-byte numeric/time scalars, sixteen-byte decimal/date-time-offset; excludes object overhead.</param>
     /// <returns>The same application result produced from native complete rows.</returns>
     /// <exception cref="ArgumentNullException">The outcome is null.</exception>
     /// <exception cref="ArgumentException">The outcome belongs to another query snapshot.</exception>
     /// <exception cref="InvalidOperationException">Execution failed, was incomplete or suppressed, or returned unresolved rows.</exception>
-    public TResult AssembleResult(RelationQueryEvaluationOutcome outcome)
+    public TResult AssembleResult(RelationQueryEvaluationOutcome outcome, int maximumRows = int.MaxValue, long maximumBytes = long.MaxValue)
     {
         ArgumentNullException.ThrowIfNull(outcome);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRows);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
         if (!ReferenceEquals(outcome.Evaluation.Compilation, CompilationRequest))
             throw new ArgumentException("The outcome must belong to this exact query compilation request.", nameof(outcome));
         if (!outcome.IsSuccessful || outcome.Result is not { QueryResults.Length: 1 } result
             || result.QueryResults[0].State != RelationQueryExecutionOutputState.Complete
             || result.QueryResults[0].Rows.Any(row => !row.IsComplete))
             throw new InvalidOperationException("Typed projection requires a complete, unsuppressed query outcome.");
-        return project([.. result.QueryResults[0].Rows.Select(row => row.Value)]);
+        var rows = result.QueryResults[0].Rows;
+        if (rows.Length > maximumRows) throw new InvalidOperationException("Composed query exceeded its complete-result row bound.");
+        if (maximumBytes != long.MaxValue)
+        {
+            var remaining = maximumBytes;
+            foreach (var row in rows) Consume(row.Value, ref remaining);
+        }
+        return project([.. rows.Select(row => row.Value)]);
+    }
+
+    static void Consume(ObservationValue value, ref long remaining)
+    {
+        if (value.Kind == ObservationValueKind.Object)
+        {
+            foreach (var field in value.Fields!) Consume(field.Value, ref remaining);
+            return;
+        }
+        if (value.Kind == ObservationValueKind.Array)
+        {
+            foreach (var item in value.Array) Consume(item, ref remaining);
+            return;
+        }
+        long size = value.Kind switch
+        {
+            ObservationValueKind.Undefined or ObservationValueKind.Null => 0,
+            ObservationValueKind.String => System.Text.Encoding.UTF8.GetByteCount(value.GetRequiredString()),
+            ObservationValueKind.Bytes => value.Bytes.Length,
+            ObservationValueKind.Bool => 1,
+            ObservationValueKind.Decimal or ObservationValueKind.DateTimeOffset => 16,
+            ObservationValueKind.Int64 or ObservationValueKind.Double or ObservationValueKind.DateOnly
+                or ObservationValueKind.TimeOnly or ObservationValueKind.TimeSpan => 8,
+            _ => throw new InvalidOperationException("Unknown observation kind in query result.")
+        };
+        if (size > remaining) throw new InvalidOperationException("Composed query exceeded its complete-result byte bound.");
+        remaining -= size;
     }
 
 }
