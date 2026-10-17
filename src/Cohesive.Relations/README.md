@@ -2,7 +2,21 @@
 
 ## Instance composition
 
-`QueryModel` optionally groups instance-owned typed queries. Assign `Query(existingTypedQuery)` to each property; inherited `Definition` collects the canonical compilation requests once and rejects late or duplicate-ID additions. It neither compiles queries nor chooses database placement.
+`QueryModel` optionally groups instance-owned typed queries. Its `Queries` property exposes the same
+`QueryModelBuilder` available for standalone composition. `Queries.WithInput<T>("name").Array(id, recipe)`
+and `.SingleOrDefault(id, recipe)` own the isolated authoring session, parameter, finalization and registration.
+The recipe returns result rows or a nested mapping builder; it performs no runtime work. Stable IDs remain
+explicit; an optional display name defaults to the exact ID. `Query(existingTypedQuery)` (or builder
+`Include`) still supports separately authored queries. `Definition` freezes the ordered canonical requests.
+Failed recipes contribute nothing; duplicate/frozen registrations fail before invoking the recipe. A recipe
+cannot reentrantly modify or freeze its model. None of this compiles queries or chooses database placement.
+
+For nested results, `.SingleOrDefault<Detail>().From(joinedRows).Key(parent, p => p.Id, d => d.Id)`
+selects the rowset separately and declares both sides of its key mapping together. The keyed collection
+overload likewise takes the source key and child destination before the remaining field mappings. These
+forms lower through the existing identity slots and canonical assembly, preserving null-parent behavior,
+absent children, distinct children ordered by ordinal key, and conflict detection. The existing separate
+`From(..., key)` / `Identity(...)` forms remain available when the grouping key is not exposed in the result.
 
 `Cohesive.Relations` lets applications describe relationships, projections, filters, and queries in typed C# while
 leaving storage placement and execution strategy to compilers and adapters.

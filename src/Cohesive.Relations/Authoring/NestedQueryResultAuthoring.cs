@@ -39,6 +39,16 @@ public sealed class NestedQueryResultSource<TResult> where TResult : class
     readonly RelationQueryExpressionAuthoring author;
     internal NestedQueryResultSource(RelationQueryExpressionAuthoring author) => this.author = author;
 
+    /// <summary>Selects the complete rowset before declaring its parent key mapping.</summary>
+    /// <typeparam name="TFocus">Rowset focus.</typeparam><param name="rows">Complete joined branch.</param>
+    /// <returns>A key-selection stage, with no result fields available until the key is declared.</returns>
+    /// <exception cref="ArgumentNullException">Rows are null.</exception>
+    public NestedQueryResultRows<TResult> From<TFocus>(RelationQueryExpressionBoundNode<TFocus> rows) where TFocus : notnull
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        return new(author, rows.StructuralNode);
+    }
+
     /// <summary>Selects the joined branch and parent identity, enabling result mappings.</summary>
     /// <typeparam name="TFocus">Joined branch focus.</typeparam>
     /// <typeparam name="TParent">Parent value type.</typeparam>
@@ -52,9 +62,36 @@ public sealed class NestedQueryResultSource<TResult> where TResult : class
         IRelationQueryBinding<TParent> parent, Expression<Func<TParent, string>> key)
         where TFocus : notnull where TParent : notnull
     {
+        ArgumentNullException.ThrowIfNull(rows);
         var result = new NestedQueryResultBuilder<TResult>(author);
-        result.Initialize(rows, parent, key);
+        result.Initialize(rows.StructuralNode, parent, key);
         return result;
+    }
+}
+
+/// <summary>Maps a parent grouping key and its result property together.</summary>
+/// <typeparam name="TResult">Parent result type.</typeparam>
+public sealed class NestedQueryResultRows<TResult> where TResult : class
+{
+    readonly RelationQueryExpressionAuthoring author;
+    readonly RelationQueryNodeHandle<LogicalQueryNode> rows;
+    internal NestedQueryResultRows(RelationQueryExpressionAuthoring author, RelationQueryNodeHandle<LogicalQueryNode> rows)
+    { this.author = author; this.rows = rows; }
+
+    /// <summary>Declares the grouping identity and its destination using one projection slot.</summary>
+    /// <typeparam name="TParent">Source entity type.</typeparam>
+    /// <param name="source">Visible parent node or binding.</param>
+    /// <param name="key">Required ordinal string grouping identity.</param>
+    /// <param name="target">Direct result property receiving that identity.</param>
+    /// <returns>A fresh scalar and collection mapping builder.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">Source is foreign/not visible, or a selector is invalid.</exception>
+    public NestedQueryResultBuilder<TResult> Key<TParent>(IRelationQueryBinding<TParent> source,
+        Expression<Func<TParent, string>> key, Expression<Func<TResult, string>> target) where TParent : notnull
+    {
+        var result = new NestedQueryResultBuilder<TResult>(author);
+        result.Initialize(rows, source, key);
+        return result.Identity(target);
     }
 }
 
@@ -78,14 +115,13 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
         shape = author.ResultShape<TResult>();
     }
 
-    internal void Initialize<TFocus, TParent>(RelationQueryExpressionBoundNode<TFocus> rows,
+    internal void Initialize<TParent>(RelationQueryNodeHandle<LogicalQueryNode> rows,
         IRelationQueryBinding<TParent> parent, Expression<Func<TParent, string>> key)
-        where TFocus : notnull where TParent : notnull
+        where TParent : notnull
     {
-        ArgumentNullException.ThrowIfNull(rows);
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(key);
-        input = rows.StructuralNode;
+        input = rows;
         identity = AddSlot(parent, key);
     }
 
@@ -136,6 +172,25 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
         configure(child);
         collections.Add(new(path, childKey, child.Complete()));
         return this;
+    }
+
+    /// <summary>Maps child grouping identity and its result property together, then declares remaining fields.</summary>
+    /// <typeparam name="TChild">Child result type.</typeparam><typeparam name="TSource">Child source type.</typeparam>
+    /// <param name="target">Direct collection property.</param><param name="source">Visible child node or binding.</param>
+    /// <param name="key">Child grouping key; absent keys produce no child.</param>
+    /// <param name="identity">Direct child property receiving the key, without another projection slot.</param>
+    /// <param name="configure">Remaining child fields.</param><returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">A selector or callback is null.</exception>
+    /// <exception cref="ArgumentException">A selector or source is invalid.</exception>
+    /// <exception cref="InvalidOperationException">This builder is complete.</exception>
+    public NestedQueryResultBuilder<TResult> Collection<TChild, TSource>(Expression<Func<TResult, IReadOnlyList<TChild>>> target,
+        IRelationQueryBinding<TSource> source, Expression<Func<TSource, string>> key,
+        Expression<Func<TChild, string>> identity, Action<NestedQueryChildBuilder<TResult, TChild>> configure)
+        where TChild : class where TSource : notnull
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        _ = Target(author.ResultShape<TChild>(), identity);
+        return Collection(target, source, key, child => { child.Identity(identity); configure(child); });
     }
 
     /// <summary>Freezes the canonical raw query and its portable assembly metadata into one typed declaration.</summary>

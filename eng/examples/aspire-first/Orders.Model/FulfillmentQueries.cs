@@ -8,15 +8,38 @@ namespace AspireFirst.Orders;
 /// <summary>Immutable canonical fulfillment query declarations; backend preparation belongs to host composition.</summary>
 public sealed class FulfillmentQueries : QueryModel
 {
-    readonly FulfillmentDomain domain;
-
     /// <summary>Declares both queries against the supplied canonical domain.</summary>
     /// <param name="domain">Shared entity and relationship authority.</param>
     public FulfillmentQueries(FulfillmentDomain domain)
     {
-        this.domain = domain;
-        OrderDetails = Query(DefineOrderDetails());
-        ReservationAvailability = Query(DefineReservationAvailability());
+        var queries = Queries.WithInput<string>("orderId");
+        OrderDetails = queries.SingleOrDefault("fulfillment/order-details", (query, orderId) =>
+        {
+            var orders = OrdersById(query, orderId, domain);
+            var reservations = orders.TraverseInverse(domain.ReservationOrder);
+            var inventory = reservations.Traverse(domain.ReservationItem);
+            return query.SingleOrDefault<OrderDetails>()
+                .From(inventory)
+                .Key(orders, order => order.Id, result => result.Id)
+                .Field(result => result.Status, orders, order => order.Status)
+                .Collection(result => result.Reservations, reservations, reservation => reservation.Id, item => item.Id,
+                    items => items
+                        .Field(result => result.Sku, inventory, item => item.Sku)
+                        .Field(result => result.Quantity, reservations, reservation => reservation.Quantity)
+                        .Field(result => result.AvailableStock, inventory, item => item.Available));
+        }, name: "OrderDetails");
+
+        ReservationAvailability = queries.Array("fulfillment/reservation-availability", (query, orderId) =>
+        {
+            var orders = OrdersById(query, orderId, domain);
+            var demand = orders.TraverseInverse(domain.ReservationOrder,
+                (order, reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity));
+            var inventory = query.Source(domain.Inventory).Where(item => item.Partition == FulfillmentStoragePolicy.LocalPartition);
+            return demand
+                .LeftJoin(inventory, (row, item) => row.Sku == item.Sku)
+                .Select((row, item) => new ReservationAvailability(
+                    row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available));
+        }, name: "ReservationAvailability");
     }
 
     /// <summary>Canonical query plus portable nested-result assembly; no compilation or PostgreSQL configuration.</summary>
@@ -25,44 +48,8 @@ public sealed class FulfillmentQueries : QueryModel
     /// <summary>Canonical query shared by native and composed registrations.</summary>
     public RelationQuery<string, ReservationAvailability[]> ReservationAvailability { get; }
 
-    RelationQuery<string, OrderDetails?> DefineOrderDetails()
-    {
-        var query = RelationQuery.Expression();
-        var orderId = query.Parameter<string>("orderId");
-        var orders = OrdersById(query, orderId);
-        var reservations = orders.TraverseInverse(domain.ReservationOrder);
-        var inventory = reservations.Traverse(domain.ReservationItem);
-        return query.SingleOrDefault<OrderDetails>()
-            .From(inventory, orders, order => order.Id)
-            .Identity(result => result.Id)
-            .Field(result => result.Status, orders, order => order.Status)
-            .Collection(result => result.Reservations, reservations, reservation => reservation.Id,
-                items => items
-                    .Identity(result => result.Id)
-                    .Field(result => result.Sku, inventory, item => item.Sku)
-                    .Field(result => result.Quantity, reservations, reservation => reservation.Quantity)
-                    .Field(result => result.AvailableStock, inventory, item => item.Available))
-            .Build(id: new("fulfillment/order-details"), name: new("OrderDetails"), parameter: orderId);
-    }
-
-    RelationQuery<string, ReservationAvailability[]> DefineReservationAvailability()
-    {
-        var query = RelationQuery.Expression();
-        var orderId = query.Parameter<string>("orderId");
-        var orders = OrdersById(query, orderId);
-        var demand = orders.TraverseInverse(domain.ReservationOrder,
-            (order, reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity));
-        var inventory = query.Source(domain.Inventory).Where(item => item.Partition == FulfillmentStoragePolicy.LocalPartition);
-        var definition = demand
-            .LeftJoin(inventory, (row, item) => row.Sku == item.Sku)
-            .Select((row, item) => new ReservationAvailability(
-                row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available))
-            .BuildArrayQuery(id: new("fulfillment/reservation-availability"),
-                name: new("ReservationAvailability"), parameter: orderId);
-        return definition;
-    }
-
-    RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(RelationQueryExpressionAuthoring query, RelationQueryExpressionParameter<string> orderId) =>
+    static RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(RelationQueryExpressionAuthoring query,
+        RelationQueryExpressionParameter<string> orderId, FulfillmentDomain domain) =>
         query.Source(domain.Orders).Where(order => order.Id == orderId.Value && order.Partition == FulfillmentStoragePolicy.LocalPartition);
 
 }
