@@ -13,9 +13,27 @@ public sealed class GeneratedProcessDependencyTests
     internal static readonly DomainEntity<Item> Entity = new DomainModelBuilder().Entity<Item>("dependency/item");
     internal static Transition<Item, string, string> Transition(string id = "dependency/change") =>
         Entity.Transition<string, string>(new(id), new("1"), builder => builder.Return("changed"));
-    internal static EntityPointRead<Item, string, string> Read() => new(
-        HostedQuery<string, string>.Create(new("dependency/read"), new("1"), new("test/point-read", "1"),
-            "dependency/item", RunControlFixture.Provenance), Entity, input => input, item => item?.Id ?? "missing");
+    internal static EntityPointRead<Item, string, string> Read() => Entity.PointRead(
+        id: new("dependency/read"), revision: new("1"), result: item => item?.Id ?? "missing");
+
+    [Fact]
+    public void Entity_point_read_preserves_identity_absence_and_revision()
+    {
+        var read = Read();
+        Assert.Same(Entity, read.Entity);
+        Assert.Equal("item-1", read.Key("item-1"));
+        Assert.Equal("missing", read.Result(null));
+        Assert.Equal("item-1", read.Result(new Item("item-1", "local")));
+        Assert.Equal(Read().Reference, read.Reference);
+        var revised = Entity.PointRead(new("dependency/read"), new("2"), item => item?.Id ?? "missing");
+        Assert.NotEqual(read.Reference, revised.Reference);
+        Assert.Equal("2", revised.Query.Implementation.Version);
+    }
+
+    [Fact]
+    public void Entity_point_read_rejects_missing_projection_at_setup() =>
+        Assert.Throws<ArgumentNullException>(() => Entity.PointRead<Item, string>(
+            new("dependency/read"), new("1"), null!));
 
     [Fact]
     public void Generated_attachments_follow_actual_typed_invocations_and_retain_authorities()

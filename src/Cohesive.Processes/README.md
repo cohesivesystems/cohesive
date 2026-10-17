@@ -34,6 +34,21 @@ through `IProcessDependencyReceiver`; no repository is resolved during generatio
 hosted queries remain explicit adapter obligations. The point-read recipe retains an existing hosted-query
 contract and explicit entity/key/result attachments; it does not infer cardinality from a method name.
 
+For the common key-based read, use the entity declaration directly:
+
+```csharp
+readStock = domain.Inventory.PointRead(
+    id: new("fulfillment/stock"), revision: new("2"),
+    result: item => new InventoryAvailability(item is not null, item?.Available ?? 0));
+// Inside the generated process:
+var stock = await process.Query(readStock, input.Sku);
+```
+
+The library derives the hosted-query configuration, implementation reference and producer provenance.
+The explicit revision covers the result projection; change it when behavior changes. The projection
+handles absence explicitly. Hosting resolves the repository and trusted partition through the existing
+generated dependency path, without embedding persistence in the process.
+
 The standalone factory style below remains supported and uses the same lowering path.
 
 ## Author a Process

@@ -156,12 +156,10 @@ public sealed class InventoryTransitions
 }
 
 /// <summary>Canonical multi-entity sequence. This syntax is compiled into Process IR, never executed as C#.</summary>
-[Process(id: "fulfillment/submit", revision: "3")]
+[Process(id: "fulfillment/submit", revision: "4")]
 public sealed partial class FulfillmentProcess : ProcessModel<FulfillOrder, FulfillmentResult>
 {
-    // A native point read is an explicit hosted query; no SQL or repository call enters the Process IR.
-    /// <summary>Explicit native inventory point-read contract.</summary>
-    public EntityPointRead<InventoryItem, FulfillOrder, InventoryAvailability> StockPointRead { get; }
+    readonly EntityPointRead<InventoryItem, string, InventoryAvailability> readStock;
 
     readonly InventoryTransitions inventory;
     readonly OrderTransitions orders;
@@ -174,21 +172,16 @@ public sealed partial class FulfillmentProcess : ProcessModel<FulfillOrder, Fulf
     {
         this.inventory = inventory;
         this.orders = orders;
-        StockPointRead = new(HostedQuery<FulfillOrder, InventoryAvailability>.Create(
-            new("fulfillment/stock"),
-            new("1"),
-            new("aspire-first.inventory-point-read", "1"),
-            domain.Inventory.Definition.Shape.Id.Value,
-            Provenance), domain.Inventory,
-            key: input => input.Sku,
+        readStock = domain.Inventory.PointRead(
+            id: new("fulfillment/stock"),
+            revision: new("2"),
             result: item => new InventoryAvailability(item is not null, item?.Available ?? 0));
-
     }
 
     /// <inheritdoc />
     protected override async ProcessTask<FulfillmentResult> Execute(ProcessContext process, FulfillOrder input)
     {
-        var stock = await process.Query(StockPointRead, input);
+        var stock = await process.Query(readStock, input.Sku);
         if (!stock.Exists)
             return new FulfillmentResult("Rejected", "Inventory does not exist.");
         // The query is advisory. A retry may observe less stock after its own prior reservation;
