@@ -1,5 +1,33 @@
 using BenchmarkDotNet.Running;
 
+if (args is ["--graph-counters"])
+{
+    Console.WriteLine("fields,operation,median_allocated_bytes");
+    foreach (var fields in new[] { 1, 128, 1024 })
+    {
+        var benchmark = new CompiledGraphProjectionBenchmarks { Fields = fields };
+        benchmark.Setup();
+        Measure("project", () => benchmark.Project());
+        Measure("decode", () => benchmark.DecodeFresh());
+        void Measure<T>(string operation, Func<T> run)
+        {
+            for (var warm = 0; warm < 8; warm++) run();
+            var samples = new long[7];
+            for (var i = 0; i < samples.Length; i++)
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                var result = run();
+                samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+                GC.KeepAlive(result);
+            }
+            Array.Sort(samples);
+            Console.WriteLine($"{fields},{operation},{samples[3]}");
+        }
+    }
+    return;
+}
+
+
 if (args is ["--allocation-counters"])
 {
     Console.WriteLine("rows,median_allocated_bytes");

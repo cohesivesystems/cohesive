@@ -1,4 +1,4 @@
-# Property-name reuse during observation projection
+# String reuse during observation projection
 
 The original X12 Process tests still project complete shape graphs through JSON into observations.
 `SmallObservationFields.Read` and the large-object reader decoded every property name independently,
@@ -110,3 +110,18 @@ freeze its complete output and replace only the control Core DLL with the offici
 Build/freeze Ari's protocol-preparation harness once with the public packages and once with the documented
 `UseSourceAssemblies.targets`, `CohesiveSourceAssemblyDirectory` and matching `CohesiveCodeGenCliDll`.
 Use `eng/runtime-performance/durable-bookkeeping/compare-ari.py --runs 5` to compare them.
+
+## Compiled-graph follow-up
+
+The same bounded traversal table now also reuses string values by exact raw UTF-8 equality. Repeated
+field enums, discriminator literals and annotation text no longer need separate equal strings at every
+occurrence. Names and values can share a string when their raw contents match. Different escape spellings
+may still decode separately. The initial no-hit heuristic now counts both names and values; collisions
+remain ordinary decoding, not an identity guarantee. Every lookup still uses the parser's string decoding
+and rejection policy on its first occurrence. The table is returned and cleared on both success and failure.
+
+This extends the existing acquisition walk and adds no global cache or alternate JSON reader.
+The tiny-input bypass is unchanged. An attempted streaming-reader replacement was discarded after the
+128-field synthetic graph allocated 269,424 bytes versus 236,696 for the existing path. It is not included.
+See [final graph projection measurements](prepared-observation-projections.md#compiled-graph-materialization)
+for the shipped path, the typed-decoding change and its cold preparation tradeoff.
