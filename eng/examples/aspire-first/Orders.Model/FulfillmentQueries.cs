@@ -13,12 +13,12 @@ public sealed class FulfillmentQueries : QueryModel
     public FulfillmentQueries(FulfillmentDomain domain)
     {
         var queries = Queries.WithInput<string>("orderId");
-        OrderDetails = queries.SingleOrDefault("fulfillment/order-details", (query, orderId) =>
+        OrderDetails = queries.SingleOrDefault<OrderDetails>("fulfillment/order-details", (query, orderId, output) =>
         {
             var orders = OrdersById(query, orderId, domain);
             var reservations = orders.TraverseInverse(domain.ReservationOrder);
             var inventory = reservations.Traverse(domain.ReservationItem);
-            return query.SingleOrDefault<OrderDetails>()
+            return output
                 .From(inventory)
                 .Key(orders, order => order.Id, result => result.Id)
                 .Field(result => result.Status, orders, order => order.Status)

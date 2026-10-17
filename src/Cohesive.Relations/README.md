@@ -5,7 +5,9 @@
 `QueryModel` optionally groups instance-owned typed queries. Its `Queries` property exposes the same
 `QueryModelBuilder` available for standalone composition. `Queries.WithInput<T>("name").Array(id, recipe)`
 and `.SingleOrDefault(id, recipe)` own the isolated authoring session, parameter, finalization and registration.
-The recipe returns result rows or a nested mapping builder; it performs no runtime work. Stable IDs remain
+The array recipe returns result rows. The nested recipe receives `(query, input, output)` and returns
+`output.From(rows).Key(...)` mappings; only the outer `SingleOrDefault<TResult>` declares cardinality
+and result type. Recipes perform no runtime work. Stable IDs remain
 explicit; an optional display name defaults to the exact ID. `Query(existingTypedQuery)` (or builder
 `Include`) still supports separately authored queries. `Definition` freezes the ordered canonical requests.
 Failed recipes contribute nothing; duplicate/frozen registrations fail before invoking the recipe. A recipe

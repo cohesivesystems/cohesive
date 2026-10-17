@@ -132,6 +132,7 @@ without a second decrement. Separate store consistency remains a limit even when
 The query catalog exposes only logical queries. Composed storage preparation infers supported closed native prefixes; an explicit projection ID remains available as an advanced placement override. Inference runs at preparation, not per request, and does not imply a distributed snapshot.
 
 `FulfillmentQueries` uses `Queries.WithInput<string>("orderId")` to author and register each query in one
-place. Array recipes return their final projection; nested recipes return keyed field/collection mappings.
+place. Array recipes return their final projection; nested recipes receive a typed output source and return keyed field/collection mappings, so
+`SingleOrDefault<OrderDetails>` is declared only once.
 Neither repeats a terminal query ID/parameter registration. Nested `.From(rows).Key(source, sourceKey,
 resultKey)` and the keyed collection mapping preserve the existing portable assembly and query fingerprints.

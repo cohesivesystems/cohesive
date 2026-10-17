@@ -40,14 +40,14 @@ public sealed class QueryModelInputBuilder<TInput>
     /// <summary>Authors and registers a nested single-parent query, preserving keyed result assembly.</summary>
     /// <typeparam name="TResult">Parent result type.</typeparam>
     /// <param name="id">Stable semantic query ID.</param>
-    /// <param name="define">Builds nested mappings in the supplied session; the builder is finalized automatically.</param>
+    /// <param name="define">Builds mappings using the supplied session, input and typed result source; cardinality and finalization are owned by this method.</param>
     /// <param name="name">Optional display name, defaulting to the exact semantic ID.</param>
     /// <returns>The registered query, returning null when no parent exists.</returns>
     /// <exception cref="ArgumentNullException">Callback is null.</exception>
     /// <exception cref="ArgumentException">Identity, input, mapping or session ownership is invalid, or the ID is already registered.</exception>
     /// <exception cref="InvalidOperationException">The model or result builder is frozen.</exception>
     public RelationQuery<TInput, TResult?> SingleOrDefault<TResult>(string id,
-        Func<RelationQueryExpressionAuthoring, RelationQueryExpressionParameter<TInput>, NestedQueryResultBuilder<TResult>> define,
+        Func<RelationQueryExpressionAuthoring, RelationQueryExpressionParameter<TInput>, NestedQueryResultSource<TResult>, NestedQueryResultBuilder<TResult>> define,
         string? name = null) where TResult : class
     {
         ArgumentNullException.ThrowIfNull(define);
@@ -57,7 +57,7 @@ public sealed class QueryModelInputBuilder<TInput>
         {
             var session = RelationQuery.Expression();
             var parameter = session.Parameter<TInput>(parameterName);
-            var result = define(session, parameter);
+            var result = define(session, parameter, session.SingleOrDefault<TResult>());
             ArgumentNullException.ThrowIfNull(result);
             return result.Build(identity, displayName, parameter);
         });

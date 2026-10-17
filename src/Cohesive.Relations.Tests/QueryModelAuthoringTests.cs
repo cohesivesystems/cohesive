@@ -30,10 +30,10 @@ public sealed class QueryModelAuthoringTests
     public void Nested_key_mappings_preserve_fingerprint_and_reuse_identity_slots()
     {
         var model = new QueryModelBuilder();
-        var declared = model.WithInput<string>("id").SingleOrDefault("details", (q, id) =>
+        var declared = model.WithInput<string>("id").SingleOrDefault<Detail>("details", (q, id, output) =>
         {
             var rows = q.Source<Item>().Where(item => item.Id == id.Value);
-            return q.SingleOrDefault<Detail>().From(rows).Key(rows, item => item.Id, detail => detail.Id)
+            return output.From(rows).Key(rows, item => item.Id, detail => detail.Id)
                 .Collection(detail => detail.Children, rows, item => item.Id, child => child.Id, _ => { });
         }, name: "Details");
         var author = RelationQuery.Expression();
@@ -95,6 +95,18 @@ public sealed class QueryModelAuthoringTests
         var other = RelationQuery.Expression();
         var rows = Rows(other, other.Parameter<string>("id"));
         Assert.Throws<ArgumentException>(() => model.WithInput<string>("id").Array("foreign", (_, _) => rows));
+        Assert.Empty(model.Definition);
+    }
+
+    [Fact]
+    public void Nested_recipe_rejects_foreign_result_builder_without_registering_query()
+    {
+        var model = new QueryModelBuilder();
+        var foreign = RelationQuery.Expression();
+        var source = foreign.Source<Item>();
+        var mapping = foreign.SingleOrDefault<Detail>().From(source).Key(source, item => item.Id, detail => detail.Id);
+        Assert.Throws<ArgumentException>(() => model.WithInput<string>("id")
+            .SingleOrDefault<Detail>("foreign", (_, _, _) => mapping));
         Assert.Empty(model.Definition);
     }
 
