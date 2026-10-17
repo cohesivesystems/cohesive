@@ -130,6 +130,7 @@ public sealed class ProcessInterpreterRealizationTests
         {
             RequestPlan(out _),
             ForkPlan(),
+            DurableReadPlan(),
             Compile(
                 new CanonicalProcessDefinition(
                     StringContract,
@@ -299,6 +300,18 @@ public sealed class ProcessInterpreterRealizationTests
             static assembly => assembly.Name?.Contains("DurableTask", StringComparison.OrdinalIgnoreCase) == true);
     }
 
+    static CompiledProcessPlan DurableReadPlan()
+    {
+        var read = new ExecutionDefinitionReference(new("query/read"), new("1"),
+            new(ExecutionDefinitionFingerprinter.Algorithm, ExecutionDefinitionFingerprinter.Canonicalization, new string('a', 64)));
+        return Compile(new CanonicalProcessDefinition(StringContract, StringContract, new("read"), [
+            new EvaluateRelationProcessNode(new("read"), read, Expr.BoundValue(ProcessBindingIds.Input),
+                new(Edge("read-return", "return")), new(progress: ProcessReadProgress.Durable)),
+            new ReturnProcessNode(new("return"), Expr.Const("done"))
+        ], ProcessRecoveryPolicy.ContinueAttempt), contracts: null,
+            definitions: [new(read, ProcessDefinitionLinkKind.RelationQuery, StringContract, StringContract)]);
+    }
+
     static CompiledProcessPlan ReturnPlan() => Compile(
         new CanonicalProcessDefinition(
             StringContract,
@@ -363,7 +376,8 @@ public sealed class ProcessInterpreterRealizationTests
     static CompiledProcessPlan Compile(
         CanonicalProcessDefinition definition,
         InteractionContractCatalog? contracts,
-        ProcessCompilationOptions? options = null)
+        ProcessCompilationOptions? options = null,
+        IEnumerable<ProcessDefinitionLink>? definitions = null)
     {
         var document = ProcessDefinitionDocuments.Create(
             new("process/interpreter-realization-tests"),
@@ -372,7 +386,7 @@ public sealed class ProcessInterpreterRealizationTests
             Provenance());
         var result = ProcessStaticCompiler.Compile(
             document,
-            new ProcessDefinitionValidationContext(interactionContracts: contracts),
+            new ProcessDefinitionValidationContext(interactionContracts: contracts, definitions: definitions),
             options ?? ProcessCompilationOptions.Default);
         Assert.True(result.IsSuccessful, Format(result.Validation));
         return Assert.IsType<CompiledProcessPlan>(result.Plan);

@@ -17,7 +17,7 @@ public sealed partial class OrderStorageIntegrationTests
         await using var inventoryDatabase = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(InventoryConnectionVariable)!);
         foreach (var database in new[] { orders, inventoryDatabase })
         {
-            using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+            using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
             await using var command = database.CreateCommand(await schema.ReadToEndAsync());
             await command.ExecuteNonQueryAsync();
         }
@@ -25,14 +25,14 @@ public sealed partial class OrderStorageIntegrationTests
         var sku = "subplan-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create();
         var persistence = Model.Storage.Bind(orders);
-        var inventoryPersistence = Model.Storage.BindInventory(inventoryDatabase);
+        var inventoryPersistence = PostgresSplitFixture.BindInventory(Model, inventoryDatabase);
         var orderRepository = persistence.Repository(Model.Domain.Orders);
         var reservations = persistence.Repository(Model.Domain.Reservations);
         try
         {
-            await orderRepository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, Guid.Parse(id)));
-            var native = Model.Availability.BindNative(persistence, Model.StorageQueries);
-            var composed = Model.Availability.BindComposed(persistence, inventoryPersistence);
+            await orderRepository.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, Guid.Parse(id)));
+            var native = new ReservationAvailabilityQueryBindings(Model.Queries).BindNative(persistence, Model.Endpoints.Plan.QueryDependencies);
+            var composed = new ReservationAvailabilityQueryBindings(Model.Queries).BindComposed(persistence, inventoryPersistence);
             var emptyNative = await native.ReadAsync(id);
             var emptyComposed = await composed.ReadAsync(id);
             Assert.Equal(emptyNative, emptyComposed);
@@ -40,7 +40,7 @@ public sealed partial class OrderStorageIntegrationTests
             foreach (var registration in new[] { persistence, inventoryPersistence })
             {
                 var repository = registration.Repository(Model.Domain.Inventory);
-                var item = new InventoryItem(sku, FulfillmentDemo.LocalPartition, 8);
+                var item = new InventoryItem(sku, FulfillmentStoragePolicy.LocalPartition, 8);
                 await repository.Upsert(context, item);
                 Assert.Equal(item, await repository.TryGetEntity(context, sku));
             }
@@ -48,7 +48,7 @@ public sealed partial class OrderStorageIntegrationTests
             {
                 var reservationId = Guid.NewGuid().ToString("D");
                 await reservations.Upsert(context,
-                    new Reservation(reservationId, FulfillmentDemo.LocalPartition, id, sku, quantity));
+                    new Reservation(reservationId, FulfillmentStoragePolicy.LocalPartition, id, sku, quantity));
             }
             var expected = await native.ReadAsync(id);
             var actual = await composed.ReadAsync(id);

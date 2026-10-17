@@ -34,6 +34,28 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         Assert.Contains("CreateDefinition() => Define(Metadata)", result.Results.Single().GeneratedSources.Single().SourceText.ToString());
     }
 
+    [Fact]
+    public void Type_tag_accepts_primary_constructor_declaration_dependencies()
+    {
+        var source = """
+            using Cohesive.Execution;
+            using Cohesive.Processes.Authoring;
+            [Process(id: "test/instance", revision: "1")]
+            public sealed partial class InstanceProcess(ExecutionDefinitionReference query) : ProcessModel<string, string>
+            {
+                protected override async ProcessTask<string> Execute(ProcessContext process, string input)
+                {
+                    var result = await process.Query<string>(query, input);
+                    return result;
+                }
+            }
+            """;
+        var result = RunGenerator(CreateCompilation(source), out var compilation);
+        Assert.Empty(result.Diagnostics.Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error));
+        Assert.Empty(compilation.GetDiagnostics().Where(d => d.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error));
+        Assert.Contains("CreateDefinition() => Define(Metadata)", result.Results.Single().GeneratedSources.Single().SourceText.ToString());
+    }
+
     [Theory]
     [InlineData("[Process(id: \"test\", revision: \"1\", recovery: (Cohesive.Processes.IR.ProcessRecoveryPolicy)99)]")]
     [InlineData("[Process(id: \"\", revision: \"1\")]")]

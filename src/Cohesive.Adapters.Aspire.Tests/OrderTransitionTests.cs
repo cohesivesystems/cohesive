@@ -19,7 +19,7 @@ public sealed class OrderTransitionTests
         var compilation = Model.Orders.Submit.Compile();
         Assert.True(compilation.IsSuccessful, string.Join("; ", compilation.Validation.Diagnostics));
         var plan = compilation.Plan!;
-        var order = new Order("order-1", FulfillmentDemo.LocalPartition, status);
+        var order = new Order("order-1", FulfillmentStoragePolicy.LocalPartition, status);
         var decision = TransitionReferenceInterpreter.DecideFullState(plan, new("test/submit"),
             PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(Cohesive.Prelude.Unit.Value)),
             PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(order)));

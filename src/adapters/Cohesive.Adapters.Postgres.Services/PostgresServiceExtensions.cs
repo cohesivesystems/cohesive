@@ -21,6 +21,24 @@ public static class PostgresServiceExtensions
     public static PostgresPreparedQueryEvidence PrepareService(this PostgresPersistenceBindings bindings,
         ServiceBuilder service, InfrastructureTargetFacilityId implementation) => PrepareService(bindings, service.Dependencies, implementation);
 
+    /// <summary>Validates endpoint coverage and prepares native query evidence directly from the portable implementation plan.</summary>
+    /// <param name="bindings">Offline native database mappings.</param>
+    /// <param name="plan">Endpoint implementation authority; reading its selections freezes and validates the plan.</param>
+    /// <param name="implementation">Stable target implementation identity.</param>
+    /// <returns>Database-affine snapshot requirements and prepared PostgreSQL evidence, without database IO.</returns>
+    /// <exception cref="ArgumentNullException">Bindings or plan is null.</exception>
+    /// <exception cref="ServiceBindingValidationException">Endpoint coverage or native query selection is invalid.</exception>
+    /// <exception cref="ArgumentException">The plan selects no queries.</exception>
+    /// <exception cref="RelationQueryPreparationException">Semantic query compilation fails.</exception>
+    /// <exception cref="PostgresQueryPreparationException">Native query preparation fails.</exception>
+    public static PostgresPreparedQueryEvidence PrepareService(this PostgresPersistenceBindings bindings,
+        ServiceImplementationPlan plan, InfrastructureTargetFacilityId implementation)
+    {
+        ArgumentNullException.ThrowIfNull(bindings);
+        ArgumentNullException.ThrowIfNull(plan);
+        return PrepareService(bindings, plan.QueryDependencies, implementation);
+    }
+
     /// <summary>Prepares query evidence from API-derived dependency selections.</summary>
     /// <param name="bindings">Offline native mappings.</param><param name="service">Selected query requirements.</param>
     /// <param name="implementation">Target implementation identity.</param><returns>Native prepared evidence.</returns>

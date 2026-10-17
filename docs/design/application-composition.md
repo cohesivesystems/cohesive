@@ -50,8 +50,8 @@ consumers inspect query selections. `Build(services, persistence)` still explici
 `StorageModel` groups typed native binding contributions through `StorageModelBuilder`. Each recipe runs
 once during constructor authoring; activation freezes collection membership. One model can own several
 databases or providers without introducing a provider-neutral mapping DSL. `InfrastructureModel` records one `Infrastructure.Define` recipe
-and caches its canonical result. Native Aspire configuration remains in `OrdersApp.Configure(builder)`.
-The AppHost activates `OrdersApp`, whose constructor consumes the same `FulfillmentApplication` graph used
+and caches its canonical result. Native Aspire configuration remains in `FulfillmentInfrastructure.Configure(builder)`.
+The AppHost activates `FulfillmentInfrastructure`, whose constructor consumes the same `FulfillmentApplication` graph used
 by the worker. The worker never references AppHost or Aspire hosting packages.
 
 There is no global semantic identity registry. Independent compositions still govern their own revision changes.
@@ -191,3 +191,19 @@ native routes at `/api/routes/{method}/{template}` (JSON Pointer escaping). Miss
 the staged endpoint index; repeated mapping identifies `/api/mapping/state`. Coverage failures retain all
 identified endpoint diagnostics instead of a single generic location. Process endpoint authoring retains the
 one service document built during selection and reuses it for HTTP projection.
+
+
+The Aspire example now has two explicit executable compositions over `Orders.Model`: the default
+PostgreSQL-only worker and the PostgreSQL/Cosmos worker. Model activation shares semantic instances within
+each composition; no provider selection enters the domain/API catalogs. Native table mappings can be reused
+without placing every mapped entity in PostgreSQL. Service persistence selections bind exact entity contracts
+and query instances, cache preparation by requested bounds, and preserve per-backend receipt capabilities.
+
+### Example source organization
+
+`FulfillmentDomain.cs` colocates entity declarations, transitions and the generated process while retaining
+separate model types. `OrderApi.cs` colocates the contract and `OrderEndpoints : ApiBindingModel`.
+`Orders.Model/Storage/FulfillmentStorage.cs` holds shared native mappings, the fixed demo partition policy
+and the PostgreSQL-only storage model. Both compositions reuse it; mixed placement remains in its own
+storage model. Native host declarations are named `FulfillmentInfrastructure` and
+`PostgresCosmosFulfillmentInfrastructure`. This organization changes no execution lifetime or HTTP contract.

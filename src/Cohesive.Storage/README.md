@@ -239,7 +239,9 @@ portable storage IR. Use `StorageModelBuilder` directly when a subclass is unnec
 alone. Runtime connections remain explicit attachments.
 
 
-For example, one `FulfillmentStorage : StorageModel` declares both `Bindings` and `InventoryBindings`
-using `Storage.Define(...)`. Both properties retain `PostgresPersistenceBindings` as their type; the base
+For example, one `FulfillmentStorage : StorageModel` declares its selected native binding sets
+using `Storage.Define(...)`. Properties retain their native binding types; the base
 class does not select a provider or require another subclass for each database. Different adapters can
 contribute their own immutable binding types through the same builder.
+
+`EntityPartitionKeyPolicy.Fixed(value, observationField)` exposes fixed partition evidence and rejects writes whose declared field differs. Cosmos repositories propagate that evidence to process lookup/receipt admission; delegate policies do not manufacture fixed evidence.

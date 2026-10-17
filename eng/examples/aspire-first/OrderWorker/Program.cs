@@ -12,14 +12,14 @@ var model = ModelActivator.Create<FulfillmentApplication>();
 builder.Services.AddRequestOperationContext();
 builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
 builder.Services.AddCohesiveExceptionHandling();
-var connectionString = builder.Configuration.GetConnectionString(FulfillmentResources.DatabaseName)
+var connectionString = builder.Configuration.GetConnectionString(FulfillmentStoragePolicy.OrdersDatabaseName)
     ?? throw new InvalidOperationException("The native Aspire orders database reference is required.");
 await using var database = NpgsqlDataSource.Create(connectionString);
 var persistence = model.Storage.Bind(database);
-var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentDemo.LocalPartition);
+var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
 
 // The shared repository owns DML and validation, not schema lifecycle.
-using (var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")
+using (var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")
     ?? throw new InvalidOperationException("The explicit order schema resource is missing.")))
 await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync()))
     await initialize.ExecuteNonQueryAsync();

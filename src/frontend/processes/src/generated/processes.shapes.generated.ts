@@ -283,6 +283,7 @@ export interface InvokeTransitionProcessNode {
 }
 
 export interface EvaluateRelationProcessNode {
+  policy?: ProcessReadPolicy | null;
   relation: ExecutionDefinitionReference;
   input: Expr;
   continuation: ProcessContinuation;
@@ -703,6 +704,14 @@ export interface ProcessOutputBinding {
   contract: ValueContract;
 }
 
+export interface ProcessReadPolicy {
+  progress: ProcessReadProgress;
+  timeout?: TimeSpan | null;
+  maxAttempts: number;
+  retryDelay: TimeSpan;
+  retryableFailureCodes: string[];
+}
+
 export interface RequestContractReference {
   definition: ExecutionDefinitionReference;
 }
@@ -1034,6 +1043,18 @@ export const executionTokenDispositionLabels: Record<ExecutionTokenDisposition, 
   Failed: 'Failed',
   Cancelled: 'Cancelled',
   Pending: 'Pending',
+};
+
+export type ProcessReadProgress = 'ActivationLocal' | 'Durable';
+
+export const processReadProgresses = {
+  activationLocal: 'ActivationLocal',
+  durable: 'Durable',
+} as const satisfies Record<string, ProcessReadProgress>;
+
+export const processReadProgressLabels: Record<ProcessReadProgress, string> = {
+  ActivationLocal: 'ActivationLocal',
+  Durable: 'Durable',
 };
 
 export type RequestTerminalOutcomeId = string;

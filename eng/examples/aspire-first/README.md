@@ -1,642 +1,138 @@
-# Aspire-first fulfillment domain
+# One fulfillment model, two storage compositions
 
-Start with a native Aspire AppHost; attach Cohesive requirements to existing objects.
-The example keeps PostgreSQL options, project metadata, connection references, readiness
-waits and volume configuration in native Aspire. It adds no second deployment inventory.
+Declare orders, reservations, inventory, their queries and transitions once. Attach native storage and
+Aspire resources to choose how the same HTTP API executes.
 
-## Read the flow
+| Run | Orders and reservations | Inventory | Joined reads |
+| --- | --- | --- | --- |
+| `AppHost` | PostgreSQL | Same PostgreSQL database | One SQL statement |
+| `PostgresCosmosAppHost` | PostgreSQL | Cosmos DB | Bounded composed reads; availability pushes the order/reservation join into SQL |
 
-1. `AppHost/OrdersApp.cs` declares two canonical nodes: storage requires a single-statement snapshot
-   for each exact fulfillment query; the application requires .NET project execution and storage readiness.
-2. `Configure` creates the ordinary native AppHost: `AddPostgres().WithDataVolume()`,
-   `AddDatabase`, `AddProject<Projects.OrderWorker>`, `WithReference` and `WaitFor`.
-3. `AspireInfrastructureAssociation.Attach` associates those **same** database/project
-   objects with the canonical nodes. PostgreSQL evidence comes from prepared queries over
-   `model.Storage.Bindings`; project execution comes from native Aspire metadata. Native names
-   supply physical identities; there is no repeated physical-name table. The PostgreSQL
-   server, its password parameter and an illustrative Redis container remain Aspire-only.
-4. The existing target-deployment compiler matches requirements against evidence and
-   checks canonical coverage. The AppHost refuses to start if the plan is incomplete.
-5. Once the user starts the AppHost, ordinary Aspire runs the database and application.
-   `OrderWorker/FulfillmentDomain.cs` declares `Order`, `InventoryItem` and `Reservation`
-   once through the instance `DomainModel` and its existing `DomainModelBuilder`. Typed handles retain those exact definitions
-   for relationships, storage and queries. `FulfillmentStorage` attaches
-   fluent PostgreSQL mappings (`storage.Entity(entity, mapping => ...)`)
-   and binds the Aspire-supplied data source through
-   `PostgresNpgsqlRuntimeBinding`. Creation uses atomic `Create(..., EntityCreationPolicy.IfAbsent)`; reads use `TryGet`,
-   implemented by the existing `Cohesive.Adapters.Postgres` repository.
-   `JsonPropertyName` preserves the canonical `id`/`partition` names; writes use the
-   record directly through `CreateState`. PostgreSQL mappings add physical details only.
-6. `AddRequestOperationContext` registers the shared factory and request-scoped context.
-   `UseRequestOperationContext` initializes it from the HTTP principal, activity and
-   request-aborted token; minimal API handlers receive it through DI and pass it to
-   storage. If authentication is added, place context middleware after authentication
-   so it captures the established principal.
-7. Schema lifecycle stays explicit: startup executes the embedded `schema.sql` once.
-   Npgsql supplies the native data source and schema bootstrap; the shared repository
-   owns entity validation/writes and the shared native query reader executes the compiled join. The runtime binding is
-   caller-attested affinity, not independent proof of database identity.
+The first is the default and stays PostgreSQL-only. The second is a separate executable composition,
+not a placement switch scattered through domain code. The domain, query definitions, transitions,
+process and API are compiled once in `Orders.Model` and referenced by both workers.
 
-The example demonstrates persistence, guarded transitions, joined queries, and a finite multi-entity Process.
-It is not yet a CQRS/ES implementation. Event-authoritative state, reconstitution, durable process recovery,
-and audit retention remain separate capabilities. See the [fulfillment walkthrough](FULFILLMENT.md).
+## Declare → attach → bind → run
 
+1. **Declare:** `Orders.Model/FulfillmentDomain.cs` colocates entities, transitions and the process as separate types;
+   `FulfillmentQueries.cs` defines their joined read views. The generated process sequences stock lookup,
+   reservation, order submission and compensation. `OrderApi.cs` colocates the API contract and `OrderEndpoints` bindings, including fulfillment admission
+   and linked result polling alongside entity/query endpoints.
+2. **Attach:** `Orders.Model/Storage/FulfillmentStorage.cs` groups reusable native mappings, shared local partition
+   policy and PostgreSQL-only placement as separate types. `FulfillmentStorage` places all three entities in one database.
+   `PostgresCosmosWorker/PostgresCosmosStorage` selects only order/reservation mappings for PostgreSQL;
+   inventory uses the existing Cosmos canonical entity envelope, fixed partition and source reader.
+3. **Bind:** both workers activate their composition through `ModelActivator`, then use the same
+   `OrderEndpoints : ApiBindingModel`. Its constructor contributes entity, query and process bindings together; HTTP fixtures prepare this same model before host construction. PostgreSQL uses `ForServices`; the mixed composition uses
+   `ServicePersistenceBuilder` to select Cosmos inventory and composed query readers. It does not
+   redefine routes, processes or query logic.
+4. **Run:** `FulfillmentInfrastructure` and `PostgresCosmosFulfillmentInfrastructure` each supply its worker's connection references and readiness dependencies.
+   Native resource options remain ordinary Aspire calls.
 
-## Instance composition
-
-Both programs create their own `FulfillmentApplication`. It connects one `FulfillmentDomain` instance
-with `FulfillmentQueries`, `FulfillmentStorage`, transitions, `OrderApi` and a generated `FulfillmentProcess`.
-There is no global singleton. The AppHost prepares offline evidence from this recipe; the worker attaches
-Aspire's connection configuration to its own equivalent recipe. They share source declarations, not runtime objects.
+The process reads inventory directly:
 
 ```csharp
-var model = ModelActivator.Create<FulfillmentApplication>();
-var persistence = model.Storage.Bind(database);
-var services = model.Endpoints
-    .Build(builder.Services, persistence.ForServices(receiptStorage));
-// After builder.Build() and middleware:
-app.MapServices(services);
+var stock = await process.PointRead(domain.Inventory, input.Sku,
+    policy: new ProcessReadPolicy(timeout: TimeSpan.FromSeconds(2)));
+if (stock.Entity == null)
+    return new FulfillmentResult("Rejected", "Inventory does not exist.");
 ```
 
-`DomainModel`, `QueryModel` and `ApiModel` provide their immutable definitions automatically.
-`ModelActivator` discovers concrete constructor dependencies, resolves them through DI, and freezes
-each dependency before constructing its consumer. No hand-ordered construction or forced Definition reads are required. Missing or cyclic
-dependencies and duplicate process revisions fail at setup. Direct builders remain supported.
-PostgreSQL `Define(databaseId, configure)` accepts extracted configuration methods or inline lambdas through
-the same native builder and freezes the resulting mappings. The inventory-only placement uses the same
-inventory configuration method without carrying unrelated orders/reservations mappings.
+The entity declaration supplies the read contract and generated dependency. The result envelope makes
+absence explicit; subsequent transitions remain responsible for concurrency and stock validation.
+The optional deadline is cooperative and covers the whole read. Classified-failure retries can also
+be selected with `ProcessReadPolicy`; this host-memory example does not enable adapter exception classification or
+durable retry progress. The Durable Task interpreter supports an explicit `ProcessReadProgress.Durable`
+demand; selecting it with the ephemeral executor fails at setup. See [process policy semantics](../../../src/Cohesive.Processes/README.md).
 
-`[Process(id: "fulfillment/submit", revision: "3")]` now tags the complete process type. Its protected
-`Execute` method is syntax-only; the existing generator lowers it into the cached `Definition`. The source
-method is never used as an application coordinator. Generated provenance and node source locations remain
-inspectable. A new revision records the entry-method/provenance migration; no persisted-instance upgrade is claimed.
+A `StorageModel` can own multiple providers. `StorageModelBuilder` is available directly; the base
+class is optional authoring convenience. Binding recipes never open connections during activation.
+The workers explicitly initialize local schemas before preparing runtime API bindings.
 
-This is the declaration-foundation slice of [application composition](../../../docs/design/application-composition.md).
-Generated process dependencies, partial API implementation contributions, mapping-based repository resolution
-and unified `MapServices` are implemented. Linked acceptance/polling remains subsequent work.
-It does not implement SignalR, Cosmos registration, event sourcing or durable execution in this example.
+`FulfillmentStoragePolicy` owns the fixed demo partition and orders connection name. Queries still compile
+that fixed partition as a literal; invocation-scoped partition selection is not introduced by this file cleanup.
+The order-registration helper is test-only. Storage mappings live in the shared model assembly; native schema
+resources and executable startup remain in their workers.
 
-## Build and run
+## Run either composition
 
-Prerequisites: .NET 10, a running Docker-compatible container engine, and a trusted
-ASP.NET Core development certificate. Build/test does not start containers:
+Requires .NET 10, Aspire prerequisites and a Docker-compatible engine. Run one host at a time:
 
 ```sh
-dotnet build eng/examples/aspire-first/AppHost/AppHost.csproj -c Release
+# Default: PostgreSQL only
+dotnet run --project eng/examples/aspire-first/AppHost
+
+# Separate composition: PostgreSQL + Cosmos preview emulator
+dotnet run --project eng/examples/aspire-first/PostgresCosmosAppHost
+```
+
+The mixed host uses Aspire's experimental cross-platform Cosmos preview emulator. Its worker uses the
+shared `CosmosSystemTextJsonSerializer`, Gateway transport and the referenced account endpoint. Before
+binding, it reads container metadata and requires `/partitionKey`. No certificate validation bypass is
+installed. This is local example setup, not a production deployment recipe.
+
+Both expose:
+
+- `POST /orders`, `GET /orders/{id}`, `POST /orders/{id}/submit`
+- `GET /orders/{id}/details`, `GET /orders/{id}/availability`
+- `POST /fulfillment` → `202 Accepted` with a receipt and linked result URL
+- `GET /fulfillment/results/{instanceId}` → pending or terminal result
+
+Example fulfillment body (reuse these IDs only to retry the same intent):
+
+```json
+{"commandId":"demo-1","idempotencyKey":"demo-1","instanceId":"demo-1","attemptId":"1","input":{"orderId":"<created order ID>","sku":"book","quantity":2}}
+```
+
+An empty store has no inventory: fulfillment reports missing inventory. The integration fixture supplies
+synthetic inventory and reservations through the canonical repositories, launches the actual worker, exercises HTTP and removes its
+fixture data. There is no automatic product-data seed or training workflow.
+
+## What changes with placement?
+
+The single-database query uses one PostgreSQL statement snapshot. In the mixed composition, availability
+infers the closed reservation-demand boundary from storage placement, executes that prefix in PostgreSQL, then joins its rows with bounded Cosmos
+inventory acquisition. Details uses the shared composed interpreter over both stores, preserving nested
+result assembly. It does not yet optimize its SQL traversal into one native prefix.
+
+The logical query fingerprint is unchanged. Source identity, placement, physical capabilities and execution
+evidence change. Remote partition mismatch, missing or ambiguous mappings and invalid source selectors fail
+at setup. Result row and decoded-scalar byte bounds are checked before returning a complete result.
+
+**There is no distributed snapshot or cross-database transaction.** Inventory may change between reads.
+The mixed SQL schema retains the reservation-to-order foreign key, but cannot enforce its inventory
+reference in Cosmos. The domain relationship is still canonical. Each entity transition atomically commits
+its own state and operation receipt in its own backend; the process provides sequencing and compensation.
+Host-owned accepted execution remains in-memory, not crash durable. See [process guarantees](FULFILLMENT.md).
+
+The original AppHost derives native PostgreSQL query capability evidence from prepared bindings. The mixed
+AppHost currently associates the .NET workload with Cohesive.Infra; its database/container resources and
+readiness wiring are native Aspire. Query placement is validated by the runtime adapters. It deliberately
+does not manufacture Cosmos capability evidence or claim that Infra proves heterogeneous query guarantees.
+
+## Validate
+
+```sh
 dotnet test src/Cohesive.Adapters.Aspire.Tests -c Release
 ```
 
-To run locally (starts PostgreSQL, Redis and the application):
-
-```sh
-dotnet run --project eng/examples/aspire-first/AppHost/AppHost.csproj
-```
-
-Open the worker HTTP endpoint from the Aspire dashboard. Using that URL:
-
-```sh
-curl -X POST "$WORKER_URL/orders"
-# Set ORDER_ID to the id returned by creation.
-curl "$WORKER_URL/orders/$ORDER_ID"
-curl -X POST "$WORKER_URL/orders/$ORDER_ID/submit"
-# A second submission returns HTTP 409 without another write.
-curl -X POST "$WORKER_URL/orders/$ORDER_ID/submit"
-```
-
-POST creates a fresh server-generated ID in `Draft`; GET returns the ID and status, or 404.
-Creation no longer accepts a caller-selected ID, preventing the old upsert route from resetting a
-submitted order. Creation retries create distinct orders; this example does not promise idempotent creation.
-`model.Orders.Submit` uses conventional node IDs and provenance, keeping only the contract ID
-and revision explicit. Inserting or reordering implicit steps changes their IDs; explicit IDs remain
-available when editing stability is required. It declares the POCO-authored `Draft → Submitted` rule. `OrderEndpoints`
-selects the subject from the route. `TransitionAuthoring.Create<Order, SubmitOrderResult>` declares no
-application input; HTTP and Process bindings supply the shared `Unit` value automatically.
-There is no duplicate subject ID to compare. The transition returns `SubmitOrderResult(Status, Outcome)`
-using closed `OrderStatus` and `SubmissionOutcome` wire contracts. API policy maps `NotDraft` to HTTP 409
-and prepares `orders.submit.NotDraft` from its serialized outcome once during registration. Every outcome
-must be classified as a conflict or non-rejection; a newly added unmapped outcome fails setup. Display text is not domain authority. It
-references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
-The binding compiles once during registration and retains the plan for requests; invalid declarations
-fail registration with a `TransitionApiPreparationException` retaining structured compiler diagnostics. No global compilation cache or per-request compilation is added.
-All order routes and the fulfillment start/result endpoints are declared as instance-owned portable handles in `OrderApi`.
-`model.Endpoints` contributes implementations through `ServiceApiBindingsBuilder.Implement(model.Api, ...)`.
-Entity operations retain the existing typed entity binding; queries use typed endpoint selectors with explicit bounds.
-A second contribution binds Fulfill to the existing service through the bounded host-owned worker. Native route input and response
-policies remain at the ASP.NET seam, and `app.MapServices` publishes the complete validated surface. Callbacks receive
-typed order state and transition outcomes; `.Input(request => ...)` uses the existing request context
-and its `RequiredEntityId`. The separate declarations contain no handlers; the example's HTTP error body
-is explicitly the native `ProblemDetails` type. Creation declares 201, lookup/submission declare 404,
-and submission declares the common 409 body.
-Combined declaration/binding is also supported by the same shared surface; `Program` only configures startup and middleware.
-The transition binding loads the order, evaluates the rule, and commits with the captured PostgreSQL concurrency
-token. Repeated submission returns 409 without a write; a stale concurrent write also returns 409 rather
-than retrying the domain decision. Both cases use `application/problem+json`: domain rejection has
-code `orders.submit.NotDraft`, while a lost conditional commit has the shared code
-`services.concurrency.conflict` and a trace ID. The transition binding returns its concurrency result
-directly; `AddCohesiveExceptionHandling` plus native `UseExceptionHandler` provide the same sanitized
-fallback for storage conflicts outside that binding. Neither exposes backend identities or tokens.
-An unknown ID returns 404. There is no authentication;
-this sample is for a local developer environment. Stop with Ctrl+C. `WithDataVolume`
-retains PostgreSQL data across runs; deleting that volume is a separate deliberate action.
-No cloud provider, deployment credentials or Ari environment is involved.
-
-The explicit bootstrap creates `public.cohesive_orders`. Any `public.orders` table from
-the earlier direct-Npgsql example remains untouched; its rows are not migrated or read.
-The next local bootstrap migration adds required `status` with `Draft` as the default for existing
-`cohesive_orders` rows. This is an explicit demo migration, not a general schema migration system.
-
-## Validation and limits
-
-The executable AppHost is referenced by the adapter test project, so tests exercise its
-actual generated project metadata and native PostgreSQL resource model. Tests verify
-object identity, unchanged native annotations/resource counts, native-only coexistence,
-canonical fingerprint equivalence, missing associations, incompatible evidence, wrong
-node kind, foreign-model objects, duplicate associations and frozen authoring. Storage
-unit tests verify the real PostgreSQL adapter binding, canonical state validation and
-cancellation before opening a connection. They do not substitute a fake repository.
-
-The compiler validates **declared evidence**, not PostgreSQL configuration or a running
-service. A PostgreSQL resource type does not automatically assert a transaction, audit,
-ordering or durability guarantee. Native `WithReference`/`WaitFor` remain the wiring
-and startup authority; association does not synthesize or certify those annotations.
-The model tests build but never start Aspire. The opt-in `OrderStorageIntegrationTests` ran against a disposable local PostgreSQL 17 database:
-it used the example's embedded schema and binding, verified create/load and token-guarded writes,
-rejected a stale token and reloaded the winning version. Tests remove only their randomly identified rows.
-Set `COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING` to a disposable database to run these tests;
-without it the database tests are explicitly skipped. CI supplies a disposable PostgreSQL 17 service
-and runs these tests, including the actual worker entry point and the chained join. This is storage evidence, not an Aspire startup or cloud check.
-
-Portable authority is the ordinary Cohesive definition, manifest and compiler result.
-The native map is an immutable dictionary pointing at Aspire-owned mutable objects;
-it is not a durable artifact or ownership transfer. Reattach and revalidate after changing
-requirements or implementation selections. No new wire schema, compiler, traversal,
-provider-options wrapper or native runtime readiness collector is introduced.
-
-## Transition validation
-
-The opt-in PostgreSQL test also starts the actual shared HTTP transition binding on a local ephemeral
-port with request-context middleware. It verifies HTTP creation (201), lookup (Draft), missing-order
-lookup (404), submit, reload as Submitted, repeated-submit 409 with
-an unchanged token, missing-order 404 and rejection of a pre-submit stale write. Pure transition tests
-run without PostgreSQL and verify admission and immutable input semantics. This establishes conditional
-state mutation, not sequential execution, event sourcing, audit history or orchestration.
-
-A deterministic HTTP race lets two submissions read the same PostgreSQL token before either writes.
-Exactly one returns 200 and one returns sanitized 409, with one persisted state-version increment and
-no retries. This test deliberately registers no exception middleware. A separate smoke test launches
-the built `OrderWorker` entry point and exercises schema bootstrap, request context, create/get/submit,
-and the domain Problem Details response. Child processes and randomly identified rows are cleaned up.
-These checks do not start the Aspire orchestrator or qualify a cloud deployment.
-
-## Compose the domain, storage and query
-
-The declaration begins with entity authority, then connects entities:
-
-```csharp
-var domain = new DomainModelBuilder().Version("1");
-var orders = domain.Entity<Order>("example/order");
-var inventory = domain.Entity<InventoryItem>("example/inventory");
-var reservations = domain.Entity<Reservation>("example/reservation");
-var reservationOrder = reservations.References(reservation => reservation.OrderId, orders);
-var reservationItem = reservations.References(reservation => reservation.Sku, inventory);
-var definition = domain.Build();
-```
-
-`References` denotes the target observation identity. The domain owns these reusable relationship
-handles; the existing query author captures a relationship in its catalog when traversed. No separate
-query schema is inferred: `entity.QueryShape(author)` imports the entity's exact canonical state graph.
-The domain model itself remains the entity catalog, not a new orchestration or persistence engine.
-
-`model.Queries.OrderDetails` selects an order by a bound parameter and the local partition, traverses the
-inverse reservation/order relationship, then traverses reservation/inventory. Both traversals are
-left joins, so an order without reservations remains present. The declaration exposes
-`RelationQuery<string, OrderDetails?>` and uses `SingleOrDefault<OrderDetails>()` to map each parent and
-reservation field once. The author derives flat SQL slots and a portable `NestedQueryResultAssembly`
-from that declaration; no `OrderDetailRow` DTO or handwritten result callback is maintained.
-
-Query authoring accepts domain entities and bound nodes directly:
-
-```csharp
-var orders = query.Source(model.Domain.Orders).Where(
-    order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
-// After the declared relationship traversals:
-query.SingleOrDefault<OrderDetails>()
-    .From(inventory, orders, order => order.Id)
-    .Identity(result => result.Id)
-    .Field(result => result.Status, orders, order => order.Status);
-```
-
-The result builder consumes each node's focused binding, preserving the same session/visibility checks
-through the shared `IRelationQueryBinding<T>` contract. Nodes and explicit bindings implement that
-contract; `From`, `Field` and `Collection` each have one signature. Parent and child `.Identity(...)` map the already-selected key to
-a public property; they reuse its projection slot rather than repeat the key expression. The example
-therefore projects six scalar slots instead of eight. This is a representation reduction, not a claim
-of measured database latency improvement. Join direction, complete joined branch and partition filters
-remain explicit. `SingleOrDefault<T>()` exposes only `From`; the returned mapping stage exposes
-`Identity`, `Field`, `Collection` and `Build`. Calling a mapping method before `From` is a compile error.
-Completed-builder reuse and foreign-session/visibility checks remain runtime authoring checks.
-
-`model.Storage.Bind` attaches each entity and its native mapping once. The host uses that same
-registration for repositories and queries; there is no separate per-query infrastructure catalog:
-
-```csharp
-var persistence = model.Storage.Bind(database);
-var orders = persistence.Repository(model.Domain.Orders);
-var details = persistence.Query(
-    model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
-```
-
-Query preparation discovers consumed source and traversal shapes from the canonical plan and resolves
-only those mappings. An order/reservation subplan does not require inventory IO or an inventory table
-binding in its SQL artifact, even though the persistence registration also knows inventory. Connections,
-physical columns, scope and bounds remain explicit. Native versus composed placement is still a host choice.
-
-Relationship handles created by `DomainEntity.References` retain exact endpoint documents. Traversing
-one imports its endpoints automatically, so `model.Queries.OrderDetails` starts with the order shape and needs no
-standalone reservation/inventory `QueryShape` calls. Explicit imports remain supported; conflicting
-registrations fail rather than silently inferring another CLR schema.
-
-The adapter invokes the existing static, placement, feasibility and native PostgreSQL compilers during
-host registration, retaining the native artifact for inspection. The query contains no PostgreSQL imports,
-placement or compiler calls. This is host infrastructure composition; it does not make the Aspire AppHost
-or Cohesive.Infra responsible for implementing query compilation. Registration reuses repository mappings
-for physical tables/columns, fails before IO for missing mappings, and retains structured compiler failures.
-There is no global cache: retain the returned reader at host lifetime and invoke it per request.
-
-`OrderApi.Details` is an `ApiEndpoint<OrderDetails>`; its primary response is visible in C# while
-NotFound remains a separate outcome. The endpoint receives `IRelationQueryReader<string, OrderDetails?>` and binds the reader object directly
-to the independently declared API. `Definition` retains the exact canonical query; no PostgreSQL type
-or extracted `ReadAsync` delegate crosses the HTTP boundary:
-
-```csharp
-app.MapApiQuery(OrderApi.Details, details)
-    .FromRoute<Guid>("id", id => id.ToString("D"))
-    .OkOrNotFound();
-```
-
-Response type and query/body contracts are checked during registration. Invalid route input returns 400
-without executing the query, null maps to the declared 404, and request cancellation reaches PostgreSQL.
-There are no joins, observation decoding or result nesting in the endpoint.
-
-Preparation occurs once at registration, and each request executes one parameterized SQL statement.
-`PostgresQueryRowsReader` implements `IRelationQueryRowsReader` and reconstructs canonical observations from native result aliases and presence
-markers. A missing joined row omits its fields. The shared canonical assembly nests reservation rows and sorts their IDs; it does not perform the joins. The reader rejects overflow rather than silently
-truncating: this example allows 1,000 rows and 1,000,000 decoded scalar bytes, with cancellation and
-native command timeout. It has no paging or retry policy, and is not a full canonical evaluation-outcome
-API. The current reader accepts non-temporal scalar results/parameters only.
-
-`GET /orders/{id}/details` returns `{ id, status, reservations: [...] }`, or 404. Each reservation includes
-its SKU, quantity and current available stock in the same PostgreSQL statement snapshot. These are
-current-state reads, not a materialized read model or event-sourced history. There is no stock reservation
-command yet: the next Process increment can orchestrate transitions using this domain foundation.
-
-Scope is explicit: the root query filters `partition = local`; inventory/reservation tables constrain
-rows to that partition, and foreign keys prevent orphan references. Their IDs are globally unique in
-this local demo; repository upserts additionally address `(partition, identity)`. This is not a general
-multi-tenant relationship policy or authorization mechanism. The mapping projection does not invent
-uniqueness, foreign-key or tenant guarantees. Native schema remains the authority for those constraints.
-
-### Remaining scope integration
-
-The example's explicit local-partition predicate remains required. Composed PostgreSQL source readers
-already support `PostgresRelationQuerySourcePolicy.PartitionScope`; native query compilation currently
-rejects any selected placement with a partition selector. Neither a registration helper nor a logical
-scope label closes that native capability gap.
-
-The next coherent scope change must attach an explicit scope once to persistence registration and
-propagate it to every source and relationship acquisition. Native compilation must filter acquired
-rowsets before joins (including optional outer-join sides), while composed readers enforce the same
-scope. Required-but-missing scope must fail before IO. Tests must include foreign-partition roots and
-related rows, matching keys across partitions, empty outer joins, and native/composed differential
-results. Only then can this example remove its handwritten predicate. Scope selection must remain
-explicit and must not be presented as authentication or authorization by itself.
-
-### One result declaration, two execution phases
-
-`SingleOrDefault<OrderDetails>().From(...).Field(...).Collection(...).Build(...)` declares parent identity,
-scalar fields and child collections. Flat row projection and nested assembly remain distinct execution
-phases, but both derive from one canonical mapping. The assembly is serialized and fingerprinted with the
-query; changing its mapping changes the query revision. Static compilation validates output coverage and
-scalar type compatibility against the result shape.
-
-Zero rows produce null. Missing/null child identities produce empty collections. Repeated identical children
-are deduplicated and sorted by ordinal string identity; conflicting copies or multiple parents fail closed.
-The initial contract supports one parent with one level of child collections, direct scalar fields and string
-identities. It does not infer aggregates, arbitrary CLR callbacks or cross-source snapshot consistency.
-
-Native complete rows and complete composed outcomes use the same assembly. `typedQuery.AssembleResult(outcome)`
-requires the exact compilation request, successful execution, an unsuppressed terminal and no unresolved
-row gaps. The original outcome remains available with its provenance and source traces. Raw interpreter
-outputs still carry the flat row shape; assembly does not relabel them as nested observations.
-
-### Existing cross-source execution
-
-These joins use the existing Relations authoring, compilation and native realization machinery. Cohesive
-also already supports cross-source joins: `IRelationQueryEvaluator` uses bounded
-`IRelationQuerySourceReader` acquisition, batched related reads and local correlation. PostgreSQL and
-Cosmos source readers implement that acquisition contract. This preserves phase evidence, completeness,
-requirement gaps and source traces; separate reads do not imply an atomic cross-source snapshot.
-
-The complete-result reader contracts added for this example do not replace that evaluator or automatically
-select federation. The example explicitly selects native PostgreSQL at registration. The existing
-`MapRelationQueryApiDefinition` binding exposes full evaluator outcomes when that richer contract is needed.
-See [execution and adapters](../../../src/Cohesive.Relations/docs/EXECUTION_AND_ADAPTERS.md) for the
-composed join example and its no-N+1 regression. Its deterministic readers prove planning/correlation;
-the example here also compares live PostgreSQL native execution with bounded composed acquisition
-and the reference interpreter, using the same declaration and shared nested assembly.
-
-### Native joins inside composed execution
-
-The companion `model.Queries.ReservationAvailability` declares a semantic `ReservationDemand` projection between
-order/reservation matching and inventory enrichment. `ReservationAvailabilityQueryBindings` can bind that
-**same graph** in either of two ways:
-
-```csharp
-var orders = model.Storage.Bind(ordersDatabase);
-var inventory = model.Storage.BindInventory(inventoryDatabase);
-var native = ReservationAvailabilityQueryBindings.BindNative(orders);
-var composed = ReservationAvailabilityQueryBindings.BindComposed(orders, inventory);
-var availability = await composed.ReadAsync(orderId, cancellationToken);
-```
-
-`BindComposed` delegates to the library's `PostgresPersistenceRegistration.QueryComposed`:
-the host supplies the query, cut, remote entity registration and one named acquisition policy with
-its partition scope. Placement construction, mapping selection and remaining-reader preparation belong
-to the adapter. Native and composed paths reuse the same entity attachments.
-
-The native path executes one SQL statement. The composed path compiles the closed demand projection into
-one PostgreSQL statement, then feeds its complete rowset into the existing physical executor for the
-remaining inventory join. Orders and reservations are not acquired or joined again. The host selects the
-cut; the query does not declare a PostgreSQL implementation. The ordinary HTTP details endpoint remains
-all-native, and this companion binding is exercised by the two-database integration test.
-
-`RelationQuerySubplan.Compile` derives both plans from the original snapshot and retains their provenance.
-Prefix and remainder have distinct deterministic query identities, with the original request retained.
-`RelationQueryPreparationException` retains semantic/physical diagnostics and stable cut-rejection codes.
-It accepts a nonterminal closed projection whose ancestors are sources, filters, joins, relationship
-traversals or projections. It rejects interior branches escaping the projection, unsupported operators,
-multiple results and partial output demand. Existing canonical validation prevents hidden input bindings
-from leaking through a projection. This is an explicit view boundary, not automatic discovery of arbitrary
-SQL join islands. No separately authored join definition or application compilation is needed.
-
-`RelationQuerySubplanReader.EvaluateAsync` retains the prefix rows, derived-plan relationship and full
-remaining evaluation. The single parameter contract, consumed parameter inputs, capability evidence and
-prefix row bound are prepared once; invocation values are validated once and remain local. Row occurrences retain bag multiplicity; they do not acquire invented entity
-identities. Missing fields remain distinct from null. Prefix errors/overflow stop before remaining IO;
-incomplete remaining acquisition cannot become a successful typed result. Preparation and native readers
-are retained at host lifetime, while rows, parameters and evidence are invocation-local. Source readers
-must match the remaining plan's source/domain/profile and declared logical partition. PostgreSQL binding
-schema v4 fingerprints the explicit `ForSource` scope; full-placement coverage is never inferred from
-which tables happen to be present. Persisted v3 bindings must be regenerated. Host registration
-is responsible for using the same authorized scope in the native prefix; the scope label does not prove
-backend authorization. There is no distributed snapshot across the two databases.
-
-The live test uses PostgreSQL 17 with two disposable databases. It covers no reservations, two reservations,
-missing orders, cancellation and independent inventory: updating only the second database to stock 11
-changes the composed result while the all-native result remains stock 8. Set both
-`COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING` and `COHESIVE_ORDER_EXAMPLE_INVENTORY_CONNECTION_STRING`
-to disposable databases to run it. Without both, this optional test skips. Deterministic tests additionally
-verify one prefix call and one remaining-source call per invocation, concurrent isolation, duplicate rows,
-invalid shape, overflow, failed native reads and partial remaining evidence.
-
-### Try a joined response
-
-After starting the example, optionally load synthetic fixtures into its **local** database. Find the
-PostgreSQL container in the Aspire dashboard or `docker ps`, set `POSTGRES_CONTAINER` to its name, then:
-
-```sh
-docker exec -i "$POSTGRES_CONTAINER" psql -U postgres -d orders -v ON_ERROR_STOP=1 < eng/examples/aspire-first/demo-data.sql
-curl "$WORKER_URL/orders/11111111-1111-4111-8111-111111111111/details"
-curl "$WORKER_URL/orders/22222222-2222-4222-8222-222222222222/details"
-```
-
-The first order has no reservations; the second has two for `demo-book`, quantities 1 and 2, with
-available stock 8 on a fresh database. Fixtures run in a transaction and preserve existing rows on
-repeat execution. They do not simulate a successful reservation Process. The schema bootstrap adds
-the two tables explicitly and leaves earlier order data intact.
-
-The database-backed regression tests cover zero/multiple reservations, an identical order ID in a
-different partition, missing IDs, parameterized hostile input, cancellation, affinity mismatch and
-row/byte bounds. They execute the chained outer joins: that path exposed and now protects a compiler
-bug where presence markers retained an alias from an earlier subquery scope.
-
-Preparation is measured in `FulfillmentDomainTests` separately from execution. It includes native
-registration and compilation after domain setup; it is not whole-host startup, retained memory or request
-latency. One isolated local .NET 10 Release run measured 455.9 ms and 49,193,688 allocated bytes; 10,000
-warm artifact accesses allocated zero bytes (excluding query execution). The returned artifact is retained
-for requests. A large query catalog needs a separate scaling
-measurement before eager preparation; the example does not claim catalog-wide startup qualification.
-
-The typed convenience currently admits one canonical invocation parameter and one row result. It adds
-no second semantic query model: its immutable compilation request retains the existing canonical
-query/shape/relationship documents. HostedQuery was considered, but its portable execution-implementation
-contract is a different responsibility from this local typed result projection. Anonymous rows use CLR
-shape conventions; use explicitly registered stable shapes when independently versioning a persisted row
-contract. Constructor and getter behavior must still pass the expression lowerer's direct-storage checks.
-
-Typed branches support source-first filtering: `query.Source(inventoryShape).Where(item => item.Partition == FulfillmentDemo.LocalPartition)`. The extension uses the branch's owning session and the existing filter implementation; chained filters retain the same binding and foreign query parameters remain invalid.
-
-### Composition and ownership
-
-`FulfillmentDomain` owns the entity definitions and POCOs, including `Order`; their canonical JSON names
-have no storage dependency. `FulfillmentStorage` owns all native table mappings and returns a concrete
-PostgreSQL registration. `FulfillmentDemo` owns the local partition policy. `FulfillmentQueries` exposes
-immutable typed declarations directly, without per-query `Definition` wrappers or an inheritance hierarchy.
-
-Bind each database once at host composition. Repositories preserve the POCO contract:
-`IEntityRepository<Order> orders = persistence.Repository(model.Domain.Orders)`.
-This reuses `TypedEntityRepository<T>` and preserves native batch/concurrency capabilities. The default typed
-identity selector is compiled at registration from the mapping's canonical identity field, using the same
-`FieldPath`/JSON-name rules as mapping authoring. Inventory therefore uses `Sku` without a second selector.
-An unreadable or ambiguous identity fails at setup; explicit custom selectors remain available.
-Semantic version selection retains existing Version/zero conventions. The entity handle remains explicit
-so a CLR type cannot silently choose among different canonical definitions.
-
-`Program` prepares the repository and details reader once and passes them directly to their sole endpoint
-consumer. Query binding helpers accept existing registrations instead of rebinding databases. No registration or compilation happens per
-request, no global result cache is introduced, and the host owns the Npgsql data source lifetime. Tests may
-prepare a separate reader deliberately for a different bound (such as overflow testing).
-
-`MapEntityApi` declares the partition once. `Create` passes that value into `initialize: partition => ...`;
-it does not rewrite the entity or infer authorization. Both combined and separately declared API bindings
-exercise a non-default partition in their HTTP contract tests.
-
-Both query definition methods reuse the private `OrderReservations` authoring helper, which selects the order
-by ID and local partition and reverse-traverses its reservations within the caller's query session. Inventory
-uses the same fluent `Source(entity)` style. The static constructor only assigns the two definitions and cut
-identity. `BindInventory` attaches only inventory to the remote database; trying to acquire an order or
-reservation repository from it fails during registration. Both live join tests exercise typed repositories
-from persistence registration rather than manually constructing native repository instances.
-
-
-Authoring boundaries: focused nodes expose fluent filtering, traversal, projection and joins, delegating
-into the same session compiler used by explicit structural authoring. The session operations remain
-available for branches with multiple visible bindings; this is not another execution path. The public
-binding interface is closed to external implementations. Child mapping callbacks retain a completion
-guard because C# callbacks can leak a builder reference; parent source selection is compile-time staged,
-while callback lifetime is enforced at definition time. Local-partition predicates remain explicit until
-native and composed acquisition can enforce scope uniformly, including outer-join sides.
-
-This shared CLR identity conversion does not broaden native key encodings: the PostgreSQL repository
-still requires required, non-null TEXT identity and partition mappings. Inferred UUID/native non-text
-keys remain rejected by mapping validation, as before this change.
-
-For shared identity preparation, cache/allocation guarantees and wrapper migration, see
-[Storage identity preparation](../../../src/Cohesive.Storage/README.md#typed-identity-preparation-and-migration-unreleased-pr405).
-For composed policy ownership and diagnostics, see the [PostgreSQL adapter](../../../src/adapters/Cohesive.Adapters.Postgres/README.md).
-
-The example’s composed policy declares batch size once in `PlanningPolicy`; source policy derives it.
-Fan-out remains 100 and buffered rows remain 1,000, independently of that batch limit.
-
-
-### Next: architecture composition
-
-Before extending this example to event sourcing and CQRS, follow up on two consumer seams:
-
-- Refine `FulfillmentQueries` authoring, evaluating LINQ-style `Where`, `Select` and joins against the
-  existing typed query graph. Preserve one canonical query and explicit native/composed execution
-  limits; syntax changes must not introduce a second evaluator or promise unrestricted LINQ support.
-- Give `ReservationAvailabilityQueryBindings` a running-program consumer. Select native versus
-  composed placement in host configuration, bind the optional inventory database through Aspire,
-  register the prepared reader once and expose a typed availability endpoint. Currently the composed
-  recipe is exercised by integration tests; it is not wired into the running program.
-
-Then compose explicit guarantees: durable multi-entity orchestration, audited transition/event commits,
-and replayable read projections. State atomicity, concurrency, idempotency and cross-source consistency
-boundaries alongside each binding; the current relational example does not yet provide those guarantees.
-
-
-### Query authoring follow-up
-
-Availability now reads as `TraverseInverse(relationship, selector)`, `LeftJoin`, `Select`, `BuildArrayQuery`.
-The traversal selector sees both order and reservation without `.Binding` arguments. `BuildArrayQuery` captures
-the immutable definition; it does not run PostgreSQL. Both definitions reuse the same explicit order-ID
-and partition predicate. Nested order details retain explicit parent/child identity and empty-collection
-assembly. The demand projection still provides the same optional native-prefix boundary.
-
-This step refines the existing authoring API rather than adding a LINQ provider. Named intermediate views,
-earlier query-header declaration and constructor-based nested result syntax remain future refinements;
-running-program availability wiring and CQRS/event-sourcing guarantees are separate follow-ups.
-
-The running program also maps `/orders/{id}/availability` through `ReservationAvailabilityQueryBindings.BindNative`
-and `/fulfillment` through the canonical host-owned Process. The former preserves the outer-join row with absent reservation fields when an order has no demand. Cross-database placement remains an alternate tested binding, not the default running configuration.
-
-### Domain contract boundary
-
-Order identity is an opaque string throughout the entity, query parameters, routes and process subject.
-UUID text is only the server's allocation choice; existing `order-123` identities also work through Get,
-Details, Availability and Submit without normalization. Submission has no application input;
-HTTP and Process invocation select the entity once. Its portable `Unit` contract retains the existing
-wire value `"()"`, rather than introducing a domain command enum. This is an explicit no-input
-authoring contract; existing default Unit inference is unchanged. Inventory adjustment contracts remain unchanged.
-
-`OrderStatus` and `SubmissionOutcome` lower into closed enum contracts with explicit serialized names.
-The shared Core wire-equivalence helper deliberately ignores enum names and member ordering while
-requiring exactly the same ordinal wire values; nominal equality and fingerprints remain distinct.
-Relations uses that helper for named/inline string-enum contracts, retains enum
-row declarations, and rejects mismatched member sets. The domain revision is 2, submission transition
-revision is 4, and fulfillment process revision is 2. These are changed contracts, not a migration of
-existing process receipts. Existing PostgreSQL state remains text (`Draft`/`Submitted`), with native
-round-trip tests. Rejected submission now has problem code `orders.submit.NotDraft`.
-
-`FulfillmentResources.cs` is the single source for native connection names, linked into AppHost and the
-worker. It declares topology names, not domain semantics. SQL remains explicit in this batch: schema
-projection, requirement-derived infrastructure admission, an inspectable system artifact and selecting
-composed placement in the running host are subsequent work. No shared snapshot is implied across databases.
-
-### Generated process dependencies
-
-Colocated process authoring automatically collects generated dependencies. The generator retains typed invocations from Execute; host binding checks
-exact canonical references. The stock lookup declares its entity/key/result recipe once beside its hosted-query
-contract. Public OrderDetails and ReservationAvailability selections remain explicit API roots with bounds;
-neither is falsely included in the fulfillment process's dependency closure. Separately declared services and raw
-references still support explicit bindings. No durable execution or new runtime capability is implied.
-
-## Unified API implementation registration
-
-`OrderEndpoints` is the one place that binds API contracts to entity operations, relational queries and processes.
-Its two `Implement` calls demonstrate partial contributions to the same API instance. Query selections also feed
-AppHost capability preparation; they are no longer unrelated entries on the fulfillment process service.
-
-`persistence.ForServices(receiptStorage)` resolves process and endpoint repositories from the native entity mappings.
-It shares repositories by exact observation contract within that host scope. `Build` prepares the selected readers
-and process once per host construction, and opts the process into the existing host-owned failure logger. Database
-schema creation and disposal remain explicit native operations. No request performs composition or compilation.
-
-Missing/duplicate endpoint implementations fail at setup. Mapping stages native routes and materializes their
-handlers before publishing any data source, rejecting incomplete query bindings, repeated model mapping and exact
-method/template collisions. More general ASP.NET template ambiguity remains native routing policy. A prepared
-model belongs to one route builder; build another model for another host. Native-only routes may coexist.
-
-
-
-Endpoint implementation coverage is inspectable offline through `model.Endpoints.Plan.Definition`.
-The portable plan in `Cohesive.Api.Execution` owns query selections used by AppHost; HTTP recipes attach
-in the ASP.NET adapter. Wrong or duplicate query/process endpoint handles fail during contribution,
-and missing coverage fails before storage resolution. Repeated host preparation reuses the same prepared
-surface. Separately declared services remain supported through `Endpoints.AcceptedProcess(service, ...)`
-and explicit service/process host binding.
-
-## One service, one API; response timing and durability are independent
-
-`OrderApi` colocates service policy with its linked process endpoints. Generated dependencies come from the
-selected process; no separate service class or manually constructed dependency catalog is needed:
-
-```csharp
-Fulfill = Endpoints.Process(process).Accepted<ServiceProcessCommand<FulfillOrder>>(
-    id: new("fulfillment"), revision: new("2"),
-    configure: service => service
-        .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
-        .ReturnAfterAdmission(ProcessExecutionLifetime.Host)
-        .Operation("result").Require(new("fulfillment.read")).ReadResultOf(process.Definition),
-    startOperationId: "fulfill", resultOperationId: "result",
-    startRoute: "/fulfillment", resultRoute: "/fulfillment/results/{instanceId}");
-```
-
-`OrderEndpoints` binds this pair through `BindHosted(api => api.Fulfill, ...)`; the pair retains the
-service and process recipe, so neither is repeated at binding.
-`Program` still calls `model.Endpoints.Build(...)` and `app.MapServices(...)`. Authoring and AppHost inspection
-perform no execution or database access; Build prepares the exact native dependencies once and registers the
-worker with the generic host. There is no parallel accepted API or second service declaration.
-
-The running demo returns **202 + receipt + Location**, then executes stock query → reserve → submit (or
-compensate) in one host-owned worker. GET of Location returns pending, the terminal result, or a safe failure.
-Start requires `fulfillment.write`; result reads independently require `fulfillment.read`. The explicit synthetic
-demo identity grants both; this is not production authentication.
-
-The API can instead declare `response: ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(2))`.
-This adds terminal response alternatives while retaining the 202 receipt fallback and polling endpoint.
-The response deadline or caller disconnect ends waiting, not execution. The service execution lifetime does
-not change. Polling remains useful even when the original result response is lost.
-
-`ProcessExecutionLifetime.Host` is explicit: the bounded in-memory admission, deduplication, checkpoints and
-results survive a request, **not a host exit**. The demo retains at most 1,000 instances including completed
-ones, refuses new admissions at capacity, and has no automatic retry, timers, multi-host coordination or
-restart recovery. PostgreSQL entity/transition receipts remain durable separately. Production durable
-execution requires an explicitly Durable service and a qualified native dispatcher/value repository; the
-host provider rejects that policy rather than pretending its in-memory state is durable.
-
-See [FULFILLMENT.md](FULFILLMENT.md) for the runnable request and the
-[linked-process design](../../../docs/design/accepted-process-api.md) for protocol and failure details.
-
-### Typed process host binding
-
-The standard `ServiceProcessCommand<TInput>` carries command/idempotency/instance/attempt IDs plus input.
-Clients retain all five fields across retries; the adapter never generates replacement IDs. Its JSON shape is
-unchanged from the former demo-specific request. Missing identities or input fail with HTTP 400 before admission.
-
-```csharp
-bindings.BindHosted(api => api.Fulfill,
-    authority: "aspire-first",
-    authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
-    maximumExecutions: 1000,
-    logPrivateFailures: true);
-```
-
-This overload converts input through the existing observation representation and decodes the terminal value
-against the selected process result contract. `Build` prepares host-local HTTP policies using the same
-`IServiceInvocationAuthorization` as native admission; start and result remain independently authorized.
-Policies are scoped to the registration, so repeated capability names do not overwrite another service's policy.
-The application still supplies authenticated identity (the demo supplies an explicitly synthetic identity),
-request OperationContext, and `UseAuthorization`. Custom request/result projections and existing native policy
-resolvers remain available through the explicit binding overload.
+Offline tests verify semantic equivalence, exclusive placement, partition rejection, native resource wiring
+and cached service query selection. Live tests are opt-in:
+
+- `COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING`: disposable default PostgreSQL database.
+- `COHESIVE_ORDER_EXAMPLE_INVENTORY_CONNECTION_STRING`: a second disposable PostgreSQL database for the
+  retained adapter regression; that alternate composition is test-only.
+- `COHESIVE_MIXED_POSTGRES_CONNECTION_STRING` and `COHESIVE_MIXED_COSMOS_CONNECTION_STRING`: **dedicated
+  disposable** stores for the mixed HTTP fixture. It creates/deletes the `inventory/stock` Cosmos container
+  and writes the local SQL schema. Never point these variables at shared or production data.
+
+The mixed test verifies joined HTTP results, fulfillment admission/polling, stock decrement and replay
+without a second decrement. Separate store consistency remains a limit even when these checks pass.
+
+The query catalog exposes only logical queries. Composed storage preparation infers supported closed native prefixes; an explicit projection ID remains available as an advanced placement override. Inference runs at preparation, not per request, and does not imply a distributed snapshot.
+
+`FulfillmentQueries` uses `Queries.WithInput<string>("orderId")` to author and register each query in one
+place. Array recipes return their final projection; nested recipes receive a typed output source and return keyed field/collection mappings, so
+`SingleOrDefault<OrderDetails>` is declared only once.
+Neither repeats a terminal query ID/parameter registration. Nested `.From(rows).Key(source, sourceKey,
+resultKey)` and the keyed collection mapping preserve the existing portable assembly and query fingerprints.

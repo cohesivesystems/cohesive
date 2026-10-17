@@ -34,6 +34,57 @@ through `IProcessDependencyReceiver`; no repository is resolved during generatio
 hosted queries remain explicit adapter obligations. The point-read recipe retains an existing hosted-query
 contract and explicit entity/key/result attachments; it does not infer cardinality from a method name.
 
+For the common key-based read, use the entity declaration at the process call site:
+
+```csharp
+var stock = await process.PointRead(domain.Inventory, input.Sku,
+    policy: new ProcessReadPolicy(timeout: TimeSpan.FromSeconds(2)));
+if (stock.Entity == null)
+    return new FulfillmentResult("Rejected", "Inventory does not exist.");
+```
+
+No read field, result delegate, or hand-authored query metadata is needed. The library derives a stable
+entity-named read identity and a revision from the canonical entity definition plus read protocol version.
+Preparation is cached for the entity handle's lifetime. A concrete `EntityPointReadResult<T>` envelope
+carries nullable `Entity`, so absence is a successful observation, not an exception or retry condition.
+Projection and absence handling are ordinary authored process expressions. The generator retains the
+exact read dependency; hosting still checks repository identity and its fixed trusted partition.
+Independently declared hosted-query attachments remain available through `EntityPointRead`.
+
+`ProcessReadPolicy` is canonical call-site data. Its timeout is a **total cooperative deadline** across
+all attempts and delays. The asynchronous interpreter uses the operation context's time provider and
+cancellation, and awaits host quiescence. It does not abandon ongoing work or promise forced termination.
+A policy with `maxAttempts > 1` must explicitly list `retryableFailureCodes`; only returned structured
+adapter failures with those codes are retried. For example, a binding that classifies temporary unavailability
+as `inventory.busy` can select that code with a finite budget and `retryDelay`. Exceptions, cancellation,
+and unselected failures propagate without retry. Repository SDK exceptions are not automatically classified.
+Retries never apply to transitions or requests merely because they follow this read.
+
+The final observation is materialized once per occurrence during activation re-entry. By default,
+`progress: ProcessReadProgress.ActivationLocal` retains attempts only in memory. To require restart recovery:
+
+```csharp
+var stock = await process.PointRead(domain.Inventory, input.Sku,
+    policy: new ProcessReadPolicy(timeout: TimeSpan.FromSeconds(20), maxAttempts: 3,
+        retryDelay: TimeSpan.FromSeconds(2), retryableFailureCodes: ["inventory.busy"],
+        progress: ProcessReadProgress.Durable));
+```
+
+This demand is part of the fingerprint and target capability inventory. Ephemeral execution rejects it at
+setup. Durable Task realizes it using its existing activity history and durable timers: replay reconstructs
+the attempt count and original deadline, consumes recorded failures and observations, and resumes backoff.
+It does not replay an already completed database read against newer data. An interrupted activity can be
+redelivered before its completion is recorded; this is observational at-least-once access, not an exactly-once
+physical-read guarantee. `maxAttempts` bounds logical attempts, not provider calls caused by redelivery.
+
+The durable deadline includes queue time. An expired activity does no database IO; a running read receives
+cooperative cancellation and is awaited until it quiesces. The timeout is therefore not a guaranteed wall-clock
+completion time. Deadline exhaustion yields `processes.read.deadlineExceeded`; worker shutdown still uses the
+scheduler's activity-redelivery path. Arbitrary exceptions are not semantic retry decisions. The attempt protocol
+retains scheduler history rather than creating a second repository or reusing mutation receipts.
+Synchronous evidence ports must explicitly declare policy support (and durable progress support when demanded),
+or the plan is rejected before any host operation. These read policies never enable automatic mutation retry.
+
 The standalone factory style below remains supported and uses the same lowering path.
 
 ## Author a Process

@@ -3,12 +3,9 @@ using Cohesive.Transitions.Model;
 
 namespace AspireFirst.Orders;
 
-/// <summary>Local demonstration policy, separate from domain semantics and native storage mappings.</summary>
-public static class FulfillmentDemo
+/// <summary>Canonical order setup used only by integration fixtures.</summary>
+internal static class OrderTestFixture
 {
-    /// <summary>Single demonstration partition; not tenant authorization.</summary>
-    public const string LocalPartition = "local";
-
     /// <summary>Creates validated order state for an ID-only order registration.</summary>
     /// <param name="domain">Canonical order authority.</param>
     /// <param name="id">Order identity, normalized to standard GUID text.</param>
@@ -16,6 +13,6 @@ public static class FulfillmentDemo
     public static EntityWriteRequest RegisterOrder(FulfillmentDomain domain, Guid id)
     {
         var identity = id.ToString("D");
-        return new(domain.Orders.Definition.CreateState(identity, new Order(identity, LocalPartition), version: 1).Snapshot);
+        return new(domain.Orders.Definition.CreateState(identity, new Order(identity, FulfillmentStoragePolicy.LocalPartition), version: 1).Snapshot);
     }
 }

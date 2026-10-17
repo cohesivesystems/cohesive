@@ -11,7 +11,7 @@ using Cohesive.Adapters.Postgres.Services;
 namespace AspireFirst;
 
 /// <summary>A native AppHost with optional Cohesive requirement validation attached to selected resources.</summary>
-public sealed class OrdersApp : InfrastructureModel
+public sealed class FulfillmentInfrastructure : InfrastructureModel
 {
     /// <summary>Canonical order storage identity.</summary>
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
@@ -26,9 +26,9 @@ public sealed class OrdersApp : InfrastructureModel
 
     /// <summary>Prepares requirements from the same offline composition as the worker.</summary>
     /// <param name="model">Same activated application graph consumed by the worker.</param>
-    public OrdersApp(FulfillmentApplication model)
+    public FulfillmentInfrastructure(FulfillmentApplication model)
     {
-        StorageQueries = model.Storage.Bindings.PrepareService(model.StorageQueries, new("example/postgres"));
+        StorageQueries = model.Storage.Bindings.PrepareService(model.Endpoints.Plan, new("example/postgres"));
         Define(
             id: new("example/orders"),
             revision: new("4"),
@@ -50,7 +50,7 @@ public sealed class OrdersApp : InfrastructureModel
     {
         ArgumentNullException.ThrowIfNull(builder);
         var postgres = builder.AddPostgres("postgres").WithDataVolume();
-        var database = postgres.AddDatabase(FulfillmentResources.DatabaseName);
+        var database = postgres.AddDatabase(FulfillmentStoragePolicy.OrdersDatabaseName);
         var worker = builder.AddProject<Projects.OrderWorker>("worker")
             .WithHttpEndpoint(env: "ASPNETCORE_HTTP_PORTS")
             .WithReference(database).WaitFor(database);

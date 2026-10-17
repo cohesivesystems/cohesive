@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
+using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Model;
 using Cohesive.Prelude;
@@ -22,7 +23,7 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Declared_join_returns_empty_and_multiple_reservations_with_local_partition_isolation()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
         var context = OperationContext.Create();
         var persistence = Model.Storage.Bind(database);
@@ -35,7 +36,7 @@ public sealed partial class OrderStorageIntegrationTests
         var sku = "book-" + Guid.NewGuid().ToString("N");
         try
         {
-            await orders.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, Guid.Parse(id)));
+            await orders.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, Guid.Parse(id)));
             await orders.Upsert(context, new EntityWriteRequest(Model.Domain.Orders.Definition.CreateState(id, new Order(id, "outside", OrderStatus.Submitted), 1).Snapshot));
             await orders.Upsert(context, new EntityWriteRequest(Model.Domain.Orders.Definition.CreateState(outsideId, new Order(outsideId, "outside"), 1).Snapshot));
             var queryReader = persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
@@ -44,10 +45,11 @@ public sealed partial class OrderStorageIntegrationTests
             { [Model.Queries.OrderDetails.Parameter] = ObservationValue.FromString(id) });
             Assert.False(Assert.Single(initialRows).TryGetField(((Cohesive.Relations.IR.QueryDefinition)Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.Definition).Assembly!.Collections[0].Identity, out _));
             var builder = WebApplication.CreateBuilder();
-            builder.Services.AddRequestOperationContext();
+            var services = await OrderHttpTestHost.Prepare(builder, Model, persistence, database);
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderHttpTestBindings.Map(app, Model, orders, queryReader, Model.Availability.BindNative(persistence, Model.StorageQueries));
+            app.UseAuthorization();
+            app.MapServices(services);
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -85,12 +87,13 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.True(physical.IsSuccessful, string.Join("; ", physical.Diagnostics.Select(diagnostic => diagnostic.Message)));
             var sourceReader = new PostgresRelationQuerySourceReader(plan, physical.Plan!, source.Id,
                 storage, database, runtime, new(100, 1000, 1000, 1_000_000,
-                    partitionScope: new(new("tests/local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition)));
+                    partitionScope: new(new("tests/local"), FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition)));
             var evaluator = new RelationQueryEvaluator(_ => placement, policy, [sourceReader]);
             var evaluation = Model.Queries.OrderDetails.CompilationRequest.Evaluate(new("tests/nested-result"))
                 .Set(Model.Queries.OrderDetails.Parameter, ObservationValue.FromString(id)).Build();
             var outcome = await evaluator.EvaluateAsync(evaluation);
             Assert.True(outcome.IsSuccessful, string.Join("; ", (outcome.PhysicalExecution?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Result?.Diagnostics.Select(diagnostic => diagnostic.Message) ?? []).Concat(outcome.Diagnostics.Select(diagnostic => diagnostic.Message))));
+            Assert.Throws<InvalidOperationException>(() => Model.Queries.OrderDetails.AssembleResult(outcome, maximumBytes: 1));
             var composed = Model.Queries.OrderDetails.AssembleResult(outcome)!;
             Assert.Equal(joined.Id, composed.Id);
             Assert.Equal(joined.Status, composed.Status);

@@ -78,6 +78,24 @@ from provider latency without exporting task hubs, continuation tokens, Process 
 This adapter scope is intentionally not part of `AddCohesiveInstrumentation`: applications opt into the providers
 they actually use by registering their package constants.
 
+## Observational read retry progress
+
+`process.PointRead(entity, key, policy: ...)` remains a canonical Relation/Query node. A policy demanding
+`ProcessReadProgress.Durable` is realized by orchestration history: each classified failed attempt is a retained
+activity result, backoff is a durable timer, and every activity receives the original absolute deadline.
+A worker restart replays completed results and timers without resetting the logical attempt budget. There is no
+new retry store. No-policy reads preserve their existing activity path.
+
+A queued activity checks the deadline before calling its host. Running reads use cooperative cancellation and
+wait for host quiescence; worker shutdown propagates for scheduler redelivery. An unrecorded activity completion
+may cause another physical read, so this does not promise exactly-once database access. Only explicitly selected
+structured failures retry; exceptions are not classified automatically. Deadline exhaustion becomes a sanitized
+`processes.read.deadlineExceeded` operation failure. Retained observations remain subject to existing history
+payload protection and retention policies.
+
+Tests simulate history replay after interruption, verify deadlines and attempt exhaustion, and exercise the
+canonical interpreter and activity boundary. They do not establish live scheduler restart qualification.
+
 ## Continue
 
 - [Internals](INTERNALS.md) contains monitoring, trusted value retrieval, planning, worker registration, execution,

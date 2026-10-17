@@ -28,6 +28,39 @@ public sealed class PostgresServiceSelectionTests
     static ServiceBuilder Service(ServiceDependencies dependencies) => Cohesive.Api.Execution.Services.Service
         .Define(new("test"), new("1"), RunControlFixture.Provenance).Use(dependencies);
 
+    sealed class QueryApi : Cohesive.Api.ApiModel
+    {
+        internal QueryApi() => Read = Endpoints.Query("items").Route("GET", "/items").Build<Row[]>();
+        internal Cohesive.Api.ApiEndpoint<Row[]> Read { get; }
+    }
+
+    [Fact]
+    public void Portable_endpoint_plan_drives_native_evidence_without_a_service_catalog()
+    {
+        var api = new QueryApi();
+        var plan = new ServiceImplementationPlan();
+        plan.Declare(api.Definition);
+        plan.Implement(api.Definition, api.Read);
+        plan.Query(Query(), new("2"), 7, 1000);
+
+        var evidence = Bindings().PrepareService(plan, new("items/postgres"));
+
+        Assert.Equal("relations/query-snapshot/v1/items%2Fread/2", Assert.Single(evidence.Requirements).Value);
+        Assert.Equal(7, Assert.Single(plan.QueryDependencies.Queries).MaximumRows);
+    }
+
+    [Fact]
+    public void Incomplete_endpoint_plan_is_rejected_before_native_preparation()
+    {
+        var plan = new ServiceImplementationPlan();
+        plan.Declare(new QueryApi().Definition);
+
+        var failure = Assert.Throws<ServiceBindingValidationException>(() =>
+            Bindings().PrepareService(plan, new("items/postgres")));
+
+        Assert.Equal("services.api.missingImplementation", Assert.Single(failure.Validation.Diagnostics).Code);
+    }
+
     [Fact]
     public void Same_selected_queries_drive_reader_preparation_and_infrastructure_evidence()
     {

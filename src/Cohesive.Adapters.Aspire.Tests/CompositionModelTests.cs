@@ -65,11 +65,7 @@ public sealed class CompositionModelTests
         var appHost = ModelActivator.Create<FulfillmentApplication>();
         var worker = ModelActivator.Create<FulfillmentApplication>();
         Assert.NotSame(appHost.Domain, worker.Domain);
-        Assert.Collection(appHost.Storage.Definition,
-            value => Assert.Same(appHost.Storage.Bindings, value),
-            value => Assert.Same(appHost.Storage.InventoryBindings, value));
-        Assert.Same(appHost.Storage.Bindings.Mapping(appHost.Domain.Inventory),
-            appHost.Storage.InventoryBindings.Mapping(appHost.Domain.Inventory));
+        Assert.Same(appHost.Storage.Bindings, Assert.Single(appHost.Storage.Definition));
         Assert.NotSame(appHost.Domain.Orders.Definition, worker.Domain.Orders.Definition);
         Assert.Equal(appHost.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint,
             worker.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint);

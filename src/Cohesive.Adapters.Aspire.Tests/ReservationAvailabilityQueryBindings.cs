@@ -29,10 +29,9 @@ public sealed class ReservationAvailabilityQueryBindings(FulfillmentQueries quer
     public RelationQuerySubplanReader<string, ReservationAvailability[]> BindComposed(PostgresPersistenceRegistration orders, PostgresPersistenceRegistration inventory)
         => orders.QueryComposed(
             queries.ReservationAvailability,
-            queries.ReservationDemandProjection,
             remote: inventory,
             composedPolicy: new PostgresRelationQueryComposedPolicy(
                 PlanningPolicy, maximumRowsPerRead: 1000,
                 maximumPageItems: 1000, maximumPageBytes: 1_000_000,
-                partitionScope: new(new("aspire-first/local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition)));
+                partitionScope: new(new(FulfillmentStoragePolicy.LogicalPartition), FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition)));
 }

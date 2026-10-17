@@ -38,6 +38,29 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         new("terminated"));
 
     [Fact]
+    public async Task Durable_read_policy_is_realized_and_materializes_only_the_final_attempt()
+    {
+        var relation = DefinitionReference("relation/inventory/read", '2');
+        var plan = Compile(Definition("read", [
+            new EvaluateRelationProcessNode(new("read"), relation, Expr.BoundValue(ProcessBindingIds.Input),
+                new(Edge("read-return", "return")), new(maxAttempts: 3,
+                    retryableFailureCodes: ["busy"], progress: ProcessReadProgress.Durable)),
+            new ReturnProcessNode(new("return"), Expr.Const("completed"))
+        ]), definitions: [new(relation, ProcessDefinitionLinkKind.RelationQuery, StringContract, StringContract)]);
+        var realization = ProcessInterpreterRealizationCompiler.Compile(plan,
+            DurableTaskProcessTargetProfile.Executable, ProcessExecutionLifetime.Durable);
+        Assert.DoesNotContain(realization.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Contains(realization.Inventory.Requirements, r => r.Key == ProcessInterpreterGuarantees.DurableReadProgress);
+        var calls = 0;
+        var result = await Run(plan, Start(plan, "sku"), op => Task.FromResult(++calls < 3
+            ? ProcessOperationResult.Failed(new("busy", DiagnosticSeverity.Error, "Unavailable."))
+            : ProcessOperationResult.Completed(op.RelationQuery!.Input)));
+        Assert.Equal(3, calls);
+        Assert.Equal(ProcessActivationDisposition.Completed, result.Disposition);
+        Assert.Single(result.Evidence);
+    }
+
+    [Fact]
     public void AuthoredCancellationTimer_RegistersBeforeControlArrival()
     {
         var fixture = CancellationFinalizerDurabilityTestFixture.Create();

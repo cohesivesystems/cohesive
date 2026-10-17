@@ -33,10 +33,10 @@ public sealed class OrderStorageExampleTests
         Assert.Same(Model.Domain.Orders.Definition, repository.EntityDefinition);
         Assert.Equal("example/order", Model.Domain.Orders.Definition.Name.Value);
         Assert.Equal(new[] { "id", "partition", "status" }, Model.Domain.Orders.Definition.Fields.Select(field => field.Name.Value));
-        var write = FulfillmentDemo.RegisterOrder(Model.Domain, Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        var write = OrderTestFixture.RegisterOrder(Model.Domain, Guid.Parse("00000000-0000-0000-0000-000000000001"));
         Assert.Equal("00000000-0000-0000-0000-000000000001", write.Entity.EntityId.Value);
         Assert.Equal(write.Entity.EntityId.Value, write.Entity.Observation.GetField(FulfillmentDomain.OrderIdField).GetRequiredString());
-        Assert.Equal(FulfillmentDemo.LocalPartition, write.Entity.Observation.GetField(FulfillmentDomain.PartitionField).GetRequiredString());
+        Assert.Equal(FulfillmentStoragePolicy.LocalPartition, write.Entity.Observation.GetField(FulfillmentDomain.PartitionField).GetRequiredString());
         Assert.Equal(1, write.Entity.Version);
         Assert.Null(write.ExpectedConcurrencyToken);
     }
@@ -61,8 +61,8 @@ public sealed class OrderStorageExampleTests
         using var database = NpgsqlDataSource.Create("Host=unreachable.invalid;Database=orders;Username=example;Pooling=false");
         var repository = Model.Storage.Bind(database).Repository(Model.Domain.Orders);
         var context = OperationContext.Create(cancellationToken: new CancellationToken(canceled: true));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, Guid.NewGuid())));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, Guid.NewGuid())));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.TryGet(context, "order-1",
-            new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition)));
+            new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition)));
     }
 }
