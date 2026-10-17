@@ -37,9 +37,9 @@ public sealed class FulfillmentProcessIntegrationTests
         string expectedStatus, int remaining)
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")!);
-        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
-        var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentDemo.LocalPartition);
+        var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
         await using (var command = database.CreateCommand(receipts.SchemaSql)) await command.ExecuteNonQueryAsync();
         var receiptStorage = await receipts.BindAsync(database);
         var persistence = Model.Storage.Bind(database);
@@ -50,10 +50,10 @@ public sealed class FulfillmentProcessIntegrationTests
         var context = OperationContext.Create().WithIdentityContext(FulfillmentDemoIdentity.Context);
         try
         {
-            await orders.Upsert(context, new Order(orderId, FulfillmentDemo.LocalPartition, initialStatus));
+            await orders.Upsert(context, new Order(orderId, FulfillmentStoragePolicy.LocalPartition, initialStatus));
             // Same ID in another partition must not confuse the trusted process read binding.
             var foreign = await orders.Upsert(context, new Order(orderId, "other", OrderStatus.Draft));
-            await inventory.Upsert(context, new InventoryItem(sku, FulfillmentDemo.LocalPartition, stock));
+            await inventory.Upsert(context, new InventoryItem(sku, FulfillmentStoragePolicy.LocalPartition, stock));
             var binding = TerminalService().Bind(Model.Process.Definition, orders, inventory)
                 .Build("aspire-first", new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
             var identity = new ProcessContinuationIdentity(new("test/" + orderId), new("attempt/1"));
@@ -63,15 +63,15 @@ public sealed class FulfillmentProcessIntegrationTests
                 result.Kind + ": " + string.Join("; ", result.Diagnostics.Select(d => d.Code + ": " + d.Message)));
             var output = Assert.IsType<ObservationValue>(result.Outcome!.Decision.State.Terminal.Detail!.Value!.Value);
             Assert.Equal(expectedStatus, output.GetProperty("Status").GetRequiredString());
-            Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentDemo.LocalPartition)))!.Available);
+            Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))!.Available);
             Assert.Equal(foreign, await orders.TryGet(context, orderId, new(partitionKey: "other")));
-            var beforeReplay = await inventory.TryGet(context, sku, new(partitionKey: FulfillmentDemo.LocalPartition));
+            var beforeReplay = await inventory.TryGet(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             // Recreate all preparation to prove receipts are native durable evidence, not an in-memory cache.
             var replay = await TerminalService().Bind(Model.Process.Definition, orders, inventory)
                 .Build("aspire-first", new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField))).Runtime.ExecuteProcessAsync(context, "fulfill", identity, input);
             Assert.Equal(ApiResultKind.Success, replay.Kind);
             Assert.Equal(output, replay.Outcome!.Decision.State.Terminal.Detail!.Value!.Value);
-            Assert.Equal(beforeReplay, await inventory.TryGet(context, sku, new(partitionKey: FulfillmentDemo.LocalPartition)));
+            Assert.Equal(beforeReplay, await inventory.TryGet(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)));
         }
         finally
         {
@@ -95,9 +95,9 @@ public sealed class FulfillmentProcessIntegrationTests
     {
         var model = ModelActivator.Create<FulfillmentApplication>();
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")!);
-        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
-        var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentDemo.LocalPartition);
+        var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
         await using (var command = database.CreateCommand(receipts.SchemaSql)) await command.ExecuteNonQueryAsync();
         var receiptStorage = await receipts.BindAsync(database);
         var persistence = model.Storage.Bind(database);
@@ -107,7 +107,7 @@ public sealed class FulfillmentProcessIntegrationTests
         var context = OperationContext.Create();
         try
         {
-            await inventory.Upsert(context, new InventoryItem(sku, FulfillmentDemo.LocalPartition, stock));
+            await inventory.Upsert(context, new InventoryItem(sku, FulfillmentStoragePolicy.LocalPartition, stock));
             var builder = WebApplication.CreateBuilder();
             builder.Services.AddRequestOperationContext();
             builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
@@ -135,7 +135,7 @@ public sealed class FulfillmentProcessIntegrationTests
             } while (response.StatusCode == HttpStatusCode.Accepted);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Contains(expectedStatus, await response.Content.ReadAsStringAsync());
-            Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentDemo.LocalPartition)))!.Available);
+            Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))!.Available);
             var details = await client.GetFromJsonAsync<OrderDetails>($"/orders/{orderId}/details");
             Assert.Equal(OrderStatus.Submitted, details!.Status);
             await app.StopAsync();

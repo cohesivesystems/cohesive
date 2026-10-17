@@ -22,7 +22,7 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Declared_join_returns_empty_and_multiple_reservations_with_local_partition_isolation()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
         var context = OperationContext.Create();
         var persistence = Model.Storage.Bind(database);
@@ -35,7 +35,7 @@ public sealed partial class OrderStorageIntegrationTests
         var sku = "book-" + Guid.NewGuid().ToString("N");
         try
         {
-            await orders.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, Guid.Parse(id)));
+            await orders.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, Guid.Parse(id)));
             await orders.Upsert(context, new EntityWriteRequest(Model.Domain.Orders.Definition.CreateState(id, new Order(id, "outside", OrderStatus.Submitted), 1).Snapshot));
             await orders.Upsert(context, new EntityWriteRequest(Model.Domain.Orders.Definition.CreateState(outsideId, new Order(outsideId, "outside"), 1).Snapshot));
             var queryReader = persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
@@ -85,7 +85,7 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.True(physical.IsSuccessful, string.Join("; ", physical.Diagnostics.Select(diagnostic => diagnostic.Message)));
             var sourceReader = new PostgresRelationQuerySourceReader(plan, physical.Plan!, source.Id,
                 storage, database, runtime, new(100, 1000, 1000, 1_000_000,
-                    partitionScope: new(new("tests/local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition)));
+                    partitionScope: new(new("tests/local"), FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition)));
             var evaluator = new RelationQueryEvaluator(_ => placement, policy, [sourceReader]);
             var evaluation = Model.Queries.OrderDetails.CompilationRequest.Evaluate(new("tests/nested-result"))
                 .Set(Model.Queries.OrderDetails.Parameter, ObservationValue.FromString(id)).Build();

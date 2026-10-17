@@ -64,12 +64,12 @@ public sealed class PostgresCosmosCompositionTests
     [Fact]
     public void Separate_AppHost_authors_native_Cosmos_and_Postgres_without_starting_resources()
     {
-        var model = ModelActivator.Create<PostgresCosmosApp>();
+        var model = ModelActivator.Create<PostgresCosmosFulfillmentInfrastructure>();
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
         var association = model.Configure(builder);
         Assert.True(association.Deployment.IsComplete);
         Assert.Contains(builder.Resources, resource => resource.Name == PostgresCosmosStorage.CosmosAccount);
-        Assert.Contains(builder.Resources, resource => resource.Name == PostgresCosmosStorage.OrdersDatabase);
+        Assert.Contains(builder.Resources, resource => resource.Name == FulfillmentStoragePolicy.OrdersDatabaseName);
     }
 
     [Fact]

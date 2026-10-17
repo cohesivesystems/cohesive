@@ -14,24 +14,29 @@ process and API are compiled once in `Orders.Model` and referenced by both worke
 
 ## Declare → attach → bind → run
 
-1. **Declare:** `Orders.Model/FulfillmentDomain.cs`, `FulfillmentQueries.cs`, `OrderTransitions.cs` and
-   `FulfillmentProcess.cs` define the shared semantics. The generated process sequences stock lookup,
-   reservation, order submission and compensation. `OrderApi.cs` includes both fulfillment admission
+1. **Declare:** `Orders.Model/FulfillmentDomain.cs` colocates entities, transitions and the process as separate types;
+   `FulfillmentQueries.cs` defines their joined read views. The generated process sequences stock lookup,
+   reservation, order submission and compensation. `OrderApi.cs` colocates the API contract and `OrderEndpoints` bindings, including fulfillment admission
    and linked result polling alongside entity/query endpoints.
-2. **Attach:** `FulfillmentPostgresMappings` declares reusable native table/column mappings, independent
-   of placement. `OrderWorker/FulfillmentStorage` places all three entities in one database.
+2. **Attach:** `Orders.Model/Storage/FulfillmentStorage.cs` groups reusable native mappings, shared local partition
+   policy and PostgreSQL-only placement as separate types. `FulfillmentStorage` places all three entities in one database.
    `PostgresCosmosWorker/PostgresCosmosStorage` selects only order/reservation mappings for PostgreSQL;
    inventory uses the existing Cosmos canonical entity envelope, fixed partition and source reader.
 3. **Bind:** both workers activate their composition through `ModelActivator`, then use the same
    `OrderEndpoints : ApiBindingModel`. PostgreSQL uses `ForServices`; the mixed composition uses
    `ServicePersistenceBuilder` to select Cosmos inventory and composed query readers. It does not
    redefine routes, processes or query logic.
-4. **Run:** each native AppHost supplies its worker's connection references and readiness dependencies.
+4. **Run:** `FulfillmentInfrastructure` and `PostgresCosmosFulfillmentInfrastructure` each supply its worker's connection references and readiness dependencies.
    Native resource options remain ordinary Aspire calls.
 
 A `StorageModel` can own multiple providers. `StorageModelBuilder` is available directly; the base
 class is optional authoring convenience. Binding recipes never open connections during activation.
 The workers explicitly initialize local schemas before preparing runtime API bindings.
+
+`FulfillmentStoragePolicy` owns the fixed demo partition and orders connection name. Queries still compile
+that fixed partition as a literal; invocation-scoped partition selection is not introduced by this file cleanup.
+The order-registration helper is test-only. Storage mappings live in the shared model assembly; native schema
+resources and executable startup remain in their workers.
 
 ## Run either composition
 

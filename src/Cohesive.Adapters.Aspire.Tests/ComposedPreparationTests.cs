@@ -29,7 +29,7 @@ public sealed class ComposedPreparationTests
             ? PostgresPersistenceBindings.Define(new("inventory"), _ => { }).Bind(new(new("inventory"), db, "test"))
             : PostgresSplitFixture.BindInventory(Model, db);
         var scope = new PostgresRelationQueryPartitionScope(new("local"),
-            failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition);
+            failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition);
         var policy = new PostgresRelationQueryComposedPolicy(
             ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000, scope);
         var error = Record.Exception(() => orders.QueryComposed(Model.Queries.ReservationAvailability, Model.Queries.ReservationDemandProjection, remote, policy));
@@ -49,7 +49,7 @@ public sealed class ComposedPreparationTests
             maximumBufferedRows: 1000, maximumLocalRows: 1000, maximumFanOut: 100,
             maximumReferenceKeysPerObservation: 100, maximumConcurrency: 1);
         var policy = new PostgresRelationQueryComposedPolicy(physical, 1000, 1000, 1_000_000,
-            new(new("local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition));
+            new(new("local"), FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition));
         Assert.Same(physical, policy.PhysicalPlanningPolicy);
         Assert.Equal(physical.MaximumBatchSize, policy.SourcePolicy.MaximumBatchKeys);
     }

@@ -17,7 +17,7 @@ public sealed partial class OrderStorageIntegrationTests
         await using var inventoryDatabase = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(InventoryConnectionVariable)!);
         foreach (var database in new[] { orders, inventoryDatabase })
         {
-            using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+            using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
             await using var command = database.CreateCommand(await schema.ReadToEndAsync());
             await command.ExecuteNonQueryAsync();
         }
@@ -30,7 +30,7 @@ public sealed partial class OrderStorageIntegrationTests
         var reservations = persistence.Repository(Model.Domain.Reservations);
         try
         {
-            await orderRepository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, Guid.Parse(id)));
+            await orderRepository.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, Guid.Parse(id)));
             var native = new ReservationAvailabilityQueryBindings(Model.Queries).BindNative(persistence, Model.StorageQueries);
             var composed = new ReservationAvailabilityQueryBindings(Model.Queries).BindComposed(persistence, inventoryPersistence);
             var emptyNative = await native.ReadAsync(id);
@@ -40,7 +40,7 @@ public sealed partial class OrderStorageIntegrationTests
             foreach (var registration in new[] { persistence, inventoryPersistence })
             {
                 var repository = registration.Repository(Model.Domain.Inventory);
-                var item = new InventoryItem(sku, FulfillmentDemo.LocalPartition, 8);
+                var item = new InventoryItem(sku, FulfillmentStoragePolicy.LocalPartition, 8);
                 await repository.Upsert(context, item);
                 Assert.Equal(item, await repository.TryGetEntity(context, sku));
             }
@@ -48,7 +48,7 @@ public sealed partial class OrderStorageIntegrationTests
             {
                 var reservationId = Guid.NewGuid().ToString("D");
                 await reservations.Upsert(context,
-                    new Reservation(reservationId, FulfillmentDemo.LocalPartition, id, sku, quantity));
+                    new Reservation(reservationId, FulfillmentStoragePolicy.LocalPartition, id, sku, quantity));
             }
             var expected = await native.ReadAsync(id);
             var actual = await composed.ReadAsync(id);

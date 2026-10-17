@@ -8,7 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Orders.Model/Orders.Model.csproj" />
-    <Compile Include="../FulfillmentResources.cs" Link="FulfillmentResources.cs" />
     <ProjectReference Include="../../../../src/Cohesive.Host/Cohesive.Host.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres.Services/Cohesive.Adapters.Postgres.Services.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.AspNet/Cohesive.Adapters.AspNet.csproj" />

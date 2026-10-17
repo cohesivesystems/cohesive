@@ -12,7 +12,7 @@ var model = ModelActivator.Create<PostgresCosmosApplication>();
 builder.Services.AddRequestOperationContext();
 builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
 builder.Services.AddCohesiveExceptionHandling();
-await using var orders = NpgsqlDataSource.Create(builder.Configuration.GetConnectionString(PostgresCosmosStorage.OrdersDatabase)
+await using var orders = NpgsqlDataSource.Create(builder.Configuration.GetConnectionString(FulfillmentStoragePolicy.OrdersDatabaseName)
     ?? throw new InvalidOperationException("The Aspire orders database reference is required."));
 using var cosmos = new CosmosClient(builder.Configuration.GetConnectionString(PostgresCosmosStorage.CosmosAccount)
     ?? throw new InvalidOperationException("The Aspire Cosmos account reference is required."),
@@ -24,7 +24,7 @@ if (metadata.Resource.PartitionKeyPath != PostgresCosmosStorage.PartitionPath)
 using (var schema = new StreamReader(typeof(PostgresCosmosStorage).Assembly.GetManifestResourceStream("Orders.PostgresCosmos.schema.sql")!))
 await using (var initialize = orders.CreateCommand(await schema.ReadToEndAsync()))
     await initialize.ExecuteNonQueryAsync();
-var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentDemo.LocalPartition);
+var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
 await using (var initialize = orders.CreateCommand(receipts.SchemaSql)) await initialize.ExecuteNonQueryAsync();
 var persistence = model.Storage.Bind(orders, inventory, await receipts.BindAsync(orders));
 var bindings = model.Endpoints.Build(builder.Services, persistence);

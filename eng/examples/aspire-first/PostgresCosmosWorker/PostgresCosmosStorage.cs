@@ -13,8 +13,6 @@ namespace AspireFirst.PostgresCosmos;
 /// <summary>Orders/reservations in PostgreSQL; inventory and its per-operation receipts in Cosmos.</summary>
 public sealed class PostgresCosmosStorage : StorageModel
 {
-    /// <summary>Native orders database connection name.</summary>
-    public const string OrdersDatabase = "orders";
     /// <summary>Native Cosmos account connection name.</summary>
     public const string CosmosAccount = "inventory-cosmos";
     /// <summary>Native Cosmos database name.</summary>
@@ -33,11 +31,11 @@ public sealed class PostgresCosmosStorage : StorageModel
     {
         this.domain = domain;
         this.queries = queries;
-        Orders = Storage.Define(() => PostgresPersistenceBindings.Define(new(OrdersDatabase), storage => storage
+        Orders = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
             .Entity(domain.Orders, mappings.Orders).Entity(domain.Reservations, mappings.Reservations)));
         InventoryPolicy = Storage.Define(() => new CosmosRelationQuerySourcePolicy(
-            partitionSourceSelector: "partitionKey", logicalPartition: new("aspire-first/local"),
-            fixedPartitionKey: new PartitionKey(FulfillmentDemo.LocalPartition), maximumEnumerationRows: 1000,
+            partitionSourceSelector: "partitionKey", logicalPartition: new(FulfillmentStoragePolicy.LogicalPartition),
+            fixedPartitionKey: new PartitionKey(FulfillmentStoragePolicy.LocalPartition), maximumEnumerationRows: 1000,
             maximumKeysPerQuery: 100, maximumQueryChunks: 10, maximumSdkPageSize: 100));
     }
     /// <summary>PostgreSQL placement of orders and reservations only.</summary>
@@ -55,9 +53,9 @@ public sealed class PostgresCosmosStorage : StorageModel
     {
         if (inventory.Id != InventoryContainer || inventory.Database.Id != InventoryDatabase)
             throw new ArgumentException("Inventory container does not match this composition.", nameof(inventory));
-        var postgres = Orders.Bind(new(new(OrdersDatabase), orders, "aspire-first/postgres-cosmos"));
+        var postgres = Orders.Bind(new(new(FulfillmentStoragePolicy.OrdersDatabaseName), orders, "aspire-first/postgres-cosmos"));
         var repository = new CosmosEntityOutboxRepository(domain.Inventory.Definition, inventory,
-            partitionKeyPolicy: EntityPartitionKeyPolicy.Fixed(FulfillmentDemo.LocalPartition, FulfillmentDomain.PartitionField),
+            partitionKeyPolicy: EntityPartitionKeyPolicy.Fixed(FulfillmentStoragePolicy.LocalPartition, FulfillmentDomain.PartitionField),
             identityField: FulfillmentDomain.InventoryIdField);
         var source = CosmosEntityRelationQuerySourceRegistration.Create(domain.Inventory.Definition.StateShape.QualifiedId,
             inventory, InventoryDatabase, InventoryContainer, InventoryPolicy,
@@ -79,5 +77,5 @@ public sealed class PostgresCosmosStorage : StorageModel
             maximumBatchSize: 100, maximumBufferedRows: rows, maximumLocalRows: rows,
             maximumFanOut: 100, maximumReferenceKeysPerObservation: 100, maximumConcurrency: 1),
         maximumRowsPerRead: rows, maximumPageItems: rows, maximumPageBytes: bytes,
-        partitionScope: new(new("aspire-first/local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition));
+        partitionScope: new(new(FulfillmentStoragePolicy.LogicalPartition), FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition));
 }

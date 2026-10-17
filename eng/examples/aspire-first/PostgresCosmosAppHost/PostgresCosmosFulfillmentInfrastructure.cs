@@ -1,3 +1,4 @@
+using AspireFirst.Orders;
 using Aspire.Hosting;
 using Cohesive.Infra;
 using Cohesive.Adapters.Aspire;
@@ -5,13 +6,13 @@ using Cohesive.Adapters.Aspire;
 namespace AspireFirst.PostgresCosmos;
 
 /// <summary>Separate native host: PostgreSQL orders plus Cosmos inventory, with no distributed snapshot claim.</summary>
-public sealed class PostgresCosmosApp : InfrastructureModel
+public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureModel
 {
     /// <summary>Activated mixed-store application graph.</summary>
     public PostgresCosmosApplication Application { get; }
     /// <summary>Declares the workload requirement for the shared application.</summary>
     /// <param name="model">Activated application composition.</param>
-    public PostgresCosmosApp(PostgresCosmosApplication model)
+    public PostgresCosmosFulfillmentInfrastructure(PostgresCosmosApplication model)
     {
         Application = model;
         Define(new("example/orders-postgres-cosmos"), new("1"), new("example/orders-postgres-cosmos/bindings"), infra =>
@@ -27,7 +28,7 @@ public sealed class PostgresCosmosApp : InfrastructureModel
     public AspireInfrastructureAssociation Configure(IDistributedApplicationBuilder builder)
     {
         var postgres = builder.AddPostgres("postgres").WithDataVolume();
-        var orders = postgres.AddDatabase(PostgresCosmosStorage.OrdersDatabase);
+        var orders = postgres.AddDatabase(FulfillmentStoragePolicy.OrdersDatabaseName);
 #pragma warning disable ASPIRECOSMOSDB001 // Local example deliberately uses the cross-platform preview emulator.
         var cosmos = builder.AddAzureCosmosDB(PostgresCosmosStorage.CosmosAccount).RunAsPreviewEmulator();
 #pragma warning restore ASPIRECOSMOSDB001

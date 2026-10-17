@@ -31,14 +31,14 @@ public sealed class PostgresCosmosIntegrationTests
             PostgresCosmosStorage.PartitionPath)).Container;
         using (var schema = new StreamReader(typeof(PostgresCosmosStorage).Assembly.GetManifestResourceStream("Orders.PostgresCosmos.schema.sql")!))
         await using (var initialize = orders.CreateCommand(await schema.ReadToEndAsync())) await initialize.ExecuteNonQueryAsync();
-        var receiptOptions = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentDemo.LocalPartition);
+        var receiptOptions = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
         await using (var initialize = orders.CreateCommand(receiptOptions.SchemaSql)) await initialize.ExecuteNonQueryAsync();
         var persistence = model.Storage.Bind(orders, container, await receiptOptions.BindAsync(orders));
         var inventory = persistence.Repository(ValueContract.FromShape(model.Domain.Inventory.Definition.Shape));
         var sku = "mixed-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create();
         await inventory.Upsert(context, new EntityWriteRequest(model.Domain.Inventory.Definition.CreateState(sku,
-            new InventoryItem(sku, FulfillmentDemo.LocalPartition, 8), 1).Snapshot));
+            new InventoryItem(sku, FulfillmentStoragePolicy.LocalPartition, 8), 1).Snapshot));
         var start = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         start.ArgumentList.Add(typeof(PostgresCosmosStorage).Assembly.Location);
         start.Environment["ConnectionStrings__orders"] = Environment.GetEnvironmentVariable(PostgresVariable)!;
@@ -70,7 +70,7 @@ public sealed class PostgresCosmosIntegrationTests
             Assert.Empty(empty!.Reservations);
             var reservations = persistence.Repository(ValueContract.FromShape(model.Domain.Reservations.Definition.Shape));
             await reservations.Upsert(context, new EntityWriteRequest(model.Domain.Reservations.Definition.CreateState(reservationId,
-                new Reservation(reservationId, FulfillmentDemo.LocalPartition, id, sku, 2), 1).Snapshot));
+                new Reservation(reservationId, FulfillmentStoragePolicy.LocalPartition, id, sku, 2), 1).Snapshot));
             var details = await client.GetFromJsonAsync<OrderDetails>($"/orders/{id}/details");
             Assert.Equal(8, Assert.Single(details!.Reservations).AvailableStock);
             var availability = await client.GetFromJsonAsync<ReservationAvailability[]>($"/orders/{id}/availability");
@@ -88,11 +88,11 @@ public sealed class PostgresCosmosIntegrationTests
             } while (response.StatusCode == HttpStatusCode.Accepted);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Contains("Submitted", await response.Content.ReadAsStringAsync());
-            var snapshot = await inventory.TryGet(context, sku, new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
+            var snapshot = await inventory.TryGet(context, sku, new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             Assert.Equal(6, snapshot!.Entity.Observation.GetField("available").GetInt32());
             var replay = await client.PostAsJsonAsync("/fulfillment", command);
             Assert.Equal(HttpStatusCode.Accepted, replay.StatusCode);
-            snapshot = await inventory.TryGet(context, sku, new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
+            snapshot = await inventory.TryGet(context, sku, new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             Assert.Equal(6, snapshot!.Entity.Observation.GetField("available").GetInt32());
         }
         finally

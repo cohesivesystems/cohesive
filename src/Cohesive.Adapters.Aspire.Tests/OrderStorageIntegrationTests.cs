@@ -28,7 +28,7 @@ public sealed partial class OrderStorageIntegrationTests
     {
         // Only point this opt-in test at a disposable example database.
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
         var persistence = Model.Storage.Bind(database);
@@ -37,18 +37,18 @@ public sealed partial class OrderStorageIntegrationTests
         var id = Guid.NewGuid();
         try
         {
-            var first = await repository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, id));
-            var loaded = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
+            var first = await repository.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, id));
+            var loaded = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             Assert.NotNull(loaded);
-            var typed = await repository.TryGetEntity(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
+            var typed = await repository.TryGetEntity(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             Assert.Equal(id.ToString("D"), typed!.Id);
-            Assert.Equal(FulfillmentDemo.LocalPartition, typed.Partition);
+            Assert.Equal(FulfillmentStoragePolicy.LocalPartition, typed.Partition);
             Assert.Equal(first.ConcurrencyToken, loaded.ConcurrencyToken);
             var second = await repository.Upsert(context, new EntityWriteRequest(loaded.Entity, loaded.ConcurrencyToken));
             Assert.NotEqual(first.ConcurrencyToken, second.ConcurrencyToken);
             await Assert.ThrowsAsync<ObservationConcurrencyConflictException>(() => repository.Upsert(context,
                 new EntityWriteRequest(loaded.Entity, loaded.ConcurrencyToken)));
-            var reloaded = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
+            var reloaded = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             Assert.Equal(second.ConcurrencyToken, reloaded!.ConcurrencyToken);
 
             var builder = WebApplication.CreateBuilder();
@@ -75,17 +75,17 @@ public sealed partial class OrderStorageIntegrationTests
             finally
             {
                 await using var removeCreated = database.CreateCommand("DELETE FROM public.cohesive_orders WHERE partition_key = $1 AND order_id = $2");
-                removeCreated.Parameters.AddWithValue(FulfillmentDemo.LocalPartition);
+                removeCreated.Parameters.AddWithValue(FulfillmentStoragePolicy.LocalPartition);
                 removeCreated.Parameters.AddWithValue(createdOrder.Id);
                 await removeCreated.ExecuteNonQueryAsync();
             }
             var submitted = await client.PostAsync($"/orders/{id:D}/submit", null);
             Assert.Equal(HttpStatusCode.OK, submitted.StatusCode);
-            var stored = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
+            var stored = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             Assert.Equal("Submitted", stored!.Entity.Observation.GetField("status").GetRequiredString());
             var rejected = await client.PostAsync($"/orders/{id:D}/submit", null);
             Assert.Equal(HttpStatusCode.Conflict, rejected.StatusCode);
-            var unchanged = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
+            var unchanged = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             Assert.Equal(stored.ConcurrencyToken, unchanged!.ConcurrencyToken);
             await Assert.ThrowsAsync<ObservationConcurrencyConflictException>(() => repository.Upsert(context,
                 new EntityWriteRequest(reloaded.Entity, reloaded.ConcurrencyToken)));
@@ -96,7 +96,7 @@ public sealed partial class OrderStorageIntegrationTests
         finally
         {
             await using var cleanup = database.CreateCommand("DELETE FROM public.cohesive_orders WHERE partition_key = $1 AND order_id = $2");
-            cleanup.Parameters.AddWithValue(FulfillmentDemo.LocalPartition);
+            cleanup.Parameters.AddWithValue(FulfillmentStoragePolicy.LocalPartition);
             cleanup.Parameters.AddWithValue(id.ToString("D"));
             await cleanup.ExecuteNonQueryAsync();
         }
@@ -106,14 +106,14 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Concurrent_HTTP_submits_return_one_commit_and_one_sanitized_conflict_without_middleware()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
         var persistence = Model.Storage.Bind(database);
         var repository = persistence.Repository(Model.Domain.Orders);
         var context = OperationContext.Create();
         var id = Guid.NewGuid();
-        var initial = await repository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, id));
+        var initial = await repository.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, id));
         try
         {
             // Both HTTP requests must observe the same token before either can commit.
@@ -137,7 +137,7 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Contains("traceId", body);
             Assert.Equal(2, racing.ReadCount);
             Assert.Equal(2, racing.WriteCount); // No hidden retry.
-            var stored = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition));
+            var stored = await repository.TryGet(context, id.ToString("D"), new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             Assert.Equal("Submitted", stored!.Entity.Observation.GetField("status").GetRequiredString());
             Assert.Equal(initial.Entity.Version + 1, stored.Entity.Version);
             await app.StopAsync();
@@ -150,7 +150,7 @@ public sealed partial class OrderStorageIntegrationTests
     {
         var connection = Environment.GetEnvironmentVariable(ConnectionVariable)!;
         var start = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-        start.ArgumentList.Add(typeof(FulfillmentStorage).Assembly.Location);
+        start.ArgumentList.Add(typeof(FulfillmentApplication).Assembly.Location);
         start.Environment["ConnectionStrings__orders"] = connection;
         start.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
         start.Environment["Logging__LogLevel__Default"] = "Information";
@@ -244,7 +244,7 @@ public sealed partial class OrderStorageIntegrationTests
     static async Task DeleteOrder(NpgsqlDataSource database, string id)
     {
         await using var command = database.CreateCommand("DELETE FROM public.cohesive_orders WHERE partition_key = $1 AND order_id = $2");
-        command.Parameters.AddWithValue(FulfillmentDemo.LocalPartition);
+        command.Parameters.AddWithValue(FulfillmentStoragePolicy.LocalPartition);
         command.Parameters.AddWithValue(id);
         await command.ExecuteNonQueryAsync();
     }

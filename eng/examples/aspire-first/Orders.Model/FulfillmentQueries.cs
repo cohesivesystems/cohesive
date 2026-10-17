@@ -57,7 +57,7 @@ public sealed class FulfillmentQueries : QueryModel
         var orders = OrdersById(query, orderId);
         var demand = orders.TraverseInverse(domain.ReservationOrder,
             (order, reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity));
-        var inventory = query.Source(domain.Inventory).Where(item => item.Partition == FulfillmentDemo.LocalPartition);
+        var inventory = query.Source(domain.Inventory).Where(item => item.Partition == FulfillmentStoragePolicy.LocalPartition);
         var definition = demand
             .LeftJoin(inventory, (row, item) => row.Sku == item.Sku)
             .Select((row, item) => new ReservationAvailability(
@@ -68,7 +68,7 @@ public sealed class FulfillmentQueries : QueryModel
     }
 
     RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(RelationQueryExpressionAuthoring query, RelationQueryExpressionParameter<string> orderId) =>
-        query.Source(domain.Orders).Where(order => order.Id == orderId.Value && order.Partition == FulfillmentDemo.LocalPartition);
+        query.Source(domain.Orders).Where(order => order.Id == orderId.Value && order.Partition == FulfillmentStoragePolicy.LocalPartition);
 
 }
 
