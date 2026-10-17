@@ -7,7 +7,9 @@ using Cohesive.Api;
 using Cohesive.Model;
 using Cohesive.Transitions.Model;
 using Cohesive.Adapters.AspNet;
+using Cohesive.Adapters.AspNet.Services;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 using System.Net.Http.Json;
@@ -20,7 +22,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 [Collection("Order PostgreSQL schema")]
 public sealed partial class OrderStorageIntegrationTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
+    readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
     const string ConnectionVariable = "COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING";
 
     [PostgresFact]
@@ -52,10 +54,15 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Equal(second.ConcurrencyToken, reloaded!.ConcurrencyToken);
 
             var builder = WebApplication.CreateBuilder();
-            builder.Services.AddRequestOperationContext();
+            var services = await OrderHttpTestHost.Prepare(builder, Model, persistence, database);
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderHttpTestBindings.Map(app, Model, repository, persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), new ReservationAvailabilityQueryBindings(Model.Queries).BindNative(persistence, Model.StorageQueries));
+            app.UseAuthorization();
+            app.MapServices(services);
+            var routes = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
+                .OfType<RouteEndpoint>().Select(endpoint => endpoint.RoutePattern.RawText).ToArray();
+            Assert.Contains("/fulfillment", routes);
+            Assert.Contains("/fulfillment/results/{instanceId}", routes);
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -117,12 +124,15 @@ public sealed partial class OrderStorageIntegrationTests
         try
         {
             // Both HTTP requests must observe the same token before either can commit.
-            var racing = new SynchronizedReads(repository);
+            SynchronizedReads? racing = null;
             var builder = WebApplication.CreateBuilder();
-            builder.Services.AddRequestOperationContext();
+            var services = await OrderHttpTestHost.Prepare(builder, Model, persistence, database,
+                repository => racing = new SynchronizedReads(repository));
+            Assert.NotNull(racing);
             await using var app = builder.Build();
             app.UseRequestOperationContext();
-            OrderHttpTestBindings.Map(app, Model, new TypedEntityRepository<Order>(racing), persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000), new ReservationAvailabilityQueryBindings(Model.Queries).BindNative(persistence, Model.StorageQueries));
+            app.UseAuthorization();
+            app.MapServices(services);
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync();
             using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
@@ -249,7 +259,7 @@ public sealed partial class OrderStorageIntegrationTests
         await command.ExecuteNonQueryAsync();
     }
 
-    sealed class SynchronizedReads(IEntityRepository inner) : IEntityRepository
+    sealed class SynchronizedReads(IEntityRepository inner) : IEntityTransitionOperationRepository
     {
         readonly TaskCompletionSource bothRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int reads;
@@ -259,6 +269,11 @@ public sealed partial class OrderStorageIntegrationTests
         public EntityDefinition EntityDefinition => inner.EntityDefinition;
         public string? IdentityField => inner.IdentityField;
         public EntityCreationCapabilities CreationCapabilities => inner.CreationCapabilities;
+        public EntityTransitionOperationCapabilities TransitionOperationCapabilities => inner.TransitionOperationCapabilities;
+        public Task<EntityTransitionOperationResult> TryGetTransitionOperation(OperationContext context, EntityTransitionOperationRequest request) => inner.TryGetTransitionOperation(context, request);
+        public Task<EntityTransitionOperationResult> TryGetCreationTransitionOperation(OperationContext context, EntityTransitionOperationRequest request) => inner.TryGetCreationTransitionOperation(context, request);
+        public Task<EntityTransitionOperationResult> ResolveTransitionOperation(OperationContext context, EntityTransitionOperationReference reference) => inner.ResolveTransitionOperation(context, reference);
+        public Task<EntityTransitionOperationResult> CommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit) => inner.CommitTransitionOperation(context, commit);
         public Task<EntitySnapshot> Create(OperationContext context, EntityObservationSnapshot entity, EntityCreationPolicy policy) => inner.Create(context, entity, policy);
         public async Task<EntitySnapshot?> TryGet(OperationContext context, string id, EntityReadOptions? options = null)
         {

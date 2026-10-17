@@ -23,7 +23,7 @@ process and API are compiled once in `Orders.Model` and referenced by both worke
    `PostgresCosmosWorker/PostgresCosmosStorage` selects only order/reservation mappings for PostgreSQL;
    inventory uses the existing Cosmos canonical entity envelope, fixed partition and source reader.
 3. **Bind:** both workers activate their composition through `ModelActivator`, then use the same
-   `OrderEndpoints : ApiBindingModel`. PostgreSQL uses `ForServices`; the mixed composition uses
+   `OrderEndpoints : ApiBindingModel`. Its constructor contributes entity, query and process bindings together; HTTP fixtures prepare this same model before host construction. PostgreSQL uses `ForServices`; the mixed composition uses
    `ServicePersistenceBuilder` to select Cosmos inventory and composed query readers. It does not
    redefine routes, processes or query logic.
 4. **Run:** `FulfillmentInfrastructure` and `PostgresCosmosFulfillmentInfrastructure` each supply its worker's connection references and readiness dependencies.
