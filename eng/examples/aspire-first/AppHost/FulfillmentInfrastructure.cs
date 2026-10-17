@@ -28,7 +28,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     /// <param name="model">Same activated application graph consumed by the worker.</param>
     public FulfillmentInfrastructure(FulfillmentApplication model)
     {
-        StorageQueries = model.Storage.Bindings.PrepareService(model.StorageQueries, new("example/postgres"));
+        StorageQueries = model.Storage.Bindings.PrepareService(model.Endpoints.Plan, new("example/postgres"));
         Define(
             id: new("example/orders"),
             revision: new("4"),

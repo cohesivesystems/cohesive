@@ -4,8 +4,10 @@ Optional integration of `Cohesive.Api.Execution` service selections with Postgre
 `Cohesive.Infra` evidence. The base PostgreSQL adapter does not depend on service hosting.
 
 Declare relational queries through API implementation Bind calls (or explicit `ServiceDependencies.Query` for separately authored services).
-`bindings.PrepareService(service, implementationId)` derives provider-neutral snapshot requirements and
-native PostgreSQL evidence from those selections. `persistence.Query(service, query)` checks the exact
+`bindings.PrepareService(endpoints.Plan, implementationId)` validates endpoint coverage and derives
+provider-neutral snapshot requirements and native PostgreSQL evidence directly from the portable
+implementation plan. No application-level query forwarding catalog is needed. Separately declared
+services and explicit dependency selections remain supported by the same preparation path. `persistence.Query(service, query)` checks the exact
 semantic inputs and prepares a reader using the selected row and byte bounds. Both paths run at setup,
 without database IO; schema installation, credentials, privileges and runtime readiness remain separate.
 

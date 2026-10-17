@@ -26,8 +26,6 @@ public sealed class FulfillmentApplication : ApplicationModel
     }
     /// <summary>Offline API binding contributions with explicit native host preparation.</summary>
     public OrderEndpoints Endpoints { get; }
-    /// <summary>Query capability requirements projected from the API implementations.</summary>
-    public Cohesive.Api.Execution.Services.ServiceDependencies StorageQueries => Endpoints.Plan.QueryDependencies;
     /// <summary>Public API contract.</summary>
     public OrderApi Api { get; }
     /// <summary>Canonical entity and relationship declarations.</summary>

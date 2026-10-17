@@ -31,7 +31,7 @@ public sealed partial class OrderStorageIntegrationTests
         try
         {
             await orderRepository.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, Guid.Parse(id)));
-            var native = new ReservationAvailabilityQueryBindings(Model.Queries).BindNative(persistence, Model.StorageQueries);
+            var native = new ReservationAvailabilityQueryBindings(Model.Queries).BindNative(persistence, Model.Endpoints.Plan.QueryDependencies);
             var composed = new ReservationAvailabilityQueryBindings(Model.Queries).BindComposed(persistence, inventoryPersistence);
             var emptyNative = await native.ReadAsync(id);
             var emptyComposed = await composed.ReadAsync(id);
