@@ -9,6 +9,28 @@ namespace Cohesive.Adapters.Postgres;
 
 public sealed partial class PostgresPersistenceRegistration
 {
+    /// <summary>Infers a closed native prefix from local and remote entity mappings.</summary>
+    /// <typeparam name="TInput">Invocation input.</typeparam><typeparam name="TResult">Query result.</typeparam>
+    /// <param name="query">Canonical query including partition predicates.</param>
+    /// <param name="remote">Mappings for the remaining entity inputs.</param>
+    /// <param name="composedPolicy">Partition and acquisition limits.</param>
+    /// <returns>A prepared native-prefix reader, without database IO.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="RelationQueryPreparationException">No supported unique split exists or preparation fails.</exception>
+    public RelationQuerySubplanReader<TInput, TResult> QueryComposed<TInput, TResult>(
+        RelationQuery<TInput, TResult> query, PostgresPersistenceRegistration remote,
+        PostgresRelationQueryComposedPolicy composedPolicy)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(remote);
+        ArgumentNullException.ThrowIfNull(composedPolicy);
+        var original = RelationQueryStaticCompiler.Compile(query.CompilationRequest);
+        var cut = InferComposedPrefix(original, shape => remote.bindings.Tables.ContainsKey(shape))
+            ?? throw new RelationQueryPreparationException("composed split", original,
+                code: "postgres.composed.splitMissing", detail: "No closed native projection covers the local inputs. Select an explicit supported boundary or use source composition.");
+        return PrepareComposed(query, cut, remote, composedPolicy);
+    }
+
     /// <summary>Prepares a native projection followed by a bounded query over another explicitly registered database.</summary>
     /// <typeparam name="TInput">Single invocation parameter type.</typeparam>
     /// <typeparam name="TResult">Declared result type.</typeparam>
@@ -30,8 +52,13 @@ public sealed partial class PostgresPersistenceRegistration
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(remote);
         ArgumentNullException.ThrowIfNull(composedPolicy);
+        return PrepareComposed(query, RelationQuerySubplan.Compile(query.CompilationRequest, projection), remote, composedPolicy);
+    }
+
+    RelationQuerySubplanReader<TInput, TResult> PrepareComposed<TInput, TResult>(RelationQuery<TInput, TResult> query,
+        RelationQuerySubplan cut, PostgresPersistenceRegistration remote, PostgresRelationQueryComposedPolicy composedPolicy)
+    {
         var policy = composedPolicy.SourcePolicy;
-        var cut = RelationQuerySubplan.Compile(query.CompilationRequest, projection);
         var physicalPolicy = composedPolicy.PhysicalPlanningPolicy;
         var scope = composedPolicy.PartitionScope;
         var prefix = Prepare(cut.Prefix.Request, policy.MaximumRowsPerRead, policy.MaximumPageBytes);

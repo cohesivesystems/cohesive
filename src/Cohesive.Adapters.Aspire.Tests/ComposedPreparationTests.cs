@@ -11,6 +11,20 @@ public sealed class ComposedPreparationTests
     static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
 
     [Fact]
+    public void Native_prefix_recipe_rejects_queries_without_a_supported_closed_row_boundary()
+    {
+        using var database = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test");
+        var local = Model.Storage.Bind(database);
+        var remote = PostgresSplitFixture.BindInventory(Model, database);
+        var policy = new PostgresRelationQueryComposedPolicy(
+            ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000,
+            new(new("local"), FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition));
+        var error = Assert.Throws<RelationQueryPreparationException>(() =>
+            local.QueryComposed(Model.Queries.OrderDetails, remote, policy));
+        Assert.Equal("postgres.composed.splitMissing", error.Code);
+    }
+
+    [Fact]
     public void Missing_scope_fails_when_policy_is_declared()
     {
         var error = Assert.Throws<ArgumentNullException>(() => new PostgresRelationQueryComposedPolicy(
@@ -32,7 +46,7 @@ public sealed class ComposedPreparationTests
             failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition);
         var policy = new PostgresRelationQueryComposedPolicy(
             ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000, scope);
-        var error = Record.Exception(() => orders.QueryComposed(Model.Queries.ReservationAvailability, Model.Queries.ReservationDemandProjection, remote, policy));
+        var error = Record.Exception(() => orders.QueryComposed(Model.Queries.ReservationAvailability, SubplanTests.DemandProjection(Model.Queries), remote, policy));
         var preparation = Assert.IsType<RelationQueryPreparationException>(error);
         Assert.Equal(failure switch {
             "missing-mapping" => "postgres.composed.remoteMappingMissing",

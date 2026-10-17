@@ -91,7 +91,7 @@ fixture data. There is no automatic product-data seed or training workflow.
 ## What changes with placement?
 
 The single-database query uses one PostgreSQL statement snapshot. In the mixed composition, availability
-executes the closed reservation-demand projection in PostgreSQL, then joins its rows with bounded Cosmos
+infers the closed reservation-demand boundary from storage placement, executes that prefix in PostgreSQL, then joins its rows with bounded Cosmos
 inventory acquisition. Details uses the shared composed interpreter over both stores, preserving nested
 result assembly. It does not yet optimize its SQL traversal into one native prefix.
 
@@ -128,3 +128,5 @@ and cached service query selection. Live tests are opt-in:
 
 The mixed test verifies joined HTTP results, fulfillment admission/polling, stock decrement and replay
 without a second decrement. Separate store consistency remains a limit even when these checks pass.
+
+The query catalog exposes only logical queries. Composed storage preparation infers supported closed native prefixes; an explicit projection ID remains available as an advanced placement override. Inference runs at preparation, not per request, and does not imply a distributed snapshot.

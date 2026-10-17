@@ -29,7 +29,6 @@ public sealed class ReservationAvailabilityQueryBindings(FulfillmentQueries quer
     public RelationQuerySubplanReader<string, ReservationAvailability[]> BindComposed(PostgresPersistenceRegistration orders, PostgresPersistenceRegistration inventory)
         => orders.QueryComposed(
             queries.ReservationAvailability,
-            queries.ReservationDemandProjection,
             remote: inventory,
             composedPolicy: new PostgresRelationQueryComposedPolicy(
                 PlanningPolicy, maximumRowsPerRead: 1000,

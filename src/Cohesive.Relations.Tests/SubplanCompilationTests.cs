@@ -36,6 +36,20 @@ public sealed class SubplanCompilationTests
     }
 
     [Fact]
+    public void Prepared_original_is_reused_without_changing_derived_fingerprints()
+    {
+        var request = SubplanFixture.Definition.CompilationRequest;
+        var original = RelationQueryStaticCompiler.Compile(request);
+        var reused = RelationQuerySubplan.Compile(original, SubplanFixture.DemandProjection);
+        var direct = RelationQuerySubplan.Compile(request, SubplanFixture.DemandProjection);
+        Assert.Same(original, reused.Original);
+        Assert.Equal(direct.Prefix.Request.DefinitionDocument.DefinitionFingerprint,
+            reused.Prefix.Request.DefinitionDocument.DefinitionFingerprint);
+        Assert.Equal(direct.Remainder.Request.DefinitionDocument.DefinitionFingerprint,
+            reused.Remainder.Request.DefinitionDocument.DefinitionFingerprint);
+    }
+
+    [Fact]
     public void Interior_source_cannot_feed_another_branch()
     {
         var q = RelationQuery.Expression();

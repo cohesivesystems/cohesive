@@ -16,9 +16,7 @@ public sealed class FulfillmentQueries : QueryModel
     {
         this.domain = domain;
         OrderDetails = Query(DefineOrderDetails());
-        var availability = DefineReservationAvailability();
-        ReservationAvailability = Query(availability.Query);
-        ReservationDemandProjection = availability.DemandProjection;
+        ReservationAvailability = Query(DefineReservationAvailability());
     }
 
     /// <summary>Canonical query plus portable nested-result assembly; no compilation or PostgreSQL configuration.</summary>
@@ -26,9 +24,6 @@ public sealed class FulfillmentQueries : QueryModel
 
     /// <summary>Canonical query shared by native and composed registrations.</summary>
     public RelationQuery<string, ReservationAvailability[]> ReservationAvailability { get; }
-
-    /// <summary>Closed logical view available as an optional physical subplan boundary.</summary>
-    public QueryNodeId ReservationDemandProjection { get; }
 
     RelationQuery<string, OrderDetails?> DefineOrderDetails()
     {
@@ -50,7 +45,7 @@ public sealed class FulfillmentQueries : QueryModel
             .Build(id: new("fulfillment/order-details"), name: new("OrderDetails"), parameter: orderId);
     }
 
-    (RelationQuery<string, ReservationAvailability[]> Query, QueryNodeId DemandProjection) DefineReservationAvailability()
+    RelationQuery<string, ReservationAvailability[]> DefineReservationAvailability()
     {
         var query = RelationQuery.Expression();
         var orderId = query.Parameter<string>("orderId");
@@ -64,7 +59,7 @@ public sealed class FulfillmentQueries : QueryModel
                 row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available))
             .BuildArrayQuery(id: new("fulfillment/reservation-availability"),
                 name: new("ReservationAvailability"), parameter: orderId);
-        return (definition, demand.Node.Id);
+        return definition;
     }
 
     RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(RelationQueryExpressionAuthoring query, RelationQueryExpressionParameter<string> orderId) =>

@@ -64,7 +64,7 @@ public sealed class PostgresCosmosStorage : StorageModel
         return new ServicePersistenceBuilder(postgres.ForServices(receipts)).Repository(repository)
             .Query(queries.OrderDetails, (rows, bytes) => postgres.QueryComposed(queries.OrderDetails, catalog, Policy(rows, bytes)))
             .Query(queries.ReservationAvailability, (rows, bytes) => postgres.QueryComposed(queries.ReservationAvailability,
-                catalog, Policy(rows, bytes), queries.ReservationDemandProjection))
+                catalog, Policy(rows, bytes)))
             .Build();
     }
 

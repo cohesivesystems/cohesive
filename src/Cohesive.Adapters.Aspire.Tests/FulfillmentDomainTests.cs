@@ -65,7 +65,7 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
         Cohesive.Storage.IEntityRepository<Order> repository = persistence.Repository(Model.Domain.Orders);
         Assert.Same(Model.Domain.Orders.Definition, repository.EntityDefinition);
         var prefix = Cohesive.Relations.Compilation.RelationQuerySubplan.Compile(
-            Model.Queries.ReservationAvailability.CompilationRequest, Model.Queries.ReservationDemandProjection);
+            Model.Queries.ReservationAvailability.CompilationRequest, SubplanTests.DemandProjection(Model.Queries));
         var rows = persistence.Prepare(prefix.Prefix.Request, 1000, 1_000_000);
         Assert.DoesNotContain("cohesive_inventory", rows.Artifact.Statement.Text);
         Assert.Contains("cohesive_reservations", rows.Artifact.Statement.Text);

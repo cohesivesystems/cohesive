@@ -38,8 +38,20 @@ public sealed class RelationQuerySubplan
     public static RelationQuerySubplan Compile(RelationQueryCompilationRequest request, QueryNodeId projection)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var original = RelationQueryStaticCompiler.Compile(request);
+        return Compile(RelationQueryStaticCompiler.Compile(request), projection);
+    }
+
+    /// <summary>Derives a cut while reusing the exact original semantic compilation.</summary>
+    /// <param name="original">Prepared original query and its retained request.</param>
+    /// <param name="projection">Nonterminal closed projection boundary.</param>
+    /// <returns>Validated prefix and remainder with original provenance.</returns>
+    /// <exception cref="ArgumentNullException">Compilation is null.</exception>
+    /// <exception cref="RelationQueryPreparationException">Original compilation or the selected cut is invalid.</exception>
+    public static RelationQuerySubplan Compile(RelationQueryCompilationResult original, QueryNodeId projection)
+    {
+        ArgumentNullException.ThrowIfNull(original);
         Require(original, "Original query");
+        var request = original.Request;
         if (request.DefinitionDocument.Definition is not QueryDefinition query
             || query.Results.Length != 1 || query.Results[0] is not RowsQueryResultDefinition
             || request.Demand.Kind != RelationQueryCompilationDemandKind.AllDeclaredOutputs)

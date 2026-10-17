@@ -19,7 +19,7 @@ public sealed partial class PostgresPersistenceRegistration
     /// <param name="query">Shared logical query.</param>
     /// <param name="remote">One active source per remotely placed entity.</param>
     /// <param name="composedPolicy">Explicit partition and bounded acquisition policy.</param>
-    /// <param name="projection">Optional closed projection to execute as one native SQL prefix.</param>
+    /// <param name="projection">Explicit closed projection override; otherwise infer a native prefix from registered entity placement.</param>
     /// <returns>Prepared reader retaining native and composed execution evidence.</returns>
     /// <remarks>No global snapshot or cross-store transaction is implied. Source registration must attest the
     /// same logical partition; the prefix must enforce that scope. No IO occurs during preparation.</remarks>
@@ -33,8 +33,10 @@ public sealed partial class PostgresPersistenceRegistration
         ArgumentNullException.ThrowIfNull(query);
         ArgumentNullException.ThrowIfNull(remote);
         ArgumentNullException.ThrowIfNull(composedPolicy);
-        var cut = projection is { } node ? RelationQuerySubplan.Compile(query.CompilationRequest, node) : null;
-        var compilation = cut?.Remainder ?? RelationQueryStaticCompiler.Compile(query.CompilationRequest);
+        var original = RelationQueryStaticCompiler.Compile(query.CompilationRequest);
+        var cut = projection is { } node ? RelationQuerySubplan.Compile(original, node)
+            : InferComposedPrefix(original, shape => remote.TryGetSource(shape, out _));
+        var compilation = cut?.Remainder ?? original;
         if (!compilation.IsSuccessful) throw new RelationQueryPreparationException("semantic", compilation);
         var plan = compilation.Plan!;
         var scope = composedPolicy.PartitionScope;

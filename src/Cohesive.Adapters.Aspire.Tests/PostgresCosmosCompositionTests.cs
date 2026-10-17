@@ -45,8 +45,21 @@ public sealed class PostgresCosmosCompositionTests
         var catalog = new EntityRelationQuerySourceCatalog([source]);
         var orders = model.Storage.Orders.Bind(new(new("orders"), database, "test"));
         Assert.Same(model.Queries.OrderDetails, orders.QueryComposed(model.Queries.OrderDetails, catalog, PostgresCosmosStorage.Policy(1000, 1_000_000)).Definition);
-        Assert.Same(model.Queries.ReservationAvailability, orders.QueryComposed(model.Queries.ReservationAvailability, catalog,
-            PostgresCosmosStorage.Policy(1000, 1_000_000), model.Queries.ReservationDemandProjection).Definition);
+        var inferred = Assert.IsType<Cohesive.Relations.Execution.RelationQuerySubplanReader<string, ReservationAvailability[]>>(
+            orders.QueryComposed(model.Queries.ReservationAvailability, catalog, PostgresCosmosStorage.Policy(1000, 1_000_000)));
+        Assert.Same(model.Queries.ReservationAvailability, inferred.Definition);
+        var explicitReader = Assert.IsType<Cohesive.Relations.Execution.RelationQuerySubplanReader<string, ReservationAvailability[]>>(
+            orders.QueryComposed(model.Queries.ReservationAvailability, catalog, PostgresCosmosStorage.Policy(1000, 1_000_000),
+                inferred.Plan.Cut.Id));
+        Assert.Equal(explicitReader.Plan.Prefix.Request.DefinitionDocument.DefinitionFingerprint, inferred.Plan.Prefix.Request.DefinitionDocument.DefinitionFingerprint);
+        Assert.Single(inferred.Plan.Prefix.Plan.Definition.Body.Nodes.OfType<Cohesive.Relations.IR.TraverseRelationshipQueryNode>());
+        Assert.Empty(inferred.Plan.Remainder.Plan!.Definition.Body.Nodes.OfType<Cohesive.Relations.IR.TraverseRelationshipQueryNode>());
+        var native = orders.Prepare(inferred.Plan.Prefix.Request, 1000, 1_000_000);
+        Assert.Contains("LEFT JOIN", native.Artifact.Statement.Text);
+        Assert.DoesNotContain("cohesive_inventory", native.Artifact.Statement.Text);
+        var terminal = ((Cohesive.Relations.IR.QueryDefinition)model.Queries.ReservationAvailability.CompilationRequest.DefinitionDocument.Definition).Results[0].Input;
+        Assert.Equal("relationQuery.subplan.cutInvalid", Assert.Throws<RelationQueryPreparationException>(() =>
+            orders.QueryComposed(model.Queries.ReservationAvailability, catalog, PostgresCosmosStorage.Policy(1000, 1_000_000), terminal)).Code);
         var missing = Assert.Throws<RelationQueryPreparationException>(() => orders.QueryComposed(model.Queries.OrderDetails,
             new EntityRelationQuerySourceCatalog([]), PostgresCosmosStorage.Policy(1000, 1_000_000)));
         Assert.Equal("postgres.composed.remoteMappingMissing", missing.Code);
