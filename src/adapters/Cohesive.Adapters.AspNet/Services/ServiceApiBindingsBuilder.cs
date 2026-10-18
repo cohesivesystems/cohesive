@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Cohesive.Api.Services;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Api;
@@ -124,19 +125,20 @@ public sealed class ServiceApiImplementation<TApi>
     /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Declared result.</typeparam>
     /// <param name="select">Typed API endpoint selector.</param><param name="query">Canonical query.</param>
     /// <param name="revision">Semantic query revision.</param><param name="maximumRows">Result row bound.</param>
+    /// <param name="consistency">Required consistency across every read contributing to the result.</param>
     /// <param name="maximumBytes">Decoded-value bound.</param><param name="configure">Native input and result binding.</param>
     /// <returns>This contribution.</returns>
     public ServiceApiImplementation<TApi> Bind<TInput, TResult>(Func<TApi, ApiEndpoint<TResult>> select,
         RelationQuery<TInput, TResult?> query, ExecutionRevisionId revision, int maximumRows, long maximumBytes,
-        Action<ApiQueryBinding<TInput, TResult>> configure)
+        Action<ApiQueryBinding<TInput, TResult>> configure, RelationQueryConsistency consistency)
     {
         ArgumentNullException.ThrowIfNull(configure);
         var endpoint = Select(select);
-        model.Plan.Query(query, revision, maximumRows, maximumBytes);
+        model.Plan.Query(query, revision, maximumRows, maximumBytes, consistency);
         model.Plan.Implement(definition, endpoint);
         model.Add(persistence =>
         {
-            var reader = persistence.Query(query, maximumRows, maximumBytes);
+            var reader = ServiceQueryConsistencyValidation.Require(persistence.Query(query, maximumRows, maximumBytes, consistency), consistency);
             return new([endpoint], routes => configure(routes.MapApiQuery(endpoint, reader)), []);
         });
         return this;

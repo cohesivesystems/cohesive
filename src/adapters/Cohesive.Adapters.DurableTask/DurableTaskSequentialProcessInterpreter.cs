@@ -217,6 +217,7 @@ static class DurableTaskSequentialProcessInterpreter
                         start.Receipt.Request.Context,
                         executeOperation,
                         resolveSignalTarget,
+                        createTimer, getCurrentUtc,
                         AwaitHostWorkWithControlAsync)
                     .ConfigureAwait(true);
             }
@@ -717,7 +718,8 @@ static class DurableTaskSequentialProcessInterpreter
                             cancellationActivation,
                             start.Receipt.Request.Context,
                             executeOperation,
-                            resolveSignalTarget)
+                            resolveSignalTarget,
+                            createTimer, getCurrentUtc)
                         .ConfigureAwait(true);
                     if (cancellationDecision.Disposition == ProcessActivationDisposition.Rejected
                         || cancellationPolicy == ProcessCancellationCompletionPolicy.Immediate
@@ -1378,6 +1380,8 @@ static class DurableTaskSequentialProcessInterpreter
         ProcessControlCommandContext startContext,
         Func<DurableTaskProcessHostOperation, Task<ProcessOperationResult>> executeOperation,
         Func<ProcessSignalTargetResolution, Task<ProcessSignalTargetResult>>? resolveSignalTarget,
+        Func<TimeSpan, CancellationToken, Task> createTimer,
+        Func<DateTimeOffset> getCurrentUtc,
         Func<Task, Task>? awaitHostWork = null)
     {
         var host = new SuspendingHost(startContext);
@@ -1389,9 +1393,11 @@ static class DurableTaskSequentialProcessInterpreter
             }
             catch (PendingHostOperationException pending)
             {
-                var execution = executeOperation(pending.Operation)
+                var execution = pending.Operation.RelationQuery?.Policy is not null
+                    ? DurableTaskProcessReadExecution.ExecuteAsync(pending.Operation, executeOperation, createTimer, getCurrentUtc, awaitHostWork)
+                    : executeOperation(pending.Operation)
                     ?? throw new InvalidOperationException("A Durable Task host-operation activity returned null.");
-                if (awaitHostWork is not null)
+                if (awaitHostWork is not null && pending.Operation.RelationQuery?.Policy is null)
                 {
                     await awaitHostWork(execution).ConfigureAwait(true);
                 }
@@ -1441,6 +1447,8 @@ static class DurableTaskSequentialProcessInterpreter
 
     sealed class SuspendingHost(ProcessControlCommandContext startContext) : IProcessReferenceHost
     {
+        public bool SupportsReadPolicies => true;
+        public bool SupportsDurableReadProgress => true;
         readonly Dictionary<OperationKey, MaterializedOperation> materialized = [];
         readonly Dictionary<OperationKey, MaterializedSignalTarget> signalTargets = [];
 

@@ -28,15 +28,15 @@ public sealed class OrderStorageExampleTests
     public void Example_binds_shared_repository_to_the_canonical_entity_without_connecting()
     {
         using var database = NpgsqlDataSource.Create("Host=unreachable.invalid;Database=orders;Username=example;Pooling=false");
-        IEntityRepository repository = Model.Storage.Bind(database).Repository(Model.Domain.Orders);
+        IEntityRepository repository = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment").Repository(Model.Domain.Orders);
         Assert.IsAssignableFrom<IEntityRepository<Order>>(repository);
         Assert.Same(Model.Domain.Orders.Definition, repository.EntityDefinition);
         Assert.Equal("example/order", Model.Domain.Orders.Definition.Name.Value);
         Assert.Equal(new[] { "id", "partition", "status" }, Model.Domain.Orders.Definition.Fields.Select(field => field.Name.Value));
-        var write = FulfillmentDemo.RegisterOrder(Model.Domain, Guid.Parse("00000000-0000-0000-0000-000000000001"));
+        var write = OrderTestFixture.RegisterOrder(Model.Domain, Guid.Parse("00000000-0000-0000-0000-000000000001"));
         Assert.Equal("00000000-0000-0000-0000-000000000001", write.Entity.EntityId.Value);
         Assert.Equal(write.Entity.EntityId.Value, write.Entity.Observation.GetField(FulfillmentDomain.OrderIdField).GetRequiredString());
-        Assert.Equal(FulfillmentDemo.LocalPartition, write.Entity.Observation.GetField(FulfillmentDomain.PartitionField).GetRequiredString());
+        Assert.Equal(FulfillmentStoragePolicy.LocalPartition, write.Entity.Observation.GetField(FulfillmentDomain.PartitionField).GetRequiredString());
         Assert.Equal(1, write.Entity.Version);
         Assert.Null(write.ExpectedConcurrencyToken);
     }
@@ -59,10 +59,10 @@ public sealed class OrderStorageExampleTests
     public async Task Repository_operations_observe_cancellation_before_opening_a_connection()
     {
         using var database = NpgsqlDataSource.Create("Host=unreachable.invalid;Database=orders;Username=example;Pooling=false");
-        var repository = Model.Storage.Bind(database).Repository(Model.Domain.Orders);
+        var repository = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment").Repository(Model.Domain.Orders);
         var context = OperationContext.Create(cancellationToken: new CancellationToken(canceled: true));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.Upsert(context, FulfillmentDemo.RegisterOrder(Model.Domain, Guid.NewGuid())));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, Guid.NewGuid())));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => repository.TryGet(context, "order-1",
-            new EntityReadOptions(partitionKey: FulfillmentDemo.LocalPartition)));
+            new EntityReadOptions(partitionKey: FulfillmentStoragePolicy.LocalPartition)));
     }
 }

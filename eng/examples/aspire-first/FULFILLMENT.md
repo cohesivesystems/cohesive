@@ -118,3 +118,19 @@ durable execution, effects and child-process hosting still need their explicit b
 selections are host composition roots for the existing HTTP readers, not newly inferred portable service
 query operations. The composed two-database example remains an explicit placement alternative;
 `PrepareService` rejects independent-source selections instead of advertising a native snapshot for them.
+
+
+## Separate PostgreSQL + Cosmos composition
+
+`PostgresCosmosAppHost` runs the same `Orders.Model` API/process with PostgreSQL orders and Cosmos inventory.
+`ServicePersistenceBuilder` selects the inventory repository by its exact observation contract; generated
+process dependencies therefore resolve to the intended provider without a second process declaration.
+`EntityPartitionKeyPolicy.Fixed` exposes the same trusted partition to Cosmos reads, writes and service
+lookup admission. The explicit `sku` identity field supports typed lookup without an Id/Key convention.
+The Cosmos client uses the existing canonical System.Text.Json serializer, not the SDK's default serializer.
+
+Cosmos uses an atomic transactional batch for stock plus its receipt; PostgreSQL uses its native transaction
+for order state plus its receipt. There is no cross-store transaction. The same host-owned process compensates
+when order submission is domain-rejected; infrastructure failure may leave an uncertain effect for recovery.
+HTTP 202 and result polling do not imply crash-durable execution. Joined reads have no distributed snapshot.
+The two-database PostgreSQL split is retained solely as an adapter regression, not as production example setup.

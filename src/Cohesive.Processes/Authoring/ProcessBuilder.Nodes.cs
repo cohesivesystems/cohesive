@@ -81,6 +81,7 @@ public sealed partial class ProcessBuilder<TInput, TResult>
     /// <param name="relation">Exact Relation or Query definition revision and fingerprint.</param>
     /// <param name="input">Typed query input expression.</param>
     /// <param name="continuation">Continuation selected after the query result is available.</param>
+    /// <param name="policy">Optional read budget and required progress retention.</param>
     /// <param name="sourceFile">Compiler-supplied source file used only for source attribution.</param>
     /// <param name="sourceLine">Compiler-supplied source line used only for source attribution.</param>
     /// <param name="sourceMember">Compiler-supplied source member used only for source attribution.</param>
@@ -97,6 +98,7 @@ public sealed partial class ProcessBuilder<TInput, TResult>
         ExecutionDefinitionReference relation,
         ProcessValue<TQueryInput> input,
         ProcessContinuation continuation,
+        ProcessReadPolicy? policy = null,
         [CallerFilePath] string sourceFile = "",
         [CallerLineNumber] int sourceLine = 0,
         [CallerMemberName] string sourceMember = "")
@@ -105,7 +107,7 @@ public sealed partial class ProcessBuilder<TInput, TResult>
         context.RequireValue(input);
         ArgumentNullException.ThrowIfNull(continuation);
         var source = context.Source(sourceFile, sourceLine, sourceMember, $"Relation evaluation '{id.Value}'");
-        return Add(new EvaluateRelationProcessNode(id, relation, input.Expression, continuation), source);
+        return Add(new EvaluateRelationProcessNode(id, relation, input.Expression, continuation, policy), source);
     }
 
     /// <summary>Adds one durable typed Request obligation with explicit terminal continuations.</summary>

@@ -1,4 +1,5 @@
 using System.Runtime.ExceptionServices;
+using Npgsql;
 using Cohesive.Prelude;
 using Cohesive.Model;
 using Cohesive.Transitions.Model;
@@ -12,7 +13,7 @@ namespace Cohesive.Adapters.Postgres;
 /// <summary>Offline PostgreSQL entity mappings used by native query preparation and runtime registration.</summary>
 /// <remarks>Configure once at host composition. Define is the sole authoring entry point and freezes mappings before returning. Runtime registrations
 /// share immutable mappings. Completion freezes authoring and rejects late contributions. Preparation performs no IO and retains no credentials or data source.</remarks>
-public sealed class PostgresPersistenceBindings
+public sealed partial class PostgresPersistenceBindings
 {
     readonly AuthoringState<PostgresPersistenceBindings> state;
     ExceptionDispatchInfo? preparationFailure;
@@ -101,6 +102,17 @@ public sealed class PostgresPersistenceBindings
             throw new ArgumentException("The exact entity is not registered in these database bindings.", nameof(entity));
         return entry.Mapping;
     }
+
+    /// <summary>Attaches a caller-owned data source using this declaration's database identity.</summary>
+    /// <param name="dataSource">Single-host native data source; ownership remains with the caller.</param>
+    /// <param name="authority">Stable non-secret identity attesting the data source implements the declared database.</param>
+    /// <returns>A runtime registration sharing these frozen mappings.</returns>
+    /// <remarks>Performs no IO and does not infer or verify the server's database name. The caller attests
+    /// the association; the existing explicit runtime-binding overload supports additional replication configuration.</remarks>
+    /// <exception cref="ArgumentNullException">Data source or authority is null.</exception>
+    /// <exception cref="ArgumentException">The data source is multi-host or the authority is invalid.</exception>
+    public PostgresPersistenceRegistration Bind(NpgsqlDataSource dataSource, string authority) =>
+        Bind(new PostgresNpgsqlRuntimeBinding(Database, dataSource, authority));
 
     /// <summary>Attaches a caller-owned data source to these frozen mappings.</summary>
     /// <param name="runtime">Exact runtime binding for the declared database.</param>

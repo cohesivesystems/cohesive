@@ -13,9 +13,103 @@ public sealed class GeneratedProcessDependencyTests
     internal static readonly DomainEntity<Item> Entity = new DomainModelBuilder().Entity<Item>("dependency/item");
     internal static Transition<Item, string, string> Transition(string id = "dependency/change") =>
         Entity.Transition<string, string>(new(id), new("1"), builder => builder.Return("changed"));
-    internal static EntityPointRead<Item, string, string> Read() => new(
-        HostedQuery<string, string>.Create(new("dependency/read"), new("1"), new("test/point-read", "1"),
-            "dependency/item", RunControlFixture.Provenance), Entity, input => input, item => item?.Id ?? "missing");
+    internal static EntityPointRead<Item, string, string> Read() => Entity.PointRead(
+        id: new("dependency/read"), revision: new("1"), result: item => item?.Id ?? "missing");
+
+    [Fact]
+    public void Direct_point_read_retains_call_site_policy_in_its_fingerprint()
+    {
+        var plain = new DirectPointReadProcess(Entity);
+        var controlled = new PolicyPointReadProcess(Entity);
+        var node = Assert.Single(controlled.Definition.Definition.Nodes.OfType<EvaluateRelationProcessNode>());
+        Assert.Equal(3, node.Policy!.MaxAttempts);
+        Assert.Equal(ProcessReadProgress.Durable, node.Policy.Progress);
+        Assert.Equal(TimeSpan.FromSeconds(2), node.Policy.Timeout);
+        Assert.Equal("storage.busy", Assert.Single(node.Policy.RetryableFailureCodes));
+        Assert.Equal(Entity.PointRead().Reference, node.Relation);
+        Assert.NotEqual(plain.Definition.Reference.Fingerprint, controlled.Definition.Reference.Fingerprint);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Direct_read_binds_the_repository_and_encodes_presence_or_absence(bool present)
+    {
+        var snapshots = present ? new[] { new Cohesive.Storage.EntitySnapshot(
+            Entity.Definition.CreateState("sku", new Item("sku", "local")).Snapshot, "local", new("seed")) } : [];
+        var repository = new Cohesive.Storage.InMemoryEntityOutboxRepository(Entity.Definition,
+            Cohesive.Storage.EntityPartitionKeyPolicy.Fixed("local", nameof(Item.Partition)), snapshots);
+        var process = new DirectPointReadProcess(Entity);
+        var prepared = Service.Define(new("read-service"), new("1"), RunControlFixture.Provenance)
+            .Use(new ServiceDependencies().Process(process)).Operation("read").Run(process.Definition)
+            .ExecuteEphemerally(TimeSpan.FromSeconds(1)).Bind(process.Definition, _ => repository).Prepare();
+        var read = Entity.PointRead();
+        var evaluation = ExecutionKernel.ProcessRelationHandlerCatalogTests.Evaluation(read.Reference, read.Query.InputContract, "sku");
+        var result = await prepared.Host.EvaluateRelationAsync(OperationContext.Create(), evaluation);
+        Assert.True(result.IsSuccessful, result.Failure?.Message);
+        var observed = result.Value!.Value!.Value.GetProperty("Entity");
+        Assert.Equal(!present, observed.Kind == ObservationValueKind.Null);
+        if (present) Assert.Equal("sku", observed.GetProperty(nameof(Item.Id)).GetRequiredString());
+    }
+
+    public sealed record RevisedItem(string Id, string Partition, int Count);
+
+    [Fact]
+    public void Entity_shape_changes_derive_a_new_read_revision_without_changing_logical_identity()
+    {
+        var revised = new DomainModelBuilder().Entity<RevisedItem>(Entity.Definition.Name.Value).PointRead();
+        Assert.Equal(Entity.PointRead().Reference.DefinitionId, revised.Reference.DefinitionId);
+        Assert.NotEqual(Entity.PointRead().Reference.RevisionId, revised.Reference.RevisionId);
+    }
+
+    [Fact]
+    public void Derived_read_warm_preparation_does_not_allocate()
+    {
+        _ = MeasureDerivedRead();
+        Assert.Equal(0, MeasureDerivedRead());
+    }
+
+    static long MeasureDerivedRead()
+    {
+        var expected = Entity.PointRead();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 10000; i++)
+            if (!ReferenceEquals(expected, Entity.PointRead())) throw new InvalidOperationException();
+        return GC.GetAllocatedBytesForCurrentThread() - before;
+    }
+
+    [Fact]
+    public void Direct_point_read_derives_and_reuses_the_entity_contract()
+    {
+        var read = Entity.PointRead();
+        Assert.Same(read, Entity.PointRead());
+        Assert.Null(read.Result(null).Entity);
+        var item = new Item("sku", "local");
+        Assert.Same(item, read.Result(item).Entity);
+        var process = new DirectPointReadProcess(Entity);
+        Assert.Single(process.Dependencies);
+        Assert.Equal(read.Reference, Assert.Single(process.Definition.Definition.Nodes.OfType<EvaluateRelationProcessNode>()).Relation);
+        _ = new ServiceDependencies().Process(process);
+    }
+
+    [Fact]
+    public void Entity_point_read_preserves_identity_absence_and_revision()
+    {
+        var read = Read();
+        Assert.Same(Entity, read.Entity);
+        Assert.Equal("item-1", read.Key("item-1"));
+        Assert.Equal("missing", read.Result(null));
+        Assert.Equal("item-1", read.Result(new Item("item-1", "local")));
+        Assert.Equal(Read().Reference, read.Reference);
+        var revised = Entity.PointRead(new("dependency/read"), new("2"), item => item?.Id ?? "missing");
+        Assert.NotEqual(read.Reference, revised.Reference);
+        Assert.Equal("2", revised.Query.Implementation.Version);
+    }
+
+    [Fact]
+    public void Entity_point_read_rejects_missing_projection_at_setup() =>
+        Assert.Throws<ArgumentNullException>(() => Entity.PointRead<Item, string>(
+            new("dependency/read"), new("1"), null!));
 
     [Fact]
     public void Generated_attachments_follow_actual_typed_invocations_and_retain_authorities()
@@ -302,5 +396,31 @@ public sealed partial class RawMixedProcess : ProcessModel<string, string>
         await process.Transition(transition, input, input);
         var result = await process.Query<string>(query, input);
         return result;
+    }
+}
+
+[Process(id: "dependency/direct-read", revision: "1")]
+internal sealed partial class DirectPointReadProcess : ProcessModel<string, bool>
+{
+    readonly DomainEntity<GeneratedProcessDependencyTests.Item> entity;
+    public DirectPointReadProcess(DomainEntity<GeneratedProcessDependencyTests.Item> entity) => this.entity = entity;
+    protected override async ProcessTask<bool> Execute(ProcessContext process, string input)
+    {
+        var found = await process.PointRead(entity, input);
+        return found.Entity != null;
+    }
+}
+
+[Process(id: "dependency/direct-read", revision: "1")]
+internal sealed partial class PolicyPointReadProcess : ProcessModel<string, bool>
+{
+    readonly DomainEntity<GeneratedProcessDependencyTests.Item> entity;
+    public PolicyPointReadProcess(DomainEntity<GeneratedProcessDependencyTests.Item> entity) => this.entity = entity;
+    protected override async ProcessTask<bool> Execute(ProcessContext process, string input)
+    {
+        var found = await process.PointRead(entity, input, policy: new ProcessReadPolicy(
+            timeout: TimeSpan.FromSeconds(2), maxAttempts: 3,
+            retryableFailureCodes: ["storage.busy"], progress: ProcessReadProgress.Durable));
+        return found.Entity != null;
     }
 }

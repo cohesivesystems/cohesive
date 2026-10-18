@@ -13,7 +13,7 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
     public void Remote_inventory_registration_prepares_its_declared_key_without_an_Id_convention()
     {
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var remote = Model.Storage.BindInventory(database);
+        var remote = PostgresSplitFixture.BindInventory(Model, database);
         Cohesive.Storage.IEntityRepository<InventoryItem> inventory = remote.Repository(Model.Domain.Inventory);
         Assert.Same(Model.Domain.Inventory.Definition, inventory.EntityDefinition);
         Assert.Throws<InvalidOperationException>(() => remote.Repository(Model.Domain.Orders));
@@ -30,7 +30,7 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
         var allocated = GC.GetAllocatedBytesForCurrentThread();
         var started = System.Diagnostics.Stopwatch.StartNew();
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var reader = Model.Storage.Bind(database).Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
+        var reader = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment").Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
         IRelationQueryReader<string, OrderDetails?> contract = reader;
         Assert.Same(Model.Queries.OrderDetails, contract.Definition);
         var artifact = reader.Artifact;
@@ -61,11 +61,11 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
     public void Persistence_reuses_entity_authority_and_selects_only_consumed_mappings()
     {
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var persistence = Model.Storage.Bind(database);
+        var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         Cohesive.Storage.IEntityRepository<Order> repository = persistence.Repository(Model.Domain.Orders);
         Assert.Same(Model.Domain.Orders.Definition, repository.EntityDefinition);
         var prefix = Cohesive.Relations.Compilation.RelationQuerySubplan.Compile(
-            Model.Queries.ReservationAvailability.CompilationRequest, Model.Queries.ReservationDemandProjection);
+            Model.Queries.ReservationAvailability.CompilationRequest, SubplanTests.DemandProjection(Model.Queries));
         var rows = persistence.Prepare(prefix.Prefix.Request, 1000, 1_000_000);
         Assert.DoesNotContain("cohesive_inventory", rows.Artifact.Statement.Text);
         Assert.Contains("cohesive_reservations", rows.Artifact.Statement.Text);

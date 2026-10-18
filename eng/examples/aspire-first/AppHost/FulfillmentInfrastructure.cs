@@ -5,20 +5,17 @@ using Cohesive.Infra;
 using Cohesive.Infra.Realization;
 using Cohesive.Model;
 using AspireFirst.Orders;
-using Cohesive.Adapters.Postgres.Infra;
 using Cohesive.Adapters.Postgres.Services;
 
 namespace AspireFirst;
 
 /// <summary>A native AppHost with optional Cohesive requirement validation attached to selected resources.</summary>
-public sealed class OrdersApp : InfrastructureModel
+public sealed class FulfillmentInfrastructure : InfrastructureModel
 {
     /// <summary>Canonical order storage identity.</summary>
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
     public static InfrastructureNodeId Worker { get; } = new("workloads/orders");
-    /// <summary>Derived entirely from the service's selected query registrations and native mappings.</summary>
-    public PostgresPreparedQueryEvidence StorageQueries { get; }
     /// <summary>Required application execution capability.</summary>
     public static InfrastructureCapabilityId ApplicationExecution { get; } = AspireInfrastructure.DotNetProjectExecution;
 
@@ -26,17 +23,16 @@ public sealed class OrdersApp : InfrastructureModel
 
     /// <summary>Prepares requirements from the same offline composition as the worker.</summary>
     /// <param name="model">Same activated application graph consumed by the worker.</param>
-    public OrdersApp(FulfillmentApplication model)
+    public FulfillmentInfrastructure(FulfillmentApplication model)
     {
-        StorageQueries = model.Storage.Bindings.PrepareService(model.StorageQueries, new("example/postgres"));
         Define(
             id: new("example/orders"),
             revision: new("4"),
             bindingProfileId: new("example/orders/bindings"),
             infra =>
             {
-                var storage = infra.Resource(Store).Persistent();
-                foreach (var requirement in StorageQueries.Requirements) storage.Requires(requirement);
+                infra.Resource(Store).Persistent()
+                    .Postgres(model.Storage.Bindings, model.Endpoints.Plan);
                 infra.Workload(Worker).Requires(ApplicationExecution).RequiresReady(Store);
             });
     }
@@ -50,20 +46,19 @@ public sealed class OrdersApp : InfrastructureModel
     {
         ArgumentNullException.ThrowIfNull(builder);
         var postgres = builder.AddPostgres("postgres").WithDataVolume();
-        var database = postgres.AddDatabase(FulfillmentResources.DatabaseName);
+        var database = postgres.AddDatabase(FulfillmentStoragePolicy.OrdersDatabaseName);
         var worker = builder.AddProject<Projects.OrderWorker>("worker")
             .WithHttpEndpoint(env: "ASPNETCORE_HTTP_PORTS")
             .WithReference(database).WaitFor(database);
         _ = builder.AddContainer("native-only", "redis", "7.4");
 
         // Associate existing Aspire resources with the canonical requirements and implementations.
-        return AspireInfrastructureAssociation.Attach(
-            application: builder,
-            definition: Definition,
+        return builder.AttachCohesive(
+            model: this,
             id: new("example/orders/local"),
             variant: new("development"),
             associations => associations
-                .Resource(Store, database, StorageQueries, new("aspire/example/orders"), [Source])
+                .Resource(Store, database, authority: new("aspire/example/orders"), sources: [Source])
                 .Workload(Worker, worker, sources: [Source])
             );
     }

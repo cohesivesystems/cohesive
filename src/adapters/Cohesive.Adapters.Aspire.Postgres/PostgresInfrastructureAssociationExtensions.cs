@@ -10,6 +10,25 @@ namespace Cohesive.Adapters.Aspire.Postgres;
 /// <summary>Associates prepared PostgreSQL query evidence with its native Aspire database.</summary>
 public static class PostgresInfrastructureAssociationExtensions
 {
+    /// <summary>Associates a database using evidence already prepared on its canonical resource.</summary>
+    /// <param name="associations">Current native association session.</param>
+    /// <param name="node">Canonical resource with PostgreSQL preparation.</param>
+    /// <param name="native">Existing Aspire database; its actual database name must match the preparation.</param>
+    /// <param name="authority">Explicit lifecycle owner, or aspire/native for native AppHost ownership.</param>
+    /// <param name="sources">Explicit attribution, or deterministic association defaults.</param>
+    /// <returns>The same association builder, without recompiling queries or creating resources.</returns>
+    /// <exception cref="ArgumentNullException">Associations or native resource is null.</exception>
+    /// <exception cref="ArgumentException">Database affinity, resource membership or association is invalid.</exception>
+    /// <exception cref="InvalidOperationException">Preparation is absent or authoring has ended.</exception>
+    public static AspireInfrastructureAssociationBuilder Resource(this AspireInfrastructureAssociationBuilder associations,
+        InfrastructureNodeId node, IResourceBuilder<PostgresDatabaseResource> native,
+        InfrastructureLifecycleAuthorityId? authority = null, ImmutableArray<SourceReference> sources = default)
+    {
+        ArgumentNullException.ThrowIfNull(associations);
+        return associations.Resource(node, native, associations.RequireResourcePreparation<PostgresPreparedQueryEvidence>(node),
+            authority ?? new InfrastructureLifecycleAuthorityId("aspire/native"), sources);
+    }
+
     /// <summary>Validates native database affinity before adding an association.</summary>
     /// <param name="associations">Current association builder.</param>
     /// <param name="node">Canonical storage node.</param>

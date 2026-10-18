@@ -125,18 +125,24 @@ public sealed record EvaluateRelationProcessNode : ProcessNode
     /// <param name="relation">Exact Relation or Query definition revision and fingerprint.</param>
     /// <param name="input">Portable typed query input expression.</param>
     /// <param name="continuation">Typed continuation receiving the query result when requested.</param>
+    /// <param name="policy">Optional read execution policy, including its required progress retention.</param>
     [JsonConstructor]
     public EvaluateRelationProcessNode(
         ExecutionNodeId id,
         ExecutionDefinitionReference relation,
         Expr input,
-        ProcessContinuation continuation)
+        ProcessContinuation continuation, ProcessReadPolicy? policy = null)
         : base(id)
     {
+        Policy = policy;
         Relation = relation;
         Input = input;
         Continuation = continuation;
     }
+
+    /// <summary>Optional read execution policy; requires the asynchronous policy-aware driver.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ProcessReadPolicy? Policy { get; }
 
     /// <summary>Exact Relation or Query definition revision and fingerprint.</summary>
     public ExecutionDefinitionReference Relation { get; }

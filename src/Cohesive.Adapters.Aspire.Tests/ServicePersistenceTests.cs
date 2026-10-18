@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres.Services;
@@ -12,9 +13,9 @@ public sealed class ServicePersistenceTests
     {
         var model = ModelActivator.Create<FulfillmentApplication>();
         await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=unused;Username=unused");
-        var persistence = model.Storage.Bind(database).ForServices();
-        var first = persistence.Query(model.Queries.OrderDetails, 1000, 1_000_000);
-        Assert.Same(first, persistence.Query(model.Queries.OrderDetails, 1000, 1_000_000));
-        Assert.NotSame(first, persistence.Query(model.Queries.OrderDetails, 999, 1_000_000));
+        var persistence = model.Storage.Bindings.Bind(database, authority: "test/fulfillment").ForServices();
+        var first = persistence.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.SingleSnapshot);
+        Assert.Same(first, persistence.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.SingleSnapshot));
+        Assert.NotSame(first, persistence.Query(model.Queries.OrderDetails, 999, 1_000_000, RelationQueryConsistency.SingleSnapshot));
     }
 }

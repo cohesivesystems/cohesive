@@ -57,7 +57,9 @@ public static partial class ProcessReferenceInterpreter
             }
             catch (PendingAsyncRelationException pending)
             {
-                var result = await host.EvaluateRelationAsync(context, pending.Evaluation).ConfigureAwait(false);
+                var result = pending.Evaluation.Policy is null
+                    ? await host.EvaluateRelationAsync(context, pending.Evaluation).ConfigureAwait(false)
+                    : await ProcessReadExecution.EvaluateAsync(context, pending.Evaluation, host).ConfigureAwait(false);
                 materialized.Materialize(pending.Evaluation, RequireOperationResult(result, "Relation/Query"));
             }
             catch (PendingAsyncSignalTargetException pending)
@@ -96,6 +98,7 @@ public static partial class ProcessReferenceInterpreter
 
     sealed class AsyncMaterializingHost : IProcessReferenceHost
     {
+        public bool SupportsReadPolicies => true;
         readonly Dictionary<AsyncOperationKey, MaterializedOperation> operations = [];
         readonly Dictionary<AsyncOperationKey, MaterializedSignalTarget> signalTargets = [];
 

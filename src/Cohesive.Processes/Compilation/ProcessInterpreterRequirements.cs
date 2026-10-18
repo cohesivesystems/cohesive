@@ -113,12 +113,16 @@ public static class ProcessInterpreterGuarantees
     /// <summary>Preserve an explicitly requested whole-definition atomic scope.</summary>
     public static ProcessInterpreterRequirementKey WholeDefinitionAtomicity { get; } = Guarantee("wholeDefinitionAtomicity");
 
+    /// <summary>Retain observational read attempts, deadlines and final evidence across restart.</summary>
+    public static ProcessInterpreterRequirementKey DurableReadProgress { get; } = Guarantee("durableReadProgress");
+
     /// <summary>Every guarantee that a compiled Process inventory can currently demand.</summary>
     public static ImmutableArray<ProcessInterpreterRequirementKey> All { get; } =
     [
         ExactDefinitionPinning,
         StableExecutionIdentity,
         DeterministicReplay,
+        DurableReadProgress,
         InputAdmissionAndDisposition,
         LifecycleControl,
         DurableRequestRecovery,
@@ -324,6 +328,9 @@ public static class ProcessInterpreterRequirementCollector
         {
             Add(ProcessNodeConstructCatalog.GetRequirement(node), [node.Id]);
         }
+
+        AddWhen(ProcessInterpreterGuarantees.DurableReadProgress,
+            plan.Definition.Nodes.Where(static node => node is EvaluateRelationProcessNode { Policy.Progress: ProcessReadProgress.Durable }));
 
         var allNodes = plan.Definition.Nodes.Select(static node => node.Id).ToImmutableArray();
         Add(ProcessInterpreterGuarantees.ExactDefinitionPinning, allNodes);

@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Cohesive.Adapters.Postgres.Infra;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Infra;
@@ -11,6 +12,27 @@ namespace Cohesive.Adapters.Postgres.Services;
 /// <summary>Prepares selected service queries through the existing PostgreSQL compiler, for runtime and Infra.</summary>
 public static class PostgresServiceExtensions
 {
+    /// <summary>Prepares endpoint-selected queries once and contributes their requirements and native evidence.</summary>
+    /// <param name="resource">Canonical resource receiving the prepared attachment.</param>
+    /// <param name="bindings">Offline database mappings.</param>
+    /// <param name="plan">Validated endpoint selections, including query bounds and consistency.</param>
+    /// <param name="implementation">Optional explicit implementation identity; defaults to postgres/{node}/implementation.</param>
+    /// <returns>The resource with requirements and prepared evidence attached.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="InvalidOperationException">The resource already has a preparation.</exception>
+    /// <exception cref="ArgumentException">Requirements conflict or no queries are selected.</exception>
+    /// <exception cref="ServiceBindingValidationException">Endpoint coverage or placement is invalid.</exception>
+    /// <exception cref="RelationQueryPreparationException">Semantic preparation fails.</exception>
+    /// <exception cref="PostgresQueryPreparationException">Native compilation fails.</exception>
+    public static InfrastructureResourceBuilder Postgres(this InfrastructureResourceBuilder resource,
+        PostgresPersistenceBindings bindings, ServiceImplementationPlan plan,
+        InfrastructureTargetFacilityId? implementation = null)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        return resource.Prepared(bindings.PrepareService(plan,
+            implementation ?? new InfrastructureTargetFacilityId($"postgres/{resource.Id.Value}/implementation")));
+    }
+
     /// <summary>Derives native snapshot requirements and evidence from the service's selected query registrations.</summary>
     /// <param name="bindings">Offline database mappings.</param><param name="service">Service with explicit selected relational queries.</param>
     /// <param name="implementation">Stable target implementation identity.</param><returns>Database-affine prepared query evidence.</returns>
@@ -20,6 +42,24 @@ public static class PostgresServiceExtensions
     /// <exception cref="PostgresQueryPreparationException">Native compilation fails.</exception>
     public static PostgresPreparedQueryEvidence PrepareService(this PostgresPersistenceBindings bindings,
         ServiceBuilder service, InfrastructureTargetFacilityId implementation) => PrepareService(bindings, service.Dependencies, implementation);
+
+    /// <summary>Validates endpoint coverage and prepares native query evidence directly from the portable implementation plan.</summary>
+    /// <param name="bindings">Offline native database mappings.</param>
+    /// <param name="plan">Endpoint implementation authority; reading its selections freezes and validates the plan.</param>
+    /// <param name="implementation">Stable target implementation identity.</param>
+    /// <returns>Database-affine snapshot requirements and prepared PostgreSQL evidence, without database IO.</returns>
+    /// <exception cref="ArgumentNullException">Bindings or plan is null.</exception>
+    /// <exception cref="ServiceBindingValidationException">Endpoint coverage or native query selection is invalid.</exception>
+    /// <exception cref="ArgumentException">The plan selects no queries.</exception>
+    /// <exception cref="RelationQueryPreparationException">Semantic query compilation fails.</exception>
+    /// <exception cref="PostgresQueryPreparationException">Native query preparation fails.</exception>
+    public static PostgresPreparedQueryEvidence PrepareService(this PostgresPersistenceBindings bindings,
+        ServiceImplementationPlan plan, InfrastructureTargetFacilityId implementation)
+    {
+        ArgumentNullException.ThrowIfNull(bindings);
+        ArgumentNullException.ThrowIfNull(plan);
+        return PrepareService(bindings, plan.QueryDependencies, implementation);
+    }
 
     /// <summary>Prepares query evidence from API-derived dependency selections.</summary>
     /// <param name="bindings">Offline native mappings.</param><param name="service">Selected query requirements.</param>
@@ -62,9 +102,9 @@ public static class PostgresServiceExtensions
 
     static void RequireNative(ServiceQuerySelection query)
     {
-        if (query.Consistency != ServiceQueryConsistency.SingleSnapshot)
+        if (!Enum.IsDefined(query.Consistency))
             throw new ServiceBindingValidationException(new([new(ServiceBindingDiagnosticCodes.QueryPlacementUnsupported, Cohesive.Model.DiagnosticSeverity.Error,
-                "Independent-source queries require an explicitly composed binding; native snapshot preparation cannot realize that selection.", "/bindings/queries")]));
+                "The query consistency requirement is unknown.", "/bindings/queries")]));
     }
 
     static RelationQueryPlanComponentFingerprint Fingerprint(RelationQueryCompilationRequest request)

@@ -2,7 +2,23 @@
 
 ## Instance composition
 
-`QueryModel` optionally groups instance-owned typed queries. Assign `Query(existingTypedQuery)` to each property; inherited `Definition` collects the canonical compilation requests once and rejects late or duplicate-ID additions. It neither compiles queries nor chooses database placement.
+`QueryModel` optionally groups instance-owned typed queries. Its `Queries` property exposes the same
+`QueryModelBuilder` available for standalone composition. `Queries.WithInput<T>("name").Array(id, recipe)`
+and `.SingleOrDefault(id, recipe)` own the isolated authoring session, parameter, finalization and registration.
+The array recipe returns result rows. The nested recipe receives `(query, input, output)` and returns
+`output.From(rows).Key(...)` mappings; only the outer `SingleOrDefault<TResult>` declares cardinality
+and result type. Recipes perform no runtime work. Stable IDs remain
+explicit; an optional display name defaults to the exact ID. `Query(existingTypedQuery)` (or builder
+`Include`) still supports separately authored queries. `Definition` freezes the ordered canonical requests.
+Failed recipes contribute nothing; duplicate/frozen registrations fail before invoking the recipe. A recipe
+cannot reentrantly modify or freeze its model. None of this compiles queries or chooses database placement.
+
+For nested results, `.SingleOrDefault<Detail>().From(joinedRows).Key(parent, p => p.Id, d => d.Id)`
+selects the rowset separately and declares both sides of its key mapping together. The keyed collection
+overload likewise takes the source key and child destination before the remaining field mappings. These
+forms lower through the existing identity slots and canonical assembly, preserving null-parent behavior,
+absent children, distinct children ordered by ordinal key, and conflict detection. The existing separate
+`From(..., key)` / `Identity(...)` forms remain available when the grouping key is not exposed in the result.
 
 `Cohesive.Relations` lets applications describe relationships, projections, filters, and queries in typed C# while
 leaving storage placement and execution strategy to compilers and adapters.
@@ -203,6 +219,21 @@ The unshipped PR408 terminal `ToArray` is now `BuildArrayQuery`. These are sourc
 no compatibility aliases are retained. Alpha.132 contains the previous surface (as does alpha.131 for
 APIs present there); publishing this PR and upgrading downstream consumers are separate steps. This PR
 updates in-repository consumers only and does not claim Ari or Ito have adopted the changes.
+
+### Reader consistency and reusable physical preparation
+
+`IRelationQueryReader<TInput,TResult>.Consistency` describes all reads contributing to one result.
+`SingleSnapshot` requires one shared observation snapshot; `IndependentSources` permits independent
+observations, including multiple reads from one database. Native PostgreSQL statement readers report the
+former; composed and subplan readers report the latter. Service/API binding checks the declared requirement
+before publishing routes, and rechecks it when reusing a cached reader. This is a guarantee contract,
+not an automatic downgrade based on the number of databases.
+
+`RelationQueryPhysicalPreparation` retains validated interpreter and physical planning evidence for reuse
+at runtime binding. Affinity checks preserve the exact semantic compilation, placement and policy; this
+never caches parameters, source observations or results.
+
+### Hosted typed query admission
 
 Hosted typed Query admission prepares the framework CLR contract once and reads ordinary envelopes directly
 from observation fields. Customized members retain their owning JSON converters; explicitly immutable

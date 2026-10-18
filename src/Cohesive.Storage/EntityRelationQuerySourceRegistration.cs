@@ -12,25 +12,15 @@ namespace Cohesive.Storage;
 /// execution domain, target capabilities, and limits. This registration adds only entity-shape affinity and the
 /// adapter-interpreted selectors needed to author plan-scoped placement bindings.
 /// </remarks>
-public sealed class EntityRelationQuerySourceRegistration
+public sealed class EntityRelationQuerySourceRegistration : EntityRelationQuerySourceBinding
 {
-    /// <summary>Conventional selector for <see cref="EntityObservationSnapshot.EntityId"/>.</summary>
-    public const string ObservationIdentitySourceSelector =
-        RelationQueryPlacementBuilder.FrameworkIdentitySourceSelector;
-
-    /// <summary>Conventional in-memory selector for <see cref="EntityObservationSnapshot.Version"/>.</summary>
-    public const string ObservationVersionSourceSelector = "$version";
-
-    /// <summary>In-memory selector for the exact opaque repository snapshot concurrency token.</summary>
-    public const string ConcurrencyTokenSourceSelector = "$concurrencyToken";
-
     /// <summary>Creates one immutable entity-backed canonical source registration.</summary>
     /// <param name="shape">Exact graph-qualified entity shape supplied by the source.</param>
     /// <param name="source">Canonical physical source instance, capability profile, and limits.</param>
     /// <param name="reader">Reader implementing the exact source instance.</param>
     /// <param name="identitySourceSelector">
     /// Stable physical identity selector, or <see langword="null"/> for
-    /// <see cref="ObservationIdentitySourceSelector"/>.
+    /// <see cref="EntityRelationQuerySourceBinding.ObservationIdentitySourceSelector"/>.
     /// </param>
     /// <param name="identitySemanticPath">
     /// Optional canonical field path whose value is exactly the source-native observation identity.
@@ -69,97 +59,18 @@ public sealed class EntityRelationQuerySourceRegistration
         FieldPath? observationVersionSemanticPath = null,
         QualifiedShapeId? persistedObservationType = null,
         FieldPath? concurrencyTokenSemanticPath = null)
+        : base(shape, source, (reader ?? throw new ArgumentNullException(nameof(reader))).Descriptor, identitySourceSelector, identitySemanticPath,
+            fieldSourceSelector, relationshipKeySourceSelector, observationVersionSemanticPath,
+            persistedObservationType, concurrencyTokenSemanticPath)
     {
-        if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
-            throw new ArgumentException("An entity relation/query source requires a graph-qualified shape.", nameof(shape));
-
-        Source = Guard.RequireNotNull(source);
-        Reader = Guard.RequireNotNull(reader);
-        var descriptor = reader.Descriptor;
-        if (descriptor.Source != source.Id
-            || descriptor.ExecutionDomain != source.ExecutionDomain
-            || !descriptor.TargetProfile.HasSameSemantics(source.TargetProfile))
-        {
-            throw new ArgumentException(
-                "The source reader descriptor must exactly match the registered source identity, execution domain, and target profile.",
-                nameof(reader));
-        }
-
-        Shape = shape;
-        var effectivePersistedObservationType = persistedObservationType ?? shape;
-        if (string.IsNullOrWhiteSpace(effectivePersistedObservationType.GraphId.Value)
-            || string.IsNullOrWhiteSpace(effectivePersistedObservationType.ShapeId.Value))
-        {
-            throw new ArgumentException(
-                "An entity relation/query source requires a graph-qualified persisted observation type.",
-                nameof(persistedObservationType));
-        }
-        PersistedObservationType = effectivePersistedObservationType;
+        Reader = reader;
         if (reader is IEntityRelationQuerySourceReader entityReader
-            && (entityReader.Shape != shape
-                || entityReader.PersistedObservationType != effectivePersistedObservationType))
-        {
-            throw new ArgumentException(
-                "The entity source reader must project the registered source-view shape from the registered persisted observation type.",
-                nameof(reader));
-        }
-        if (identitySemanticPath is { Segments.IsDefaultOrEmpty: true })
-            throw new ArgumentException("An identity semantic path cannot be empty.", nameof(identitySemanticPath));
-        if (observationVersionSemanticPath is { Segments.IsDefaultOrEmpty: true })
-            throw new ArgumentException("An observation-version semantic path cannot be empty.", nameof(observationVersionSemanticPath));
-        if (observationVersionSemanticPath is { } versionPath && identitySemanticPath == versionPath)
-        {
-            throw new ArgumentException(
-                "Observation identity and observation version cannot occupy the same semantic path.",
-                nameof(observationVersionSemanticPath));
-        }
-        IdentitySourceSelector = identitySourceSelector is null
-            ? ObservationIdentitySourceSelector
-            : Guard.RequireNotNullOrWhiteSpace(identitySourceSelector);
-        IdentitySemanticPath = identitySemanticPath;
-        if (concurrencyTokenSemanticPath is { } tokenPath
-            && (tokenPath.Segments.IsDefaultOrEmpty || tokenPath == identitySemanticPath || tokenPath == observationVersionSemanticPath))
-            throw new ArgumentException("A concurrency-token path must be nonempty and distinct from identity and version metadata.", nameof(concurrencyTokenSemanticPath));
-        ConcurrencyTokenSemanticPath = concurrencyTokenSemanticPath;
-        ObservationVersionSemanticPath = observationVersionSemanticPath;
-        FieldSourceSelector = fieldSourceSelector ?? SemanticPathSelector;
-        RelationshipKeySourceSelector = relationshipKeySourceSelector ?? SemanticPathSelector;
+            && (entityReader.Shape != shape || entityReader.PersistedObservationType != PersistedObservationType))
+            throw new ArgumentException("Reader entity shape must match the registered source view and persisted shape.", nameof(reader));
     }
 
-    /// <summary>Exact graph-qualified semantic source-view shape supplied by this registration.</summary>
-    public QualifiedShapeId Shape { get; }
-
-    /// <summary>
-    /// Exact graph-qualified entity observation retained by the repository. This may differ from
-    /// <see cref="Shape"/> when the source projects a derived metadata-enriched view.
-    /// </summary>
-    public QualifiedShapeId PersistedObservationType { get; }
-
-    /// <summary>Canonical physical source instance, target profile, and execution limits.</summary>
-    public RelationQuerySourceInstance Source { get; }
-
-    /// <summary>Canonical bounded reader implementing <see cref="Source"/>.</summary>
+    /// <summary>Runtime reader implementing the declared source contract.</summary>
     public IRelationQuerySourceReader Reader { get; }
-
-    /// <summary>Stable physical selector for semantic observation identity.</summary>
-    public string IdentitySourceSelector { get; }
-
-    /// <summary>Canonical field path equal to the observation identity, when explicitly evidenced.</summary>
-    public FieldPath? IdentitySemanticPath { get; }
-
-    /// <summary>
-    /// Canonical field path projected from authoritative repository observation-version metadata, when configured.
-    /// </summary>
-    public FieldPath? ObservationVersionSemanticPath { get; }
-
-    /// <summary>Optional field projected from the exact opaque repository token, never observation payload.</summary>
-    public FieldPath? ConcurrencyTokenSemanticPath { get; }
-
-    /// <summary>Deterministic semantic-to-physical field selector.</summary>
-    public RelationQueryPlacementFieldSelector FieldSourceSelector { get; }
-
-    /// <summary>Deterministic semantic-to-physical relationship-reference selector.</summary>
-    public RelationQueryPlacementFieldSelector RelationshipKeySourceSelector { get; }
 
     /// <summary>Creates an in-memory entity source registration using deterministic conventions.</summary>
     /// <param name="shape">Exact graph-qualified semantic source-view shape supplied to queries.</param>
@@ -291,7 +202,6 @@ public sealed class EntityRelationQuerySourceRegistration
             concurrencyTokenSemanticPath);
     }
 
-    internal static string SelectSemanticPath(FieldPath path) => SemanticPathSelector(path);
 
     static readonly RelationQueryPlacementFieldSelector SemanticPathSelector =
         static semanticPath => semanticPath.ToString();

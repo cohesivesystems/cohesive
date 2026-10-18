@@ -11,6 +11,20 @@ public sealed class ComposedPreparationTests
     static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
 
     [Fact]
+    public void Native_prefix_recipe_rejects_queries_without_a_supported_closed_row_boundary()
+    {
+        using var database = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test");
+        var local = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
+        var remote = PostgresSplitFixture.BindInventory(Model, database);
+        var policy = new PostgresRelationQueryComposedPolicy(
+            ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000,
+            new(new("local"), FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition));
+        var error = Assert.Throws<RelationQueryPreparationException>(() =>
+            local.QueryComposed(Model.Queries.OrderDetails, remote, policy));
+        Assert.Equal("postgres.composed.splitMissing", error.Code);
+    }
+
+    [Fact]
     public void Missing_scope_fails_when_policy_is_declared()
     {
         var error = Assert.Throws<ArgumentNullException>(() => new PostgresRelationQueryComposedPolicy(
@@ -24,15 +38,15 @@ public sealed class ComposedPreparationTests
     public void Invalid_registration_fails_without_opening_a_database(string failure)
     {
         using var db = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test;Timeout=1");
-        var orders = Model.Storage.Bind(db);
+        var orders = Model.Storage.Bindings.Bind(db, authority: "test/fulfillment");
         var remote = failure == "missing-mapping"
             ? PostgresPersistenceBindings.Define(new("inventory"), _ => { }).Bind(new(new("inventory"), db, "test"))
-            : Model.Storage.BindInventory(db);
+            : PostgresSplitFixture.BindInventory(Model, db);
         var scope = new PostgresRelationQueryPartitionScope(new("local"),
-            failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition);
+            failure == "wrong-selector" ? "wrong" : FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition);
         var policy = new PostgresRelationQueryComposedPolicy(
             ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000, scope);
-        var error = Record.Exception(() => orders.QueryComposed(Model.Queries.ReservationAvailability, Model.Queries.ReservationDemandProjection, remote, policy));
+        var error = Record.Exception(() => orders.QueryComposed(Model.Queries.ReservationAvailability, SubplanTests.DemandProjection(Model.Queries), remote, policy));
         var preparation = Assert.IsType<RelationQueryPreparationException>(error);
         Assert.Equal(failure switch {
             "missing-mapping" => "postgres.composed.remoteMappingMissing",
@@ -49,7 +63,7 @@ public sealed class ComposedPreparationTests
             maximumBufferedRows: 1000, maximumLocalRows: 1000, maximumFanOut: 100,
             maximumReferenceKeysPerObservation: 100, maximumConcurrency: 1);
         var policy = new PostgresRelationQueryComposedPolicy(physical, 1000, 1000, 1_000_000,
-            new(new("local"), FulfillmentDomain.PartitionField, FulfillmentDemo.LocalPartition));
+            new(new("local"), FulfillmentDomain.PartitionField, FulfillmentStoragePolicy.LocalPartition));
         Assert.Same(physical, policy.PhysicalPlanningPolicy);
         Assert.Equal(physical.MaximumBatchSize, policy.SourcePolicy.MaximumBatchKeys);
     }

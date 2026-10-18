@@ -11,6 +11,30 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class CompositionModelTests
 {
     [Fact]
+    public void Domain_owns_transition_authorities_used_by_the_separate_process()
+    {
+        var model = ModelActivator.Create<FulfillmentApplication>();
+        var dependencies = model.Process.Dependencies;
+        var expected = new[]
+        {
+            Cohesive.Processes.Authoring.ProcessDependency.Transition(model.Domain.OrderTransitions.Submit),
+            Cohesive.Processes.Authoring.ProcessDependency.Transition(model.Domain.InventoryTransitions.Reserve),
+            Cohesive.Processes.Authoring.ProcessDependency.Transition(model.Domain.InventoryTransitions.Release)
+        };
+        foreach (var transition in expected)
+        {
+            var dependency = Assert.Single(dependencies, candidate => candidate.Reference == transition.Reference);
+            Assert.True(dependency.HasSameAuthority(transition));
+        }
+        Assert.Same(model.Process, model.Composition.Get<FulfillmentProcess>());
+        Assert.Throws<KeyNotFoundException>(() => model.Composition.Get<OrderTransitions>());
+        Assert.Throws<KeyNotFoundException>(() => model.Composition.Get<InventoryTransitions>());
+        var independent = ModelActivator.Create<FulfillmentApplication>();
+        Assert.NotSame(model.Domain.OrderTransitions.Submit, independent.Domain.OrderTransitions.Submit);
+        Assert.Equal(model.Domain.OrderTransitions.Submit.Reference, independent.Domain.OrderTransitions.Submit.Reference);
+    }
+
+    [Fact]
     public void Colocated_and_separate_service_authoring_produce_identical_contracts()
     {
         var model = ModelActivator.Create<FulfillmentApplication>();
@@ -65,11 +89,7 @@ public sealed class CompositionModelTests
         var appHost = ModelActivator.Create<FulfillmentApplication>();
         var worker = ModelActivator.Create<FulfillmentApplication>();
         Assert.NotSame(appHost.Domain, worker.Domain);
-        Assert.Collection(appHost.Storage.Definition,
-            value => Assert.Same(appHost.Storage.Bindings, value),
-            value => Assert.Same(appHost.Storage.InventoryBindings, value));
-        Assert.Same(appHost.Storage.Bindings.Mapping(appHost.Domain.Inventory),
-            appHost.Storage.InventoryBindings.Mapping(appHost.Domain.Inventory));
+        Assert.Same(appHost.Storage.Bindings, Assert.Single(appHost.Storage.Definition));
         Assert.NotSame(appHost.Domain.Orders.Definition, worker.Domain.Orders.Definition);
         Assert.Equal(appHost.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint,
             worker.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
@@ -81,7 +101,7 @@ public sealed class CompositionModelTests
     public async Task Generated_process_definition_is_shared_across_concurrent_access()
     {
         var domain = new FulfillmentDomain();
-        var process = new FulfillmentProcess(domain, new(domain), new(domain));
+        var process = new FulfillmentProcess(domain);
         var definitions = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => Task.Run(() => process.Definition)));
         Assert.All(definitions, definition => Assert.Same(definitions[0], definition));
         Assert.True(definitions[0].IsValid);

@@ -454,7 +454,7 @@ public sealed class ServiceAcceptedProcessTests
     sealed class NoPersistence : IServicePersistence
     {
         public IEntityRepository Repository(ValueContract observation) => throw new InvalidOperationException("No storage resolution expected.");
-        public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes) =>
+        public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes, RelationQueryConsistency consistency) =>
             throw new InvalidOperationException("No storage resolution expected.");
     }
 }

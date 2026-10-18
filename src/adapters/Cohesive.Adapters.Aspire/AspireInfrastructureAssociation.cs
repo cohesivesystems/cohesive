@@ -50,7 +50,7 @@ public sealed class AspireInfrastructureAssociation
             new($"{id.Value}/facilities"), new($"{id.Value}/profile"), Target, variant,
             [InfrastructureDefinitionDocument.CurrentSchemaVersion], deployment =>
             {
-                associations = new(application, deployment, id);
+                associations = new(application, definition, deployment, id);
                 try { configure(associations); }
                 finally { associations.Freeze(); }
             });
@@ -62,6 +62,7 @@ public sealed class AspireInfrastructureAssociation
 public sealed class AspireInfrastructureAssociationBuilder
 {
     readonly IDistributedApplicationBuilder application;
+    readonly InfrastructureAuthoringResult definition;
     readonly InfrastructureTargetDeploymentManifestId manifestId;
     readonly InfrastructureTargetDeploymentManifestBuilder deployment;
     readonly Dictionary<InfrastructureNodeId, IResource> resources = [];
@@ -69,12 +70,24 @@ public sealed class AspireInfrastructureAssociationBuilder
     bool frozen;
 
     internal AspireInfrastructureAssociationBuilder(IDistributedApplicationBuilder application,
-        InfrastructureTargetDeploymentManifestBuilder deployment, InfrastructureTargetDeploymentManifestId manifestId)
+        InfrastructureAuthoringResult definition, InfrastructureTargetDeploymentManifestBuilder deployment, InfrastructureTargetDeploymentManifestId manifestId)
     {
         this.application = application;
+        this.definition = definition;
         this.manifestId = manifestId;
         this.deployment = deployment;
         existing = new(application.Resources, ReferenceEqualityComparer.Instance);
+    }
+
+    /// <summary>Resolves setup evidence retained by the canonical resource's authoring session.</summary>
+    /// <typeparam name="T">Expected adapter preparation.</typeparam>
+    /// <param name="node">Canonical resource identity.</param>
+    /// <returns>The exact immutable preparation; no compilation is repeated.</returns>
+    /// <exception cref="InvalidOperationException">Authoring ended or the requested preparation is missing.</exception>
+    public T RequireResourcePreparation<T>(InfrastructureNodeId node) where T : class, IInfrastructureResourcePreparation
+    {
+        EnsureMutable();
+        return definition.RequireResourcePreparation<T>(node);
     }
 
     void EnsureMutable()
@@ -122,6 +135,7 @@ public sealed class AspireInfrastructureAssociationBuilder
     /// <param name="node">Canonical workload identity.</param>
     /// <param name="native">Existing project resource; no process is started.</param>
     /// <param name="sources">Selection attribution, or the deterministic association default.</param>
+    /// <param name="executionEvidence">Additional prepared runtime capabilities, excluding project execution itself.</param>
     /// <param name="sourceFile">Compiler-provided authoring file.</param>
     /// <param name="sourceLine">Compiler-provided authoring line.</param>
     /// <param name="sourceMember">Compiler-provided authoring member.</param>
@@ -130,14 +144,17 @@ public sealed class AspireInfrastructureAssociationBuilder
     /// <exception cref="ArgumentException">Membership, identity or project path is invalid.</exception>
     /// <exception cref="InvalidOperationException">Metadata is absent/ambiguous or authoring has completed.</exception>
     public AspireInfrastructureAssociationBuilder Workload(InfrastructureNodeId node, IResourceBuilder<ProjectResource> native,
-        ImmutableArray<SourceReference> sources = default,
+        ImmutableArray<SourceReference> sources = default, ImmutableArray<InfrastructureCapabilityEvidence> executionEvidence = default,
         [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0, [CallerMemberName] string sourceMember = "")
     {
         ArgumentNullException.ThrowIfNull(native);
         Validate(node, native.Resource);
         var metadata = native.Resource.GetProjectMetadata();
         ArgumentException.ThrowIfNullOrWhiteSpace(metadata.ProjectPath);
-        return Workload(node, native, AspireInfrastructure.DotNetProject, sources, sourceFile, sourceLine, sourceMember);
+        var implementation = executionEvidence.IsDefaultOrEmpty ? AspireInfrastructure.DotNetProject
+            : InfrastructureTargetImplementation.WorkloadImplementation(new($"aspire/project/{node.Value}"),
+                [.. AspireInfrastructure.DotNetProject.Evidence, .. executionEvidence]);
+        return Workload(node, native, implementation, sources, sourceFile, sourceLine, sourceMember);
     }
 
     /// <summary>Associates an existing executable, project or container with a canonical workload.</summary>

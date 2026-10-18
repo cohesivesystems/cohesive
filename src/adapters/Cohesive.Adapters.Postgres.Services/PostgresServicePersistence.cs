@@ -34,7 +34,7 @@ public static class PostgresServicePersistenceExtensions
             }
         }
         public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query,
-            int maximumRows, long maximumBytes)
+            int maximumRows, long maximumBytes, RelationQueryConsistency consistency)
         {
             ArgumentNullException.ThrowIfNull(query);
             lock (queries)
@@ -43,7 +43,7 @@ public static class PostgresServicePersistenceExtensions
                 var key = (maximumRows, maximumBytes);
                 if (!bounded.TryGetValue(key, out var reader))
                     bounded.Add(key, reader = persistence.Query(query, maximumRows, maximumBytes));
-                return (IRelationQueryReader<TInput, TResult>)reader;
+                return ServiceQueryConsistencyValidation.Require((IRelationQueryReader<TInput, TResult>)reader, consistency);
             }
         }
     }

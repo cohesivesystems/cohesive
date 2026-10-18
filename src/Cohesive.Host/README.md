@@ -69,9 +69,36 @@ stop/start, disposal without stop, duplicate registration, disabled logging and 
 ## Offline application composition
 
 `ModelActivator.Create<T>()` discovers concrete constructor dependencies and prepares one offline graph.
-The optional callback accepts ordinary `IServiceCollection` singleton registrations for interfaces/factories.
-Dependencies complete before consumers are constructed, so constructor-assigned get-only handles are ready.
-No property reflection, source generator, explicit Prepare call or runtime service container is required.
+Public `required ... { get; init; }` properties also declare dependencies on every model declaration,
+including inherited required properties. Constructor and property injection may coexist on the same model.
+The optional callback
+accepts ordinary `IServiceCollection` singleton registrations for interfaces/factories.
+
+Both sets of dependencies complete before a model is constructed. The activator passes constructor
+dependencies, assigns required init properties, then completes authoring before exposing the model to consumers.
+Use constructor parameters when authoring in the constructor; use property dependencies during
+`IAuthoringModel.Complete()` or definition preparation triggered by completion.
+Reflection cannot prevent arbitrary constructor code from reading properties early: constructor failures
+report this initialization boundary and preserve the original exception. Constructors must not read init properties; use
+constructors for models that actively author declarations from dependencies. No partially populated model
+is exposed to resolve a cycle. Property metadata is retained only within the composition builder, and
+reflection-based assignment runs once during activation, never per invocation. No source generator,
+explicit Prepare call or runtime service container is required.
+
+```csharp
+public sealed class OrdersApplication : ApplicationModel
+{
+    public required OrdersDomain Domain { get; init; }
+    public required OrdersQueries Queries { get; init; }
+}
+```
+
+The direct builder still requires explicit registrations for all dependencies. Automatically constructed
+models resolve properties through the same singleton registry as constructor parameters. Explicit factory
+or instance registrations retain responsibility for initialization: their values are not overwritten, but
+null required components are rejected before model completion. Required fields, mutable setters,
+non-public accessors and value-type component properties are unsupported. Init modifiers are recognized
+by full metadata name, including library-local IsExternalInit polyfills.
 
 The underlying `ApplicationModelBuilder` also supports direct explicit registration. `Build()` returns
 `PreparedApplicationModel`, with shared instances and a validated canonical execution catalog. The optional

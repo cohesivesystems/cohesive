@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -87,14 +88,15 @@ public sealed class ServiceImplementationPlan
     /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Query result.</typeparam>
     /// <param name="query">Canonical query authority.</param><param name="revision">Semantic revision.</param>
     /// <param name="rows">Maximum result rows.</param><param name="bytes">Maximum decoded bytes.</param>
+    /// <param name="consistency">Required consistency across every read contributing to the result.</param>
     /// <exception cref="ServiceBindingValidationException">The same query has competing bounds or revisions.</exception>
-    public void Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes) =>
+    public void Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes, RelationQueryConsistency consistency) =>
         state.Edit(() =>
         {
             var existing = queries.Queries.FirstOrDefault(item => ReferenceEquals(item.Request, query.CompilationRequest));
-            if (existing is null) queries = queries.Query(query, revision, rows, bytes);
-            else if (existing.Reference.RevisionId != revision || existing.MaximumRows != rows || existing.MaximumBytes != bytes)
-                throw Error("services.api.querySelectionMismatch", "One query authority must have one revision and preparation bound.");
+            if (existing is null) queries = queries.Query(query, revision, rows, bytes, consistency);
+            else if (existing.Reference.RevisionId != revision || existing.MaximumRows != rows || existing.MaximumBytes != bytes || existing.Consistency != consistency)
+                throw Error("services.api.querySelectionMismatch", "One query authority must have one revision, preparation bound and consistency requirement.");
             return this;
         });
 

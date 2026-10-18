@@ -20,6 +20,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     readonly Dictionary<EmissionId, InteractionEnvelopeContentFingerprint> outboxEnvelopeFingerprintsById = [];
     readonly EntityDefinition entityDefinition;
     readonly EntityPartitionKeyPolicy partitionKeyPolicy;
+    readonly EntityTransitionOperationCapabilities transitionOperationCapabilities;
     readonly Action<EntityTransitionOperationCommitPhase>? transitionOperationCommitBoundary;
     long nextConcurrencyVersion;
 
@@ -44,6 +45,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     {
         this.entityDefinition = Guard.RequireNotNull(entityDefinition);
         this.partitionKeyPolicy = Guard.RequireNotNull(partitionKeyPolicy);
+        transitionOperationCapabilities = new(true, partitionKeyPolicy.FixedPartitionKey);
         if (seedSnapshots is null)
             return;
 
@@ -111,7 +113,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
 
     /// <summary>Gets atomic entity-state and Process Transition receipt capabilities.</summary>
     public EntityTransitionOperationCapabilities TransitionOperationCapabilities =>
-        EntityTransitionOperationCapabilities.AtomicStateAndReceipt;
+        transitionOperationCapabilities;
 
     /// <summary>Gets the canonical envelopes retained by the entity outbox in commit order.</summary>
     public IReadOnlyList<InteractionEnvelope> OutboxEnvelopes

@@ -16,10 +16,10 @@ public sealed class OrderTransitionTests
     [InlineData(OrderStatus.Submitted, TransitionDecisionKind.AdmissionRejected, SubmissionOutcome.NotDraft)]
     public void Submission_requires_draft_and_preserves_input(OrderStatus status, TransitionDecisionKind expected, SubmissionOutcome outcomeKind)
     {
-        var compilation = Model.Orders.Submit.Compile();
+        var compilation = Model.Domain.OrderTransitions.Submit.Compile();
         Assert.True(compilation.IsSuccessful, string.Join("; ", compilation.Validation.Diagnostics));
         var plan = compilation.Plan!;
-        var order = new Order("order-1", FulfillmentDemo.LocalPartition, status);
+        var order = new Order("order-1", FulfillmentStoragePolicy.LocalPartition, status);
         var decision = TransitionReferenceInterpreter.DecideFullState(plan, new("test/submit"),
             PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(Cohesive.Prelude.Unit.Value)),
             PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(order)));
