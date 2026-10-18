@@ -136,3 +136,8 @@ place. Array recipes return their final projection; nested recipes receive a typ
 `SingleOrDefault<OrderDetails>` is declared only once.
 Neither repeats a terminal query ID/parameter registration. Nested `.From(rows).Key(source, sourceKey,
 resultKey)` and the keyed collection mapping preserve the existing portable assembly and query fingerprints.
+
+`FulfillmentApplication` exposes its components as public required init-only properties. `ModelActivator`
+resolves those through the same graph as constructor dependencies, shares each component instance, and
+populates the root before returning it. Domain, query, API and binding models keep constructor injection
+for declaration authoring; no property attributes, partial classes or `null!` initializers are needed.

@@ -69,9 +69,30 @@ stop/start, disposal without stop, duplicate registration, disabled logging and 
 ## Offline application composition
 
 `ModelActivator.Create<T>()` discovers concrete constructor dependencies and prepares one offline graph.
-The optional callback accepts ordinary `IServiceCollection` singleton registrations for interfaces/factories.
-Dependencies complete before consumers are constructed, so constructor-assigned get-only handles are ready.
-No property reflection, source generator, explicit Prepare call or runtime service container is required.
+For `ApplicationModel` roots, public `required ... { get; init; }` properties also declare dependencies,
+including inherited required properties. Other models retain constructor injection. The optional callback
+accepts ordinary `IServiceCollection` singleton registrations for interfaces/factories.
+
+Dependencies complete before the root is constructed. The activator then assigns its required init
+properties before authoring completion or publication. Constructors must not read init properties; use
+constructors for models that actively author declarations from dependencies. No partially populated root
+is exposed to resolve a cycle. Property metadata is retained only within the composition builder, and
+reflection-based assignment runs once during activation, never per invocation. No source generator,
+explicit Prepare call or runtime service container is required.
+
+```csharp
+public sealed class OrdersApplication : ApplicationModel
+{
+    public required OrdersDomain Domain { get; init; }
+    public required OrdersQueries Queries { get; init; }
+}
+```
+
+The direct builder still requires explicit registrations for all dependencies. Automatically constructed
+roots resolve properties through the same singleton registry as constructor parameters. Explicit factory
+or instance registrations retain responsibility for initialization: their values are not overwritten, but
+null required components are rejected before model completion. Required fields, mutable setters,
+non-public accessors and value-type component properties are unsupported.
 
 The underlying `ApplicationModelBuilder` also supports direct explicit registration. `Build()` returns
 `PreparedApplicationModel`, with shared instances and a validated canonical execution catalog. The optional

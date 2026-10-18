@@ -6,38 +6,20 @@ namespace AspireFirst.Orders;
 /// <remarks>Each program owns its instance. Typed references connect declarations; CLR names are not semantic IDs.</remarks>
 public sealed class FulfillmentApplication : ApplicationModel
 {
-    /// <summary>Exposes the activated application components; dependencies are prepared before this constructor.</summary>
-    /// <param name="domain">Shared domain.</param><param name="queries">Query catalog.</param>
-    /// <param name="storage">Storage attachments.</param><param name="orders">Order transitions.</param>
-    /// <param name="inventory">Inventory transitions.</param><param name="api">API contract.</param>
-    /// <param name="process">Generated process.</param><param name="endpoints">Offline API bindings.</param>
-    public FulfillmentApplication(FulfillmentDomain domain, FulfillmentQueries queries, FulfillmentStorage storage,
-        OrderTransitions orders, InventoryTransitions inventory, OrderApi api, FulfillmentProcess process,
-        OrderEndpoints endpoints)
-    {
-        Domain = domain;
-        Queries = queries;
-        Storage = storage;
-        Orders = orders;
-        Inventory = inventory;
-        Api = api;
-        Process = process;
-        Endpoints = endpoints;
-    }
     /// <summary>Offline API binding contributions with explicit native host preparation.</summary>
-    public OrderEndpoints Endpoints { get; }
+    public required OrderEndpoints Endpoints { get; init; }
     /// <summary>Public API contract.</summary>
-    public OrderApi Api { get; }
+    public required OrderApi Api { get; init; }
     /// <summary>Canonical entity and relationship declarations.</summary>
-    public FulfillmentDomain Domain { get; }
+    public required FulfillmentDomain Domain { get; init; }
     /// <summary>Canonical query declarations.</summary>
-    public FulfillmentQueries Queries { get; }
+    public required FulfillmentQueries Queries { get; init; }
     /// <summary>Offline native storage attachments.</summary>
-    public FulfillmentStorage Storage { get; }
+    public required FulfillmentStorage Storage { get; init; }
     /// <summary>Order transitions.</summary>
-    public OrderTransitions Orders { get; }
+    public required OrderTransitions Orders { get; init; }
     /// <summary>Inventory transitions.</summary>
-    public InventoryTransitions Inventory { get; }
+    public required InventoryTransitions Inventory { get; init; }
     /// <summary>Generated multi-entity process.</summary>
-    public FulfillmentProcess Process { get; }
+    public required FulfillmentProcess Process { get; init; }
 }

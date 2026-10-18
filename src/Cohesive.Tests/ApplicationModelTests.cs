@@ -61,6 +61,111 @@ public sealed class ApplicationModelTests
         public void AddLate() => Storage.Define(() => new FirstBindings("late"));
     }
 
+    public abstract class InitApplicationBase : ApplicationModel
+    {
+        public required Dependency Dependency { get; init; }
+    }
+    public sealed class InitApplication : InitApplicationBase, IAuthoringModel
+    {
+        public required Consumer Consumer { get; init; }
+        public required Dependency Alias { get; init; }
+        public bool Completed { get; private set; }
+        public void Complete()
+        {
+            Assert.True(Dependency.Completed);
+            Assert.Same(Dependency, Consumer.Dependency);
+            Assert.Same(Dependency, Alias);
+            Completed = true;
+        }
+    }
+    public sealed class InitCycle : ApplicationModel
+    {
+        public required RootConsumer Consumer { get; init; }
+    }
+    public sealed class RootConsumer(InitCycle root) { public InitCycle Root { get; } = root; }
+    public sealed class InterfaceRoot : ApplicationModel
+    {
+        public required ISettings Settings { get; init; }
+    }
+    public sealed class MutableRoot : ApplicationModel
+    {
+        public required Dependency Dependency { get; set; }
+    }
+    public sealed class FieldRoot : ApplicationModel
+    {
+        public required Dependency Dependency;
+    }
+    public sealed class InvalidInitDependencyRoot : ApplicationModel
+    {
+        public required InvalidDependency Dependency { get; init; }
+        public InvalidInitDependencyRoot() => throw new Exception("Root must not construct before dependency completion.");
+    }
+
+    [Fact]
+    public void Required_init_components_share_completed_dependencies_and_support_inherited_members()
+    {
+        var first = ModelActivator.Create<InitApplication>();
+        var second = ModelActivator.Create<InitApplication>();
+        Assert.True(first.Completed);
+        Assert.True(first.Consumer.PreparedAtConstruction);
+        Assert.Same(first.Dependency, first.Composition.Get<Dependency>());
+        Assert.Equal(1, first.Dependency.CompletionCount);
+        Assert.NotSame(first.Dependency, second.Dependency);
+    }
+
+    [Fact]
+    public void Required_init_properties_resolve_explicit_interface_registrations()
+    {
+        var model = ModelActivator.Create<InterfaceRoot>(services => services.AddSingleton<ISettings, Settings>());
+        Assert.Equal("selected", model.Settings.Name);
+        Assert.Contains(nameof(ISettings), Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<InterfaceRoot>()).Message);
+    }
+
+    [Fact]
+    public void Required_init_dependencies_preserve_cycle_detection()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<InitCycle>());
+        Assert.Contains(nameof(InitCycle), error.Message);
+        Assert.Contains(nameof(RootConsumer), error.Message);
+    }
+
+    [Fact]
+    public void Required_init_dependency_failure_precedes_root_construction() =>
+        Assert.Equal("invalid declaration", Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<InvalidInitDependencyRoot>()).Message);
+
+    [Fact]
+    public void Required_mutable_properties_and_fields_are_rejected()
+    {
+        Assert.Contains("init-only", Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<MutableRoot>()).Message);
+        Assert.Contains("init-only", Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<FieldRoot>()).Message);
+    }
+
+    [Fact]
+    public void Explicit_root_factory_cannot_publish_null_required_properties()
+    {
+        var builder = new ApplicationModelBuilder().Add<InterfaceRoot>(_ => new InterfaceRoot { Settings = null! });
+        var error = Assert.Throws<InvalidOperationException>(() => builder.Build());
+        Assert.Contains("InterfaceRoot.Settings", error.Message);
+        Assert.Same(error, Assert.Throws<InvalidOperationException>(() => builder.Build()));
+    }
+
+    [Fact]
+    public void Explicit_root_factory_retains_its_initialized_components()
+    {
+        var settings = new Settings();
+        var root = ModelActivator.Create<InterfaceRoot>(services => services.AddSingleton(_ => new InterfaceRoot { Settings = settings }));
+        Assert.Same(settings, root.Settings);
+    }
+
+    [Fact]
+    public void Direct_builder_requires_property_dependencies_to_be_registered()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => new ApplicationModelBuilder().Add<InterfaceRoot>().Build());
+        Assert.Contains("InterfaceRoot.Settings", error.Message);
+        var builder = new ApplicationModelBuilder().Add<InitApplication>().Add<Consumer>().Add<Dependency>();
+        Assert.True(builder.Build().Get<InitApplication>().Completed);
+    }
+
     [Fact]
     public void Storage_model_owns_multiple_native_binding_types_in_declaration_order()
     {
