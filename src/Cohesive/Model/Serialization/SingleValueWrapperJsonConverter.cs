@@ -97,6 +97,13 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
         return true;
     }
 
+    // This optional native interpretation belongs to the actual selected converter, so declared
+    // profiles and overrides cannot accidentally use an attribute-based parallel wrapper contract.
+    internal interface IObservationStringProjection
+    {
+        bool TryGetString(object value, out string? text);
+    }
+
     static bool DeclaresSingleValueWrapperConverter(Type type) =>
         type.GetCustomAttribute<JsonConverterAttribute>()?.ConverterType
         == typeof(SingleValueWrapperJsonConverter);
@@ -180,7 +187,7 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
         byte[][] AcceptedNestedPropertyNamesUtf8
         );
 
-    sealed class SpecialSingleValueWrapperJsonConverter<TWrapper, TValue> : JsonConverter<TWrapper>
+    sealed class SpecialSingleValueWrapperJsonConverter<TWrapper, TValue> : JsonConverter<TWrapper>, IObservationStringProjection
     {
         readonly Func<TWrapper, TValue> getValue;
         readonly Func<TValue, TWrapper> createWrapper;
@@ -218,6 +225,17 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
                 body: Expression.New(constructor, valueParameter),
                 parameters: valueParameter
                 ).Compile();
+        }
+
+        public bool TryGetString(object value, out string? text)
+        {
+            if (typeof(TValue) == typeof(string))
+            {
+                text = (string?)(object?)getValue((TWrapper)value);
+                return true;
+            }
+            text = null;
+            return false;
         }
 
         public override TWrapper Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)

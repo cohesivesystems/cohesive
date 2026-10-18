@@ -72,7 +72,7 @@ public sealed class PreparedGraphProjectionTests
         var samples = new long[7];
         for (var run = 0; run < samples.Length; run++)
         {
-            var input = PortableValue.Concrete(Contract, ObservationValue.FromObject(source));
+            var input = PortableValue.Concrete(Contract, ObservationValue.FromObject(Graph(128)));
             var before = GC.GetAllocatedBytesForCurrentThread();
             var result = HostedQueryValueAdapter.Decode<ShapeGraphDocument>(input, Contract);
             samples[run] = GC.GetAllocatedBytesForCurrentThread() - before;

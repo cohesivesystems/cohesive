@@ -18,7 +18,7 @@ for harness in [args.baseline, args.candidate]:
 args.output.parent.mkdir(parents=True, exist_ok=True)
 with args.output.open("w", newline="") as output:
     writer = csv.writer(output, lineterminator="\n")
-    writer.writerow(["variant", "run", "source", "phase", "allocated_bytes", "elapsed_ms"])
+    writer.writerow(["variant", "run", "source", "phase", "allocated_bytes", "elapsed_ms", "cpu_ms"])
     for run in range(1, args.runs + 1):
         for source in ["x12-004010-204", "x12-005030-204"]:
             variants = [("baseline", args.baseline), ("candidate", args.candidate)]
@@ -32,6 +32,6 @@ with args.output.open("w", newline="") as output:
                 for row in rows:
                     if row["source"] != source:
                         raise RuntimeError("Wrong workload in harness result")
-                    writer.writerow([variant, run, source, row["phase"], int(row["allocated_bytes"]), row["elapsed_ms"]])
+                    writer.writerow([variant, run, source, row["phase"], int(row["allocated_bytes"]), row["elapsed_ms"], row.get("cpu_ms", "")])
                 output.flush()
         print(f"Completed pair {run}/{args.runs}", flush=True)

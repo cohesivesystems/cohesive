@@ -59,6 +59,9 @@ See [property-name qualification](../../docs/performance/observation-name-reuse.
 Explicit `IImmutableObservationProjection` types (including `ShapeGraphDocument`) can reuse decoded
 interpretations of the same immutable payload under the same frozen serializer profile and binary encoding.
 Mutable results remain independent. Reuse conveys no validation or admission evidence.
+Shape graph documents prepare their observation representation once by immutable object identity;
+new envelopes over the same graph share its payload and typed interpretation. First decoding and
+external admission still run normally. Preparation remains owned by the live document/graph.
 The hosted materializer reads immutable collections and supported polymorphic members directly from observations;
 customized contracts retain their serializer. See [prepared projection qualification](../../docs/performance/prepared-observation-projections.md).
 `CanonicalJsonWriter.GetCanonicalSequenceText` returns owned text using the same explicit profile, encoder and exclusions as streaming canonical output.

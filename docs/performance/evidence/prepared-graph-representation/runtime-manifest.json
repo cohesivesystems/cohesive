@@ -1,0 +1,69 @@
+{
+  "qualification": "source Core replacement in a frozen public alpha.145 Ari runtime closure; not a published release",
+  "cohesive_base_commit": "f76f7659cd0129a5c46d27577bca9e9b718e5a67",
+  "ari_source_commit": "78f25ec6586d6b416384b6ba3e4a711237fd9fda",
+  "runtime": "net10.0 / .NET 10.0.13 / SDK 10.0.402 / macOS 27.0.1 / Apple M5 Max arm64 / Release",
+  "source_files_sha256": {
+    "src/Cohesive/Model/ImmutableObservationProjectionCache.cs": "94c677bee359d22c82032c553d0efa0dc9acb35b680b2eb321fe2ec2e176f16a",
+    "src/Cohesive/Model/ObservationValue.cs": "899ae6c8b560cdafa3dd71b31b8791ba24b9f8552c80ea930b889ead2d67944c",
+    "src/Cohesive/Model/PreparationSlot.cs": "04b801d9fd3f85af9ac09ac6525fe9f841a0e725886263a93d852508d074a8e3",
+    "src/Cohesive/Model/PreparedDeclaredObservationProjection.cs": "162609a3482d0e7b68974c33923fdd3eeb62600f868afff02fefc0cc399b7896",
+    "src/Cohesive/Model/Serialization/SingleValueWrapperJsonConverter.cs": "e1d78e084055ebd07cb42e51dc51b096104a20504f42a820588aa5122da4017c",
+    "src/Cohesive/Model/ShapeGraph.cs": "31d72e0ad5b63b83ac098adf3da245529e375b73f0d1d354e590b968ff3be527",
+    "src/Cohesive/Model/SmallObservationFields.cs": "7ea60512b67526a9e453fba265108d47063c34cbd23d54aab615b7860799b9fa",
+    "src/Cohesive/Model/WeakPreparationCache.cs": "2e804e1dd00ab3ddd45ebb431134596bbe9dd186c7be9140acbe492207ca93ba"
+  },
+  "changed_runtime_assemblies": [
+    "Cohesive.dll"
+  ],
+  "control_core_sha256": "f51445a3dffa9ef2da0d81a25792ce7705d5e4a834fa9bd38067cf86d28a0f9d",
+  "candidate_core_sha256": "1ee74fc6b2acaee3153757b00f48208aace0bf4e311e7eb6d79f82befb26cb6e",
+  "shared_runtime_module_count": 124,
+  "shared_runtime_module_manifest_sha256": "f0f922712136367cd76c826564e70d583f52b6d8135bdeeff438afe5dad74937",
+  "shared_harness_sha256": "d75abb1cb4bd9415ac938603ca4b600946dc16178fb9e357922e4f71e802a416",
+  "original_test_source_sha256": "a93d276e33d252610c3da106f853a40262ea1c6aea6412d5235b6714fc3dbba8",
+  "public_alpha145_provenance_reference": "ari:docs/performance/evidence/alpha145-x12/manifest.json",
+  "public_alpha145_provenance_sha256": "ceecd52b93a4c31e32ee203b484dee8ba79b71d6b9156ed6d5c10d1fb91199dc",
+  "collection": "5 alternating fresh-process pairs per source; cold then repeated invocation; no overlapping tests, builds, benchmarks or traces",
+  "benchmark_binary_sha256": "f784cd149b105cd77c1fdf0b37dc5ba6c111c3a0881b187887de6424f27a6390",
+  "benchmark": "same binary, in-process emit, 3 warmups, 5 iterations, 250ms iteration target, 1 launch",
+  "trace_collection": "3 candidate traces per source; gc-verbose and dotnet-sampled-thread-time; same frozen candidate binary",
+  "trace_analyzer_source_sha256": "3b846d90ef148ac934087b79ebdb2830557cd793572b71f0579af41a7ab2f3ea",
+  "trace_rules_sha256": "5cce34c38ececba816cb6b9068b142124bcc12a95a75e8a0d5e2f6afbec8263d",
+  "graph_hashes": [
+    "004010,sha256:7967751c7bbda5edb53770ba3f7889126f8a5f6c23b33c35abc1954555f85452",
+    "005030,sha256:90a9a3760f81a4df020d03c2595726ea4e776fbbf1efb3724576cd38a093b172"
+  ],
+  "trace_files": [
+    {
+      "source": "004010",
+      "run": "1",
+      "sha256": "203ef0bdd5125501197b9a37e07be9eef6b67a7644b0f5e63922812f277f9350"
+    },
+    {
+      "source": "004010",
+      "run": "2",
+      "sha256": "f426526d54763aaa4c9d128a8a7a721437cfbd27caf8802e987d002bf987d2ff"
+    },
+    {
+      "source": "004010",
+      "run": "3",
+      "sha256": "0de59ddc36382d6208096b3c5f30d7a29b6d4d902687c8ba48225f510ef458a1"
+    },
+    {
+      "source": "005030",
+      "run": "1",
+      "sha256": "8bec2d3697bcdfd4462796722131d62a4a7b105b37cc78ebdf5d9f6dd39c909e"
+    },
+    {
+      "source": "005030",
+      "run": "2",
+      "sha256": "0c2e55977e5d88b89d8a53237edf59378acb720abb5ff75f471f7287e645426a"
+    },
+    {
+      "source": "005030",
+      "run": "3",
+      "sha256": "49451128e097bf2a63f01b70cf12dcb446cbf18c28f7c521a803fecca54cf8a5"
+    }
+  ]
+}
