@@ -1,5 +1,7 @@
 # Prepared hosted observation projections
 
+Latest qualification: [prepared graph representations through typed decoding](#prepared-graph-representations-through-typed-decoding).
+
 A hosted Query used to admit its portable value, write the entire observation tree into pooled JSON,
 and deserialize the whole CLR envelope on every call. Preview comparison, persistence planning and
 preview output rebuilt graph documents even when they referenced identical immutable observation storage.
@@ -187,3 +189,109 @@ comparisons use `--inProcess --warmupCount 3 --iterationCount 5 --iterationTime 
 The existing `eng/runtime-performance/durable-bookkeeping/compare-ari.py` collects paired Ari counters.
 Freeze the same Ari harness and its dependency closure, replace only Core for the candidate, and provide
 its two DLL paths to that script. The script's `--runs 5` output is the checked-in X12 evidence.
+
+## Prepared graph representations through typed decoding
+
+The existing `ObservationValue` projection and immutable interpretation cache now share a prepared
+representation across compiler output, preview and typed persistence planning. The declared serializer
+metadata remains the field/discriminator authority. This extends Core's existing immutable projection
+contract and preparation helpers; it introduces no Ari cache, model or fingerprint authority.
+
+For example, projecting a compiled `ShapeGraphDocument`, decoding it through the hosted adapter and
+projecting that result again retains the original observation fields when the declared encoding is
+unchanged. A metadata-only envelope change shares the graph interpretation but still reads the new
+metadata. First decoding continues to run constructors. Changed and independently parsed observations
+have independent admission; contract, depth, normalization and contextual checks remain fresh.
+
+Supported declared object contracts project into Core's compact field vectors using frozen JSON metadata.
+Actual wrapper converters supply their existing string getters. Opaque converters and contextual member
+policies retain serialization. Mutable envelopes are not cached. Eligibility requires the existing explicit
+deep-immutability contract; framework graphs participate in its reflection audit.
+
+A successful typed read supplies an encoding **candidate**, not evidence of canonical output. Reprojection
+checks property membership, discriminator, arrays and exact scalar representation before reusing fields.
+Constructor normalization, custom read profiles, decimal scale, signed zero and unknown fields can force
+fresh output. Small annotation tokens compare using existing field names; wider objects keep the linear
+strict token projector. Duplicate names remain rejected without another serialization pass. The JSON
+scalar reader remains authoritative. Native UTF-16 checks preserve replacement behavior without the
+boxed-char allocation found in the generic short-span range helper on this Arm64 runtime.
+
+Preparation is keyed by source object identity plus declared type, never IDs, equality overrides or
+fingerprints. The framework's fixed strict read profile retains its source until preparation so collection
+between Process steps does not discard it. Arbitrary read profiles supply weak candidates. Publication
+clears candidates; completed preparation owns its resulting storage. Nested misses prepare outside another
+owner's lock before publishing, so invalid cyclic values cannot introduce lock-order deadlocks. Concurrent
+nested misses can duplicate preparation; completed values and top-level first preparation are shared.
+A live source can retain its prepared field tree; lower cumulative allocation is not a retained-heap claim.
+Failed preparation remains retryable. Dead serializer profiles are pruned on subsequent reads. Profile
+references live inside the payload's weakly owned entry rather than a second weak table keyed by globally
+live options: this avoids retaining a discarded payload through the new decode/reprojection cycle.
+
+### Qualification
+
+October 17, 2026 local time; macOS 27.0.1, Apple M5 Max arm64, SDK 10.0.402/runtime 10.0.13, Release.
+Control is public alpha.145. Candidate replaces **only `Cohesive.dll`** in the identical frozen Ari runtime
+closure. This is source qualification, not publication or an Ari package upgrade. The
+[manifest](evidence/prepared-graph-representation/runtime-manifest.json) identifies source-file hashes,
+runtime and benchmark binaries, shared closure digest, and unchanged graph hashes. No builds, tests,
+benchmarks or traces overlapped the uninstrumented counters.
+
+Five alternating fresh-process pairs per source, original repository-transition case, fresh fixtures and
+repositories in both invocations. Repeated means the second invocation sharing application preparation,
+not a stabilized steady-state service. MB is decimal and allocations are cumulative, **not retained heap**.
+
+| X12 case | Control repeated MB | Candidate repeated MB | Allocation change | Control CPU ms | Candidate CPU ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 004010 | 28.76 | 25.75 | -3.01 MB / -10.5% | 315.2 | 283.6 |
+| 005030 | 31.32 | 28.52 | -2.80 MB / -8.9% | 361.6 | 349.9 |
+
+Cold allocation medians are 157.74 → 154.70 MB and 159.88 → 157.36 MB. Cold CPU is 1,775.1 →
+1,779.1 ms and 1,831.6 → 1,805.5 ms: no broad cold CPU gain is established. Repeated elapsed medians
+are 306.7 → 283.6 ms and 343.7 → 338.3 ms. CPU includes background GC/JIT and native threads;
+the smaller 005030 timing difference warrants caution. This does not establish CI or deployment latency.
+[All 40 counters](evidence/prepared-graph-representation/x12-counters.csv).
+
+Identical BenchmarkDotNet binaries use in-process emit, three warmups, five measured iterations and a
+250 ms target. [Control](evidence/prepared-graph-representation/control-benchmark.md) and
+[candidate](evidence/prepared-graph-representation/candidate-benchmark.md) include uncertainty/GC data.
+At 128 fields, authoring a fresh graph and projecting it takes 262.19 → 155.26 μs; first admission of fresh
+graph storage takes 254.93 → 136.10 μs. A fresh envelope over already-prepared graph storage takes
+255.36 → 24.07 μs and 212.18 KiB → 4,077 B. Repeated projection of the same source is allocation-free.
+Fresh graph benchmark setup asserts distinct decoded graph instances: assigning an equal child with
+`WithField` can preserve its old storage and must not masquerade as a first-decode measurement.
+
+The median-of-seven first-reprojection guard uses a 128-field decoded graph: **28,240 B**, ceiling
+40,960 B. A separate guard allows 256 B total for 128 warm projections of a 1,024-field graph. Exact-byte
+comparisons cover every declared TypeRef, named-type and constraint case. Regressions cover Unicode,
+malformed escapes in annotation keys/values, duplicate spellings, constructor normalization, custom read
+profiles, unknown fields, depth, cycles, concurrent first use, collection between steps, discarded graph
+cycles and expired profiles. Full validation: **4,807 Core tests**, **233 SQLite tests**, **963 Ari engine
+tests**; 41/18 pre-existing Core/Ari integration skips. The final targeted byte/regression run also passes.
+
+Three candidate traces per source retain disjoint
+[allocation](evidence/prepared-graph-representation/allocation-budget.csv) and
+[managed CPU](evidence/prepared-graph-representation/cpu-budget.csv) budgets. No lost events or missing
+managed CPU stacks; one 005030 repeated allocation sample is unresolved and remains in Other.
+[Trace quality](evidence/prepared-graph-representation/trace-quality.csv). Remaining repeated allocations
+include observation projection (5.85/7.13 MB), hosted admission/decoding (3.75/4.14 MB) and other EDI
+compilation (5.33/5.62 MB). These are sampled categories, not extra costs to add to the precise totals.
+First graph construction, scalar-wrapper/annotation decoding and mandatory validation remain; this
+change removes repeated representation work, not all first-use work or all JSON conversion.
+
+Reproduce by freezing the public-alpha.145 harness closure twice and replacing only candidate Core:
+
+```sh
+python3 eng/runtime-performance/durable-bookkeeping/compare-ari.py \
+  --baseline CONTROL/ProtocolPreparation.dll --candidate CANDIDATE/ProtocolPreparation.dll \
+  --output counters.csv --runs 5
+```
+
+The comparator now retains optional `cpu_ms` from the existing Ari harness. Benchmark commands remain
+those above; freeze the same benchmark binary in both directories and use each variant's Core DLL.
+Raw traces stay outside Git and are identified by hashes in the manifest.
+
+Publication qualification also covers hash-independent annotation byte ordering: Linux CI exposed
+that the new annotation dictionary projection had retained source hash enumeration order. It now
+uses the existing token-reader ordering helper. A constant-hash comparer regression fails before
+this correction and passes after it. The source measurements above precede this small ordering
+correction; they remain identified by the checked-in runtime manifest.

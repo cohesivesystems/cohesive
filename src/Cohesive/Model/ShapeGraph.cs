@@ -7,7 +7,11 @@ namespace Cohesive.Model;
 /// <summary>
 /// Immutable container of semantic shapes and named types.
 /// </summary>
-public sealed class ShapeGraph
+/// <remarks>
+/// Its observation interpretation may be shared under the exact immutable payload and frozen serializer
+/// profile. Sharing carries no contextual validation, authorization or persisted-admission evidence.
+/// </remarks>
+public sealed class ShapeGraph : IImmutableObservationProjection
 {
     readonly ImmutableDictionary<ShapeId, Shape> shapesById;
     readonly ImmutableDictionary<TypeId, TypeDefinition> namedTypesById;

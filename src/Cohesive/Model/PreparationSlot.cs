@@ -7,6 +7,12 @@ internal sealed class PreparationSlot<TValue>
     TValue value = default!;
     int prepared;
     internal bool IsPrepared => Volatile.Read(ref prepared) != 0;
+    internal bool TryGet(out TValue result)
+    {
+        if (IsPrepared) { result = value; return true; }
+        result = default!;
+        return false;
+    }
     internal TValue Get<TContext>(TContext context, Func<TContext, TValue> factory)
     {
         if (IsPrepared) return value;
