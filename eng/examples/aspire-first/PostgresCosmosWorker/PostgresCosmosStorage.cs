@@ -26,8 +26,9 @@ public sealed class PostgresCosmosStorage : StorageModel
     /// <summary>Places orders in SQL and defines bounded inventory acquisition.</summary>
     /// <param name="domain">Shared entity declarations.</param>
     /// <param name="queries">Shared logical queries.</param>
+    /// <param name="endpoints">Portable query selections and consistency requirements.</param>
     /// <param name="mappings">Native table mappings, independent of placement.</param>
-    public PostgresCosmosStorage(FulfillmentDomain domain, FulfillmentQueries queries, FulfillmentPostgresMappings mappings)
+    public PostgresCosmosStorage(FulfillmentDomain domain, FulfillmentQueries queries, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints)
     {
         this.domain = domain;
         this.queries = queries;
@@ -38,11 +39,21 @@ public sealed class PostgresCosmosStorage : StorageModel
             partitionSourceSelector: "partitionKey", logicalPartition: new(FulfillmentStoragePolicy.LogicalPartition),
             fixedPartitionKey: new PartitionKey(FulfillmentStoragePolicy.LocalPartition), maximumEnumerationRows: 1000,
             maximumKeysPerQuery: 100, maximumQueryChunks: 10, maximumSdkPageSize: 100));
+        InventoryBinding = Storage.Define(() => new CosmosEntityQueryBinding(domain.Inventory.Definition.StateShape.QualifiedId,
+            CosmosAccount, InventoryDatabase, InventoryContainer, InventoryPolicy,
+            Cohesive.Model.FieldPath.FromField(FulfillmentDomain.InventoryIdField)));
+        Preparation = Storage.Define(() => PostgresBindings.PrepareComposedService(endpoints.Plan,
+            new EntityRelationQuerySourceCatalog([InventoryBinding.Binding]), Policy));
     }
     /// <summary>PostgreSQL placement of orders and reservations only.</summary>
     public PostgresPersistenceBindings PostgresBindings { get; }
     /// <summary>Native bounded Cosmos source policy for the local demo partition.</summary>
     public CosmosRelationQuerySourcePolicy InventoryPolicy { get; }
+
+    /// <summary>Offline Cosmos acquisition contract shared with its runtime reader.</summary>
+    public CosmosEntityQueryBinding InventoryBinding { get; }
+    /// <summary>Selected physical plans shared by runtime and infrastructure.</summary>
+    public PostgresComposedServicePreparation Preparation { get; }
 
     /// <summary>Composes caller-owned SQL and Cosmos backends; metadata must be verified before calling.</summary>
     /// <remarks>This method owns heterogeneous repository/query selection, not a forwarding database-name wrapper.
@@ -60,14 +71,11 @@ public sealed class PostgresCosmosStorage : StorageModel
         var repository = new CosmosEntityOutboxRepository(domain.Inventory.Definition, inventory,
             partitionKeyPolicy: EntityPartitionKeyPolicy.Fixed(FulfillmentStoragePolicy.LocalPartition, FulfillmentDomain.PartitionField),
             identityField: FulfillmentDomain.InventoryIdField);
-        var source = CosmosEntityRelationQuerySourceRegistration.Create(domain.Inventory.Definition.StateShape.QualifiedId,
-            inventory, InventoryDatabase, InventoryContainer, InventoryPolicy,
-            identitySemanticPath: Cohesive.Model.FieldPath.FromField(FulfillmentDomain.InventoryIdField));
+        var source = InventoryBinding.Bind(inventory);
         var catalog = new EntityRelationQuerySourceCatalog([source]);
         return new ServicePersistenceBuilder(postgres.ForServices(receipts)).Repository(repository)
-            .Query(queries.OrderDetails, (rows, bytes) => postgres.QueryComposed(queries.OrderDetails, catalog, Policy(rows, bytes)))
-            .Query(queries.ReservationAvailability, (rows, bytes) => postgres.QueryComposed(queries.ReservationAvailability,
-                catalog, Policy(rows, bytes)))
+            .Query(queries.OrderDetails, (rows, bytes) => Preparation.Bind(postgres, queries.OrderDetails, catalog, rows, bytes))
+            .Query(queries.ReservationAvailability, (rows, bytes) => Preparation.Bind(postgres, queries.ReservationAvailability, catalog, rows, bytes))
             .Build();
     }
 

@@ -39,9 +39,9 @@ public sealed class ServiceModelTests
         return query.BuildQuery(new(id), new(id), rows, parameter, result: values => values.Count == 0 ? null : values[0]);
     }
     static void First(ServiceApiImplementation<Catalog> bindings) => bindings.Bind(api => api.First, Query("first"), new("1"), 10, 1000,
-        query => query.FromRoute<string>("id", value => value).OkOrNotFound());
+        query => query.FromRoute<string>("id", value => value).OkOrNotFound(), RelationQueryConsistency.SingleSnapshot);
     static void Second(ServiceApiImplementation<Catalog> bindings) => bindings.Bind(api => api.Second, Query("second"), new("1"), 10, 1000,
-        query => query.FromRoute<string>("id", value => value).OkOrNotFound());
+        query => query.FromRoute<string>("id", value => value).OkOrNotFound(), RelationQueryConsistency.SingleSnapshot);
 
     [Fact]
     public async Task Partial_contributions_map_one_surface_and_prepare_once_before_requests()
@@ -82,7 +82,7 @@ public sealed class ServiceModelTests
     {
         var api = new Catalog(); var other = new Catalog();
         Assert.Throws<ServiceBindingValidationException>(() => new ServiceApiBindingsBuilder().Implement(api, bindings =>
-            bindings.Bind(_ => other.First, Query("first"), new("1"), 10, 1000, _ => { })));
+            bindings.Bind(_ => other.First, Query("first"), new("1"), 10, 1000, _ => { }, RelationQueryConsistency.SingleSnapshot)));
     }
 
     [Fact]
@@ -104,7 +104,7 @@ public sealed class ServiceModelTests
         var api = new Catalog();
         var builder = WebApplication.CreateBuilder();
         var prepared = new ServiceApiBindingsBuilder().Implement(api, First).Implement(api, bindings =>
-            bindings.Bind(a => a.Second, Query("second"), new("1"), 10, 1000, _ => { }))
+            bindings.Bind(a => a.Second, Query("second"), new("1"), 10, 1000, _ => { }, RelationQueryConsistency.SingleSnapshot))
             .Build(builder.Services, new Persistence());
         await using var app = builder.Build();
         var error = Assert.Throws<ServiceMappingException>(() => app.MapServices(prepared));
@@ -128,7 +128,7 @@ public sealed class ServiceModelTests
         var api = new Catalog();
         var query = Query("first");
         void Contribute(ServiceApiImplementation<Catalog> bindings) => bindings.Bind(a => a.First, query, new("1"), 10, 1000,
-            binding => binding.FromRoute<string>("id", value => value).OkOrNotFound());
+            binding => binding.FromRoute<string>("id", value => value).OkOrNotFound(), RelationQueryConsistency.SingleSnapshot);
         var builder = new ServiceApiBindingsBuilder().Implement(api, Contribute);
         var error = Assert.Throws<ServiceBindingValidationException>(() => builder.Implement(api, Contribute));
         Assert.Contains(error.Validation.Diagnostics, item => item.Code == "services.api.duplicateImplementation");
@@ -139,8 +139,8 @@ public sealed class ServiceModelTests
     {
         var api = new Catalog();
         var query = Query("shared");
-        var model = new ServiceApiBindingsBuilder().Implement(api, bindings => bindings.Bind(a => a.First, query, new("1"), 10, 1000, _ => { }));
-        Assert.Throws<ServiceBindingValidationException>(() => model.Implement(api, bindings => bindings.Bind(a => a.Second, query, new("1"), 11, 1000, _ => { })));
+        var model = new ServiceApiBindingsBuilder().Implement(api, bindings => bindings.Bind(a => a.First, query, new("1"), 10, 1000, _ => { }, RelationQueryConsistency.SingleSnapshot));
+        Assert.Throws<ServiceBindingValidationException>(() => model.Implement(api, bindings => bindings.Bind(a => a.Second, query, new("1"), 11, 1000, _ => { }, RelationQueryConsistency.SingleSnapshot)));
     }
 
     [Fact]
@@ -362,7 +362,7 @@ public sealed class ServiceModelTests
         Assert.Throws<ServiceBindingValidationException>(() => model.Implement(api, bindings =>
         {
             Second(bindings);
-            bindings.Bind(a => a.First, Query("discarded"), new("1"), 10, 1000, _ => { });
+            bindings.Bind(a => a.First, Query("discarded"), new("1"), 10, 1000, _ => { }, RelationQueryConsistency.SingleSnapshot);
         }));
         model.Implement(api, Second);
         Assert.Equal(2, model.Plan.QueryDependencies.Queries.Length);
@@ -382,18 +382,70 @@ public sealed class ServiceModelTests
         Assert.False(serialized.RootElement.TryGetProperty("Reference", out _));
     }
 
-    sealed class Persistence : IServicePersistence
+    [Fact]
+    public void Endpoint_requirement_rejects_a_weaker_custom_resolver_before_mapping()
+    {
+        var api = new Catalog();
+        var bindings = new ServiceApiBindingsBuilder().Implement(api, First).Implement(api, Second);
+        var resolver = new Persistence(RelationQueryConsistency.IndependentSources);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => bindings.Build(new ServiceCollection(), resolver));
+        Assert.Contains(error.Validation.Diagnostics, diagnostic => diagnostic.Code == ServiceBindingDiagnosticCodes.QueryPlacementUnsupported
+            && diagnostic.Location == "/bindings/queries/consistency");
+    }
+
+    [Fact]
+    public void Cached_reader_is_rechecked_for_a_stronger_requirement_without_repreparing()
+    {
+        var query = Query("cached");
+        var preparations = 0;
+        var persistence = new ServicePersistenceBuilder().Query(query, (_, _) =>
+        { preparations++; return new Reader(query, RelationQueryConsistency.IndependentSources); }).Build();
+        var reader = persistence.Query(query, 10, 1000, RelationQueryConsistency.IndependentSources);
+        Assert.Throws<ServiceBindingValidationException>(() => persistence.Query(query, 10, 1000, RelationQueryConsistency.SingleSnapshot));
+        Assert.Same(reader, persistence.Query(query, 10, 1000, RelationQueryConsistency.IndependentSources));
+        Assert.Equal(1, preparations);
+    }
+
+    [Theory]
+    [InlineData(RelationQueryConsistency.SingleSnapshot)]
+    [InlineData(RelationQueryConsistency.IndependentSources)]
+    public void Native_snapshot_satisfies_either_declared_requirement(RelationQueryConsistency required)
+    {
+        var reader = new Reader(Query("native"));
+        Assert.Same(reader, ServiceQueryConsistencyValidation.Require(reader, required));
+    }
+
+    [Fact]
+    public void Unknown_reader_guarantee_is_not_admitted()
+    {
+        var reader = new Reader(Query("unknown"), (RelationQueryConsistency)99);
+        Assert.Throws<ServiceBindingValidationException>(() => ServiceQueryConsistencyValidation.Require(reader, RelationQueryConsistency.IndependentSources));
+    }
+
+    [Fact]
+    public void Same_query_cannot_have_competing_consistency_requirements()
+    {
+        var query = Query("same");
+        var plan = new ServiceImplementationPlan();
+        plan.Query(query, new("1"), 10, 1000, RelationQueryConsistency.SingleSnapshot);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => plan.Query(query, new("1"), 10, 1000, RelationQueryConsistency.IndependentSources));
+        Assert.Contains(error.Validation.Diagnostics, diagnostic => diagnostic.Code == "services.api.querySelectionMismatch");
+    }
+
+    sealed class Persistence(RelationQueryConsistency suppliedConsistency = RelationQueryConsistency.SingleSnapshot) : IServicePersistence
     {
         internal int Prepared;
         public IEntityRepository Repository(ValueContract observation) => throw new InvalidOperationException("Query composition must not resolve an entity repository.");
-        public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes)
+        public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes, RelationQueryConsistency consistency)
         {
             Prepared++;
-            return (IRelationQueryReader<TInput, TResult>)(object)new Reader((RelationQuery<string, Detail?>)(object)query);
+            return (IRelationQueryReader<TInput, TResult>)(object)new Reader((RelationQuery<string, Detail?>)(object)query, suppliedConsistency);
         }
     }
-    sealed class Reader(RelationQuery<string, Detail?> definition) : IRelationQueryReader<string, Detail?>
+    sealed class Reader(RelationQuery<string, Detail?> definition, RelationQueryConsistency consistency = RelationQueryConsistency.SingleSnapshot) : IRelationQueryReader<string, Detail?>
     {
+        /// <inheritdoc />
+        public RelationQueryConsistency Consistency => consistency;
         public RelationQuery<string, Detail?> Definition => definition;
         public Task<Detail?> ReadAsync(string input, CancellationToken cancellationToken = default) => Task.FromResult<Detail?>(new(input));
     }

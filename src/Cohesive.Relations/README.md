@@ -219,3 +219,16 @@ The unshipped PR408 terminal `ToArray` is now `BuildArrayQuery`. These are sourc
 no compatibility aliases are retained. Alpha.132 contains the previous surface (as does alpha.131 for
 APIs present there); publishing this PR and upgrading downstream consumers are separate steps. This PR
 updates in-repository consumers only and does not claim Ari or Ito have adopted the changes.
+
+### Reader consistency and reusable physical preparation
+
+`IRelationQueryReader<TInput,TResult>.Consistency` describes all reads contributing to one result.
+`SingleSnapshot` requires one shared observation snapshot; `IndependentSources` permits independent
+observations, including multiple reads from one database. Native PostgreSQL statement readers report the
+former; composed and subplan readers report the latter. Service/API binding checks the declared requirement
+before publishing routes, and rechecks it when reusing a cached reader. This is a guarantee contract,
+not an automatic downgrade based on the number of databases.
+
+`RelationQueryPhysicalPreparation` retains validated interpreter and physical planning evidence for reuse
+at runtime binding. Affinity checks preserve the exact semantic compilation, placement and policy; this
+never caches parameters, source observations or results.

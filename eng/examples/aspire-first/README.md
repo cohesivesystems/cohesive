@@ -108,10 +108,18 @@ reference in Cosmos. The domain relationship is still canonical. Each entity tra
 its own state and operation receipt in its own backend; the process provides sequencing and compensation.
 Host-owned accepted execution remains in-memory, not crash durable. See [process guarantees](FULFILLMENT.md).
 
-The original AppHost derives native PostgreSQL query capability evidence from prepared bindings. The mixed
-AppHost currently associates the .NET workload with Cohesive.Infra; its database/container resources and
-readiness wiring are native Aspire. Query placement is validated by the runtime adapters. It deliberately
-does not manufacture Cosmos capability evidence or claim that Infra proves heterogeneous query guarantees.
+The shared endpoint bindings explicitly permit `RelationQueryConsistency.IndependentSources`. This is
+an application consistency choice, not a consequence inferred from placement. The PostgreSQL-only
+reader supplies the stronger statement snapshot. Selecting `SingleSnapshot` for a mixed reader fails at
+setup, including when that reader was already cached for an independent-source request.
+
+Both AppHosts derive infrastructure evidence from prepared bindings. The mixed storage model prepares
+its endpoint-selected queries offline, with no PostgreSQL connection or Cosmos SDK client. PostgreSQL
+acquisition evidence attaches to the order database, Cosmos source-profile evidence to the inventory
+container, and bounded physical-evaluation evidence to the worker. Resource dependencies are explicit.
+Runtime binding consumes the same preparation and checks source descriptors, selectors, partition,
+query identity and result bounds. There is no aggregate snapshot capability in this graph. These are
+preparation/association proofs, not evidence of deployed schemas, credentials, live reads or readiness.
 
 ## Validate
 
@@ -157,9 +165,8 @@ The adapter derives both requirements and evidence from the same selected query 
 Database association reuses that preparation and checks the actual native database name.
 This is offline evidence, not database or runtime qualification; native-only resources remain supported.
 
-`PostgresCosmosFulfillmentInfrastructure` also uses `builder.AttachCohesive(model: this, ...)`, but
-governs only the workload execution capability. Its PostgreSQL and Cosmos resources remain native-only:
-the single-database `.Postgres(bindings, endpointPlan)` preparation cannot claim snapshot evidence for
-queries that also read Cosmos. `PostgresCosmosStorage.PostgresBindings` contains orders/reservations
-only. Its constructor authors immutable SQL mappings and Cosmos policy; `Bind` retains the substantive
-cross-store repository and query composition, inferring the SQL database name from those bindings.
+`PostgresCosmosFulfillmentInfrastructure` uses the same attachment entry point for both resources and
+the worker. `PostgresCosmosStorage` owns the SQL mappings, offline Cosmos container binding and selected
+physical preparation. Native account/database/container names are checked when associated; the worker
+gets its connection from the corresponding native Aspire reference. Its `Bind` supplies runtime clients
+to those plans without rediscovering the split or recompiling the physical remainder.

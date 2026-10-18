@@ -51,12 +51,16 @@ public sealed class ApiQueryBindingTests
     }
     sealed class CountReader : IRelationQueryReader<int, int>
     {
+        /// <inheritdoc />
+        public RelationQueryConsistency Consistency => RelationQueryConsistency.SingleSnapshot;
         public RelationQuery<int, int> Definition => throw new NotSupportedException("Transport only.");
         public Task<int> ReadAsync(int input, CancellationToken cancellationToken = default) => Task.FromResult(input);
     }
 
     sealed class SearchReader : IRelationQueryReader<Search, Detail?>
     {
+        /// <inheritdoc />
+        public RelationQueryConsistency Consistency => RelationQueryConsistency.SingleSnapshot;
         public RelationQuery<Search, Detail?> Definition => throw new NotSupportedException("The transport never compiles the reader.");
         public Task<Detail?> ReadAsync(Search input, CancellationToken cancellationToken = default) =>
             Task.FromResult(input.Id == "found" ? new Detail(input.Id) : null);
@@ -107,6 +111,8 @@ public sealed class ApiQueryBindingTests
     // The HTTP boundary depends only on the typed contract, not the PostgreSQL adapter or a method group.
     sealed class DetailReader(Func<string, CancellationToken, Task<Detail?>> read) : IRelationQueryReader<string, Detail?>
     {
+        /// <inheritdoc />
+        public RelationQueryConsistency Consistency => RelationQueryConsistency.SingleSnapshot;
         public RelationQuery<string, Detail?> Definition { get; } = CreateDefinition();
         public Task<Detail?> ReadAsync(string input, CancellationToken cancellationToken = default) => read(input, cancellationToken);
 

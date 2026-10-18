@@ -12,7 +12,7 @@ using Cohesive.Relations.Realization;
 namespace Cohesive.Storage;
 
 /// <summary>
-/// Immutable, deterministic catalog of entity-backed canonical relation/query sources.
+/// Immutable, deterministic catalog of offline source contracts or bound canonical relation/query sources.
 /// </summary>
 /// <remarks>
 /// Version 1 admits one active physical source for each exact graph-qualified shape. Selecting among replicas or
@@ -20,16 +20,17 @@ namespace Cohesive.Storage;
 /// </remarks>
 public sealed class EntityRelationQuerySourceCatalog
 {
-    readonly ImmutableDictionary<QualifiedShapeId, EntityRelationQuerySourceRegistration> sourcesByShape;
+    readonly ImmutableDictionary<QualifiedShapeId, EntityRelationQuerySourceBinding> sourcesByShape;
+    readonly ImmutableArray<IRelationQuerySourceReader> sourceReaders;
 
-    /// <summary>Creates an immutable source catalog from explicit registrations.</summary>
-    /// <param name="sources">Entity-backed source registrations to snapshot.</param>
+    /// <summary>Creates an immutable source catalog from explicit declarations or runtime registrations.</summary>
+    /// <param name="sources">Entity-backed source contracts to snapshot; runtime evaluation requires every entry to be bound.</param>
     /// <exception cref="ArgumentNullException"><paramref name="sources"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="sources"/> contains a null entry, repeats a graph-qualified shape, or repeats a physical
     /// source identity.
     /// </exception>
-    public EntityRelationQuerySourceCatalog(IEnumerable<EntityRelationQuerySourceRegistration> sources)
+    public EntityRelationQuerySourceCatalog(IEnumerable<EntityRelationQuerySourceBinding> sources)
     {
         ArgumentNullException.ThrowIfNull(sources);
         var normalized = sources.ToArray();
@@ -46,20 +47,24 @@ public sealed class EntityRelationQuerySourceCatalog
                 .OrderBy(static registration => registration.Shape.GraphId.Value, StringComparer.Ordinal)
                 .ThenBy(static registration => registration.Shape.ShapeId.Value, StringComparer.Ordinal)
         ];
-        SourceReaders =
-        [
-            .. Sources
-                .Select(static registration => registration.Reader)
-                .OrderBy(static reader => reader.Descriptor.Source.Value, StringComparer.Ordinal)
-        ];
         sourcesByShape = Sources.ToImmutableDictionary(static source => source.Shape);
+        sourceReaders = Sources.All(source => source is EntityRelationQuerySourceRegistration)
+            ? [.. Sources.Select(RequireReader).OrderBy(reader => reader.Descriptor.Source.Value, StringComparer.Ordinal)] : default;
     }
 
     /// <summary>Registered entity sources in deterministic graph-and-shape order.</summary>
-    public ImmutableArray<EntityRelationQuerySourceRegistration> Sources { get; }
+    public ImmutableArray<EntityRelationQuerySourceBinding> Sources { get; }
 
-    /// <summary>Registered source readers in deterministic physical-source order.</summary>
-    public ImmutableArray<IRelationQuerySourceReader> SourceReaders { get; }
+    /// <summary>Bound source readers in deterministic physical-source order; rejects unbound offline declarations.</summary>
+    public ImmutableArray<IRelationQuerySourceReader> SourceReaders => !sourceReaders.IsDefault ? sourceReaders
+        : throw new InvalidOperationException("Offline source declarations must be bound before evaluation.");
+
+    /// <summary>Resolves a runtime reader; offline declarations cannot accidentally execute.</summary>
+    /// <param name="binding">Declared source.</param><returns>The bound reader.</returns>
+    /// <exception cref="InvalidOperationException">The source has not been bound to runtime IO.</exception>
+    public static IRelationQuerySourceReader RequireReader(EntityRelationQuerySourceBinding binding) =>
+        binding is EntityRelationQuerySourceRegistration registration ? registration.Reader
+            : throw new InvalidOperationException($"Source '{binding.Source.Id}' has no runtime reader.");
 
     /// <summary>Attempts to find the one registered source for an exact graph-qualified shape.</summary>
     /// <param name="shape">Exact graph-qualified shape to resolve.</param>
@@ -68,7 +73,7 @@ public sealed class EntityRelationQuerySourceCatalog
     /// <exception cref="ArgumentException"><paramref name="shape"/> is incomplete.</exception>
     public bool TryGetSource(
         QualifiedShapeId shape,
-        [NotNullWhen(true)] out EntityRelationQuerySourceRegistration? source)
+        [NotNullWhen(true)] out EntityRelationQuerySourceBinding? source)
     {
         if (string.IsNullOrWhiteSpace(shape.GraphId.Value) || string.IsNullOrWhiteSpace(shape.ShapeId.Value))
             throw new ArgumentException("A source lookup requires a graph-qualified shape.", nameof(shape));
@@ -166,7 +171,7 @@ public sealed class EntityRelationQuerySourceCatalog
 
     static RelationQueryPlacementSourceHandle Source(
         RelationQueryPlacementBuilder builder,
-        EntityRelationQuerySourceRegistration registration,
+        EntityRelationQuerySourceBinding registration,
         IDictionary<RelationQuerySourceInstanceId, RelationQueryPlacementSourceHandle> handles)
     {
         if (handles.TryGetValue(registration.Source.Id, out var existing))
@@ -211,7 +216,7 @@ public sealed class EntityRelationQuerySourceCatalog
     /// <param name="diagnostics">Receives invalid native selector diagnostics.</param>
     public static void Configure(
         RelationQueryPlacementInputBuilder binding,
-        EntityRelationQuerySourceRegistration registration,
+        EntityRelationQuerySourceBinding registration,
         ImmutableArray<RelationQueryFieldInputContract> fields,
         RelationQueryInputId input,
         FieldPath? relationshipReference,
@@ -220,7 +225,7 @@ public sealed class EntityRelationQuerySourceCatalog
         ArgumentNullException.ThrowIfNull(binding);
         ArgumentNullException.ThrowIfNull(registration);
         ArgumentNullException.ThrowIfNull(diagnostics);
-        if (registration.Reader.Descriptor.PartitionBinding is { } partition)
+        if (registration.Descriptor.PartitionBinding is { } partition)
             binding.Partition(partition.SourceSelector);
 
         if (registration.IdentitySemanticPath is { } identityPath)

@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Cohesive.Api;
 using Cohesive.Execution;
 using Cohesive.Api.Execution.Services;
@@ -75,9 +76,11 @@ public sealed class OrderEndpoints : ApiBindingModel
                         .Conflict(SubmissionOutcome.NotDraft, title: "Order cannot be submitted", detail: "Order must be Draft to submit.")
                         .NotRejected(SubmissionOutcome.Submitted)));
             bindings.Bind(api => api.Details, queries.OrderDetails, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
-                configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound());
+                configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound(),
+                consistency: RelationQueryConsistency.IndependentSources);
             bindings.Bind(api => api.Availability, queries.ReservationAvailability, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
-                configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound());
+                configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound(),
+                consistency: RelationQueryConsistency.IndependentSources);
             bindings.BindHosted(endpoint => endpoint.Fulfill,
                 authority: "aspire-first", authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
                 maximumExecutions: 1000, logPrivateFailures: true);

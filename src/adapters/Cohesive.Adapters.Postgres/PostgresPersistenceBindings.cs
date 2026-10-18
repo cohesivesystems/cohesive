@@ -13,7 +13,7 @@ namespace Cohesive.Adapters.Postgres;
 /// <summary>Offline PostgreSQL entity mappings used by native query preparation and runtime registration.</summary>
 /// <remarks>Configure once at host composition. Define is the sole authoring entry point and freezes mappings before returning. Runtime registrations
 /// share immutable mappings. Completion freezes authoring and rejects late contributions. Preparation performs no IO and retains no credentials or data source.</remarks>
-public sealed class PostgresPersistenceBindings
+public sealed partial class PostgresPersistenceBindings
 {
     readonly AuthoringState<PostgresPersistenceBindings> state;
     ExceptionDispatchInfo? preparationFailure;

@@ -17,6 +17,9 @@ namespace Cohesive.Relations.Execution;
 /// </remarks>
 public interface IRelationQueryReader<TInput, TResult>
 {
+    /// <summary>The consistency guaranteed across all reads of one evaluation.</summary>
+    RelationQueryConsistency Consistency { get; }
+
     /// <summary>The exact authored query and result projection realized by this reader.</summary>
     RelationQuery<TInput, TResult> Definition { get; }
 

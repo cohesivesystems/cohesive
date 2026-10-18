@@ -104,6 +104,8 @@ public sealed partial class PostgresPersistenceRegistration
 /// <typeparam name="TResult">Application result type.</typeparam>
 public sealed class PostgresQueryReader<TInput, TResult> : IRelationQueryReader<TInput, TResult>
 {
+    /// <inheritdoc />
+    public RelationQueryConsistency Consistency => RelationQueryConsistency.SingleSnapshot;
     readonly IRelationQueryRowsReader rows;
     /// <inheritdoc />
     public RelationQuery<TInput, TResult> Definition { get; }

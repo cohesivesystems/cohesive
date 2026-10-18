@@ -12,6 +12,24 @@ namespace Cohesive.Tests.Model;
 public sealed class EntityRelationQuerySourceCatalogTests
 {
     [Fact]
+    public void Offline_catalog_produces_identical_placement_but_cannot_supply_runtime_readers()
+    {
+        var fixture = CreateQueryFixture();
+        var registered = CreateRegistration(fixture, [Stored("load-a", "Alpha")]);
+        var metadata = new EntityRelationQuerySourceBinding(registered.Shape, registered.Source, registered.Descriptor,
+            registered.IdentitySourceSelector, registered.IdentitySemanticPath, registered.FieldSourceSelector,
+            registered.RelationshipKeySourceSelector, registered.ObservationVersionSemanticPath,
+            registered.PersistedObservationType, registered.ConcurrencyTokenSemanticPath);
+        var offline = new EntityRelationQuerySourceCatalog([metadata]);
+        var runtime = new EntityRelationQuerySourceCatalog([registered]);
+        Assert.Equal(runtime.Place(fixture.Plan).RequireValue().Placement.Fingerprint,
+            offline.Place(fixture.Plan).RequireValue().Placement.Fingerprint);
+        Assert.Throws<InvalidOperationException>(() => offline.SourceReaders);
+        Assert.Same(registered.Reader, Assert.Single(runtime.SourceReaders));
+        Assert.Equal(runtime.SourceReaders, runtime.SourceReaders);
+    }
+
+    [Fact]
     public void Catalog_AuthorsExactDeterministicPlacementFromCanonicalRegistration()
     {
         var fixture = CreateQueryFixture();

@@ -25,7 +25,7 @@ public sealed partial class PostgresPersistenceRegistration
         ArgumentNullException.ThrowIfNull(remote);
         ArgumentNullException.ThrowIfNull(composedPolicy);
         var original = RelationQueryStaticCompiler.Compile(query.CompilationRequest);
-        var cut = InferComposedPrefix(original, shape => remote.bindings.Tables.ContainsKey(shape))
+        var cut = bindings.InferComposedPrefix(original, shape => remote.bindings.Tables.ContainsKey(shape))
             ?? throw new RelationQueryPreparationException("composed split", original,
                 code: "postgres.composed.splitMissing", detail: "No closed native projection covers the local inputs. Select an explicit supported boundary or use source composition.");
         return PrepareComposed(query, cut, remote, composedPolicy);

@@ -11,6 +11,11 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
     /// <summary>Canonical shared application workload identity.</summary>
     public static InfrastructureNodeId Worker { get; } = new("workloads/orders");
 
+    /// <summary>Native order database declaration.</summary>
+    public static InfrastructureNodeId Orders { get; } = new("resources/orders");
+    /// <summary>Native inventory container declaration.</summary>
+    public static InfrastructureNodeId Inventory { get; } = new("resources/inventory");
+
     /// <summary>Activated mixed-store application graph.</summary>
     public PostgresCosmosApplication Application { get; }
     /// <summary>Declares the workload requirement for the shared application.</summary>
@@ -22,7 +27,15 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
             id: new("example/orders-postgres-cosmos"),
             revision: new("1"),
             bindingProfileId: new("example/orders-postgres-cosmos/bindings"),
-            infra => infra.Workload(Worker).Requires(AspireInfrastructure.DotNetProjectExecution));
+            infra =>
+            {
+                var prepared = model.Storage.Preparation;
+                infra.Resource(Orders).Persistent().Prepared(prepared.Postgres);
+                infra.Resource(Inventory).Persistent().Prepared(prepared.Sources[model.Storage.InventoryBinding.Binding.Source.Id]);
+                var worker = infra.Workload(Worker).Requires(AspireInfrastructure.DotNetProjectExecution)
+                    .RequiresReady(Orders).RequiresReady(Inventory);
+                foreach (var requirement in prepared.Requirements) worker.Requires(requirement);
+            });
     }
 
     /// <summary>Attaches native local resources and the inferred .NET workload implementation.</summary>
@@ -43,13 +56,25 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
         var worker = builder.AddProject<Projects.PostgresCosmosWorker>("worker")
             .WithHttpEndpoint(env: "ASPNETCORE_HTTP_PORTS").WithReference(orders).WithReference(cosmos)
             .WaitFor(orders).WaitFor(inventory);
-        // Storage stays native: the composed reads do not claim a cross-store snapshot.
+        // Each source supplies acquisition evidence; only the worker composes the independent observations.
         var association = builder.AttachCohesive(
             model: this,
             id: new("example/orders-postgres-cosmos/local"),
             variant: new("development"),
-            associations => associations.Workload(Worker, worker));
-        if (!association.Deployment.IsComplete) throw new InvalidOperationException("Incomplete native resource associations.");
+            associations =>
+            {
+                var prepared = Application.Storage.Preparation;
+                var source = Application.Storage.InventoryBinding;
+                // Native names are shared with the source declaration; no account endpoint is invented offline.
+                if (cosmos.Resource.Name != source.Account || database.Resource.DatabaseName != source.Database
+                    || inventory.Resource.ContainerName != source.Container
+                    || inventory.Resource.PartitionKeyPath != PostgresCosmosStorage.PartitionPath)
+                    throw new InvalidOperationException("Cosmos resource differs from the prepared acquisition binding.");
+                associations.Resource(Orders, orders, prepared.Postgres.ForSource(orders.Resource.DatabaseName), new("aspire/example/orders"));
+                associations.Resource(Inventory, inventory, prepared.Sources[source.Binding.Source.Id].ForSource(source.Binding.Source.Id.Value), new("aspire/example/inventory"));
+                associations.Workload(Worker, worker, executionEvidence: prepared.ExecutionEvidence);
+            });
+        if (!association.Deployment.IsComplete) throw new InvalidOperationException(string.Join("; ", association.Deployment.Diagnostics.Select(item => item.Code + ": " + item.Message)));
         return association;
     }
 }

@@ -31,82 +31,44 @@ public sealed partial class PostgresPersistenceRegistration
         PostgresRelationQueryComposedPolicy composedPolicy, QueryNodeId? projection = null)
     {
         ArgumentNullException.ThrowIfNull(query);
-        ArgumentNullException.ThrowIfNull(remote);
-        ArgumentNullException.ThrowIfNull(composedPolicy);
-        var original = RelationQueryStaticCompiler.Compile(query.CompilationRequest);
-        var cut = projection is { } node ? RelationQuerySubplan.Compile(original, node)
-            : InferComposedPrefix(original, shape => remote.TryGetSource(shape, out _));
-        var compilation = cut?.Remainder ?? original;
-        if (!compilation.IsSuccessful) throw new RelationQueryPreparationException("semantic", compilation);
-        var plan = compilation.Plan!;
-        var scope = composedPolicy.PartitionScope;
-        var builder = RelationQueryPlacement.For(plan);
-        var physicalPolicy = composedPolicy.PhysicalPlanningPolicy;
-        var limits = new RelationQuerySourcePlacementLimits(physicalPolicy.MaximumBatchSize,
-            physicalPolicy.MaximumBufferedRows, physicalPolicy.MaximumFanOut, physicalPolicy.MaximumConcurrency);
-        var local = builder.Source("postgres/composed/local",
-            cut is null ? PostgresRelationQuerySourceTargetProfile.Default : RelationQueryProjectedRowset.Profile,
-            new(runtime.Database.Value), limits: limits);
-        var handles = new Dictionary<QualifiedShapeId, RelationQueryPlacementSourceHandle>();
-        var used = new Dictionary<QualifiedShapeId, EntityRelationQuerySourceRegistration>();
-        var diagnostics = new List<RelationQueryArtifactAuthoringDiagnostic>();
-        foreach (var input in plan.InputContract.Sources)
+        return BindComposed(query, bindings.PrepareComposed(query.CompilationRequest, remote, composedPolicy, projection), remote);
+    }
+
+    /// <summary>Binds offline heterogeneous preparation to actual source readers without rediscovering placement.</summary>
+    /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Query result.</typeparam>
+    /// <param name="query">Exact prepared declaration.</param><param name="prepared">Offline preparation.</param>
+    /// <param name="remote">Runtime registrations matching prepared descriptors.</param><returns>A complete-result reader.</returns>
+    public IRelationQueryReader<TInput, TResult> BindComposed<TInput, TResult>(RelationQuery<TInput, TResult> query,
+        PostgresComposedQueryPreparation prepared, EntityRelationQuerySourceCatalog remote)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        if (!ReferenceEquals(query.CompilationRequest, prepared.Request))
+            throw new ArgumentException("The prepared query authority must match exactly.", nameof(query));
+        var readers = prepared.Sources.Select(binding =>
         {
-            if (cut is not null && input.Node == cut.Cut.Id)
-                builder.Place(input, local).Identity("$row").FieldsBySemanticPath();
-            else Place(input.Shape, source => builder.Place(input, source), input.Fields, input.Input.Id, null);
-        }
-        foreach (var input in plan.InputContract.Traversals)
-            Place(input.ResultShape, source => builder.Place(input, source), input.Fields, input.Input.Id,
-                input.Input.Direction == RelationshipTraversalDirection.Inverse ? input.Definition.SourceReference : null);
-        var authored = builder.Build().RequireValue();
-        if (diagnostics.Count != 0)
-            throw new RelationQueryArtifactAuthoringException([.. diagnostics]);
-        var placement = authored.Placement;
-        if (cut is not null)
+            if (!remote.TryGetSource(binding.Shape, out var actual) || actual.Source != binding.Source || actual.Descriptor != binding.Descriptor)
+                throw new ArgumentException("Runtime sources must match prepared source and partition contracts.", nameof(remote));
+            if (actual.PersistedObservationType != binding.PersistedObservationType
+                || actual.IdentitySemanticPath != binding.IdentitySemanticPath || actual.IdentitySourceSelector != binding.IdentitySourceSelector
+                || actual.ObservationVersionSemanticPath != binding.ObservationVersionSemanticPath
+                || actual.ConcurrencyTokenSemanticPath != binding.ConcurrencyTokenSemanticPath)
+                throw new ArgumentException("Runtime entity and identity mappings differ from preparation.", nameof(remote));
+            foreach (var placed in prepared.Placement.Bindings.Where(item => item.Source == binding.Source.Id))
+                if (placed.Fields.Any(field => actual.FieldSourceSelector(field.SemanticPath) != field.SourceSelector)
+                    || placed.RelationshipKeys.Any(key => actual.RelationshipKeySourceSelector(key.SemanticPath) != key.SourceSelector))
+                    throw new ArgumentException("Runtime selectors differ from prepared source placement.", nameof(remote));
+            return EntityRelationQuerySourceCatalog.RequireReader(actual);
+        }).ToArray();
+        var policy = prepared.Policy;
+        if (prepared.Cut is { } cut)
             return new RelationQuerySubplanReader<TInput, TResult>(query, cut,
-                Prepare(cut.Prefix.Request, composedPolicy.SourcePolicy.MaximumRowsPerRead, composedPolicy.SourcePolicy.MaximumPageBytes),
-                placement, physicalPolicy, _ => used.Values.Select(source => source.Reader), scope.LogicalPartition,
-                composedPolicy.SourcePolicy.MaximumRowsPerRead, composedPolicy.SourcePolicy.MaximumPageBytes);
-
-        var realization = RelationQueryInMemoryInterpreter.Default.Realize(plan);
-        var physical = RelationQueryPhysicalPlanner.Compile(plan, realization, placement, physicalPolicy);
-        if (!physical.IsSuccessful) throw new RelationQueryPreparationException("physical", compilation, physical);
-        var storage = PostgresRelationQueryBinding.For(authored).ForSource(local.Id).Database(runtime.Database);
-        foreach (var input in authored.Inputs.Where(input => input.Source.Id == local.Id))
-            storage.Table(input, bindings.Mapping(input.Shape));
-        var bound = storage.Build().RequireValue();
-        IRelationQuerySourceReader[] readers = [new PostgresRelationQuerySourceReader(plan, physical.Plan!, local.Id,
-            bound, runtime.DataSource, runtime, composedPolicy.SourcePolicy), .. used.Values.Select(source => source.Reader)];
-        return new ComposedReader<TInput, TResult>(query, compilation, realization, placement, physical, readers,
-            composedPolicy.SourcePolicy.MaximumRowsPerRead, composedPolicy.SourcePolicy.MaximumPageBytes);
-
-        void Place(QualifiedShapeId shape, Func<RelationQueryPlacementSourceHandle, RelationQueryPlacementInputBuilder> place,
-            ImmutableArray<RelationQueryFieldInputContract> fields, RelationQueryInputId input, FieldPath? relationship)
-        {
-            if (!remote.TryGetSource(shape, out var registration))
-            {
-                if (cut is not null || !bindings.Tables.ContainsKey(shape))
-                    throw new RelationQueryPreparationException("composed mapping", compilation,
-                        code: "postgres.composed.remoteMappingMissing", detail: $"No source registered for shape '{shape}'.");
-                bindings.Place(place(local), shape, scope.SourceSelector);
-                return;
-            }
-            if (bindings.Tables.ContainsKey(shape))
-                throw new RelationQueryPreparationException("composed mapping", compilation,
-                    code: "postgres.composed.placementAmbiguous", detail: $"Shape '{shape}' is placed in both PostgreSQL and a remote source.");
-            if (registration.Reader.Descriptor.LogicalPartition != scope.LogicalPartition)
-                throw new RelationQueryPreparationException("composed scope", compilation,
-                    code: "postgres.composed.partitionMismatch", detail: "Remote source logical partition differs from the composed scope.");
-            if (!handles.TryGetValue(shape, out var handle))
-            {
-                var source = registration.Source;
-                handle = builder.Source(source.Id.Value, source.TargetProfile, source.ExecutionDomain, source.Limits, source.Id);
-                handles.Add(shape, handle);
-                used.Add(shape, registration);
-            }
-            EntityRelationQuerySourceCatalog.Configure(place(handle), registration, fields, input, relationship, diagnostics);
-        }
+                new PostgresQueryRowsReader(prepared.Prefix!, runtime, policy.SourcePolicy.MaximumRowsPerRead, policy.SourcePolicy.MaximumPageBytes),
+                prepared.Placement, policy.PhysicalPlanningPolicy, _ => readers, policy.PartitionScope.LogicalPartition,
+                policy.SourcePolicy.MaximumRowsPerRead, policy.SourcePolicy.MaximumPageBytes, prepared.Execution);
+        IRelationQuerySourceReader[] all = [new PostgresRelationQuerySourceReader(prepared.Compilation.Plan!, prepared.Physical.Plan!,
+            prepared.LocalSource, prepared.Storage!, runtime.DataSource, runtime, policy.SourcePolicy), .. readers];
+        return new ComposedReader<TInput, TResult>(query, prepared.Compilation, prepared.Realization, prepared.Placement,
+            prepared.Physical, all, policy.SourcePolicy.MaximumRowsPerRead, policy.SourcePolicy.MaximumPageBytes);
     }
 
     sealed class ComposedReader<TInput, TResult>(RelationQuery<TInput, TResult> query,
@@ -114,6 +76,8 @@ public sealed partial class PostgresPersistenceRegistration
         RelationQuerySourcePlacement placement, RelationQueryPhysicalPlanningResult physical,
         IRelationQuerySourceReader[] readers, int maximumRows, long maximumBytes) : IRelationQueryReader<TInput, TResult>
     {
+        /// <inheritdoc />
+        public RelationQueryConsistency Consistency => RelationQueryConsistency.IndependentSources;
         readonly RelationQueryPhysicalExecutor executor = new(readers);
         readonly ImmutableArray<RelationQueryCapabilityEvidence> capabilities = RelationQueryRealizationRuntimeEvidence.ProjectCapabilities(compilation.Plan!, realization);
         public RelationQuery<TInput, TResult> Definition => query;

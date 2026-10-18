@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Cohesive.Adapters.Postgres.Infra;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Infra;
@@ -101,9 +102,9 @@ public static class PostgresServiceExtensions
 
     static void RequireNative(ServiceQuerySelection query)
     {
-        if (query.Consistency != ServiceQueryConsistency.SingleSnapshot)
+        if (!Enum.IsDefined(query.Consistency))
             throw new ServiceBindingValidationException(new([new(ServiceBindingDiagnosticCodes.QueryPlacementUnsupported, Cohesive.Model.DiagnosticSeverity.Error,
-                "Independent-source queries require an explicitly composed binding; native snapshot preparation cannot realize that selection.", "/bindings/queries")]));
+                "The query consistency requirement is unknown.", "/bindings/queries")]));
     }
 
     static RelationQueryPlanComponentFingerprint Fingerprint(RelationQueryCompilationRequest request)

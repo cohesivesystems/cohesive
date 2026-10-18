@@ -27,6 +27,33 @@ public sealed class CosmosRelationQuerySourceReaderTests
     static readonly FieldPath VersionPath = FieldPath.FromField("SourceEntityVersion");
 
     [Fact]
+    public void Offline_container_binding_preserves_runtime_profile_partition_and_envelope_selectors()
+    {
+        var declared = new CosmosEntityQueryBinding(Shape, "logical-account", "operations", "entities", FixedPolicy(), NamePath);
+        using var client = new CosmosClient("https://localhost:8081/", EmulatorMasterKey,
+            new CosmosClientOptions { ConnectionMode = ConnectionMode.Gateway });
+        var runtime = declared.Bind(client.GetContainer("operations", "entities"));
+        Assert.Same(declared.Binding.Source, runtime.Source);
+        Assert.Equal(declared.Binding.Descriptor, runtime.Descriptor);
+        Assert.Equal(declared.Binding.IdentitySemanticPath, runtime.IdentitySemanticPath);
+        Assert.Equal(runtime.FieldSourceSelector(NamePath), declared.Binding.FieldSourceSelector(NamePath));
+        Assert.Equal(runtime.RelationshipKeySourceSelector(CustomerIdsPath), declared.Binding.RelationshipKeySourceSelector(CustomerIdsPath));
+        Assert.Throws<ArgumentException>(() => declared.Bind(client.GetContainer("other", "entities")));
+        Assert.Throws<ArgumentException>(() => declared.Bind(client.GetContainer("operations", "other")));
+    }
+
+    [Fact]
+    public void Offline_container_identity_changes_with_account_container_or_policy()
+    {
+        var original = new CosmosEntityQueryBinding(Shape, "account", "db", "entities", FixedPolicy(), NamePath);
+        Assert.Equal(original.Binding.Source.Id, new CosmosEntityQueryBinding(Shape, "account", "db", "entities", FixedPolicy(), NamePath).Binding.Source.Id);
+        Assert.NotEqual(original.Binding.Source.Id, new CosmosEntityQueryBinding(Shape, "other", "db", "entities", FixedPolicy(), NamePath).Binding.Source.Id);
+        Assert.NotEqual(original.Binding.Source.Id, new CosmosEntityQueryBinding(Shape, "account", "db", "other", FixedPolicy(), NamePath).Binding.Source.Id);
+        var differentPolicy = new CosmosRelationQuerySourcePolicy("partitionKey", new("other"), fixedPartitionKey: new PartitionKey("other"));
+        Assert.NotEqual(original.Binding.Source.Id, new CosmosEntityQueryBinding(Shape, "account", "db", "entities", differentPolicy, NamePath).Binding.Source.Id);
+    }
+
+    [Fact]
     public async Task ConcurrencyTokenProjection_DoesNotRewriteAnOrdinaryApplicationTokenProperty()
     {
         var rawPath = FieldPath.FromField("RawToken");

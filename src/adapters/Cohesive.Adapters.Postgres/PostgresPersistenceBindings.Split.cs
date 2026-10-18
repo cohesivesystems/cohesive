@@ -4,10 +4,10 @@ using Cohesive.Relations.IR;
 
 namespace Cohesive.Adapters.Postgres;
 
-public sealed partial class PostgresPersistenceRegistration
+public sealed partial class PostgresPersistenceBindings
 {
     // Preparation only: retain the validated cut in the reader, never rediscover it per invocation.
-    RelationQuerySubplan? InferComposedPrefix(RelationQueryCompilationResult original, Func<QualifiedShapeId, bool> isRemote)
+    internal RelationQuerySubplan? InferComposedPrefix(RelationQueryCompilationResult original, Func<QualifiedShapeId, bool> isRemote)
     {
         if (!original.IsSuccessful) throw new RelationQueryPreparationException("semantic", original);
         var request = original.Request;
@@ -24,7 +24,7 @@ public sealed partial class PostgresPersistenceRegistration
             try { cut = RelationQuerySubplan.Compile(original, projection.Id); }
             catch (RelationQueryPreparationException) { continue; } // An invalid cut is not an invalid original query.
             var native = Inputs(cut.Prefix);
-            if (!native.Any() || native.Any(shape => !bindings.Tables.ContainsKey(shape) || isRemote(shape))) continue;
+            if (!native.Any() || native.Any(shape => !Tables.ContainsKey(shape) || isRemote(shape))) continue;
             var remaining = cut.Remainder.Plan!.InputContract;
             var remoteShapes = remaining.Sources.Where(input => input.Node != cut.Cut.Id).Select(input => input.Shape)
                 .Concat(remaining.Traversals.Select(input => input.ResultShape)).ToArray();

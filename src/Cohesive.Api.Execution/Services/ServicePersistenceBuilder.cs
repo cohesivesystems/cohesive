@@ -68,14 +68,14 @@ public sealed class ServicePersistenceBuilder
         readonly Dictionary<object, Dictionary<(int, long), Lazy<object>>> prepared = new(ReferenceEqualityComparer.Instance);
         public IEntityRepository Repository(ValueContract observation) => repositories.TryGetValue(observation, out var repository)
             ? repository : fallback?.Repository(observation) ?? throw new InvalidOperationException("No repository is selected for the observation contract.");
-        public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes)
+        public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes, RelationQueryConsistency consistency)
         {
             ArgumentNullException.ThrowIfNull(query);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRows);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
             if (!queries.TryGetValue(query, out var factory))
-                return fallback?.Query(query, maximumRows, maximumBytes)
-                    ?? throw new InvalidOperationException("No persistence is selected for the query declaration.");
+                return ServiceQueryConsistencyValidation.Require(fallback?.Query(query, maximumRows, maximumBytes, consistency)
+                    ?? throw new InvalidOperationException("No persistence is selected for the query declaration."), consistency);
             Lazy<object> value;
             lock (prepared)
             {
@@ -83,7 +83,7 @@ public sealed class ServicePersistenceBuilder
                 if (!bounds.TryGetValue((maximumRows, maximumBytes), out value!))
                     bounds.Add((maximumRows, maximumBytes), value = new(() => factory(maximumRows, maximumBytes)));
             }
-            return (IRelationQueryReader<TInput, TResult>)value.Value;
+            return ServiceQueryConsistencyValidation.Require((IRelationQueryReader<TInput, TResult>)value.Value, consistency);
         }
     }
 }
