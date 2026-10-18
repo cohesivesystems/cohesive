@@ -1,0 +1,13 @@
+Method,Entries,OverlayEntries,Mean,Error,StdDev,Allocated,Toolchain,IterationCount,WarmupCount,IterationTime
+Rebuild,8,1,285.74 ns,8.001 ns,2.078 ns,616 B,InProcessEmitToolchain,5,3,250ms
+Reuse,8,1,86.14 ns,0.779 ns,0.121 ns,352 B,InProcessEmitToolchain,5,3,250ms
+Rebuild,8,8,506.17 ns,14.521 ns,3.771 ns,1064 B,InProcessEmitToolchain,5,3,250ms
+Reuse,8,8,373.51 ns,15.859 ns,4.118 ns,992 B,InProcessEmitToolchain,5,3,250ms
+Rebuild,128,1,"5,967.64 ns",254.346 ns,66.053 ns,8296 B,InProcessEmitToolchain,5,3,250ms
+Reuse,128,1,151.65 ns,4.257 ns,0.659 ns,608 B,InProcessEmitToolchain,5,3,250ms
+Rebuild,128,8,"6,186.13 ns",146.871 ns,38.142 ns,8744 B,InProcessEmitToolchain,5,3,250ms
+Reuse,128,8,795.77 ns,11.441 ns,2.971 ns,2784 B,InProcessEmitToolchain,5,3,250ms
+Rebuild,1024,1,"61,230.11 ns","1,972.797 ns",512.329 ns,65641 B,InProcessEmitToolchain,5,3,250ms
+Reuse,1024,1,210.93 ns,3.363 ns,0.873 ns,864 B,InProcessEmitToolchain,5,3,250ms
+Rebuild,1024,8,"61,778.43 ns","3,349.445 ns",518.330 ns,66089 B,InProcessEmitToolchain,5,3,250ms
+Reuse,1024,8,"1,255.53 ns",17.127 ns,4.448 ns,4832 B,InProcessEmitToolchain,5,3,250ms

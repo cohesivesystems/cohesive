@@ -1,0 +1,28 @@
+{
+  "qualification": "Isolated immutable annotation-map merge benchmark; no full-case CPU claim.",
+  "source_base": "0ffb2ddf94ce2d6c495ed5f99b3ae382ac7aa8a3",
+  "source_sha256": "8e327cbe1474226f0edfc923753d05cbbc5595ba80225d82c6913f5ef8c30687",
+  "runtime_module_sha256": "916cccf33768c45ff800fd934d5244ecead41f4d7c5bdea67dad090e7e40c860",
+  "benchmark_source_sha256": "da0e87d7f8067f9f8a0ecdef04a8062bd07bd9fc922c39ccc5a2bdefdc13a605",
+  "benchmark_harness_sha256": "9deffe48f15fa6bf5a7025678c7dbecfaa52765427ee163864bb26d9ff03e12a",
+  "environment": {
+    "cpu": "Apple M5 Max arm64",
+    "os": "macOS 27.0.1",
+    "sdk": "10.0.402",
+    "runtime": "10.0.13",
+    "configuration": "Release"
+  },
+  "benchmark": {
+    "toolchain": "InProcessEmit",
+    "launches": 1,
+    "warmups": 3,
+    "iterations": 5,
+    "iteration_time_ms": 250,
+    "report_sha256": "8d9409de26a95eda40b1a9cf6d3d807abb6edb633afca68880c192e56022bfc6",
+    "harness_sha256": "9deffe48f15fa6bf5a7025678c7dbecfaa52765427ee163864bb26d9ff03e12a"
+  },
+  "core_passed": 4931,
+  "existing_core_skips": 41,
+  "semantics": "Default key and value equality, later unequal values replace earlier values, input maps unchanged; compatible persistent roots may be shared. Custom comparers are not adopted.",
+  "evidence_sha256": "43f35a2b24f09de0d5211b4ee8e4a7d0eb00ca3e5961acbe9bf48f6002ee3efa"
+}
