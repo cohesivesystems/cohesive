@@ -73,3 +73,13 @@ registration order. `Build()` constructs each once, completes `IAuthoringModel` 
 from `IExecutionDefinitionModel` through the canonical execution catalog. Duplicate revisions, cycles and missing
 dependencies fail at setup. Models must not own disposable resources or perform IO; native connections remain
 separate runtime attachments. Completed models are resolved by `model.Get<T>()`. Preparation failures are cached.
+
+## Finite host-owned process execution
+
+`AddCohesiveHostProcessWorker(prepared, maximumExecutions)` attaches prepared native process bindings to the
+.NET host. It does not start during construction. Admission and checkpoints use the existing in-memory
+execution adapter and process runtime; the worker supplies bounded scheduling and host cancellation only.
+It declares Host lifetime, never Durable. Request disconnects do not cancel admitted work; host exit loses
+receipt/result history. Capacity includes completed instances, with no eviction or automatic retry. For the
+HTTP composition, `BindHosted` prepares and registers this provider at ServiceApiBindingsBuilder.Build, leaving
+AppHost semantic inspection offline. See [the protocol](../../docs/design/accepted-process-api.md).

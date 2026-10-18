@@ -99,7 +99,7 @@ public static class ServiceApiProjection
         var nativeResults = declared is ServiceProcessOperation { Execution.Completion: ServiceProcessCompletion.Admission }
             ? native.Results.Select(result => result.Kind == ApiResultKind.Success
                 ? new ApiResultDefinition(ApiResultKind.Accepted, result.BodyType, result.IsPrimary,
-                    description: "The Process was durably admitted; terminal completion is not promised.")
+                    description: "The Process was admitted to its declared execution lifetime; terminal completion is not promised.")
                 : result).ToArray()
             : native.Results;
         var operation = new ApiOperation(operationId, native.Kind, requestType, native.ResponseType,

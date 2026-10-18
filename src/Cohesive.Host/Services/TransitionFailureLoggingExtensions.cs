@@ -29,15 +29,27 @@ public static class TransitionFailureLoggingExtensions
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(process);
         services.AddLogging();
-        services.Configure<TransitionFailureLoggingOptions>(options => options.Processes.Add(process));
+        services.Configure<TransitionFailureLoggingOptions>(options => options.Processes.TryAdd(process, process.SubscribeTransitionFailures));
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, TransitionFailureLoggingService>());
         return services;
     }
+    /// <summary>Logs scoped private failures from prepared host execution using the same native host lifetime.</summary>
+    /// <param name="services">Owning host services.</param><param name="process">Prepared failure source.</param>
+    /// <returns>The service collection.</returns>
+    public static IServiceCollection AddCohesiveTransitionFailureLogging(this IServiceCollection services, PreparedServiceProcess process)
+    {
+        ArgumentNullException.ThrowIfNull(services); ArgumentNullException.ThrowIfNull(process);
+        services.AddLogging();
+        services.Configure<TransitionFailureLoggingOptions>(options => options.Processes.TryAdd(process, process.SubscribeTransitionFailures));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IHostedService, TransitionFailureLoggingService>());
+        return services;
+    }
+
 }
 
 internal sealed class TransitionFailureLoggingOptions
 {
-    public HashSet<HostedServiceProcess> Processes { get; } = new(ReferenceEqualityComparer.Instance);
+    public Dictionary<object, Func<Action<EntityTransitionFailureDiagnostic>, IDisposable>> Processes { get; } = new(ReferenceEqualityComparer.Instance);
 }
 
 internal sealed partial class TransitionFailureLoggingService(
@@ -59,7 +71,7 @@ internal sealed partial class TransitionFailureLoggingService(
             try
             {
                 foreach (var process in options.Value.Processes)
-                    subscriptions.Add(process.SubscribeTransitionFailures(Log));
+                    subscriptions.Add(process.Value(Log));
             }
             catch
             {

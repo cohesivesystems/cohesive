@@ -118,10 +118,10 @@ must be classified as a conflict or non-rejection; a newly added unmapped outcom
 references that exact declaration in the canonical API and passes it to the shared ASP.NET binding.
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with a `TransitionApiPreparationException` retaining structured compiler diagnostics. No global compilation cache or per-request compilation is added.
-All order routes and the terminal fulfillment endpoint are declared as instance-owned portable handles in `OrderApi`.
-`OrderEndpoints.Define(model)` contributes implementations through `ServiceModelBuilder.Implement(model.Api, ...)`.
+All order routes and the fulfillment start/result endpoints are declared as instance-owned portable handles in `OrderApi`.
+`OrderEndpoints.Define(model)` contributes implementations through `ServiceApiBindingsBuilder.Implement(model.Api, ...)`.
 Entity operations retain the existing typed entity binding; queries use typed endpoint selectors with explicit bounds.
-A second contribution binds Fulfill to the separately declared ephemeral service. Native route input and response
+A second contribution binds Fulfill to the existing service through the bounded host-owned worker. Native route input and response
 policies remain at the ASP.NET seam, and `app.MapServices` publishes the complete validated surface. Callbacks receive
 typed order state and transition outcomes; `.Input(request => ...)` uses the existing request context
 and its `RequiredEntityId`. The separate declarations contain no handlers; the example's HTTP error body
@@ -519,7 +519,7 @@ earlier query-header declaration and constructor-based nested result syntax rema
 running-program availability wiring and CQRS/event-sourcing guarantees are separate follow-ups.
 
 The running program also maps `/orders/{id}/availability` through `ReservationAvailabilityQueryBindings.BindNative`
-and `/fulfillment` through the canonical ephemeral Process. The former preserves the outer-join row with absent reservation fields when an order has no demand. Cross-database placement remains an alternate tested binding, not the default running configuration.
+and `/fulfillment` through the canonical host-owned Process. The former preserves the outer-join row with absent reservation fields when an order has no demand. Cross-database placement remains an alternate tested binding, not the default running configuration.
 
 ### Domain contract boundary
 
@@ -546,8 +546,7 @@ composed placement in the running host are subsequent work. No shared snapshot i
 
 ### Generated process dependencies
 
-FulfillmentService now calls `.Use(new ServiceDependencies().Process(process)...)` instead of repeating Reserve,
-Release, Submit and the stock lookup. The generator retains typed invocations from Execute; host binding checks
+Colocated process authoring automatically collects generated dependencies. The generator retains typed invocations from Execute; host binding checks
 exact canonical references. The stock lookup declares its entity/key/result recipe once beside its hosted-query
 contract. Public OrderDetails and ReservationAvailability selections remain explicit API roots with bounds;
 neither is falsely included in the fulfillment process's dependency closure. Separately declared services and raw
@@ -569,14 +568,75 @@ handlers before publishing any data source, rejecting incomplete query bindings,
 method/template collisions. More general ASP.NET template ambiguity remains native routing policy. A prepared
 model belongs to one route builder; build another model for another host. Native-only routes may coexist.
 
-Fulfill declares terminal completion (HTTP 200 after execution), not acceptance for a background job. The typed
-endpoint is projected from the exact service declaration and included in OrderApi; binding checks its process,
-request/result contracts and policies. Accepted receipts, polling and durable workers remain out of this batch.
 
 
 Endpoint implementation coverage is inspectable offline through `model.Services.Plan.Definition`.
 The portable plan in `Cohesive.Api.Execution` owns query selections used by AppHost; HTTP recipes attach
 in the ASP.NET adapter. Wrong or duplicate query/process endpoint handles fail during contribution,
 and missing coverage fails before storage resolution. Repeated host preparation reuses the same prepared
-surface. Process endpoint authoring uses `Endpoints.Process(service.Definition, "fulfill", process).Route(...)`;
-the typed process supplies C# input/output contracts while the service remains separately declared.
+surface. Separately declared services remain supported through `Endpoints.AcceptedProcess(service, ...)`
+and explicit service/process host binding.
+
+## One service, one API; response timing and durability are independent
+
+`OrderApi` colocates service policy with its linked process endpoints. Generated dependencies come from the
+selected process; no separate service class or manually constructed dependency catalog is needed:
+
+```csharp
+Fulfill = Endpoints.Process(process).Accepted<ServiceProcessCommand<FulfillOrder>>(
+    id: new("fulfillment"), revision: new("2"),
+    configure: service => service
+        .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
+        .ReturnAfterAdmission(ProcessExecutionLifetime.Host)
+        .Operation("result").Require(new("fulfillment.read")).ReadResultOf(process.Definition),
+    startOperationId: "fulfill", resultOperationId: "result",
+    startRoute: "/fulfillment", resultRoute: "/fulfillment/results/{instanceId}");
+```
+
+`OrderEndpoints.Define` binds this pair through `BindHosted(api => api.Fulfill, ...)`; the pair retains the
+service and process recipe, so neither is repeated at binding.
+`Program` still calls `model.Services.Build(...)` and `app.MapServices(...)`. Authoring and AppHost inspection
+perform no execution or database access; Build prepares the exact native dependencies once and registers the
+worker with the generic host. There is no parallel accepted API or second service declaration.
+
+The running demo returns **202 + receipt + Location**, then executes stock query → reserve → submit (or
+compensate) in one host-owned worker. GET of Location returns pending, the terminal result, or a safe failure.
+Start requires `fulfillment.write`; result reads independently require `fulfillment.read`. The explicit synthetic
+demo identity grants both; this is not production authentication.
+
+The API can instead declare `response: ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(2))`.
+This adds terminal response alternatives while retaining the 202 receipt fallback and polling endpoint.
+The response deadline or caller disconnect ends waiting, not execution. The service execution lifetime does
+not change. Polling remains useful even when the original result response is lost.
+
+`ProcessExecutionLifetime.Host` is explicit: the bounded in-memory admission, deduplication, checkpoints and
+results survive a request, **not a host exit**. The demo retains at most 1,000 instances including completed
+ones, refuses new admissions at capacity, and has no automatic retry, timers, multi-host coordination or
+restart recovery. PostgreSQL entity/transition receipts remain durable separately. Production durable
+execution requires an explicitly Durable service and a qualified native dispatcher/value repository; the
+host provider rejects that policy rather than pretending its in-memory state is durable.
+
+See [FULFILLMENT.md](FULFILLMENT.md) for the runnable request and the
+[linked-process design](../../../docs/design/accepted-process-api.md) for protocol and failure details.
+
+### Typed process host binding
+
+The standard `ServiceProcessCommand<TInput>` carries command/idempotency/instance/attempt IDs plus input.
+Clients retain all five fields across retries; the adapter never generates replacement IDs. Its JSON shape is
+unchanged from the former demo-specific request. Missing identities or input fail with HTTP 400 before admission.
+
+```csharp
+bindings.BindHosted(api => api.Fulfill,
+    authority: "aspire-first",
+    authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
+    maximumExecutions: 1000,
+    logPrivateFailures: true);
+```
+
+This overload converts input through the existing observation representation and decodes the terminal value
+against the selected process result contract. `Build` prepares host-local HTTP policies using the same
+`IServiceInvocationAuthorization` as native admission; start and result remain independently authorized.
+Policies are scoped to the registration, so repeated capability names do not overwrite another service's policy.
+The application still supplies authenticated identity (the demo supplies an explicitly synthetic identity),
+request OperationContext, and `UseAuthorization`. Custom request/result projections and existing native policy
+resolvers remain available through the explicit binding overload.

@@ -19,7 +19,7 @@ internal static class OrderHttpTestBindings
         IRelationQueryReader<string, OrderDetails?> details, IRelationQueryReader<string, ReservationAvailability[]> availability)
     {
         var definition = ApiDefinition.From(model.Api.Create, model.Api.Get, model.Api.Submit, model.Api.Details, model.Api.Availability);
-        var prepared = new ServiceModelBuilder().Implement(model.Api, definition, bindings => OrderEndpoints.ConfigureOrders(bindings, model))
+        var prepared = new ServiceApiBindingsBuilder().Implement(model.Api, definition, bindings => OrderEndpoints.ConfigureOrders(bindings, model))
             .Build(new ServiceCollection(), new Persistence(model, orders, details, availability));
         app.MapServices(prepared);
     }

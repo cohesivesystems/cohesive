@@ -10,7 +10,7 @@ public sealed class FulfillmentApplication
     public FulfillmentApplication()
     {
         var model = new ApplicationModelBuilder()
-            .Add<FulfillmentService>().Add<OrderApi>().Add<FulfillmentProcess>()
+            .Add<OrderApi>().Add<FulfillmentProcess>()
             .Add<FulfillmentQueries>().Add<FulfillmentStorage>().Add<FulfillmentDomain>()
             .Add<OrderTransitions>().Add<InventoryTransitions>().Add<ReservationAvailabilityQueryBindings>()
             .Build();
@@ -21,12 +21,11 @@ public sealed class FulfillmentApplication
         Inventory = model.Get<InventoryTransitions>();
         Api = model.Get<OrderApi>();
         Process = model.Get<FulfillmentProcess>();
-        Service = model.Get<FulfillmentService>();
         Availability = model.Get<ReservationAvailabilityQueryBindings>();
         Services = OrderEndpoints.Define(this);
     }
     /// <summary>Partial API implementation recipes shared by host and infrastructure preparation.</summary>
-    internal Cohesive.Adapters.AspNet.Services.ServiceModelBuilder Services { get; }
+    internal Cohesive.Adapters.AspNet.Services.ServiceApiBindingsBuilder Services { get; }
     /// <summary>Query capability requirements projected from the API implementations.</summary>
     public Cohesive.Api.Execution.Services.ServiceDependencies StorageQueries => Services.Plan.QueryDependencies;
     /// <summary>Public API contract.</summary>
@@ -43,8 +42,6 @@ public sealed class FulfillmentApplication
     public InventoryTransitions Inventory { get; }
     /// <summary>Generated multi-entity process.</summary>
     public FulfillmentProcess Process { get; }
-    /// <summary>Explicit execution and dependency bindings.</summary>
-    public FulfillmentService Service { get; }
     /// <summary>Native and composed placement examples.</summary>
     public ReservationAvailabilityQueryBindings Availability { get; }
 }

@@ -31,5 +31,6 @@ var services = model.Services.Build(builder.Services, persistence.ForServices(re
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
+app.UseAuthorization();
 app.MapServices(services);
 app.Run();

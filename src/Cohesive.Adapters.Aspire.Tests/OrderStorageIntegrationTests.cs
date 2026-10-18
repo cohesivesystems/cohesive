@@ -1,3 +1,4 @@
+using Cohesive.Api.Execution.Services;
 using AspireFirst.Orders;
 using System.Diagnostics;
 using System.Text.Json;
@@ -192,7 +193,15 @@ public sealed partial class OrderStorageIntegrationTests
                 seed.Parameters.AddWithValue(fulfillmentSku);
                 await seed.ExecuteNonQueryAsync();
             }
-            var fulfillment = await client.PostAsJsonAsync("/fulfillment", new FulfillOrder(id, fulfillmentSku, 2));
+            var fulfillment = await client.PostAsJsonAsync("/fulfillment", new ServiceProcessCommand<FulfillOrder>(id, id, id, "1", new(id, fulfillmentSku, 2)));
+            Assert.Equal(HttpStatusCode.Accepted, fulfillment.StatusCode);
+            var location = fulfillment.Headers.Location!;
+            using var completionDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            do
+            {
+                fulfillment = await client.GetAsync(location, completionDeadline.Token);
+                if (fulfillment.StatusCode == HttpStatusCode.Accepted) await Task.Delay(50, completionDeadline.Token);
+            } while (fulfillment.StatusCode == HttpStatusCode.Accepted);
             Assert.Equal(HttpStatusCode.OK, fulfillment.StatusCode);
             Assert.Equal("Submitted", (await fulfillment.Content.ReadFromJsonAsync<FulfillmentResult>())!.Status);
             Assert.Null(Assert.Single((await client.GetFromJsonAsync<ReservationAvailability[]>($"/orders/{id}/availability"))!).ReservationId);
