@@ -31,19 +31,22 @@ public sealed class PostgresCosmosStorage : StorageModel
     {
         this.domain = domain;
         this.queries = queries;
-        Orders = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
-            .Entity(domain.Orders, mappings.Orders).Entity(domain.Reservations, mappings.Reservations)));
+        PostgresBindings = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
+            .Entity(domain.Orders, mappings.Orders)
+            .Entity(domain.Reservations, mappings.Reservations)));
         InventoryPolicy = Storage.Define(() => new CosmosRelationQuerySourcePolicy(
             partitionSourceSelector: "partitionKey", logicalPartition: new(FulfillmentStoragePolicy.LogicalPartition),
             fixedPartitionKey: new PartitionKey(FulfillmentStoragePolicy.LocalPartition), maximumEnumerationRows: 1000,
             maximumKeysPerQuery: 100, maximumQueryChunks: 10, maximumSdkPageSize: 100));
     }
     /// <summary>PostgreSQL placement of orders and reservations only.</summary>
-    public PostgresPersistenceBindings Orders { get; }
+    public PostgresPersistenceBindings PostgresBindings { get; }
     /// <summary>Native bounded Cosmos source policy for the local demo partition.</summary>
     public CosmosRelationQuerySourcePolicy InventoryPolicy { get; }
 
-    /// <summary>Attaches caller-owned backends; metadata must be verified before calling this method.</summary>
+    /// <summary>Composes caller-owned SQL and Cosmos backends; metadata must be verified before calling.</summary>
+    /// <remarks>This method owns heterogeneous repository/query selection, not a forwarding database-name wrapper.
+    /// The PostgreSQL database identity is inferred from PostgresBindings; cross-store query policy remains explicit.</remarks>
     /// <param name="orders">Caller-owned SQL data source.</param>
     /// <param name="inventory">Container with verified partition metadata.</param>
     /// <param name="receipts">Validated SQL receipt storage.</param>
@@ -53,7 +56,7 @@ public sealed class PostgresCosmosStorage : StorageModel
     {
         if (inventory.Id != InventoryContainer || inventory.Database.Id != InventoryDatabase)
             throw new ArgumentException("Inventory container does not match this composition.", nameof(inventory));
-        var postgres = Orders.Bind(orders, authority: "aspire-first/postgres-cosmos");
+        var postgres = PostgresBindings.Bind(orders, authority: "aspire-first/postgres-cosmos");
         var repository = new CosmosEntityOutboxRepository(domain.Inventory.Definition, inventory,
             partitionKeyPolicy: EntityPartitionKeyPolicy.Fixed(FulfillmentStoragePolicy.LocalPartition, FulfillmentDomain.PartitionField),
             identityField: FulfillmentDomain.InventoryIdField);

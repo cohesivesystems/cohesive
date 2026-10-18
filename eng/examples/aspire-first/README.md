@@ -140,7 +140,8 @@ place. Array recipes return their final projection; nested recipes receive a typ
 Neither repeats a terminal query ID/parameter registration. Nested `.From(rows).Key(source, sourceKey,
 resultKey)` and the keyed collection mapping preserve the existing portable assembly and query fingerprints.
 
-`FulfillmentApplication` exposes its components as public required init-only properties. `ModelActivator`
+`FulfillmentApplication` and `PostgresCosmosApplication` expose their components as public required
+init-only properties, including the independently registered process. `ModelActivator`
 resolves those through the same graph as constructor dependencies, shares each component instance, and
 populates the root before returning it. Domain, query, API and binding models keep constructor injection
 for declaration authoring in their constructors. Required-init injection is also available to those models
@@ -155,3 +156,10 @@ The adapter derives both requirements and evidence from the same selected query 
 `builder.AttachCohesive(model: this, ...)` then associates the existing database and project.
 Database association reuses that preparation and checks the actual native database name.
 This is offline evidence, not database or runtime qualification; native-only resources remain supported.
+
+`PostgresCosmosFulfillmentInfrastructure` also uses `builder.AttachCohesive(model: this, ...)`, but
+governs only the workload execution capability. Its PostgreSQL and Cosmos resources remain native-only:
+the single-database `.Postgres(bindings, endpointPlan)` preparation cannot claim snapshot evidence for
+queries that also read Cosmos. `PostgresCosmosStorage.PostgresBindings` contains orders/reservations
+only. Its constructor authors immutable SQL mappings and Cosmos policy; `Bind` retains the substantive
+cross-store repository and query composition, inferring the SQL database name from those bindings.

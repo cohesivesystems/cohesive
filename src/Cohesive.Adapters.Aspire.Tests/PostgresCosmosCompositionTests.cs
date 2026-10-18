@@ -26,10 +26,18 @@ public sealed class PostgresCosmosCompositionTests
         Assert.Equal(single.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint,
             mixed.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
         Assert.Equal(single.Api.Definition.Endpoints.Select(e => e.Id), mixed.Api.Definition.Endpoints.Select(e => e.Id));
-        Assert.Throws<ArgumentException>(() => mixed.Storage.Orders.Mapping(mixed.Domain.Inventory));
+        Assert.Throws<ArgumentException>(() => mixed.Storage.PostgresBindings.Mapping(mixed.Domain.Inventory));
         Assert.NotNull(single.Storage.Bindings.Mapping(single.Domain.Inventory));
         Assert.Single(single.Storage.Definition);
         Assert.Equal(2, mixed.Storage.Definition.Length);
+        Assert.Same(mixed.Storage.PostgresBindings, mixed.Storage.Definition[0]);
+        Assert.Same(mixed.Storage.InventoryPolicy, mixed.Storage.Definition[1]);
+        Assert.Same(mixed.Domain, mixed.Composition.Get<FulfillmentDomain>());
+        Assert.Same(mixed.Process, mixed.Api.Fulfill.Process);
+        Assert.Same(mixed.Process, mixed.Composition.Get<FulfillmentProcess>());
+        Assert.Equal(single.Process.Definition.Reference, mixed.Process.Definition.Reference);
+        Assert.Throws<KeyNotFoundException>(() => mixed.Composition.Get<OrderTransitions>());
+        Assert.Throws<KeyNotFoundException>(() => mixed.Composition.Get<InventoryTransitions>());
     }
 
     [Fact]
@@ -43,7 +51,7 @@ public sealed class PostgresCosmosCompositionTests
             inventory, inventory.Database.Id, inventory.Id, model.Storage.InventoryPolicy,
             identitySemanticPath: FieldPath.FromField(FulfillmentDomain.InventoryIdField));
         var catalog = new EntityRelationQuerySourceCatalog([source]);
-        var orders = model.Storage.Orders.Bind(database, authority: "test");
+        var orders = model.Storage.PostgresBindings.Bind(database, authority: "test");
         Assert.Same(model.Queries.OrderDetails, orders.QueryComposed(model.Queries.OrderDetails, catalog, PostgresCosmosStorage.Policy(1000, 1_000_000)).Definition);
         var inferred = Assert.IsType<Cohesive.Relations.Execution.RelationQuerySubplanReader<string, ReservationAvailability[]>>(
             orders.QueryComposed(model.Queries.ReservationAvailability, catalog, PostgresCosmosStorage.Policy(1000, 1_000_000)));
@@ -81,8 +89,14 @@ public sealed class PostgresCosmosCompositionTests
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
         var association = model.Configure(builder);
         Assert.True(association.Deployment.IsComplete);
+        Assert.Single(association.Resources);
+        Assert.Same(builder.Resources.Single(resource => resource.Name == "worker"),
+            association.Resources[PostgresCosmosFulfillmentInfrastructure.Worker]);
+        Assert.Empty(model.Definition.ResourcePreparations);
+        Assert.Empty(model.Definition.Definition.Definition.Resources);
         Assert.Contains(builder.Resources, resource => resource.Name == PostgresCosmosStorage.CosmosAccount);
         Assert.Contains(builder.Resources, resource => resource.Name == FulfillmentStoragePolicy.OrdersDatabaseName);
+        using var app = builder.Build(); // Build the native model only; do not start either database.
     }
 
     [Fact]
