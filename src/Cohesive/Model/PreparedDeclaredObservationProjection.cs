@@ -325,21 +325,7 @@ internal static class PreparedDeclaredObservationProjection
 
     static ObservationValue ProjectString(string text, JsonSerializerOptions options, int depth)
     {
-        // The serializer replaces malformed UTF-16. Native strings must preserve that behavior.
-        var offset = -1;
-        // The generic range helper boxes chars on short ARM64 inputs; this loop does not.
-        for (var i = 0; i < text.Length; i++)
-            if (char.IsSurrogate(text[i])) { offset = i; break; }
-        if (offset >= 0)
-        {
-            var remaining = text.AsSpan(offset);
-            while (!remaining.IsEmpty)
-            {
-                if (System.Text.Rune.DecodeFromUtf16(remaining, out _, out var consumed) != System.Buffers.OperationStatus.Done)
-                    return Serialize(text, typeof(string), options, depth);
-                remaining = remaining[consumed..];
-            }
-        }
+        if (!JsonText.IsWellFormed(text)) return Serialize(text, typeof(string), options, depth);
         return ObservationValue.FromString(text);
     }
 

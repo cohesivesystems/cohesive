@@ -295,3 +295,89 @@ that the new annotation dictionary projection had retained source hash enumerati
 uses the existing token-reader ordering helper. A constant-hash comparer regression fails before
 this correction and passes after it. The source measurements above precede this small ordering
 correction; they remain identified by the checked-in runtime manifest.
+
+## Scalar wrapper decoding
+
+The next retained change targets first decoding of string-backed values such as `ShapeId`.
+Previously the prepared reader serialized each observation string to pooled UTF-8 and invoked the
+JSON reader merely to call the wrapper constructor. The selected `SingleValueWrapperJsonConverter`
+now supplies that native read itself. This extends the existing converter preparation used by hosted
+CLR reads, plain JSON preparation and default shape materialization; it adds no decoding API, result
+cache or parallel wrapper catalog. Constructors run on every read. Customized underlying string
+readers, legacy objects, nulls, other value kinds and malformed UTF-16 retain the actual serializer
+path. The native guard is shared with declared projection and native string annotations.
+
+A proposed observation-backed structured annotation representation was also implemented and tested,
+then discarded. Its extra full-case allocation saving was small, while retaining an observation
+subtree alongside a requested JSON view introduced another lifetime and encoding-order obligation.
+Annotations keep their existing backing. The remaining decode category also includes retained model,
+collection and validation work; it must not be treated as entirely removable JSON overhead.
+
+### Qualification
+
+Public **alpha.146** is the baseline. Candidate replaces only `Cohesive.dll` in an otherwise identical
+frozen Ari runtime; this is not a published package upgrade. All 27 baseline packaged runtime DLLs
+match official archives and their merged publisher commit, and the other 26 candidate packaged DLLs
+are identical. The three Ari-owned protocol incubators remain source projects.
+
+Matched BenchmarkDotNet workloads, Apple M5 Max arm64, macOS 27.0.1, SDK 10.0.402 / runtime 10.0.13,
+Release, separate processes per variant, in-process emit, one launch, three warmups, five 250 ms
+iterations. Means are elapsed time per operation, not per-method CPU measurements.
+
+| Workload | Baseline time | Candidate time | Baseline allocation | Candidate allocation |
+| --- | ---: | ---: | ---: | ---: |
+| Decode 128 string wrappers | 15.54 μs | 1.66 μs | 28,013 B | 1,384 B |
+| First decode, 128-field graph | 121.08 μs | 103.68 μs | 184.50 KiB | 158.08 KiB |
+| First decode, 1,024-field graph | 1,150.59 μs | 968.21 μs | 1,409.62 KiB | 1,201.18 KiB |
+
+The wrapper workload includes fresh typed results and hosted contract validation. Fresh graph storage
+is asserted by its existing setup; a shared decoded graph cannot make this a warm result-cache hit.
+[All sizes, errors, deviations and settings](evidence/scalar-wrapper-decoding/benchmarks.csv).
+Fixed allocation ceilings cover 128 wrapped fields through the hosted-profile reader, public prepared
+JSON reader and default shape materializer, using medians of seven samples after preparation.
+
+Five alternating fresh-process pairs per source run the original X12 case twice, with fresh repositories
+and fixtures on each invocation. No local builds, tests, benchmarks or traces overlap measurements.
+Second invocation is not established steady state. Whole-process CPU includes GC, JIT and native work.
+
+| Case, second invocation | Baseline MB | Candidate MB | Baseline CPU ms | Candidate CPU ms |
+| --- | ---: | ---: | ---: | ---: |
+| 004010 | 25.714 | 25.690 | 304.4 | 276.9 |
+| 005030 | 28.552 | 28.257 | 307.2 | 324.2 |
+
+These whole-case differences are small relative to process-to-process allocation variation, including
+roughly 1.6–2 MB excursions in some samples. Median paired allocation differences are 0.219 / 0.149 MB;
+they are not guaranteed per-case savings. Cold allocation medians are 154.995 → 154.685 MB and
+157.265 → 156.915 MB. There is **no established end-to-end CPU or latency improvement**: the two
+sources' CPU medians move in opposite directions. Exploratory longer runs continued to change with
+runtime warmup; disabling tiered compilation was a separate diagnostic, not a deployment-performance
+claim. Keep the small shared converter fix on its component evidence, rather than claim a large X12 win.
+[All 40 counters](evidence/scalar-wrapper-decoding/x12-counters.csv),
+[exact source/runtime identity](evidence/scalar-wrapper-decoding/runtime-manifest.json), and
+[unchanged graph hashes](evidence/scalar-wrapper-decoding/graph-hashes.csv).
+
+Three new traces per variant and source have no lost events or missing allocation/managed CPU stacks.
+Candidate second-use sampled allocation remains about **5.5–6.1 MB in EDI construction**, **5.4–6.5 MB
+in observation projection**, **3.4–3.9 MB in hosted decoding/admission**, and **6.5–7.0 MB in Other**.
+These are disjoint category estimates, not predicted savings; inclusive call-site totals must not be
+added to them. The next larger target is annotation/map and graph construction, rather than more
+wrapper-level caching. [Allocation budgets](evidence/scalar-wrapper-decoding/allocation-budget.csv),
+[managed CPU shares](evidence/scalar-wrapper-decoding/cpu-budget.csv),
+[quality](evidence/scalar-wrapper-decoding/trace-quality.csv).
+
+Validation: **4,818 Core tests, 233 SQLite tests, 963 Ari engine tests and three comparison-driver tests
+pass**, with the existing integration/emulator skips. Coverage includes constructor normalization,
+nulls, malformed Unicode, strict/legacy objects, custom wrapper/string readers, mutable result
+independence and fixed allocation bounds. Both X12 graph hashes remain unchanged.
+
+Reproduce after building isolated runtime/benchmark variants:
+
+```sh
+python3 eng/runtime-performance/durable-bookkeeping/compare-ari.py --baseline /absolute/baseline/ProtocolPreparation.dll --candidate /absolute/candidate/ProtocolPreparation.dll --output /absolute/results/counters.csv --runs 5
+dotnet /absolute/variant/ValueConversion.dll --filter '*ScalarWrapperDecodeBenchmarks*' '*CompiledGraphProjectionBenchmarks.DecodeNewGraphStorage*' --inProcess --warmupCount 3 --iterationCount 5 --iterationTime 250 --launchCount 1 --artifacts /absolute/results/benchmark
+```
+
+For longer diagnostic runs, the comparison driver accepts `--iterations 2..64` with Ari's updated
+harness. Default two-phase comparisons remain compatible with the original harness; stale harnesses
+cannot silently supply fewer phases than requested. A fixed invocation count alone does not establish
+steady state.
