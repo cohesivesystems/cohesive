@@ -82,7 +82,10 @@ public sealed class PostgresComposedServicePreparation : IServiceStorageComposit
         var sources = new EntityStorageRegistration[nativeSources.Length];
         for (var index = 0; index < sources.Length; index++)
             sources[index] = await nativeSources[index].BindAsync(services, cancellationToken).ConfigureAwait(false);
-        return Bind(bindings.Bind(database, "di/" + bindings.Database.Value), receipts, sources);
+        var history = bindings.HistoryConfiguration is { } configuration
+            ? await configuration.PrepareAsync(services, bindings.Database.Value, database, cancellationToken).ConfigureAwait(false) : null;
+        var outbox = await bindings.PrepareOutboxAsync(database, cancellationToken).ConfigureAwait(false);
+        return BindCore(bindings.Bind(database, "di/" + bindings.Database.Value), receipts, sources, history, outbox);
     }
 
     readonly Dictionary<object, (ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries;
@@ -149,10 +152,16 @@ public sealed class PostgresComposedServicePreparation : IServiceStorageComposit
     public IServicePersistence Bind(PostgresPersistenceRegistration persistence,
         PostgresTransitionReceiptStorage? receipts = null, params EntityStorageRegistration[] sources)
     {
+        return BindCore(persistence, receipts, sources, null, null);
+    }
+
+    IServicePersistence BindCore(PostgresPersistenceRegistration persistence, PostgresTransitionReceiptStorage? receipts,
+        EntityStorageRegistration[] sources, PostgresEntityHistoryStorage? history, PostgresEntityOutboxStorage? outbox)
+    {
         ArgumentNullException.ThrowIfNull(persistence);
         ArgumentNullException.ThrowIfNull(sources);
         RequirePersistence(persistence);
-        var repositories = new ServicePersistenceBuilder(persistence.ForServices(receipts));
+        var repositories = new ServicePersistenceBuilder(persistence.ForServices(receipts, history, outbox));
         foreach (var source in sources)
         {
             ArgumentNullException.ThrowIfNull(source);

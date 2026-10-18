@@ -185,7 +185,7 @@ to those plans without rediscovering the split or recompiling the physical remai
 
 ## Storage preparation and native resource ownership
 
-`StorageModel` owns native mappings, receipt configuration and a single offline composition. The PostgreSQL
+`StorageModel` owns native mappings, receipt/history/outbox configuration and a single offline composition. The PostgreSQL
 example composes its endpoint plan with `PostgresStorageComposition`; the mixed example uses
 `ComposeServices` with its declared Cosmos source. Infrastructure consumes this same preparation through
 `RequireComposition<T>()`. There is no extra `Preparation` property or application-owned mixed-store `Bind` recipe.
@@ -204,11 +204,16 @@ await app.RunAsync();
 ```
 
 The runnable demo uses the asynchronous preparation overload to perform **explicit demo schema initialization**
-and attach Marten history/outbox before returning the composed service persistence. Receipt initialization belongs to the storage declaration: both demos opt into
-`TransitionReceipts(options, initialization: PostgresReceiptSchemaInitialization.CreateIfMissing)`.
+for product tables. The PostgreSQL model declares history authority, reconstitution and outbox options;
+async preparation resolves the keyed DI Marten store and validates its exact shared data source before
+initialization. Receipts, history and outbox default to `ValidateOnly`. The demos explicitly opt into
+`CreateIfMissing`; Marten uses native `CreateOnly` and then checks schema equality. Receipt initialization
+also belongs to the storage declaration: both demos opt into
+`TransitionReceipts(options, initialization: PostgresSchemaInitialization.CreateIfMissing)`.
 Async composition creates the receipt table if missing, then validates its columns and uniqueness fences.
 The default `ValidateOnly` performs no DDL; incompatible tables always require an explicit migration.
-This creates neither the enclosing schema nor cloud resources. Cosmos container metadata remains validation-only.
+Receipt/outbox bootstrap does not create the enclosing schema or cloud resources. Marten owns its
+configured schema objects, including its event schema. Cosmos container metadata remains validation-only.
 Coordinate concurrent-host schema bootstrap externally; failures are not automatically retried.
 Registration performs no native IO. Mapping awaits one cached preparation; failure or cancellation prevents
 route publication and remains failed for that host. Rebuild the host after correcting configuration.

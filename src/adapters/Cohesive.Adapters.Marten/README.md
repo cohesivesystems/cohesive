@@ -27,6 +27,22 @@ var services = persistence.ForServices(receipts, history, outbox);
 native data source and store alive for the attachment lifetime. Configure `AutoCreate.None`
 to prevent implicit native migrations. Native Marten configuration remains available.
 
+## Storage-model preparation
+
+Declare `bindings.History(new MartenEntityHistoryConfiguration(authority, reconstitution))` alongside
+`bindings.Outbox(options)` and receipts. Both native and composite service preparation borrow the
+`IDocumentStore` keyed by the existing database resource name from DI and require the exact relational
+`NpgsqlDataSource` before any history DDL. Clients remain DI-owned; model construction performs no IO.
+
+`ValidateOnly` is the default. Explicit `initialization: PostgresSchemaInitialization.CreateIfMissing`
+uses native Marten `AutoCreate.CreateOnly`, followed by schema validation. It does not update or remove
+existing objects. This covers all objects configured in that store, so dedicate the store to history if
+schema ownership must be isolated. Keep `AutoCreate.None` on the native store. Cancellation reaches
+native preparation, reconnection retries are disabled, and a failure may leave created objects behind;
+inspect and repair before rebuilding the host. No lifecycle callback disposes borrowed clients.
+Authority/reconstitution are immutable model policy; changing authority on existing streams still requires
+an explicit migration. Product tables, delivery workers and retention are outside this initialization.
+
 ## One commit boundary
 
 The PostgreSQL repository owns a connection and transaction. Each Marten session enlists

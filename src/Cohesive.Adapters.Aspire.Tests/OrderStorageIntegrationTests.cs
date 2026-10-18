@@ -35,7 +35,7 @@ public sealed partial class OrderStorageIntegrationTests
         var table = "receipts_" + Guid.NewGuid().ToString("N");
         var bindings = Cohesive.Adapters.Postgres.PostgresPersistenceBindings.Define(new("test"), storage => storage
             .TransitionReceipts(new("public", table, "local"),
-                Cohesive.Adapters.Postgres.PostgresReceiptSchemaInitialization.CreateIfMissing));
+                Cohesive.Adapters.Postgres.PostgresSchemaInitialization.CreateIfMissing));
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => bindings.PrepareReceiptsAsync(database, canceled.Token));

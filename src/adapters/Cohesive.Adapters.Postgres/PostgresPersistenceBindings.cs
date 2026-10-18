@@ -32,7 +32,7 @@ public sealed partial class PostgresPersistenceBindings
     public PostgresTransitionReceiptOptions? ReceiptOptions { get; private set; }
 
     /// <summary>Schema admission policy applied during async runtime preparation.</summary>
-    public PostgresReceiptSchemaInitialization ReceiptInitialization { get; private set; }
+    public PostgresSchemaInitialization ReceiptInitialization { get; private set; }
 
     /// <summary>Prepares configured receipts against a borrowed native data source.</summary>
     /// <param name="database">Native database shared with entity repositories.</param>
@@ -50,7 +50,7 @@ public sealed partial class PostgresPersistenceBindings
         ArgumentNullException.ThrowIfNull(database);
         _ = state.Value;
         if (ReceiptOptions is not { } options) return null;
-        if (ReceiptInitialization == PostgresReceiptSchemaInitialization.CreateIfMissing)
+        if (ReceiptInitialization == PostgresSchemaInitialization.CreateIfMissing)
         {
             await using var create = database.CreateCommand(options.SchemaSql);
             await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -65,7 +65,7 @@ public sealed partial class PostgresPersistenceBindings
     /// <exception cref="ArgumentNullException">Options are null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Initialization policy is unknown.</exception>
     /// <exception cref="InvalidOperationException">Already configured or frozen.</exception>
-    public PostgresPersistenceBindings TransitionReceipts(PostgresTransitionReceiptOptions options, PostgresReceiptSchemaInitialization initialization = PostgresReceiptSchemaInitialization.ValidateOnly)
+    public PostgresPersistenceBindings TransitionReceipts(PostgresTransitionReceiptOptions options, PostgresSchemaInitialization initialization = PostgresSchemaInitialization.ValidateOnly)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (!Enum.IsDefined(initialization)) throw new ArgumentOutOfRangeException(nameof(initialization));

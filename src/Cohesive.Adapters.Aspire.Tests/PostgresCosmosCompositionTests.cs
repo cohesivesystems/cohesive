@@ -73,7 +73,7 @@ public sealed class PostgresCosmosCompositionTests
         var missing = Assert.Throws<RelationQueryPreparationException>(() => orders.QueryComposed(model.Queries.OrderDetails,
             new EntityRelationQuerySourceCatalog([]), PostgresCosmosStorage.Policy(1000, 1_000_000)));
         Assert.Equal("postgres.composed.remoteMappingMissing", missing.Code);
-        var full = new FulfillmentStorage(model.Domain, new FulfillmentPostgresMappings(model.Domain), model.Endpoints).Bindings.Bind(database, authority: "test/fulfillment");
+        var full = new FulfillmentStorage(model.Domain, new FulfillmentPostgresMappings(model.Domain), model.Endpoints, new()).Bindings.Bind(database, authority: "test/fulfillment");
         var ambiguous = Assert.Throws<RelationQueryPreparationException>(() => full.QueryComposed(model.Queries.OrderDetails,
             catalog, PostgresCosmosStorage.Policy(1000, 1_000_000)));
         Assert.Equal("postgres.composed.placementAmbiguous", ambiguous.Code);

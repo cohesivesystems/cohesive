@@ -12,7 +12,11 @@ using Npgsql;
 using Cohesive.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
-var model = ModelActivator.Create<FulfillmentApplication>();
+var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy
+{
+    Authority = builder.Configuration.GetValue("EntityState:Authority", EntityStateAuthority.State),
+    Reconstitution = builder.Configuration.GetValue("EntityState:Reconstitution", EntityReconstitutionMode.CheckpointAndTail)
+}));
 builder.Services.AddRequestOperationContext();
 builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
 builder.Services.AddCohesiveExceptionHandling();
@@ -28,29 +32,18 @@ builder.Services.AddKeyedSingleton<IDocumentStore>(FulfillmentStoragePolicy.Orde
     options.Events.StreamIdentity = StreamIdentity.AsString;
     options.Events.AddEventType<EntityStateEvent>();
 }));
-// The application explicitly owns demo schema initialization; library binding only validates it.
+// Product table migrations remain explicit; auxiliary persistence policy belongs to the storage model.
 builder.Services.AddCohesiveServices(model.Endpoints, async (services, cancellationToken) =>
 {
     var database = services.GetRequiredKeyedService<NpgsqlDataSource>(FulfillmentStoragePolicy.OrdersDatabaseName);
 
-    // Application and history migrations remain explicit; receipt bootstrap belongs to storage configuration.
+    // Initialize product tables before preparing the configured history, outbox and receipts.
     using (var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")
         ?? throw new InvalidOperationException("The explicit order schema resource is missing.")))
     await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync(cancellationToken)))
         await initialize.ExecuteNonQueryAsync(cancellationToken);
 
-    // Authority is a storage choice. Commands, transitions, queries and API contracts stay unchanged.
-    // Use a fresh database when changing authority; an existing history requires explicit migration.
-    var authority = builder.Configuration.GetValue("EntityState:Authority", EntityStateAuthority.State);
-    var replay = builder.Configuration.GetValue("EntityState:Reconstitution", EntityReconstitutionMode.CheckpointAndTail);
-    var eventStore = services.GetRequiredKeyedService<IDocumentStore>(FulfillmentStoragePolicy.OrdersDatabaseName);
-    await eventStore.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
-    var historyStorage = await MartenEntityHistoryStorage.BindAsync(database, eventStore, authority, replay);
-    var outbox = new PostgresEntityOutboxOptions("public", "cohesive_transition_outbox");
-    await using (var initializeOutbox = database.CreateCommand(outbox.SchemaSql))
-        await initializeOutbox.ExecuteNonQueryAsync(cancellationToken);
-    var outboxStorage = await outbox.BindAsync(database);
-    return await model.Storage.RequireComposition<PostgresStorageComposition>().BindAsync(services, historyStorage, outboxStorage, cancellationToken);
+    return await model.Storage.RequireComposition<PostgresStorageComposition>().BindAsync(services, cancellationToken);
 });
 
 await using var app = builder.Build();

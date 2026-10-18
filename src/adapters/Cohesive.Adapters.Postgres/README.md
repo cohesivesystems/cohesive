@@ -255,8 +255,10 @@ See the [PostgreSQL example authority walkthrough](../../../eng/examples/aspire-
 for the replacement-action contract, bounds, concurrency and migration limits.
 
 Receipt schema admission can also be owned by `PostgresPersistenceBindings.TransitionReceipts(options,
-initialization: PostgresReceiptSchemaInitialization.CreateIfMissing)`. Native and composed service preparation
+initialization: PostgresSchemaInitialization.CreateIfMissing)`. Native and composed service preparation
 share `PrepareReceiptsAsync`: create a missing receipt table in an existing schema, then validate it.
 The default is `ValidateOnly`; incompatible tables are never altered. Offline model construction performs no IO.
 Host preparation runs once before route/worker admission; direct rebinding repeats validation. Coordinate
-bootstrap between concurrent hosts externally. Application, history and outbox migrations remain explicit.
+bootstrap between concurrent hosts externally. Product table migrations remain explicit. `History(configuration)` and `Outbox(options, initialization)`
+are optional model-owned attachments. History is prepared by its adapter; PostgreSQL remains independent
+of Marten. Outbox initialization follows the same validation-only default and explicit create/validate policy.

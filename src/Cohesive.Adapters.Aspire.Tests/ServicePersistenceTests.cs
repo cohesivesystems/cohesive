@@ -13,14 +13,18 @@ public sealed class ServicePersistenceTests
     public void Unknown_receipt_initialization_fails_during_authoring()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => PostgresPersistenceBindings.Define(new("test"), storage =>
-            storage.TransitionReceipts(new("public", "receipts", "local"), (PostgresReceiptSchemaInitialization)42)));
+            storage.TransitionReceipts(new("public", "receipts", "local"), (PostgresSchemaInitialization)42)));
     }
 
     [Fact]
     public void Receipt_policy_is_model_owned_and_frozen_with_native_mappings()
     {
         var model = ModelActivator.Create<FulfillmentApplication>();
-        Assert.Equal(PostgresReceiptSchemaInitialization.CreateIfMissing, model.Storage.Bindings.ReceiptInitialization);
+        Assert.Equal(PostgresSchemaInitialization.CreateIfMissing, model.Storage.Bindings.ReceiptInitialization);
+        Assert.IsType<Cohesive.Adapters.Marten.MartenEntityHistoryConfiguration>(model.Storage.Bindings.HistoryConfiguration);
+        Assert.NotNull(model.Storage.Bindings.OutboxOptions);
+        Assert.Throws<InvalidOperationException>(() => model.Storage.Bindings.History(new Cohesive.Adapters.Marten.MartenEntityHistoryConfiguration()));
+        Assert.Throws<InvalidOperationException>(() => model.Storage.Bindings.Outbox(new("public", "other_outbox")));
         Assert.Equal(FulfillmentStoragePolicy.LocalPartition, model.Storage.Bindings.ReceiptOptions!.PartitionKey);
         Assert.Throws<InvalidOperationException>(() => model.Storage.Bindings.TransitionReceipts(
             new("public", "other_receipts", "other")));

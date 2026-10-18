@@ -1,5 +1,6 @@
 using Cohesive.Adapters.Postgres;
 using Cohesive.Storage;
+using Cohesive.Adapters.Marten;
 using Cohesive.Adapters.Postgres.Services;
 
 namespace AspireFirst.Orders;
@@ -10,14 +11,19 @@ public sealed class FulfillmentStorage : StorageModel
     /// <summary>Builds immutable offline mappings without opening a connection.</summary>
     /// <param name="domain">Shared canonical entities.</param>
     /// <param name="endpoints">Shared endpoint selections.</param>
+    /// <param name="history">Environment-selected authority and reconstitution, captured by this model.</param>
     /// <param name="mappings">Shared native table mappings.</param>
-    public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints)
+    public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints, FulfillmentHistoryPolicy history)
     {
         Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
             new(FulfillmentStoragePolicy.OrdersDatabaseName), storage =>
             {
                 storage.TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition),
-                initialization: PostgresReceiptSchemaInitialization.CreateIfMissing);
+                initialization: PostgresSchemaInitialization.CreateIfMissing);
+                storage.History(new MartenEntityHistoryConfiguration(history.Authority, history.Reconstitution,
+                    initialization: PostgresSchemaInitialization.CreateIfMissing));
+                storage.Outbox(new("public", "cohesive_transition_outbox"),
+                    initialization: PostgresSchemaInitialization.CreateIfMissing);
                 storage.Entity(domain.Orders, mappings.Orders);
                 storage.Entity(domain.Reservations, mappings.Reservations);
                 storage.Entity(domain.Inventory, mappings.Inventory);
@@ -67,4 +73,13 @@ public static class FulfillmentStoragePolicy
     /// <summary>Logical scope shared by the composed acquisition sources.</summary>
     public const string LogicalPartition = "aspire-first/" + LocalPartition;
 
+}
+
+/// <summary>Demo environment selection; switching authority for existing data requires migration.</summary>
+public sealed class FulfillmentHistoryPolicy
+{
+    /// <summary>Authoritative entity representation.</summary>
+    public EntityStateAuthority Authority { get; init; } = EntityStateAuthority.State;
+    /// <summary>History read policy.</summary>
+    public EntityReconstitutionMode Reconstitution { get; init; } = EntityReconstitutionMode.CheckpointAndTail;
 }
