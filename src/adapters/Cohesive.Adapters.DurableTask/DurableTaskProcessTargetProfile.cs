@@ -18,11 +18,11 @@ public static class DurableTaskProcessTargetProfile
 
     /// <summary>Stable identity of the current realization-planning profile.</summary>
     public static ProcessInterpreterCapabilityProfileId PlanningProfileId { get; } = new(
-        "cohesive.adapters.durable-task.scheduler/realization-planning-v2");
+        "cohesive.adapters.durable-task.scheduler/realization-planning-v3");
 
     /// <summary>Stable identity of the bounded, conformance-tested executable profile.</summary>
     public static ProcessInterpreterCapabilityProfileId ExecutableProfileId { get; } = new(
-        "cohesive.adapters.durable-task.scheduler/executable-v3");
+        "cohesive.adapters.durable-task.scheduler/executable-v4");
 
     /// <summary>
     /// Boundary requiring every externally visible effect to supply stable idempotency or authored reconciliation.
@@ -45,6 +45,10 @@ public static class DurableTaskProcessTargetProfile
     /// </summary>
     public static ProcessInterpreterOperatingBoundaryId PayloadBoundary { get; } = new(
         "durable-task/boundary/payload-limit-redaction-and-externalization/v1");
+
+    /// <summary>Observational activities may be redelivered; deadlines wait for cooperative host quiescence.</summary>
+    public static ProcessInterpreterOperatingBoundaryId ReadProgressBoundary { get; } = new(
+        "durable-task/boundary/read-redelivery-and-cooperative-deadline/v1");
 
     /// <summary>
     /// Complete planning profile. Every currently declared canonical construct and guarantee has one explicit
@@ -183,6 +187,11 @@ public static class DurableTaskProcessTargetProfile
                 "validated-payload-externalization",
                 ["canonical-payload-contracts", "content-addressed-payload-reference"],
                 [PayloadBoundary]),
+            ConstrainedGuarantee(
+                ProcessInterpreterGuarantees.DurableReadProgress,
+                "history-backed-read-attempts",
+                ["orchestration-history", "durable-timers"],
+                [ReadProgressBoundary]),
             UnavailableGuarantee(
                 ProcessInterpreterGuarantees.WholeDefinitionAtomicity,
                 "multi-resource-atomicity")
@@ -306,6 +315,11 @@ public static class DurableTaskProcessTargetProfile
                 "validated-payload-boundary",
                 ["canonical-payload-contracts", "content-addressed-payload-reference"],
                 [PayloadBoundary]),
+            ExecutableConstrainedGuarantee(
+                ProcessInterpreterGuarantees.DurableReadProgress,
+                "history-backed-read-attempts",
+                ["orchestration-history", "durable-timers"],
+                [ReadProgressBoundary]),
             ExecutableUnavailableGuarantee(
                 ProcessInterpreterGuarantees.WholeDefinitionAtomicity,
                 "multi-resource-atomicity")

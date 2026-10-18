@@ -120,6 +120,24 @@ public sealed class ServiceBuilder
         Func<ValueContract, IEntityRepository> repositories, InteractionContractCatalog? contracts = null) =>
         Service.Bind(Build(), process, Dependencies, repositories, contracts);
 
+    /// <summary>Prepares one declared process and its generated dependencies without selecting an execution provider.</summary>
+    /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process result.</typeparam>
+    /// <param name="process">Exact declared process.</param><param name="repositories">Native observation-contract resolver.</param>
+    /// <param name="contracts">Optional interaction contracts.</param><returns>Reusable native preparation.</returns>
+    /// <exception cref="ServiceBindingValidationException">The process is undeclared or dependencies are invalid.</exception>
+    public PreparedServiceProcess PrepareProcess<TInput, TResult>(Process<TInput, TResult> process,
+        Func<ValueContract, IEntityRepository> repositories, InteractionContractCatalog? contracts = null)
+    {
+        ArgumentNullException.ThrowIfNull(process); ArgumentNullException.ThrowIfNull(repositories);
+        var declaration = Build();
+        if (!declaration.GetDefinition<ServiceDefinition>().Operations.OfType<ServiceProcessOperation>().Any(item => item.Process == process.Reference))
+            throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.ProcessSelectionInvalid,
+                "Prepare a process declared by this service.", "/bindings/process");
+        var preparation = new ServiceProcessHostBuilder<TInput, TResult>(null, "", process, contracts);
+        preparation.Use(Dependencies, repositories);
+        return preparation.Prepare();
+    }
+
     /// <summary>Adds a requirement inherited by subsequently declared operations.</summary>
     /// <remarks>Earlier operations retain their declared requirements; repeated requirements are idempotent.</remarks>
     public ServiceBuilder Require(ApiAuthorizationRequirement requirement)
@@ -288,8 +306,13 @@ public sealed class ServiceOperationBuilder
     }
 
     /// <summary>Completes the operation with durable admission; the response does not promise Process completion.</summary>
-    public ServiceBuilder ReturnAfterDurableAdmission() => Complete(
-        new(ProcessExecutionLifetime.Durable, ServiceProcessCompletion.Admission));
+    public ServiceBuilder ReturnAfterDurableAdmission() => ReturnAfterAdmission(ProcessExecutionLifetime.Durable);
+
+    /// <summary>Declares admission independently of its host-owned or durable execution lifetime.</summary>
+    /// <param name="lifetime">Required execution ownership; invocation-local execution cannot outlive a request.</param>
+    /// <returns>The service containing this admission operation.</returns>
+    public ServiceBuilder ReturnAfterAdmission(ProcessExecutionLifetime lifetime) => Complete(
+        new(lifetime, ServiceProcessCompletion.Admission));
 
     ServiceBuilder Complete(ServiceProcessExecution execution, ExecutionDefinitionReference? classifier = null) => service.Add(new ServiceProcessOperation(id,
         process ?? throw new InvalidOperationException("Select the Process with Run before choosing its execution policy."), requirements, execution, classifier));

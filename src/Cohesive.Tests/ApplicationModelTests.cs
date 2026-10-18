@@ -1,4 +1,5 @@
 using Cohesive.Host.Composition;
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Prelude;
 using Cohesive.Execution;
 
@@ -9,11 +10,13 @@ public sealed class ApplicationModelTests
     public sealed class Dependency : IAuthoringModel
     {
         public bool Completed { get; private set; }
-        public void Complete() => Completed = true;
+        public int CompletionCount { get; private set; }
+        public void Complete() { Completed = true; CompletionCount++; }
     }
     public sealed class Consumer(Dependency dependency)
     {
         public Dependency Dependency { get; } = dependency;
+        public bool PreparedAtConstruction { get; } = dependency.Completed;
     }
     public sealed class First : IExecutionDefinitionModel
     {
@@ -26,6 +29,358 @@ public sealed class ApplicationModelTests
     public sealed class CycleA(CycleB other) { public CycleB Other { get; } = other; }
     public sealed class CycleB(CycleA other) { public CycleA Other { get; } = other; }
 
+    public sealed class Application(Dependency dependency, Consumer consumer) : ApplicationModel
+    {
+        public Dependency Dependency { get; } = dependency;
+        public Consumer Consumer { get; } = consumer;
+    }
+    public interface ISettings { string Name { get; } }
+    public sealed class Settings : ISettings { public string Name => "selected"; }
+    public sealed class Configured(ISettings settings) { public ISettings Settings { get; } = settings; }
+    public sealed class DisposableModel : IDisposable { public void Dispose() { } }
+    public sealed class InvalidDependency : IAuthoringModel
+    {
+        public void Complete() => throw new InvalidOperationException("invalid declaration");
+    }
+    public sealed class MustNotConstruct
+    {
+        public MustNotConstruct(InvalidDependency dependency) => throw new Exception("Consumer must not run before invalid dependency fails.");
+    }
+
+    public sealed record FirstBindings(string Database);
+    public sealed record SecondBindings(string Database);
+    public sealed class NativeStorage : Cohesive.Storage.StorageModel
+    {
+        public NativeStorage()
+        {
+            First = Storage.Define(() => new FirstBindings("orders"));
+            Second = Storage.Define(() => new SecondBindings("inventory"));
+        }
+        public FirstBindings First { get; }
+        public SecondBindings Second { get; }
+        public void AddLate() => Storage.Define(() => new FirstBindings("late"));
+    }
+
+    public abstract class InitApplicationBase : ApplicationModel
+    {
+        public required Dependency Dependency { get; init; }
+    }
+    public sealed class InitApplication : InitApplicationBase, IAuthoringModel
+    {
+        public required Consumer Consumer { get; init; }
+        public required Dependency Alias { get; init; }
+        public bool Completed { get; private set; }
+        public void Complete()
+        {
+            Assert.True(Dependency.Completed);
+            Assert.Same(Dependency, Consumer.Dependency);
+            Assert.Same(Dependency, Alias);
+            Completed = true;
+        }
+    }
+    public sealed class InitCycle : ApplicationModel
+    {
+        public required RootConsumer Consumer { get; init; }
+    }
+    public sealed class RootConsumer(InitCycle root) { public InitCycle Root { get; } = root; }
+    public sealed class InterfaceRoot : ApplicationModel
+    {
+        public required ISettings Settings { get; init; }
+    }
+    public sealed class MutableRoot : ApplicationModel
+    {
+        public required Dependency Dependency { get; set; }
+    }
+    public sealed class FieldRoot : ApplicationModel
+    {
+        public required Dependency Dependency;
+    }
+    public sealed class InvalidInitDependencyRoot : ApplicationModel
+    {
+        public required InvalidDependency Dependency { get; init; }
+        public InvalidInitDependencyRoot() => throw new Exception("Root must not construct before dependency completion.");
+    }
+
+    [Fact]
+    public void Init_polyfill_from_another_assembly_is_supported()
+    {
+        var assembly = System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
+            new System.Reflection.AssemblyName("InitPolyfillFixture"),
+            System.Reflection.Emit.AssemblyBuilderAccess.RunAndCollect);
+        var module = assembly.DefineDynamicModule("fixture");
+        var marker = module.DefineType("System.Runtime.CompilerServices.IsExternalInit",
+            System.Reflection.TypeAttributes.Public).CreateType()!;
+        Assert.NotEqual(typeof(System.Runtime.CompilerServices.IsExternalInit), marker);
+        var type = module.DefineType("PolyfillRoot", System.Reflection.TypeAttributes.Public, typeof(ApplicationModel));
+        type.DefineDefaultConstructor(System.Reflection.MethodAttributes.Public);
+        var field = type.DefineField("_dependency", typeof(Dependency), System.Reflection.FieldAttributes.Private);
+        var property = type.DefineProperty("Dependency", System.Reflection.PropertyAttributes.None, typeof(Dependency), null);
+        var getter = type.DefineMethod("get_Dependency", System.Reflection.MethodAttributes.Public |
+            System.Reflection.MethodAttributes.SpecialName, typeof(Dependency), Type.EmptyTypes);
+        var il = getter.GetILGenerator();
+        il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+        il.Emit(System.Reflection.Emit.OpCodes.Ldfld, field);
+        il.Emit(System.Reflection.Emit.OpCodes.Ret);
+        var setter = type.DefineMethod("set_Dependency", System.Reflection.MethodAttributes.Public |
+            System.Reflection.MethodAttributes.SpecialName, System.Reflection.CallingConventions.HasThis,
+            typeof(void), [marker], null, [typeof(Dependency)], null, null);
+        il = setter.GetILGenerator();
+        il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+        il.Emit(System.Reflection.Emit.OpCodes.Ldarg_1);
+        il.Emit(System.Reflection.Emit.OpCodes.Stfld, field);
+        il.Emit(System.Reflection.Emit.OpCodes.Ret);
+        property.SetGetMethod(getter);
+        property.SetSetMethod(setter);
+        property.SetCustomAttribute(new System.Reflection.Emit.CustomAttributeBuilder(
+            typeof(System.Runtime.CompilerServices.RequiredMemberAttribute).GetConstructor(Type.EmptyTypes)!, []));
+        var rootType = type.CreateType()!;
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ApplicationModel), rootType);
+        services.AddSingleton<Dependency>();
+        var prepared = new ApplicationModelBuilder(services).Build();
+        Assert.Same(prepared.Get<Dependency>(), rootType.GetProperty("Dependency")!.GetValue(prepared.Get<ApplicationModel>()));
+    }
+
+    public sealed class RequiredNonRoot : IAuthoringModel
+    {
+        public required Dependency Dependency { get; init; }
+        public int CompletionCount { get; private set; }
+        public void Complete()
+        {
+            Assert.True(Dependency.Completed);
+            CompletionCount++;
+        }
+    }
+    public sealed class RequiredConsumer(RequiredNonRoot model, Dependency dependency)
+    {
+        public RequiredNonRoot Model { get; } = model;
+        public bool ReadyAtConstruction { get; } = model.CompletionCount == 1 && ReferenceEquals(model.Dependency, dependency);
+    }
+    public sealed class RequiredCycleA { public required RequiredCycleB Other { get; init; } }
+    public sealed class RequiredCycleB(RequiredCycleA other) { public RequiredCycleA Other { get; } = other; }
+    public sealed class MixedInvalidDependency(InvalidDependency invalid)
+    {
+        public InvalidDependency Invalid { get; } = invalid;
+        public required Dependency Dependency { get; init; }
+    }
+    public sealed class MixedRoot(Dependency dependency) : ApplicationModel
+    {
+        public Dependency ConstructorDependency { get; } = dependency;
+        public required Dependency Dependency { get; init; }
+    }
+    public sealed class EarlyReadRoot : ApplicationModel
+    {
+        public required Dependency Dependency { get; init; }
+        public EarlyReadRoot() => _ = Dependency!.Completed;
+    }
+
+    [Fact]
+    public void Non_root_required_components_complete_before_constructor_consumers()
+    {
+        var model = ModelActivator.Create<RequiredConsumer>();
+        Assert.True(model.ReadyAtConstruction);
+        Assert.Equal(1, model.Model.CompletionCount);
+    }
+
+    [Fact]
+    public void Factory_cannot_leave_non_root_required_members_null()
+    {
+        var builder = new ApplicationModelBuilder().Add(_ => new RequiredNonRoot { Dependency = null! });
+        Assert.Contains("RequiredNonRoot.Dependency", Assert.Throws<InvalidOperationException>(() => builder.Build()).Message);
+    }
+
+    [Fact]
+    public void Constructor_and_property_injection_share_completed_dependencies()
+    {
+        var root = ModelActivator.Create<MixedRoot>();
+        Assert.Same(root.ConstructorDependency, root.Dependency);
+        Assert.True(root.Dependency.Completed);
+        Assert.Equal(1, root.Dependency.CompletionCount);
+    }
+
+    [Fact]
+    public void Mixed_non_root_dependency_cycle_fails_without_publishing_partial_instances()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<RequiredCycleA>());
+        Assert.Contains("Cyclic", error.Message);
+        Assert.Contains(nameof(RequiredCycleA), error.Message);
+        Assert.Contains(nameof(RequiredCycleB), error.Message);
+    }
+
+    [Fact]
+    public void Direct_builder_resolves_non_root_required_properties_once()
+    {
+        var builder = new ApplicationModelBuilder().Add<RequiredNonRoot>().Add<Dependency>();
+        var prepared = builder.Build();
+        Assert.Same(prepared, builder.Build());
+        Assert.Same(prepared.Get<Dependency>(), prepared.Get<RequiredNonRoot>().Dependency);
+        Assert.Equal(1, prepared.Get<RequiredNonRoot>().CompletionCount);
+    }
+
+    [Fact]
+    public void Constructor_dependency_failure_is_not_misreported_as_an_early_property_read()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<MixedInvalidDependency>());
+        Assert.Equal("invalid declaration", error.Message);
+    }
+
+    [Fact]
+    public void Explicit_factory_owns_mixed_root_initialization()
+    {
+        var dependency = new Dependency();
+        var root = ModelActivator.Create<MixedRoot>(services =>
+            services.AddSingleton(_ => new MixedRoot(dependency) { Dependency = dependency }));
+        Assert.Same(root.ConstructorDependency, root.Dependency);
+    }
+
+    [Fact]
+    public void Early_property_read_reports_boundary_and_original_cause()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<EarlyReadRoot>());
+        Assert.Contains("EarlyReadRoot", error.Message);
+        Assert.Contains("before required init components were assigned", error.Message);
+        Assert.IsType<NullReferenceException>(error.GetBaseException());
+    }
+
+    [Fact]
+    public void Required_init_components_share_completed_dependencies_and_support_inherited_members()
+    {
+        var first = ModelActivator.Create<InitApplication>();
+        var second = ModelActivator.Create<InitApplication>();
+        Assert.True(first.Completed);
+        Assert.True(first.Consumer.PreparedAtConstruction);
+        Assert.Same(first.Dependency, first.Composition.Get<Dependency>());
+        Assert.Equal(1, first.Dependency.CompletionCount);
+        Assert.NotSame(first.Dependency, second.Dependency);
+    }
+
+    [Fact]
+    public void Required_init_properties_resolve_explicit_interface_registrations()
+    {
+        var model = ModelActivator.Create<InterfaceRoot>(services => services.AddSingleton<ISettings, Settings>());
+        Assert.Equal("selected", model.Settings.Name);
+        Assert.Contains(nameof(ISettings), Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<InterfaceRoot>()).Message);
+    }
+
+    [Fact]
+    public void Required_init_dependencies_preserve_cycle_detection()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<InitCycle>());
+        Assert.Contains(nameof(InitCycle), error.Message);
+        Assert.Contains(nameof(RootConsumer), error.Message);
+    }
+
+    [Fact]
+    public void Required_init_dependency_failure_precedes_root_construction() =>
+        Assert.Equal("invalid declaration", Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<InvalidInitDependencyRoot>()).Message);
+
+    [Fact]
+    public void Required_mutable_properties_and_fields_are_rejected()
+    {
+        Assert.Contains("init-only", Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<MutableRoot>()).Message);
+        Assert.Contains("init-only", Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<FieldRoot>()).Message);
+    }
+
+    [Fact]
+    public void Explicit_root_factory_cannot_publish_null_required_properties()
+    {
+        var builder = new ApplicationModelBuilder().Add<InterfaceRoot>(_ => new InterfaceRoot { Settings = null! });
+        var error = Assert.Throws<InvalidOperationException>(() => builder.Build());
+        Assert.Contains("InterfaceRoot.Settings", error.Message);
+        Assert.Same(error, Assert.Throws<InvalidOperationException>(() => builder.Build()));
+    }
+
+    [Fact]
+    public void Explicit_root_factory_retains_its_initialized_components()
+    {
+        var settings = new Settings();
+        var root = ModelActivator.Create<InterfaceRoot>(services => services.AddSingleton(_ => new InterfaceRoot { Settings = settings }));
+        Assert.Same(settings, root.Settings);
+    }
+
+    [Fact]
+    public void Direct_builder_requires_property_dependencies_to_be_registered()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => new ApplicationModelBuilder().Add<InterfaceRoot>().Build());
+        Assert.Contains("InterfaceRoot.Settings", error.Message);
+        var builder = new ApplicationModelBuilder().Add<InitApplication>().Add<Consumer>().Add<Dependency>();
+        Assert.True(builder.Build().Get<InitApplication>().Completed);
+    }
+
+    [Fact]
+    public void Storage_model_owns_multiple_native_binding_types_in_declaration_order()
+    {
+        var model = ModelActivator.Create<NativeStorage>();
+        Assert.Collection(model.Definition,
+            value => Assert.Same(model.First, value),
+            value => Assert.Same(model.Second, value));
+        Assert.Equal(model.Definition, model.Definition);
+        Assert.Throws<InvalidOperationException>(model.AddLate);
+    }
+
+    [Fact]
+    public void Storage_builder_runs_each_recipe_once_and_rejects_edits_after_build()
+    {
+        var calls = 0;
+        var builder = new Cohesive.Storage.StorageModelBuilder();
+        var native = builder.Define(() => { calls++; return new FirstBindings("orders"); });
+        Assert.Equal(1, calls);
+        Assert.Same(native, Assert.Single(builder.Build()));
+        Assert.Equal(builder.Build(), builder.Build());
+        Assert.Throws<InvalidOperationException>(() => builder.Define(() => { calls++; return native; }));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public void Failed_storage_recipe_does_not_publish_a_contribution()
+    {
+        var builder = new Cohesive.Storage.StorageModelBuilder();
+        var failure = new InvalidOperationException("invalid mapping");
+        Assert.Same(failure, Assert.Throws<InvalidOperationException>(() => builder.Define<object>(() => throw failure)));
+        Assert.Throws<InvalidOperationException>(() => builder.Define<object>(() => null!));
+        Assert.Throws<ArgumentNullException>(() => builder.Define<object>(null!));
+        Assert.Empty(builder.Build());
+    }
+
+    [Fact]
+    public void Activation_infers_shared_dependencies_and_prepares_them_before_constructor_consumption()
+    {
+        var first = ModelActivator.Create<Application>();
+        var second = ModelActivator.Create<Application>();
+        Assert.Same(first.Dependency, first.Consumer.Dependency);
+        Assert.True(first.Consumer.PreparedAtConstruction);
+        Assert.Same(first.Dependency, first.Composition.Get<Dependency>());
+        Assert.Equal(1, first.Dependency.CompletionCount);
+        Assert.NotSame(first.Dependency, second.Dependency);
+    }
+
+    [Fact]
+    public void Standard_DI_registration_selects_an_interface_implementation() =>
+        Assert.Equal("selected", ModelActivator.Create<Configured>(services => services.AddSingleton<ISettings, Settings>()).Settings.Name);
+
+    [Fact]
+    public void Activation_rejects_missing_interface_registration() =>
+        Assert.Contains(nameof(ISettings), Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<Configured>()).Message);
+
+    [Fact]
+    public void Activation_reports_cycle_path()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<CycleA>());
+        Assert.Contains(nameof(CycleA), error.Message);
+        Assert.Contains(nameof(CycleB), error.Message);
+    }
+
+    [Fact]
+    public void Invalid_dependency_fails_before_consumer_constructor() =>
+        Assert.Equal("invalid declaration", Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<MustNotConstruct>()).Message);
+
+    [Fact]
+    public void Runtime_resource_and_scoped_registration_are_rejected()
+    {
+        Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<DisposableModel>());
+        Assert.Throws<ArgumentException>(() => ModelActivator.Create<Configured>(services => services.AddScoped<ISettings, Settings>()));
+    }
+
     [Fact]
     public void Constructor_order_is_resolved_and_authoring_completed_once()
     {
@@ -33,6 +388,7 @@ public sealed class ApplicationModelTests
         var model = builder.Build();
         Assert.Same(model.Get<Dependency>(), model.Get<Consumer>().Dependency);
         Assert.True(model.Get<Dependency>().Completed);
+        Assert.True(model.Get<Consumer>().PreparedAtConstruction);
         Assert.Same(model, builder.Build());
         Assert.Throws<InvalidOperationException>(() => builder.Add<First>());
     }

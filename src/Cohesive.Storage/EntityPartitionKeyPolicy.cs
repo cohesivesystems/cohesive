@@ -35,6 +35,27 @@ public sealed class EntityPartitionKeyPolicy
     /// </summary>
     public string Description { get; }
 
+    /// <summary>Fixed placement evidence, present only for a policy created with Fixed.</summary>
+    public string? FixedPartitionKey { get; private init; }
+
+    /// <summary>Uses one partition for every point read and write, optionally checking an observation field.</summary>
+    /// <param name="partitionKey">Required trusted partition value.</param>
+    /// <param name="observationField">If supplied, writes must carry this same value in that field.</param>
+    /// <returns>An immutable policy exposing fixed placement to repository capabilities.</returns>
+    /// <exception cref="ArgumentException">A supplied name or partition is empty, or the partition has surrounding whitespace.</exception>
+    public static EntityPartitionKeyPolicy Fixed(string partitionKey, string? observationField = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
+        if (partitionKey != partitionKey.Trim()) throw new ArgumentException("Fixed partition must not have surrounding whitespace.", nameof(partitionKey));
+        if (observationField is not null) ArgumentException.ThrowIfNullOrWhiteSpace(observationField);
+        return new("fixed partition", (_, snapshot) =>
+        {
+            if (observationField is not null && snapshot.Observation.GetField(observationField).GetRequiredString() != partitionKey)
+                throw new ArgumentException("Observation differs from the fixed storage partition.");
+            return partitionKey;
+        }, (_, _) => partitionKey) { FixedPartitionKey = partitionKey };
+    }
+
     /// <summary>
     /// Default policy that uses the observation id as the partition key for writes and reads.
     /// </summary>

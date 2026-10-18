@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -23,7 +24,15 @@ public sealed class ServiceImplementationPlan
         var errors = definition.Endpoints.Where(endpoint => !supplied.Contains(endpoint.Id))
             .Select(endpoint => new DocumentValidationDiagnostic("services.api.missingImplementation", DiagnosticSeverity.Error,
                 $"Endpoint '{endpoint.Id}' has no implementation.", "/api/implementations")).ToArray();
-        if (errors.Length != 0) throw new ServiceBindingValidationException(new([.. errors]));
+        var links = definition.Operations.Where(operation => operation.ResultOf is not null)
+            .Where(operation => operation.Kind != ApiOperationKind.Query
+                || !definition.TryGetOperation(operation.ResultOf!.Value, out var command)
+                || command.Kind != ApiOperationKind.Command || command.PrimaryResult.Kind != ApiResultKind.Accepted)
+            .Select(operation => new DocumentValidationDiagnostic("services.api.resultLinkInvalid", DiagnosticSeverity.Error,
+                $"Result endpoint '{operation.Id}' must link to a declared admission command.",
+                $"/api/endpoints/{operation.Id.Value.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal)}/resultOf"));
+        var diagnostics = errors.Concat(links).ToArray();
+        if (diagnostics.Length != 0) throw new ServiceBindingValidationException(new([.. diagnostics]));
         return definition;
     });
 
@@ -79,14 +88,15 @@ public sealed class ServiceImplementationPlan
     /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Query result.</typeparam>
     /// <param name="query">Canonical query authority.</param><param name="revision">Semantic revision.</param>
     /// <param name="rows">Maximum result rows.</param><param name="bytes">Maximum decoded bytes.</param>
+    /// <param name="consistency">Required consistency across every read contributing to the result.</param>
     /// <exception cref="ServiceBindingValidationException">The same query has competing bounds or revisions.</exception>
-    public void Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes) =>
+    public void Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes, RelationQueryConsistency consistency) =>
         state.Edit(() =>
         {
             var existing = queries.Queries.FirstOrDefault(item => ReferenceEquals(item.Request, query.CompilationRequest));
-            if (existing is null) queries = queries.Query(query, revision, rows, bytes);
-            else if (existing.Reference.RevisionId != revision || existing.MaximumRows != rows || existing.MaximumBytes != bytes)
-                throw Error("services.api.querySelectionMismatch", "One query authority must have one revision and preparation bound.");
+            if (existing is null) queries = queries.Query(query, revision, rows, bytes, consistency);
+            else if (existing.Reference.RevisionId != revision || existing.MaximumRows != rows || existing.MaximumBytes != bytes || existing.Consistency != consistency)
+                throw Error("services.api.querySelectionMismatch", "One query authority must have one revision, preparation bound and consistency requirement.");
             return this;
         });
 

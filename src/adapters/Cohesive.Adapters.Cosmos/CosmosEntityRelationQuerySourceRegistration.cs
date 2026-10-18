@@ -205,7 +205,7 @@ public static class CosmosEntityRelationQuerySourceRegistration
             concurrencyTokenSemanticPath: concurrencyTokenSemanticPath);
     }
 
-    static string FingerprintBinding(
+    internal static string FingerprintBinding(
         string accountEndpoint,
         string databaseId,
         string containerId,

@@ -279,7 +279,7 @@ public sealed class ServiceQueryRuntimeTests
         var repository = new InMemoryEntityOutboxRepository(entity, _ => "shared", snapshots);
         var registered = EntityRelationQuerySourceRegistration.InMemory(shape.Id, repository, RelationQueryLogicalPartitionIdentity.WholeSource);
         var reader = new CountingReader(registered.Reader);
-        var catalog = new EntityRelationQuerySourceCatalog([new(shape.Id, registered.Source, reader)]);
+        var catalog = new EntityRelationQuerySourceCatalog([new EntityRelationQuerySourceRegistration(shape.Id, registered.Source, reader)]);
         var evaluator = catalog.CreateEvaluator(new(new("tests/services/query"), "tests/v1", 100, 1000, 1000, 100, 100, 4));
         var fixture = new Fixture { Reader = reader };
         var binding = new ServiceQueryBinding("search", new("v1"), compilation, (_, scope) =>

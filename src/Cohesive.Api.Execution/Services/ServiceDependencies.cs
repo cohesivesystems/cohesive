@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Cohesive.Model.Serialization;
 using System.Collections.Immutable;
 using Cohesive.Execution;
@@ -143,7 +144,7 @@ public sealed class ServiceDependencies
     /// <returns>A new immutable registration set.</returns>
     /// <exception cref="ArgumentException">The query is invalid or already selected.</exception>
     public ServiceDependencies Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision,
-        int maximumRows, long maximumBytes, ServiceQueryConsistency consistency = ServiceQueryConsistency.SingleSnapshot)
+        int maximumRows, long maximumBytes, RelationQueryConsistency consistency = RelationQueryConsistency.SingleSnapshot)
     {
         ArgumentNullException.ThrowIfNull(query);
         var reference = ServiceQueryBinding.GetReference(revision, query.CompilationRequest);
@@ -216,8 +217,9 @@ public sealed class ServiceDependencies
 /// <summary>One selected relational query and explicit execution bounds; no runtime data source is retained.</summary>
 public sealed class ServiceQuerySelection
 {
-    internal ServiceQuerySelection(ExecutionDefinitionReference reference, RelationQueryCompilationRequest request, int maximumRows, long maximumBytes, ServiceQueryConsistency consistency)
+    internal ServiceQuerySelection(ExecutionDefinitionReference reference, RelationQueryCompilationRequest request, int maximumRows, long maximumBytes, RelationQueryConsistency consistency)
     {
+        if (!Enum.IsDefined(consistency)) throw new ArgumentOutOfRangeException(nameof(consistency));
         if (!Enum.IsDefined(consistency)) throw new ArgumentOutOfRangeException(nameof(consistency));
         Consistency = consistency;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRows);
@@ -225,7 +227,7 @@ public sealed class ServiceQuerySelection
         Reference = reference; Request = request; MaximumRows = maximumRows; MaximumBytes = maximumBytes;
     }
     /// <summary>Selected acquisition guarantee.</summary>
-    public ServiceQueryConsistency Consistency { get; }
+    public RelationQueryConsistency Consistency { get; }
     /// <summary>Canonical query identity, explicit revision and definition fingerprint.</summary>
     public ExecutionDefinitionReference Reference { get; }
     /// <summary>Exact semantic request.</summary>
@@ -234,13 +236,4 @@ public sealed class ServiceQuerySelection
     public int MaximumRows { get; }
     /// <summary>Decoded-value byte bound.</summary>
     public long MaximumBytes { get; }
-}
-
-/// <summary>Explicit consistency choice for a selected relational query.</summary>
-public enum ServiceQueryConsistency
-{
-    /// <summary>All query reads must share one snapshot.</summary>
-    SingleSnapshot,
-    /// <summary>Sources are acquired independently; no cross-source snapshot is claimed.</summary>
-    IndependentSources
 }

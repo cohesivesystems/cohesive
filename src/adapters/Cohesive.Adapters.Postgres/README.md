@@ -140,7 +140,9 @@ name is replaced by `PostgresPersistenceRegistration.Query` in this unreleased s
 ## Prepared native and composed queries
 
 `PostgresPersistenceRegistration` attaches canonical entities to native repository mappings once.
-`Query` prepares a native typed reader. `QueryComposed(query, projection, remote, policy)` prepares a
+`Query` prepares a native typed reader. `QueryComposed(query, remote, policy)` infers a closed prefix from
+local/remote mappings and fails with `postgres.composed.splitMissing` if none exists.
+`QueryComposed(query, projection, remote, policy)` explicitly overrides that choice and prepares a
 closed native prefix and the remaining query over one remote PostgreSQL registration, reusing those
 same attachments. The policy declares acquisition bounds and a partition scope once. Remaining source
 and traversal mappings are selected from the remote registration; missing mappings or mismatched partition
@@ -222,3 +224,23 @@ connections and results remain invocation-scoped; no query-result cache or globa
 
 Optional [Cohesive.Adapters.Postgres.Infra](../Cohesive.Adapters.Postgres.Infra/README.md) projects prepared
 artifacts into exact infrastructure evidence without adding an Infra dependency to the base adapter.
+
+
+### Heterogeneous composed reads
+
+`QueryComposed(query, EntityRelationQuerySourceCatalog, policy, projection)` accepts canonical remote sources
+such as Cosmos. Without an explicit projection, preparation infers a closed nonterminal projection whose
+inputs are all local and whose remainder inputs are registered remotely. It selects a unique maximal
+supported prefix, validates closure and compiles it as one PostgreSQL statement. Incomparable candidates
+require an explicit projection override (`postgres.composed.splitAmbiguous`). With no supported cut,
+the physical executor acquires local PostgreSQL and registered remote inputs. A shape cannot be placed both
+locally and remotely. Partition identity and source selectors are validated before IO. Both paths prepare
+once and enforce complete-result row/scalar-byte bounds; neither asserts a cross-source snapshot.
+See `eng/examples/aspire-first/PostgresCosmosWorker` for the running consumer.
+
+At host composition, `bindings.Bind(dataSource, authority: "application/host")` attaches a caller-owned
+single-host Npgsql data source using the database identity already declared by those bindings. No wrapper
+method or repeated database ID is required. The authority remains explicit and non-secret. This attests an
+association without database IO; it does not verify the live database name. The explicit
+`Bind(PostgresNpgsqlRuntimeBinding)` overload remains available for advanced configuration, including
+logical replication connections, and retains its database-identity mismatch check.

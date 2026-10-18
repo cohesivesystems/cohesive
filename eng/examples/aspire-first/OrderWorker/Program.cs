@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using AspireFirst;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
@@ -7,18 +8,18 @@ using Cohesive.Adapters.Postgres.Services;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
-var model = new FulfillmentApplication();
+var model = ModelActivator.Create<FulfillmentApplication>();
 builder.Services.AddRequestOperationContext();
 builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
 builder.Services.AddCohesiveExceptionHandling();
-var connectionString = builder.Configuration.GetConnectionString(FulfillmentResources.DatabaseName)
+var connectionString = builder.Configuration.GetConnectionString(FulfillmentStoragePolicy.OrdersDatabaseName)
     ?? throw new InvalidOperationException("The native Aspire orders database reference is required.");
 await using var database = NpgsqlDataSource.Create(connectionString);
-var persistence = model.Storage.Bind(database);
-var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentDemo.LocalPartition);
+var persistence = model.Storage.Bindings.Bind(database, authority: "aspire-first/apphost");
+var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
 
 // The shared repository owns DML and validation, not schema lifecycle.
-using (var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")
+using (var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")
     ?? throw new InvalidOperationException("The explicit order schema resource is missing.")))
 await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync()))
     await initialize.ExecuteNonQueryAsync();
@@ -26,10 +27,11 @@ await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync
 await using (var initializeReceipts = database.CreateCommand(receipts.SchemaSql))
     await initializeReceipts.ExecuteNonQueryAsync();
 var receiptStorage = await receipts.BindAsync(database);
-var services = model.Services.Build(builder.Services, persistence.ForServices(receiptStorage));
+var services = model.Endpoints.Build(builder.Services, persistence.ForServices(receiptStorage));
 
 var app = builder.Build();
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
+app.UseAuthorization();
 app.MapServices(services);
 app.Run();

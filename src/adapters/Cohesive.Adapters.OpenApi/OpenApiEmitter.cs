@@ -121,6 +121,9 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             if (operation.SemanticReferences.Count > 0)
                 node["x-cohesive-semantic-references"] = BuildSemanticReferences(operation.SemanticReferences);
 
+            if (operation.ResultOf is { } command)
+                node["x-cohesive-result-of"] = command.Value;
+
             var parameters = BuildParameters(operation, http);
             if (parameters.Count > 0)
                 node["parameters"] = parameters;

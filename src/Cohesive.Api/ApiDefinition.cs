@@ -478,6 +478,7 @@ public sealed class ApiOperation
     /// <param name="scopePolicies">Optional semantic scope policies.</param>
     /// <param name="authorizationRequirements">Optional transport-neutral authorization requirements.</param>
     /// <param name="semanticReferences">Optional references to exact constructs owned by semantic authorities.</param>
+    /// <param name="resultOf">Optional command endpoint whose retained execution result this operation reads.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="name"/>, <paramref name="requestType"/>, or <paramref name="responseType"/> is
     /// <see langword="null"/>.
@@ -503,8 +504,10 @@ public sealed class ApiOperation
         IReadOnlyList<ApiResultDefinition>? results = null,
         IReadOnlyList<ApiScopePolicy>? scopePolicies = null,
         IReadOnlyList<ApiAuthorizationRequirement>? authorizationRequirements = null,
-        IReadOnlyList<ApiSemanticReference>? semanticReferences = null)
+        IReadOnlyList<ApiSemanticReference>? semanticReferences = null,
+        ApiEndpointId? resultOf = null)
     {
+        ResultOf = resultOf;
         Name = Guard.RequireNotNullOrWhiteSpace(name);
         Id = id ?? new ApiEndpointId(Name);
         Kind = kind;
@@ -540,6 +543,9 @@ public sealed class ApiOperation
     /// Operation kind.
     /// </summary>
     public ApiOperationKind Kind { get; }
+
+    /// <summary>Command endpoint whose retained execution result is read; does not confer authorization.</summary>
+    public ApiEndpointId? ResultOf { get; }
 
     /// <summary>
     /// Declared request payload or envelope type.
@@ -644,7 +650,8 @@ public sealed class ApiOperation
             results: results,
             scopePolicies: ScopePolicies,
             authorizationRequirements: AuthorizationRequirements,
-            semanticReferences: SemanticReferences);
+            semanticReferences: SemanticReferences,
+            resultOf: ResultOf);
     }
 
     static IReadOnlyList<ApiAuthorizationRequirement> NormalizeAuthorizationRequirements(

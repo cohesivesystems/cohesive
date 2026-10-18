@@ -1,4 +1,4 @@
-> Current entry point: `OrderEndpoints.Define(model)` composes partial entity/query/process implementations;
+> Current entry point: `model.Endpoints` composes partial entity/query/process implementations;
 > `Build(builder.Services, persistence.ForServices(receipts))` resolves their storage and logging;
 > `app.MapServices(prepared)` maps the complete API. The standalone binding APIs below remain available.
 
@@ -8,8 +8,8 @@
 attach to the same domain definitions. `FulfillmentProcess.Execute` is authoring syntax compiled into canonical
 Process IR, not an async application coordinator. Its class-level `[Process]` declaration generates an instance-owned, cached definition that can be inspected and fingerprinted.
 `FulfillmentApplication` supplies shared instances of the domain, queries, transitions and process.
-`FulfillmentService` uses the existing `Service.Define` builder to select canonical transitions, a typed stock lookup
-and relational queries once. `ServiceModelBuilder.Build(..., persistence.ForServices(receipts))` prepares exact links, catalogs
+`OrderApi` colocates service policy with its process endpoint pair. Generated process dependencies supply
+the transitions and stock lookup; HTTP relations remain separate API query bindings. `ServiceApiBindingsBuilder.Build(..., persistence.ForServices(receipts))` prepares exact links, catalogs
 and the shared runtime at startup, matching repositories against the declared entity contracts. Receipt schema must be bound and validated before constructing receipt-capable repositories.
 The binding phase retains canonical compiler diagnostics;
 applications bind domain operations to repositories without recreating adapters and dispatch catalogs.
@@ -57,7 +57,9 @@ VALUES ('demo-book', 'local', 5, 0);
 Use the returned order ID:
 
 ```sh
-curl -H 'Content-Type: application/json' -d '{"orderId":"<order-id>","sku":"demo-book","quantity":2}' "$WORKER_URL/fulfillment"
+curl -i -H 'Content-Type: application/json' -d '{"commandId":"demo-1","idempotencyKey":"demo-1","instanceId":"demo-1","attemptId":"1","input":{"orderId":"<order-id>","sku":"demo-book","quantity":2}}' "$WORKER_URL/fulfillment"
+# Follow the Location returned above; keep the original request unchanged for deliberate retry.
+curl "$WORKER_URL/fulfillment/results/ZGVtby0x"
 curl "$WORKER_URL/orders/<order-id>"
 curl "$WORKER_URL/orders/<order-id>/availability"
 ```
@@ -70,13 +72,17 @@ than duplicating physical placement in portable query configuration.
 
 ## Failure and recovery boundary
 
-Execution is ephemeral with a 15-second budget. There is no durable Process ledger or background recovery worker.
-A physical failure after reservation can leave stock reserved; compensation only runs when the graph reaches its
-explicit domain-rejection branch. Cancellation or commit acknowledgement loss is an uncertain-effect result,
-not proof that nothing happened. Resolve the exact retained operation before retrying; never blindly compensate.
-The HTTP projection currently derives a new invocation identity per request. Repeating a POST is a new process,
-not client idempotency. Query observations and terminal process results are not persisted: re-executing an
-ephemeral process can observe a changed world even when its completed entity operations replay. Runtime tests use an explicit retained identity; this does not establish HTTP retry safety.
+Execution is host-owned and independent of the HTTP request. Start returns 202 with a native admission receipt;
+the process continues in the generic-host worker. Caller cancellation and bounded response waiting do not
+cancel admitted execution. The same explicit command/idempotency/instance/attempt/input replays admission
+without scheduling another execution. Conflicting intent is rejected.
+
+There is no crash recovery: in-memory execution receipts, deduplication and results disappear on host exit.
+At most 1,000 instances are retained, including completed ones. Capacity rejects new work without eviction.
+The single worker supports finite process graphs, has no retry/timer/distributed scheduler, and reports missing
+terminal evidence safely if physical execution fails. A physical failure after reservation may leave stock
+reserved; compensation runs only along the graph's explicit domain-rejection branch. Inspect the exact
+PostgreSQL transition receipt before deciding how to recover; do not blindly repeat or compensate.
 
 Receipts are retained indefinitely in this demo. Schema bootstrap is explicit, caller-owned and idempotent; it
 is not a migration engine. Production must choose schema migration, receipt retention, reconciliation and
@@ -87,72 +93,10 @@ reconstitution, state checkpoints and read projections. Those are not inferred f
 
 ### Operator failure details
 
-`model.Service.Definition.Bind(...).Build(...)` returns the prepared `HostedServiceProcess` directly; `Program` maps
-its single route through the native ASP.NET extension and opts into `AddCohesiveTransitionFailureLogging(fulfillment)`; route mapping has no
-subscription or lifetime wiring. The generic-host integration in `Cohesive.Host` subscribes at native host startup and releases the
-subscription on stop or disposal, including disposal without stopping. An unstarted host never subscribes.
-Repeated registration subscribes once per native host. It logs full native diagnostics at Debug level; enable
-that level only for a protected operator sink because IDs and concurrency tokens may be present. Public
-process responses remain sanitized. Other hosts and process-wide diagnostic listeners cannot subscribe to
-these failures without a reference to this host or adapter instance.
-
-### Closed order contracts
-
-The order submission step takes no application input. Its Process binding supplies canonical Unit to
-the subject selected by `input.OrderId`. It branches on `SubmissionOutcome.Submitted`; neither a duplicated command ID nor display
-text participates in the domain rule. `OrderStatus` has explicit `Draft` and `Submitted` wire members.
-The process revision is 2 because the referenced transition's input/outcome contracts changed. Existing
-revision-1 receipts are not reinterpreted as revision-2 evidence.
-
-### Authoring and binding boundaries
-
-Start transitions at their entity: `model.Domain.Orders.Transition<SubmitOrderResult>(...)`
-uses the exact declared order shape and the shared Unit input contract. Payload-bearing transitions use
-`Inventory.Transition<FulfillOrder, StockResult>(...)`. Both delegate to `TransitionAuthoring`; they do
-not introduce a second transition model or compile on invocation.
-
-`Service.Define(...).Operation(...).Run(...).Build(...)` retains its typed process and selected operation.
-`app.MapServiceEphemeralProcess(fulfillment, http: ...)` projects those retained contracts; callers do not
-repeat the operation ID, process, declaration and runtime. The declaration-plus-deferred-resolver overload
-remains appropriate when a host intentionally postpones preparation.
-
-`AddFixedRequestIdentity(FulfillmentDemoIdentity.Context)` supplies reusable request-context plumbing.
-The example still owns its synthetic actor, local scope and grants. This is not authentication and must
-not be used as a substitute for authenticated per-user identities.
-
-Some explicit declarations carry meaning:
-
-- `model.Storage.Bind` places the full model in one database. `BindInventory` places only inventory
-  in the remote database for composed execution. Sharing the mapping objects avoids schema duplication;
-  registering all entities in the remote database would falsely describe its authority.
-- `ReservationDemandProjection` identifies the optional closed prefix used by composed availability
-  execution. Details currently has no composed placement, so it needs no corresponding cut. The cut is
-  placement advice, not a second query. A future named-subplan authoring seam should retain it with its
-  exact query rather than infer it from node order or CLR result types.
-- `StockPointRead` is an `EntityPointRead` attaching the existing observational query to inventory,
-  an SKU selector and an absence-aware result projection. The generator retains it because Execute invokes it.
-  `ServiceDependencies.Process(process)` supplies its binding and the invoked transitions automatically.
-  The native lookup uses the repository's trusted partition; the reserve transition remains authoritative.
-  Key/result delegates remain explicit host code, not portable keyed-read IR.
-- `Provenance` attributes generated process/query/service artifacts to their producer and source. It is
-  not runtime configuration. Convention-derived provenance can reduce authoring, but must still be
-  materialized in those artifacts rather than dropped.
-
-Aspire association selection sources can default to a deterministic reference, but this example retains
-its real `Source` on both associations. Native project metadata supplies only .NET project execution.
-
-`ordersApp.StorageQueries` is derived by `Bindings.PrepareService(model.StorageQueries, ...)`.
-The selected query identities, revisions, bounds and consistency live on the service registration, not in a second
-AppHost list. The optional `Cohesive.Adapters.Postgres.Services` integration uses the same offline mappings and native compiler
-as the worker; the returned capabilities drive Infra requirements. Exact required, provenance and binding
-plans must agree. Compiler changes alter evidence fingerprints, not public requirement identities.
-The optional Aspire/Postgres association rejects evidence for a different actual database, independently
-of its Aspire resource label. No database connection is opened during preparation. Each query gets its
-own statement snapshot, not a common snapshot across queries or the composed two-database path.
-
-This evidence does not certify schema installation, privileges, live readiness, conditional entity writes
-or atomic transition receipts. Those require their own prepared and/or runtime evidence; a database name
-or query artifact is insufficient. Native schema and receipt setup remain explicit in the worker.
+`BindHosted(..., logPrivateFailures: true)` opts into the existing generic-host scoped transition failure
+logger. It subscribes to the prepared process at startup and releases on stop/disposal. Disabled Debug
+logging does not build diagnostic arguments. The logger is operator-only; native IDs, tokens and provider
+details must remain in protected sinks. Public polling responses contain only the service's safe diagnostics.
 
 ## Service declarations and host attachments
 
@@ -169,8 +113,24 @@ var hosted = Service.Bind(serviceDocument, process, dependencies, orders, invent
     .Build(authority: "example", authorization: authorization);
 ```
 
-This automatic binding profile hosts one ephemeral, terminal process operation. Multiple operations,
+The standalone `Service.Bind` profile above hosts one ephemeral, terminal process operation; the running demo uses `BindHosted` for admission and polling. Multiple operations,
 durable execution, effects and child-process hosting still need their explicit bindings. The relational query
 selections are host composition roots for the existing HTTP readers, not newly inferred portable service
 query operations. The composed two-database example remains an explicit placement alternative;
 `PrepareService` rejects independent-source selections instead of advertising a native snapshot for them.
+
+
+## Separate PostgreSQL + Cosmos composition
+
+`PostgresCosmosAppHost` runs the same `Orders.Model` API/process with PostgreSQL orders and Cosmos inventory.
+`ServicePersistenceBuilder` selects the inventory repository by its exact observation contract; generated
+process dependencies therefore resolve to the intended provider without a second process declaration.
+`EntityPartitionKeyPolicy.Fixed` exposes the same trusted partition to Cosmos reads, writes and service
+lookup admission. The explicit `sku` identity field supports typed lookup without an Id/Key convention.
+The Cosmos client uses the existing canonical System.Text.Json serializer, not the SDK's default serializer.
+
+Cosmos uses an atomic transactional batch for stock plus its receipt; PostgreSQL uses its native transaction
+for order state plus its receipt. There is no cross-store transaction. The same host-owned process compensates
+when order submission is domain-rejected; infrastructure failure may leave an uncertain effect for recovery.
+HTTP 202 and result polling do not imply crash-durable execution. Joined reads have no distributed snapshot.
+The two-database PostgreSQL split is retained solely as an adapter regression, not as production example setup.

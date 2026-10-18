@@ -1,4 +1,5 @@
 using Cohesive.Model.Serialization;
+using System.Reflection;
 
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -7,17 +8,44 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Cohesive.Host.Composition;
 
-/// <summary>Composes explicitly registered offline declarations by constructor dependency, then freezes them.</summary>
+/// <summary>Composes offline declarations by constructor dependencies and required init properties, then freezes them.</summary>
 /// <remarks>No runtime services or resources are created implicitly. Registrations and instances belong to this
 /// builder alone. Constructor dependencies must also be registered; cycles fail at setup. Build caches failures.
-/// Model constructors must not perform IO or own disposable resources. This is not an invocation service container.</remarks>
+/// Required init properties are resolved before construction and assigned before authoring completion.
+/// Constructor and property dependencies share the same registry; properties become available only after construction.
+/// Model constructors must not read init properties, perform IO or own disposable resources. This is not an invocation service container.</remarks>
 public sealed class ApplicationModelBuilder
 {
     readonly Dictionary<Type, Func<IServiceProvider, object>> registrations = [];
-    readonly AuthoringState<ApplicationModel> state;
+    readonly Dictionary<Type, Type> implementations = [];
+    readonly Dictionary<Type, PropertyInfo[]> componentProperties = [];
+    readonly AuthoringState<PreparedApplicationModel> state;
 
     /// <summary>Starts an independently owned offline composition.</summary>
     public ApplicationModelBuilder() => state = new(Prepare);
+
+    /// <summary>Imports ordinary singleton DI registrations into an isolated declaration composition.</summary>
+    /// <param name="services">Declaration registrations only; keyed, scoped, transient and disposable runtime services are unsupported.</param>
+    /// <exception cref="ArgumentException">A registration has unsupported lifetime, key or duplicate contract.</exception>
+    public ApplicationModelBuilder(IServiceCollection services) : this()
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        foreach (var descriptor in services)
+        {
+            if (descriptor.IsKeyedService || descriptor.Lifetime != ServiceLifetime.Singleton)
+                throw new ArgumentException("Model registrations must be unkeyed singletons.", nameof(services));
+            if (descriptor.ImplementationType is { } implementation)
+            {
+                var factory = CreateDeclarationFactory(implementation);
+                registrations.Add(descriptor.ServiceType, factory);
+                implementations.Add(descriptor.ServiceType, implementation);
+            }
+            else if (descriptor.ImplementationInstance is { } instance)
+                registrations.Add(descriptor.ServiceType, _ => instance);
+            else if (descriptor.ImplementationFactory is { } factory)
+                registrations.Add(descriptor.ServiceType, factory);
+        }
+    }
 
     /// <summary>Registers a declaration whose public constructor consumes other registered declarations.</summary>
     /// <typeparam name="T">Concrete, non-disposable declaration type.</typeparam>
@@ -30,8 +58,9 @@ public sealed class ApplicationModelBuilder
         {
             if (typeof(IDisposable).IsAssignableFrom(typeof(T)) || typeof(IAsyncDisposable).IsAssignableFrom(typeof(T)))
                 throw new ArgumentException("Offline declarations cannot own disposable runtime resources.");
-            var factory = ActivatorUtilities.CreateFactory(typeof(T), Type.EmptyTypes);
-            registrations.Add(typeof(T), provider => factory(provider, null));
+            var factory = CreateDeclarationFactory(typeof(T));
+            registrations.Add(typeof(T), factory);
+            implementations.Add(typeof(T), typeof(T));
             return this;
         });
     }
@@ -40,40 +69,163 @@ public sealed class ApplicationModelBuilder
     /// <returns>The immutable instance registry and validated execution catalog.</returns>
     /// <exception cref="InvalidOperationException">Dependencies are missing or cyclic, or declaration preparation fails.</exception>
     /// <exception cref="ApplicationModelPreparationException">Canonical documents fail catalog validation.</exception>
-    public ApplicationModel Build() => state.Value;
+    public PreparedApplicationModel Build() => state.Value;
 
-    ApplicationModel Prepare()
+    PreparedApplicationModel Prepare()
     {
-        var resolver = new Resolver(registrations);
-        foreach (var type in registrations.Keys) resolver.GetService(type);
-        foreach (var instance in resolver.Instances.Values)
-            if (instance is IAuthoringModel authoring) authoring.Complete();
-        var documents = resolver.Instances.Values.OfType<IExecutionDefinitionModel>().Select(model => model.Document);
+        var services = new ServiceCollection();
+        var instances = new Dictionary<Type, object>();
+        var path = new List<Type>();
+        var completed = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        foreach (var (type, factory) in registrations)
+            services.AddSingleton(type, provider =>
+            {
+                if (path.Contains(type))
+                    throw new InvalidOperationException($"Cyclic declaration dependency: {string.Join(" -> ", path.Append(type).Select(t => t.Name))}.");
+                path.Add(type);
+                try
+                {
+                    var instance = factory(provider) ?? throw new InvalidOperationException($"Model factory returned null for {type}.");
+                    if (instance is IDisposable or IAsyncDisposable)
+                        throw new InvalidOperationException("Offline models cannot own disposable runtime resources.");
+                    if (completed.Add(instance))
+                    {
+                        ValidateRequiredComponents(instance);
+                        if (instance is IAuthoringModel authoring) authoring.Complete();
+                    }
+                    instances.Add(type, instance);
+                    return instance;
+                }
+                finally { path.RemoveAt(path.Count - 1); }
+            });
+        // This container owns declarations only. No scoped runtime provider escapes preparation.
+        using var provider = services.BuildServiceProvider();
+        foreach (var type in registrations.Keys) provider.GetRequiredService(type);
+        var documents = instances.Values.Distinct(ReferenceEqualityComparer.Instance).OfType<IExecutionDefinitionModel>().Select(model => model.Document);
         var validation = ExecutionDefinitionDocumentCatalog.TryCreate(documents, out var catalog);
         if (!validation.IsValid) throw new ApplicationModelPreparationException(validation);
-        return new(resolver.Instances, catalog!);
+        var prepared = new PreparedApplicationModel(instances, catalog!);
+        foreach (var application in instances.Values.OfType<ApplicationModel>()) application.Attach(prepared);
+        return prepared;
     }
 
-    sealed class Resolver(Dictionary<Type, Func<IServiceProvider, object>> registrations) : IServiceProvider
+    internal void Discover(Type root, HashSet<Type> visited)
     {
-        readonly HashSet<Type> constructing = [];
-        internal Dictionary<Type, object> Instances { get; } = [];
-        public object? GetService(Type serviceType)
+        if (!visited.Add(root)) return;
+        if (registrations.ContainsKey(root))
         {
-            if (Instances.TryGetValue(serviceType, out var instance)) return instance;
-            if (!registrations.TryGetValue(serviceType, out var factory)) return null;
-            if (!constructing.Add(serviceType)) throw new InvalidOperationException($"Cyclic declaration dependency at '{serviceType}'.");
-            try { instance = factory(this); Instances.Add(serviceType, instance); return instance; }
-            finally { constructing.Remove(serviceType); }
+            if (implementations.TryGetValue(root, out var implementation))
+                foreach (var dependency in Dependencies(implementation)) Discover(dependency, visited);
+            return;
         }
+        if (!root.IsClass || root.IsAbstract || root == typeof(string) || root.ContainsGenericParameters)
+            throw new InvalidOperationException($"Model dependency '{root}' needs an explicit registration.");
+        if (typeof(IDisposable).IsAssignableFrom(root) || typeof(IAsyncDisposable).IsAssignableFrom(root))
+            throw new InvalidOperationException($"Offline model '{root}' cannot own runtime resources.");
+        foreach (var dependency in Dependencies(root)) Discover(dependency, visited);
+        registrations.Add(root, CreateDeclarationFactory(root));
+    }
+
+    IEnumerable<Type> Dependencies(Type type) => RequireConstructor(type).GetParameters()
+        .Select(parameter => parameter.ParameterType).Concat(RequiredComponents(type).Select(property => property.PropertyType));
+
+    PropertyInfo[] RequiredComponents(Type type)
+    {
+        if (componentProperties.TryGetValue(type, out var cached)) return cached;
+        var requiredMembers = type.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Where(member => member is PropertyInfo or FieldInfo)
+            .Where(member => member.CustomAttributes.Any(attribute =>
+                attribute.AttributeType.FullName == "System.Runtime.CompilerServices.RequiredMemberAttribute"))
+            .OrderBy(member => member.Name, StringComparer.Ordinal).ToArray();
+        if (requiredMembers.Any(member => member is FieldInfo))
+            throw new InvalidOperationException($"Model '{type}' must declare required components as init-only properties, not fields.");
+        var properties = requiredMembers.OfType<PropertyInfo>().ToArray();
+        foreach (var property in properties)
+            if (property.GetIndexParameters().Length != 0 || property.GetMethod is not { IsPublic: true }
+                || property.SetMethod is not { IsPublic: true } setter
+                || !setter.ReturnParameter.GetRequiredCustomModifiers().Any(modifier =>
+                    modifier.FullName == "System.Runtime.CompilerServices.IsExternalInit")
+                || property.PropertyType.IsValueType)
+                throw new InvalidOperationException($"Required component '{type.Name}.{property.Name}' must be a public readable init-only reference property.");
+        componentProperties.Add(type, properties);
+        return properties;
+    }
+
+    Func<IServiceProvider, object> CreateDeclarationFactory(Type type)
+    {
+        var properties = RequiredComponents(type);
+        var constructor = RequireConstructor(type);
+        if (properties.Length == 0)
+        {
+            var constructOnly = ActivatorUtilities.CreateFactory(type, Type.EmptyTypes);
+            return provider => constructOnly(provider, null);
+        }
+        var parameters = constructor.GetParameters();
+        var construct = ActivatorUtilities.CreateFactory(type, parameters.Select(parameter => parameter.ParameterType).ToArray());
+        return provider =>
+        {
+            // Resolve both dependency styles before construction; never publish a partial model to break cycles.
+            var values = new object[properties.Length];
+            for (var index = 0; index < properties.Length; index++)
+                values[index] = provider.GetService(properties[index].PropertyType)
+                    ?? throw new InvalidOperationException($"Required component '{type.Name}.{properties[index].Name}' is unresolved.");
+            var arguments = new object?[parameters.Length];
+            for (var index = 0; index < parameters.Length; index++)
+                arguments[index] = provider.GetService(parameters[index].ParameterType)
+                    ?? (parameters[index].HasDefaultValue ? parameters[index].DefaultValue
+                        : throw new InvalidOperationException($"Constructor dependency '{type.Name}.{parameters[index].Name}' is unresolved."));
+            object instance;
+            try { instance = construct(provider, arguments); }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                throw new InvalidOperationException(
+                    $"Model '{type}' constructor failed before required init components were assigned. Constructors must not read these properties; use authoring completion or an explicit factory for dependent initialization.",
+                    exception);
+            }
+            for (var index = 0; index < properties.Length; index++) properties[index].SetValue(instance, values[index]);
+            return instance;
+        };
+    }
+
+    void ValidateRequiredComponents(object instance)
+    {
+        // Explicit factories/instances retain ownership of initialization, but cannot bypass required-member validation.
+        foreach (var property in RequiredComponents(instance.GetType()))
+            if (property.GetValue(instance) is null)
+                throw new InvalidOperationException($"Required component '{instance.GetType().Name}.{property.Name}' is null.");
+    }
+
+    static System.Reflection.ConstructorInfo RequireConstructor(Type type)
+    {
+        var constructors = type.GetConstructors();
+        return constructors.Length == 1 ? constructors[0]
+            : throw new InvalidOperationException($"Model '{type}' requires exactly one public constructor or an explicit factory.");
+    }
+
+    /// <summary>Registers an explicit declaration factory, including an interface dependency override.</summary>
+    /// <typeparam name="T">Declaration contract.</typeparam><param name="factory">Setup-only factory; must not retain the provider or perform IO.</param>
+    /// <returns>This builder.</returns>
+    public ApplicationModelBuilder Add<T>(Func<IServiceProvider, T> factory) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        return state.Edit(() => { registrations.Add(typeof(T), provider => factory(provider)); return this; });
     }
 }
 
+/// <summary>Optional application root exposing constructor-assigned or required init-only components and its validated composition.</summary>
+public abstract class ApplicationModel
+{
+    PreparedApplicationModel? composition;
+    internal void Attach(PreparedApplicationModel value) => composition = value;
+    /// <summary>Validated declarations; available after ModelActivator returns, never during constructors.</summary>
+    public PreparedApplicationModel Composition => composition ?? throw new InvalidOperationException("Activate the application before inspecting its composition.");
+}
+
 /// <summary>Completed offline declarations, with no runtime dependency resolution or invocation state.</summary>
-public sealed class ApplicationModel
+public sealed class PreparedApplicationModel
 {
     readonly IReadOnlyDictionary<Type, object> instances;
-    internal ApplicationModel(IReadOnlyDictionary<Type, object> instances, ExecutionDefinitionDocumentCatalog catalog)
+    internal PreparedApplicationModel(IReadOnlyDictionary<Type, object> instances, ExecutionDefinitionDocumentCatalog catalog)
     { this.instances = instances; Executions = catalog; }
     /// <summary>Validated canonical execution documents, rejecting repeated identity/revision pairs.</summary>
     public ExecutionDefinitionDocumentCatalog Executions { get; }
@@ -82,6 +234,25 @@ public sealed class ApplicationModel
     /// <returns>The composition-owned, completed declaration.</returns>
     /// <exception cref="KeyNotFoundException">The type was not registered.</exception>
     public T Get<T>() where T : class => (T)instances[typeof(T)];
+}
+
+/// <summary>Discovers constructor dependencies and required init properties, then activates one offline graph.</summary>
+public static class ModelActivator
+{
+    /// <summary>Constructs dependencies before consumers, completes each declaration, and validates the whole catalog.</summary>
+    /// <typeparam name="T">Application or model root.</typeparam>
+    /// <param name="configure">Optional explicit interface/factory registrations; direct builder usage remains supported.</param>
+    /// <returns>The completed root; constructors capture declarations, never runtime resources.</returns>
+    /// <exception cref="InvalidOperationException">Dependencies are unsupported, missing, cyclic, or preparation fails.</exception>
+    /// <exception cref="ApplicationModelPreparationException">Canonical catalog validation fails.</exception>
+    public static T Create<T>(Action<IServiceCollection>? configure = null) where T : class
+    {
+        var services = new ServiceCollection();
+        configure?.Invoke(services);
+        var builder = new ApplicationModelBuilder(services);
+        builder.Discover(typeof(T), []);
+        return builder.Build().Get<T>();
+    }
 }
 
 /// <summary>Structured canonical catalog failure during application composition.</summary>

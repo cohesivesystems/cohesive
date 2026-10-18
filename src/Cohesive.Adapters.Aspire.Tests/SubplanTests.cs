@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Relations.Compilation;
@@ -8,13 +9,18 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class SubplanTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
+
+    internal static QueryNodeId DemandProjection(FulfillmentQueries queries) =>
+        ((QueryDefinition)queries.ReservationAvailability.CompilationRequest.DefinitionDocument.Definition)
+            .Body.Nodes.OfType<ProjectQueryNode>().Single(node =>
+                node.Id != ((QueryDefinition)queries.ReservationAvailability.CompilationRequest.DefinitionDocument.Definition).Results[0].Input).Id;
 
     [Fact]
     public void Closed_projection_derives_one_native_join_and_only_one_remaining_join()
     {
         var query = Model.Queries.ReservationAvailability;
-        var cut = RelationQuerySubplan.Compile(query.CompilationRequest, Model.Queries.ReservationDemandProjection);
+        var cut = RelationQuerySubplan.Compile(query.CompilationRequest, SubplanTests.DemandProjection(Model.Queries));
         Assert.Single(cut.Prefix.Plan!.Definition.Body.Nodes.OfType<TraverseRelationshipQueryNode>());
         Assert.Empty(cut.Remainder.Plan!.Definition.Body.Nodes.OfType<TraverseRelationshipQueryNode>());
         Assert.Single(cut.Remainder.Plan.Definition.Body.Nodes.OfType<JoinQueryNode>());

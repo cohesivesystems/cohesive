@@ -5,7 +5,7 @@ using Cohesive.Infra.Realization;
 namespace Cohesive.Adapters.Postgres.Infra;
 
 /// <summary>Prepared query evidence bound to one explicitly named logical database.</summary>
-public sealed class PostgresPreparedQueryEvidence
+public sealed class PostgresPreparedQueryEvidence : IInfrastructureResourcePreparation
 {
     readonly InfrastructureTargetImplementation implementation;
     internal PostgresPreparedQueryEvidence(PostgresRelationQueryDatabaseId database, InfrastructureTargetImplementation implementation)

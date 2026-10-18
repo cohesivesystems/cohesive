@@ -68,8 +68,53 @@ stop/start, disposal without stop, duplicate registration, disabled logging and 
 
 ## Offline application composition
 
-`ApplicationModelBuilder` composes explicitly registered declaration types by their constructors, independent of
-registration order. `Build()` constructs each once, completes `IAuthoringModel` instances, and validates documents
-from `IExecutionDefinitionModel` through the canonical execution catalog. Duplicate revisions, cycles and missing
-dependencies fail at setup. Models must not own disposable resources or perform IO; native connections remain
-separate runtime attachments. Completed models are resolved by `model.Get<T>()`. Preparation failures are cached.
+`ModelActivator.Create<T>()` discovers concrete constructor dependencies and prepares one offline graph.
+Public `required ... { get; init; }` properties also declare dependencies on every model declaration,
+including inherited required properties. Constructor and property injection may coexist on the same model.
+The optional callback
+accepts ordinary `IServiceCollection` singleton registrations for interfaces/factories.
+
+Both sets of dependencies complete before a model is constructed. The activator passes constructor
+dependencies, assigns required init properties, then completes authoring before exposing the model to consumers.
+Use constructor parameters when authoring in the constructor; use property dependencies during
+`IAuthoringModel.Complete()` or definition preparation triggered by completion.
+Reflection cannot prevent arbitrary constructor code from reading properties early: constructor failures
+report this initialization boundary and preserve the original exception. Constructors must not read init properties; use
+constructors for models that actively author declarations from dependencies. No partially populated model
+is exposed to resolve a cycle. Property metadata is retained only within the composition builder, and
+reflection-based assignment runs once during activation, never per invocation. No source generator,
+explicit Prepare call or runtime service container is required.
+
+```csharp
+public sealed class OrdersApplication : ApplicationModel
+{
+    public required OrdersDomain Domain { get; init; }
+    public required OrdersQueries Queries { get; init; }
+}
+```
+
+The direct builder still requires explicit registrations for all dependencies. Automatically constructed
+models resolve properties through the same singleton registry as constructor parameters. Explicit factory
+or instance registrations retain responsibility for initialization: their values are not overwritten, but
+null required components are rejected before model completion. Required fields, mutable setters,
+non-public accessors and value-type component properties are unsupported. Init modifiers are recognized
+by full metadata name, including library-local IsExternalInit polyfills.
+
+The underlying `ApplicationModelBuilder` also supports direct explicit registration. `Build()` returns
+`PreparedApplicationModel`, with shared instances and a validated canonical execution catalog. The optional
+`ApplicationModel` root exposes this through `Composition` after activation. DI handles construction and
+singleton sharing; `IAuthoringModel` completion and semantic validation remain a shared lifecycle concern.
+Missing interfaces, cycles, duplicate revisions, unsupported lifetimes and disposable resources fail at setup.
+Factories perform no IO and must not retain the temporary provider. Constructor selection is intentionally
+strict for discovery: one public constructor, or an explicit factory. Models and prepared values are scoped
+to one activation; failure caching belongs to the direct builder/authoring instance.
+
+## Finite host-owned process execution
+
+`AddCohesiveHostProcessWorker(prepared, maximumExecutions)` attaches prepared native process bindings to the
+.NET host. It does not start during construction. Admission and checkpoints use the existing in-memory
+execution adapter and process runtime; the worker supplies bounded scheduling and host cancellation only.
+It declares Host lifetime, never Durable. Request disconnects do not cancel admitted work; host exit loses
+receipt/result history. Capacity includes completed instances, with no eviction or automatic retry. For the
+HTTP composition, `BindHosted` prepares and registers this provider at ServiceApiBindingsBuilder.Build, leaving
+AppHost semantic inspection offline. See [the protocol](../../docs/design/accepted-process-api.md).

@@ -1,0 +1,79 @@
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.IR;
+using Cohesive.Relations.Model;
+using Cohesive.Transitions.Authoring;
+
+namespace AspireFirst.Orders;
+
+/// <summary>Immutable canonical fulfillment query declarations; backend preparation belongs to host composition.</summary>
+public sealed class FulfillmentQueries : QueryModel
+{
+    /// <summary>Declares both queries against the supplied canonical domain.</summary>
+    /// <param name="domain">Shared entity and relationship authority.</param>
+    public FulfillmentQueries(FulfillmentDomain domain)
+    {
+        var queries = Queries.WithInput<string>("orderId");
+        OrderDetails = queries.SingleOrDefault<OrderDetails>("fulfillment/order-details", (query, orderId, output) =>
+        {
+            var orders = OrdersById(query, orderId, domain);
+            var reservations = orders.TraverseInverse(domain.ReservationOrder);
+            var inventory = reservations.Traverse(domain.ReservationItem);
+            return output
+                .From(inventory)
+                .Key(orders, order => order.Id, result => result.Id)
+                .Field(result => result.Status, orders, order => order.Status)
+                .Collection(result => result.Reservations, reservations, reservation => reservation.Id, item => item.Id,
+                    items => items
+                        .Field(result => result.Sku, inventory, item => item.Sku)
+                        .Field(result => result.Quantity, reservations, reservation => reservation.Quantity)
+                        .Field(result => result.AvailableStock, inventory, item => item.Available));
+        });
+
+        ReservationAvailability = queries.Array("fulfillment/reservation-availability", (query, orderId) =>
+        {
+            var orders = OrdersById(query, orderId, domain);
+            var demand = orders.TraverseInverse(domain.ReservationOrder,
+                (order, reservation) => new ReservationDemand(order.Id, reservation.Id, reservation.Sku, reservation.Quantity));
+            var inventory = query.Source(domain.Inventory).Where(item => item.Partition == FulfillmentStoragePolicy.LocalPartition);
+            return demand
+                .LeftJoin(inventory, (row, item) => row.Sku == item.Sku)
+                .Select((row, item) => new ReservationAvailability(
+                    row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available));
+        });
+    }
+
+    /// <summary>Canonical query plus portable nested-result assembly; no compilation or PostgreSQL configuration.</summary>
+    public RelationQuery<string, OrderDetails?> OrderDetails { get; }
+
+    /// <summary>Canonical query shared by native and composed registrations.</summary>
+    public RelationQuery<string, ReservationAvailability[]> ReservationAvailability { get; }
+
+    static RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(RelationQueryExpressionAuthoring query,
+        RelationQueryExpressionParameter<string> orderId, FulfillmentDomain domain) =>
+        query.Source(domain.Orders).Where(order => order.Id == orderId.Value && order.Partition == FulfillmentStoragePolicy.LocalPartition);
+
+}
+
+/// <summary>Joined order view with zero or more reservations.</summary>
+/// <param name="Id">Order identity.</param>
+/// <param name="Status">Current lifecycle state.</param>
+/// <param name="Reservations">Joined reservations ordered by identity.</param>
+public sealed record OrderDetails(string Id, OrderStatus Status, IReadOnlyList<ReservationSummary> Reservations);
+
+/// <summary>One reservation and its current inventory availability, not an event-sourced snapshot.</summary>
+/// <param name="Id">Reservation identity.</param>
+/// <param name="Sku">Inventory identity.</param>
+/// <param name="Quantity">Reserved quantity.</param>
+/// <param name="AvailableStock">Current availability in the query snapshot.</param>
+public sealed record ReservationSummary(string Id, string Sku, int Quantity, int AvailableStock);
+
+/// <summary>Reservation demand before inventory enrichment; absent reservations remain distinguishable.</summary>
+/// <param name="OrderId">Owning order.</param><param name="ReservationId">Reservation identity when present.</param>
+/// <param name="Sku">Referenced inventory identity when present.</param><param name="Quantity">Demand when present.</param>
+public sealed record ReservationDemand(string OrderId, string? ReservationId, string? Sku, int? Quantity);
+
+/// <summary>Reservation demand enriched with independently placeable current inventory.</summary>
+/// <param name="OrderId">Owning order.</param><param name="ReservationId">Reservation identity when present.</param>
+/// <param name="Sku">Referenced inventory identity when present.</param><param name="Quantity">Demand when present.</param>
+/// <param name="Available">Inventory when present; separate reads do not imply a distributed snapshot.</param>
+public sealed record ReservationAvailability(string OrderId, string? ReservationId, string? Sku, int? Quantity, int? Available);

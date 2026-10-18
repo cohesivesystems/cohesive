@@ -3,10 +3,11 @@
 Two starting points are supported:
 
 - **Cohesive-first:** compile a canonical local realization and create its native model with `AddCohesiveLocalInfrastructure`.
-- **Aspire-first:** keep an existing AppHost and use `AspireInfrastructureAssociation.Attach` to associate selected native objects with canonical requirements.
+- **Aspire-first:** keep an existing AppHost and use `builder.AttachCohesive(model, id, variant, associations => ...)` to associate selected native objects with canonical requirements.
 
 See the [runnable Aspire-first order example](../../../eng/examples/aspire-first/README.md).
-`Attach` neither creates resources nor alters native options, references or waits. Its result
+`AttachCohesive` accepts an `InfrastructureModel` or directly authored `InfrastructureAuthoringResult`
+and delegates to the same `AspireInfrastructureAssociation.Attach` implementation. It neither creates resources nor alters native options, references or waits. Its result
 contains the original objects and the ordinary `InfrastructureTargetDeploymentPlan`; inspect
 `Deployment.IsComplete` and `Deployment.Diagnostics` before starting the application.
 Requirements and explicit implementation evidence use existing Cohesive.Infra authoring.

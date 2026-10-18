@@ -350,7 +350,7 @@ public sealed class ServiceCompositionTests
             var registered = EntityRelationQuerySourceRegistration.InMemory(entity.StateShape.QualifiedId, repository,
                 RelationQueryLogicalPartitionIdentity.WholeSource);
             var reader = new CountingReader(registered.Reader);
-            var sources = new EntityRelationQuerySourceCatalog([new(entity.StateShape.QualifiedId, registered.Source, reader)]);
+            var sources = new EntityRelationQuerySourceCatalog([new EntityRelationQuerySourceRegistration(entity.StateShape.QualifiedId, registered.Source, reader)]);
             var evaluator = sources.CreateEvaluator(new(new("tests/publishing"), "tests/v1", 100, 1000, 1000, 100, 100, 4));
             var queryBinding = new ServiceQueryBinding("search", new("1"), compilation, (_, _) => evaluator);
             var acquire = HostedQuery<string, Pair>.Create(new("documents/acquire-pair"), new("1"),

@@ -296,6 +296,7 @@ public static partial class ProcessReferenceInterpreter
     /// <param name="host">Synchronous evidence port for Transition, Relation, and target resolution.</param>
     /// <returns>Replacement continuation, intents, input dispositions, diagnostics, and attributable trace.</returns>
     /// <exception cref="ArgumentNullException">Any argument is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">The host does not support read policies required by the plan.</exception>
     public static ProcessActivationDecision Activate(
         CompiledProcessPlan plan,
         ProcessContinuationState state,
@@ -306,6 +307,10 @@ public static partial class ProcessReferenceInterpreter
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(activation);
         ArgumentNullException.ThrowIfNull(host);
+        if (plan.RequiresReadPolicy && !host.SupportsReadPolicies)
+            throw new ArgumentException("processes.read.policy.unsupported: Host must enforce read policy or supply materialized evidence.", nameof(host));
+        if (plan.RequiresDurableReadProgress && !host.SupportsDurableReadProgress)
+            throw new ArgumentException("processes.read.progress.unsupported: Host cannot retain read progress across restarts.", nameof(host));
         return new Engine(plan, state, activation, host).Run();
     }
 
@@ -1718,7 +1723,7 @@ public static partial class ProcessReferenceInterpreter
                 node.Id,
                 token.Step,
                 activation.ObservedAtUtc,
-                activation.Context));
+                activation.Context, Policy: node.Policy));
             CompleteOperation(token, node.Id, node.Continuation, link.Result, result);
         }
 

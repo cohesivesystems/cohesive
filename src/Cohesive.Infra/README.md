@@ -256,3 +256,19 @@ Artifacts are produced once at the deployment boundary; they neither execute nor
 health or runtime capability, contain no provider options or credential payload by design, and do not
 self-authenticate. Trust source/run provenance independently. Do not relabel historical handoff evidence
 as a new deployment artifact: the source reference domain is deliberately distinct.
+
+## Optional instance authoring
+
+Derive from `InfrastructureModel` and call protected `Define(id, revision, bindingProfileId, configure)` once
+in the constructor. It uses the same coordinated builder as `Infrastructure.Define`; `Definition` is cached
+and activation completes it through `IAuthoringModel`. Native resource construction stays in explicit adapter
+methods. The model never wraps provider options or creates resources during preparation.
+
+
+Adapter resource preparation can contribute requirements with `resource.Prepared(preparation)`.
+The immutable `IInfrastructureResourcePreparation` attachment is retained by the coordinated
+`InfrastructureAuthoringResult`, scoped to its canonical resource ID. It is setup-only and excluded
+from JSON; persist the definition and binding profile, then explicitly reconstruct adapter preparation
+when association requires it. No global registry or runtime resource is retained. Duplicate/conflicting
+requirements fail atomically. Adapters own preparation, native affinity checks and implementation
+evidence; the portable Infra layer does not depend on PostgreSQL or Aspire.

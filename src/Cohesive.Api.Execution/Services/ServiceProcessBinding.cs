@@ -8,8 +8,8 @@ namespace Cohesive.Api.Execution.Services;
 
 /// <summary>Associates a declared Process entry with its exact plan and existing authoritative start dispatcher.</summary>
 /// <remarks>
-/// The dispatcher owns durable admission, retained issuance evidence, deduplication and activation scheduling.
-/// This binding does not replace those guarantees with an in-memory receipt or a service-owned workflow loop.
+/// The dispatcher owns admission, retained issuance evidence, deduplication and activation scheduling for its declared lifetime.
+/// A host-owned provider must declare Host; it cannot satisfy a Durable service policy.
 /// </remarks>
 public sealed class ServiceProcessBinding : ServiceBinding
 {
@@ -17,13 +17,16 @@ public sealed class ServiceProcessBinding : ServiceBinding
     /// <param name="operationId">Declared service operation.</param>
     /// <param name="plan">Exact compiled Process authority, including input and recovery semantics.</param>
     /// <param name="authority">Native execution authority; the admitted logical scope supplies its tenant component.</param>
+    /// <param name="lifetime">Provider lifetime, validated against the declaration; a host-owned provider cannot claim durability.</param>
     /// <param name="start">Existing authoritative dispatcher qualified for the Process's required guarantees.</param>
     /// <exception cref="ArgumentException">Operation identity or authority is empty.</exception>
     /// <exception cref="ArgumentNullException">Plan or dispatcher is null.</exception>
     public ServiceProcessBinding(string operationId, CompiledProcessPlan plan, string authority,
-        ExecutionProcessStartDispatcher start) : base(operationId)
+        ExecutionProcessStartDispatcher start, ProcessExecutionLifetime lifetime = ProcessExecutionLifetime.Durable) : base(operationId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(authority);
+        if (lifetime is not (ProcessExecutionLifetime.Host or ProcessExecutionLifetime.Durable)) throw new ArgumentOutOfRangeException(nameof(lifetime));
+        Lifetime = lifetime;
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         Authority = authority;
         Start = start ?? throw new ArgumentNullException(nameof(start));
@@ -31,6 +34,8 @@ public sealed class ServiceProcessBinding : ServiceBinding
 
     /// <summary>Exact Process whose native graph owns all orchestration.</summary>
     public CompiledProcessPlan Plan { get; }
+    /// <summary>Lifetime guaranteed by this native admission provider.</summary>
+    public ProcessExecutionLifetime Lifetime { get; }
     /// <summary>Native execution authority associated by the host.</summary>
     public string Authority { get; }
     internal ExecutionProcessStartDispatcher Start { get; }
@@ -41,14 +46,17 @@ public sealed class ServiceProcessBinding : ServiceBinding
             throw ServiceBindingValidationException.Error("services.binding.inexact",
                 "The binding must realize the exact declared Process.", "/bindings/process");
         ValidateExecution(process);
+        if ((process.Execution?.Lifetime ?? ProcessExecutionLifetime.Durable) != Lifetime)
+            throw ServiceBindingValidationException.Error("services.binding.executionUnsupported",
+                "The admission provider must supply the declared execution lifetime.", "/bindings/process/execution");
     }
 
     internal static void ValidateExecution(ServiceProcessOperation process)
     {
-        if (process.Execution is { } execution && (execution.Lifetime != ProcessExecutionLifetime.Durable
+        if (process.Execution is { } execution && (execution.Lifetime == ProcessExecutionLifetime.Ephemeral
             || execution.Completion != ServiceProcessCompletion.Admission))
             throw ServiceBindingValidationException.Error("services.binding.executionUnsupported",
-                "This dispatcher binding provides durable admission only.", "/bindings/process/execution");
+                "This dispatcher binding provides host-owned or durable admission only.", "/bindings/process/execution");
     }
 }
 

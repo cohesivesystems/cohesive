@@ -19,6 +19,7 @@ public interface IServicePersistence
     /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Query result.</typeparam>
     /// <param name="query">Canonical query and presentation projection.</param>
     /// <param name="maximumRows">Complete-result row bound.</param><param name="maximumBytes">Decoded-value bound.</param>
+    /// <param name="consistency">Required consistency across every read contributing to the result.</param>
     /// <returns>A host-lifetime reader; invocation data is never cached.</returns>
-    IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes);
+    IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes, RelationQueryConsistency consistency);
 }

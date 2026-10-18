@@ -19,8 +19,8 @@ Partial contributions must ultimately resolve into one validated model rather th
 - `QueryModel` collects the actual compilation requests while returning the original typed handles. Definition
   is an immutable request collection, not a second query IR or a provider execution plan.
 - `ApiModel` supplies a frozen Definition from ApiBuilder. Existing ApiDefinition.Combine composes separately
-  declared contracts and rejects duplicate endpoint IDs. This does not yet validate all HTTP route conflicts
-  or provide partial implementation registration.
+  declared contracts and rejects duplicate endpoint IDs. Native route collisions and partial implementation registration belong to the separate
+  ServiceApiBindingsBuilder/MapServices boundary.
 - PostgreSQL's existing offline bindings gain inline mapping callbacks and a frozen Define recipe. Native table,
   column, key and partition choices stay with the adapter. Bind retains native data-source ownership at the host.
 - `[Process]` on `ProcessModel<TInput, TResult>` generates metadata, provenance and cached definition lowering
@@ -30,12 +30,31 @@ Partial contributions must ultimately resolve into one validated model rather th
   worker runtime bindings consume the same construction recipe. Independent instances have equal portable
   query/process identities without sharing mutable catalogs or credentials.
 
-`ApplicationModelBuilder` registers the finite set of offline declaration types. Constructor dependencies resolve
-once regardless of registration order; missing dependencies and cycles fail during Build. Completion freezes
-registered authoring models automatically. Canonical execution documents pass through the existing
-ExecutionDefinitionDocumentCatalog, which rejects duplicate identity/revision pairs (including differing fingerprints).
-Constructor configuration is therefore allowed, but two variants cannot silently occupy one revision in a composition.
-There is no global identity registry; separate independently deployed compositions must still govern revision changes.
+`ModelActivator.Create<T>()` discovers the concrete constructor dependency graph and uses an isolated
+singleton DI provider to construct it. Each dependency completes `IAuthoringModel` before its consumer's
+constructor runs. Constructors assign get-only handles through existing builders; no `partial`, annotations,
+virtual constructor callbacks, property injection or `null!` are needed. Interface dependencies and custom
+factories use ordinary `IServiceCollection` registration in the activator callback. Models require one public
+constructor unless explicitly supplied by a factory. Cycles, missing interfaces, duplicate registrations,
+non-singleton registrations and disposable runtime resources fail during activation.
+
+`ApplicationModelBuilder` remains the explicit, builder-only entry point. Its `Build()` returns
+`PreparedApplicationModel`. The optional `ApplicationModel` base exposes that validated composition only
+after activation returns. Canonical execution documents pass through `ExecutionDefinitionDocumentCatalog`,
+which rejects duplicate identity/revision pairs, including different fingerprints. DI handles shared instances;
+the small lifecycle layer completes declarations and validates their semantic evidence. Factories must not
+retain the temporary provider; activation owns no runtime connection, worker or scope.
+
+`ApiBindingModel` wraps `ServiceApiBindingsBuilder` and validates/finalizes offline endpoint recipes before
+consumers inspect query selections. `Build(services, persistence)` still explicitly prepares the live host.
+`StorageModel` groups typed native binding contributions through `StorageModelBuilder`. Each recipe runs
+once during constructor authoring; activation freezes collection membership. One model can own several
+databases or providers without introducing a provider-neutral mapping DSL. `InfrastructureModel` records one `Infrastructure.Define` recipe
+and caches its canonical result. Native Aspire configuration remains in `FulfillmentInfrastructure.Configure(builder)`.
+The AppHost activates `FulfillmentInfrastructure`, whose constructor consumes the same `FulfillmentApplication` graph used
+by the worker. The worker never references AppHost or Aspire hosting packages.
+
+There is no global semantic identity registry. Independent compositions still govern their own revision changes.
 
 `AuthoringState<T>` owns the shared freeze-once protocol: edits serialize with preparation, freezing starts before
 validation, and both successful results and failures are cached. Query order uses an explicit insertion list with a
@@ -49,15 +68,16 @@ by offline construction. PostgreSQL validation and preparation retain the existi
 
 ## Remaining dependency-ordered composition work
 
-1. Implemented: the ASP.NET ServiceModelBuilder composes typed API selectors and optional modules,
+1. Implemented: the ASP.NET ServiceApiBindingsBuilder composes typed API selectors and optional modules,
    preserves separately declared APIs/services, and resolves native storage through IServicePersistence.
    Public query roots belong to API bindings and project into infrastructure selections; they remain outside
    the process dependency closure. Coverage is checked after contributions, before route publication.
 2. Implemented: MapServices stages existing entity/query/process HTTP bindings, validates complete mapping
    and exact method/template collisions, then publishes routes. Build integrates opt-in protected failure logging
    using the existing host-owned subscription mechanism. Runtime completion still comes from Service IR.
-3. Add explicit accepted-execution receipts and ResultOf-linked polling, then separately consider observation
-   streams and callback contracts. Neither SignalR nor SSE implies ordering, replay, retention or durable recovery.
+3. Implemented: [accepted execution and ResultOf-linked polling](accepted-process-api.md) compose the native
+   durable admission and protected result-read paths. Production worker selection/qualification remains explicit.
+   Observation streams and callbacks remain separate; SignalR/SSE imply no durable recovery guarantee.
 4. Attach registered storage/execution bindings to native Aspire resources and derive required infrastructure
    capabilities from prepared definitions. Preserve native-only resources and target configuration. Keep declared,
    validated and observed evidence distinct. Do not introduce a second infrastructure inventory.
@@ -107,7 +127,7 @@ Required dependency preparation uses the shared WeakPreparationCache/Preparation
 
 ## HTTP implementation boundary
 
-ServiceModelBuilder lives in the ASP.NET adapter because its recipes select HTTP input, response and native
+ServiceApiBindingsBuilder lives in the ASP.NET adapter because its recipes select HTTP input, response and native
 route configuration. It is not another portable service IR: ApiDefinition and ServiceDefinition remain authority.
 The generic IServicePersistence contract only resolves canonical observations and bounded query preparations;
 PostgreSQL implements it using existing mappings, repository constructors and native query compilation. Provider
@@ -171,3 +191,19 @@ native routes at `/api/routes/{method}/{template}` (JSON Pointer escaping). Miss
 the staged endpoint index; repeated mapping identifies `/api/mapping/state`. Coverage failures retain all
 identified endpoint diagnostics instead of a single generic location. Process endpoint authoring retains the
 one service document built during selection and reuses it for HTTP projection.
+
+
+The Aspire example now has two explicit executable compositions over `Orders.Model`: the default
+PostgreSQL-only worker and the PostgreSQL/Cosmos worker. Model activation shares semantic instances within
+each composition; no provider selection enters the domain/API catalogs. Native table mappings can be reused
+without placing every mapped entity in PostgreSQL. Service persistence selections bind exact entity contracts
+and query instances, cache preparation by requested bounds, and preserve per-backend receipt capabilities.
+
+### Example source organization
+
+`FulfillmentDomain.cs` colocates entity declarations, transitions and the generated process while retaining
+separate model types. `OrderApi.cs` colocates the contract and `OrderEndpoints : ApiBindingModel`.
+`Orders.Model/Storage/FulfillmentStorage.cs` holds shared native mappings, the fixed demo partition policy
+and the PostgreSQL-only storage model. Both compositions reuse it; mixed placement remains in its own
+storage model. Native host declarations are named `FulfillmentInfrastructure` and
+`PostgresCosmosFulfillmentInfrastructure`. This organization changes no execution lifetime or HTTP contract.
