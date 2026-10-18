@@ -110,7 +110,7 @@ stable across executions nor domain entity identities. Missing and null remain d
 physical planner still applies its normal residual capability, identity and bounded-join restrictions.
 This does not automatically discover join islands or add a new arbitrary binding-environment checkpoint.
 
-See the [reservation availability example](../../../eng/examples/aspire-first/README.md#native-joins-inside-composed-execution)
+See the [reservation availability example](../../../eng/examples/aspire-first/README.md#what-changes-with-placement)
 for one graph executed entirely in PostgreSQL or as a PostgreSQL order/reservation subplan joined with
 inventory from another database. Tests cover differential results, failure boundaries and concurrent calls.
 
