@@ -32,16 +32,13 @@ builder.Services.AddKeyedSingleton<IDocumentStore>(FulfillmentStoragePolicy.Orde
 builder.Services.AddCohesiveServices(model.Endpoints, async (services, cancellationToken) =>
 {
     var database = services.GetRequiredKeyedService<NpgsqlDataSource>(FulfillmentStoragePolicy.OrdersDatabaseName);
-    var receipts = model.Storage.Bindings.ReceiptOptions!;
 
-    // The shared repository owns DML and validation, not schema lifecycle.
+    // Application and history migrations remain explicit; receipt bootstrap belongs to storage configuration.
     using (var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")
         ?? throw new InvalidOperationException("The explicit order schema resource is missing.")))
     await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync(cancellationToken)))
         await initialize.ExecuteNonQueryAsync(cancellationToken);
 
-    await using (var initializeReceipts = database.CreateCommand(receipts.SchemaSql))
-        await initializeReceipts.ExecuteNonQueryAsync(cancellationToken);
     // Authority is a storage choice. Commands, transitions, queries and API contracts stay unchanged.
     // Use a fresh database when changing authority; an existing history requires explicit migration.
     var authority = builder.Configuration.GetValue("EntityState:Authority", EntityStateAuthority.State);

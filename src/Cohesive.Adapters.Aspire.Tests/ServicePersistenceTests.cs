@@ -1,4 +1,5 @@
 using Cohesive.Relations.Execution;
+using Cohesive.Adapters.Postgres;
 using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres.Services;
@@ -9,9 +10,17 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class ServicePersistenceTests
 {
     [Fact]
+    public void Unknown_receipt_initialization_fails_during_authoring()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => PostgresPersistenceBindings.Define(new("test"), storage =>
+            storage.TransitionReceipts(new("public", "receipts", "local"), (PostgresReceiptSchemaInitialization)42)));
+    }
+
+    [Fact]
     public void Receipt_policy_is_model_owned_and_frozen_with_native_mappings()
     {
         var model = ModelActivator.Create<FulfillmentApplication>();
+        Assert.Equal(PostgresReceiptSchemaInitialization.CreateIfMissing, model.Storage.Bindings.ReceiptInitialization);
         Assert.Equal(FulfillmentStoragePolicy.LocalPartition, model.Storage.Bindings.ReceiptOptions!.PartitionKey);
         Assert.Throws<InvalidOperationException>(() => model.Storage.Bindings.TransitionReceipts(
             new("public", "other_receipts", "other")));

@@ -26,8 +26,6 @@ builder.Services.AddCohesiveServices(model.Endpoints, async (services, cancellat
     using (var schema = new StreamReader(typeof(PostgresCosmosStorage).Assembly.GetManifestResourceStream("Orders.PostgresCosmos.schema.sql")!))
     await using (var initialize = orders.CreateCommand(await schema.ReadToEndAsync(cancellationToken)))
         await initialize.ExecuteNonQueryAsync(cancellationToken);
-    var receipts = model.Storage.PostgresBindings.ReceiptOptions!;
-    await using (var initialize = orders.CreateCommand(receipts.SchemaSql)) await initialize.ExecuteNonQueryAsync(cancellationToken);
     return await model.Storage.RequireComposition<IServiceStorageComposition>().BindAsync(services, cancellationToken);
 });
 await using var app = builder.Build();

@@ -31,17 +31,49 @@ public sealed partial class PostgresPersistenceBindings
     /// <summary>Optional native receipt policy, owned by these mappings rather than service binding.</summary>
     public PostgresTransitionReceiptOptions? ReceiptOptions { get; private set; }
 
+    /// <summary>Schema admission policy applied during async runtime preparation.</summary>
+    public PostgresReceiptSchemaInitialization ReceiptInitialization { get; private set; }
+
+    /// <summary>Prepares configured receipts against a borrowed native data source.</summary>
+    /// <param name="database">Native database shared with entity repositories.</param>
+    /// <param name="cancellationToken">Cancellation of schema creation and validation.</param>
+    /// <returns>Validated storage, or null when receipts are not configured.</returns>
+    /// <remarks>Called once by host preparation, never during offline definition. CreateIfMissing creates only
+    /// the receipt table in an existing schema; it does not migrate incompatible tables or retry failures.
+    /// Concurrent hosts should coordinate schema bootstrap externally. Rebinding repeats admission checks.</remarks>
+    /// <exception cref="ArgumentNullException">Database is null.</exception>
+    /// <exception cref="OperationCanceledException">Preparation is canceled.</exception>
+    /// <exception cref="InvalidOperationException">Existing schema is incompatible.</exception>
+    /// <exception cref="NpgsqlException">Native schema creation or metadata access fails.</exception>
+    public async Task<PostgresTransitionReceiptStorage?> PrepareReceiptsAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        _ = state.Value;
+        if (ReceiptOptions is not { } options) return null;
+        if (ReceiptInitialization == PostgresReceiptSchemaInitialization.CreateIfMissing)
+        {
+            await using var create = database.CreateCommand(options.SchemaSql);
+            await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+        return await options.BindAsync(database, cancellationToken).ConfigureAwait(false);
+    }
+
     /// <summary>Declares atomic operation receipts for repositories bound from this database.</summary>
     /// <param name="options">Native schema/table and trusted partition policy.</param>
+    /// <param name="initialization">Validate only by default; explicitly opt into receipt-table bootstrap.</param>
     /// <returns>This authoring builder.</returns>
+    /// <exception cref="ArgumentNullException">Options are null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Initialization policy is unknown.</exception>
     /// <exception cref="InvalidOperationException">Already configured or frozen.</exception>
-    public PostgresPersistenceBindings TransitionReceipts(PostgresTransitionReceiptOptions options)
+    public PostgresPersistenceBindings TransitionReceipts(PostgresTransitionReceiptOptions options, PostgresReceiptSchemaInitialization initialization = PostgresReceiptSchemaInitialization.ValidateOnly)
     {
         ArgumentNullException.ThrowIfNull(options);
+        if (!Enum.IsDefined(initialization)) throw new ArgumentOutOfRangeException(nameof(initialization));
         return state.Edit(() =>
         {
             if (ReceiptOptions is not null) throw new InvalidOperationException("Receipt policy is already declared.");
             ReceiptOptions = options;
+            ReceiptInitialization = initialization;
             return this;
         });
     }

@@ -41,8 +41,7 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
     {
         ArgumentNullException.ThrowIfNull(services);
         var database = services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value);
-        var receipts = bindings.ReceiptOptions is { } options
-            ? await options.BindAsync(database, cancellationToken).ConfigureAwait(false) : null;
+        var receipts = await bindings.PrepareReceiptsAsync(database, cancellationToken).ConfigureAwait(false);
         return bindings.Bind(database, "di/" + bindings.Database.Value).ForServices(receipts, history, outbox);
     }
 }

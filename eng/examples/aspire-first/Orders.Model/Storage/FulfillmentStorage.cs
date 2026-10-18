@@ -16,7 +16,8 @@ public sealed class FulfillmentStorage : StorageModel
         Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
             new(FulfillmentStoragePolicy.OrdersDatabaseName), storage =>
             {
-                storage.TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition));
+                storage.TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition),
+                initialization: PostgresReceiptSchemaInitialization.CreateIfMissing);
                 storage.Entity(domain.Orders, mappings.Orders);
                 storage.Entity(domain.Reservations, mappings.Reservations);
                 storage.Entity(domain.Inventory, mappings.Inventory);

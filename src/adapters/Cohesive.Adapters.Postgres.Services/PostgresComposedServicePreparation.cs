@@ -78,8 +78,7 @@ public sealed class PostgresComposedServicePreparation : IServiceStorageComposit
         if (Sources.Keys.Any(id => !nativeSources.Any(source => source.Source.Source.Id == id)))
             throw new InvalidOperationException("DI composition requires declared native sources; use ComposeServices or explicit Bind.");
         var database = services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value);
-        var receipts = bindings.ReceiptOptions is { } options
-            ? await options.BindAsync(database, cancellationToken).ConfigureAwait(false) : null;
+        var receipts = await bindings.PrepareReceiptsAsync(database, cancellationToken).ConfigureAwait(false);
         var sources = new EntityStorageRegistration[nativeSources.Length];
         for (var index = 0; index < sources.Length; index++)
             sources[index] = await nativeSources[index].BindAsync(services, cancellationToken).ConfigureAwait(false);

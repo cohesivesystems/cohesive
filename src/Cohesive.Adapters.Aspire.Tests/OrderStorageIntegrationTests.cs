@@ -29,6 +29,36 @@ public sealed partial class OrderStorageIntegrationTests
     const string ConnectionVariable = "COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING";
 
     [PostgresFact]
+    public async Task Model_receipt_bootstrap_creates_validates_and_rejects_incompatible_schema()
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var table = "receipts_" + Guid.NewGuid().ToString("N");
+        var bindings = Cohesive.Adapters.Postgres.PostgresPersistenceBindings.Define(new("test"), storage => storage
+            .TransitionReceipts(new("public", table, "local"),
+                Cohesive.Adapters.Postgres.PostgresReceiptSchemaInitialization.CreateIfMissing));
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => bindings.PrepareReceiptsAsync(database, canceled.Token));
+        await using (var exists = database.CreateCommand("SELECT to_regclass($1) IS NULL"))
+        {
+            exists.Parameters.AddWithValue("public." + table);
+            Assert.Equal(true, await exists.ExecuteScalarAsync());
+        }
+        try
+        {
+            Assert.NotNull(await bindings.PrepareReceiptsAsync(database));
+            Assert.NotNull(await bindings.PrepareReceiptsAsync(database));
+            await using (var alter = database.CreateCommand($"ALTER TABLE public.{table} DROP COLUMN content_hash"))
+                await alter.ExecuteNonQueryAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => bindings.PrepareReceiptsAsync(database));
+            await using var column = database.CreateCommand("SELECT count(*) FROM information_schema.columns WHERE table_name=$1 AND column_name='content_hash'");
+            column.Parameters.AddWithValue(table);
+            Assert.Equal(0L, await column.ExecuteScalarAsync());
+        }
+        finally { await using var drop = database.CreateCommand($"DROP TABLE IF EXISTS public.{table}"); await drop.ExecuteNonQueryAsync(); }
+    }
+
+    [PostgresFact]
     public async Task Model_receipt_policy_validates_without_migrating_and_binds_every_repository()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);

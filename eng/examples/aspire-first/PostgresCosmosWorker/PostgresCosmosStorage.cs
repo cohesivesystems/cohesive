@@ -25,7 +25,8 @@ public sealed class PostgresCosmosStorage : StorageModel
     public PostgresCosmosStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints)
     {
         PostgresBindings = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
-            .TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition))
+            .TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition),
+                initialization: PostgresReceiptSchemaInitialization.CreateIfMissing)
             .Entity(domain.Orders, mappings.Orders)
             .Entity(domain.Reservations, mappings.Reservations)));
         Inventory = Storage.Define(() => new CosmosEntityStorageBinding(

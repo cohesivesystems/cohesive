@@ -204,8 +204,12 @@ await app.RunAsync();
 ```
 
 The runnable demo uses the asynchronous preparation overload to perform **explicit demo schema initialization**
-and attach Marten history/outbox before returning the composed service persistence. Library binding only
-validates receipt and Cosmos container metadata; it never creates cloud resources or changes schema.
+and attach Marten history/outbox before returning the composed service persistence. Receipt initialization belongs to the storage declaration: both demos opt into
+`TransitionReceipts(options, initialization: PostgresReceiptSchemaInitialization.CreateIfMissing)`.
+Async composition creates the receipt table if missing, then validates its columns and uniqueness fences.
+The default `ValidateOnly` performs no DDL; incompatible tables always require an explicit migration.
+This creates neither the enclosing schema nor cloud resources. Cosmos container metadata remains validation-only.
+Coordinate concurrent-host schema bootstrap externally; failures are not automatically retried.
 Registration performs no native IO. Mapping awaits one cached preparation; failure or cancellation prevents
 route publication and remains failed for that host. Rebuild the host after correcting configuration.
 

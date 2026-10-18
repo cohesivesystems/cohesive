@@ -253,3 +253,10 @@ does not reference Marten. `PostgresEntityOutboxOptions.BindAsync` independently
 transition delivery intents. Both compose with native transition receipts in the same transaction.
 See the [PostgreSQL example authority walkthrough](../../../eng/examples/aspire-first/STATE-AUTHORITY.md)
 for the replacement-action contract, bounds, concurrency and migration limits.
+
+Receipt schema admission can also be owned by `PostgresPersistenceBindings.TransitionReceipts(options,
+initialization: PostgresReceiptSchemaInitialization.CreateIfMissing)`. Native and composed service preparation
+share `PrepareReceiptsAsync`: create a missing receipt table in an existing schema, then validate it.
+The default is `ValidateOnly`; incompatible tables are never altered. Offline model construction performs no IO.
+Host preparation runs once before route/worker admission; direct rebinding repeats validation. Coordinate
+bootstrap between concurrent hosts externally. Application, history and outbox migrations remain explicit.
