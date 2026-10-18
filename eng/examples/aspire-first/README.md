@@ -90,7 +90,7 @@ Example fulfillment body (reuse these IDs only to retry the same intent):
 ```
 
 An empty store has no inventory: fulfillment reports missing inventory. The integration fixture supplies
-synthetic inventory and reservations through the canonical repositories, launches the actual worker, exercises HTTP and removes its
+synthetic inventory through the canonical repository; fulfillment creates the reservations consumed by the queries. Tests launch the actual worker, exercise HTTP and remove their
 fixture data. There is no automatic product-data seed or training workflow.
 
 ## What changes with placement?

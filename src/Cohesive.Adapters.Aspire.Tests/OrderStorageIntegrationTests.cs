@@ -214,8 +214,8 @@ public sealed partial class OrderStorageIntegrationTests
                 if (fulfillment.StatusCode == HttpStatusCode.Accepted) await Task.Delay(50, completionDeadline.Token);
             } while (fulfillment.StatusCode == HttpStatusCode.Accepted);
             Assert.Equal(HttpStatusCode.OK, fulfillment.StatusCode);
-            Assert.Equal("Submitted", (await fulfillment.Content.ReadFromJsonAsync<FulfillmentResult>())!.Status);
-            Assert.Null(Assert.Single((await client.GetFromJsonAsync<ReservationAvailability[]>($"/orders/{id}/availability"))!).ReservationId);
+            Assert.Equal(FulfillmentStatus.Submitted, (await fulfillment.Content.ReadFromJsonAsync<FulfillmentResult>())!.Status);
+            Assert.Equal(id, Assert.Single((await client.GetFromJsonAsync<ReservationAvailability[]>($"/orders/{id}/availability"))!).ReservationId);
             await AssertProblem(await client.PostAsync($"/orders/{id}/submit", null), "orders.submit.NotDraft");
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{Guid.NewGuid():D}")).StatusCode);
         }
@@ -253,6 +253,12 @@ public sealed partial class OrderStorageIntegrationTests
 
     static async Task DeleteOrder(NpgsqlDataSource database, string id)
     {
+        await using (var reservations = database.CreateCommand("DELETE FROM public.cohesive_reservations WHERE partition_key = $1 AND order_id = $2"))
+        {
+            reservations.Parameters.AddWithValue(FulfillmentStoragePolicy.LocalPartition);
+            reservations.Parameters.AddWithValue(id);
+            await reservations.ExecuteNonQueryAsync();
+        }
         await using var command = database.CreateCommand("DELETE FROM public.cohesive_orders WHERE partition_key = $1 AND order_id = $2");
         command.Parameters.AddWithValue(FulfillmentStoragePolicy.LocalPartition);
         command.Parameters.AddWithValue(id);

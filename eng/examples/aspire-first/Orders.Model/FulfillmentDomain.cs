@@ -19,7 +19,7 @@ public sealed class FulfillmentDomain : DomainModel
     /// <summary>Canonical partition field shared by the example entities.</summary>
     public const string PartitionField = "partition";
     /// <summary>Declares the shared entities and their canonical references.</summary>
-    public FulfillmentDomain() : base(revision: "2")
+    public FulfillmentDomain() : base(revision: "3")
     {
         Orders = Entity<Order>("example/order");
         Inventory = Entity<InventoryItem>("example/inventory");
@@ -28,12 +28,16 @@ public sealed class FulfillmentDomain : DomainModel
         ReservationItem = Reservations.References(reservation => reservation.Sku, Inventory);
         OrderTransitions = new(Orders);
         InventoryTransitions = new(Inventory);
+        ReservationTransitions = new(Reservations);
     }
 
     /// <summary>Canonical order behavior, authored once against this domain's order entity.</summary>
     public OrderTransitions OrderTransitions { get; }
     /// <summary>Canonical stock behavior, authored once against this domain's inventory entity.</summary>
     public InventoryTransitions InventoryTransitions { get; }
+
+    /// <summary>Canonical reservation creation, sharing the domain reservation entity.</summary>
+    public ReservationTransitions ReservationTransitions { get; }
 
     /// <summary>Canonical order state authority.</summary>
     public DomainEntity<Order> Orders { get; }
@@ -124,46 +128,123 @@ public sealed class OrderTransitions
 }
 
 /// <summary>One-item fulfillment intent. The order must already exist.</summary>
+/// <param name="OrderId">Existing order identity.</param>
+/// <param name="Sku">Inventory identity selected by the process binding.</param>
+/// <param name="Quantity">Requested positive quantity.</param>
 public sealed record FulfillOrder(string OrderId, string Sku, int Quantity);
-/// <summary>Public terminal outcome; physical interruption instead returns an uncertain-effect error.</summary>
-public sealed record FulfillmentResult(string Status, string Reason);
-/// <summary>Stock observation; the reservation transition remains authoritative for availability.</summary>
-/// <summary>Pure stock mutation outcome.</summary>
-public sealed record StockResult(bool Accepted, string Reason);
+/// <summary>Closed terminal status independent of transport behavior.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<FulfillmentStatus>))]
+public enum FulfillmentStatus
+{
+    /// <summary>Order submitted and reservation recorded.</summary>
+    Submitted,
+    /// <summary>A domain decision rejected fulfillment.</summary>
+    Rejected,
+    /// <summary>A follow-up transition rejected after an earlier commit.</summary>
+    NeedsAttention
+}
+/// <summary>Closed explanation of the fulfillment decision.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<FulfillmentOutcome>))]
+public enum FulfillmentOutcome
+{
+    /// <summary>Stock reserved, order submitted and reservation created.</summary>
+    ReservedAndSubmitted,
+    /// <summary>No inventory entity exists for the requested SKU.</summary>
+    InventoryMissing,
+    /// <summary>Quantity must be positive.</summary>
+    InvalidQuantity,
+    /// <summary>Available stock cannot satisfy the request.</summary>
+    InsufficientStock,
+    /// <summary>Order submission rejected; reserved stock was released.</summary>
+    OrderRejected,
+    /// <summary>Stock release rejected and requires reconciliation.</summary>
+    CompensationRejected,
+    /// <summary>Reservation creation rejected after order submission.</summary>
+    ReservationRejected
+}
+/// <summary>Typed public terminal result; infrastructure interruption is not a domain outcome.</summary>
+/// <param name="Status">Terminal workflow status.</param>
+/// <param name="Outcome">Closed explanation of the terminal decision.</param>
+public sealed record FulfillmentResult(FulfillmentStatus Status, FulfillmentOutcome Outcome);
+/// <summary>Quantity-only inventory intent; the binding selects the authoritative SKU.</summary>
+/// <param name="Quantity">Positive units to reserve or release.</param>
+public sealed record StockQuantity(int Quantity);
+/// <summary>Closed stock mutation outcome.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<StockOutcome>))]
+public enum StockOutcome
+{
+    /// <summary>Stock was decremented.</summary>
+    Reserved,
+    /// <summary>Previously reserved stock was returned.</summary>
+    Released,
+    /// <summary>Quantity must be positive.</summary>
+    InvalidQuantity,
+    /// <summary>Available stock cannot satisfy the request.</summary>
+    InsufficientStock
+}
+/// <summary>Pure stock mutation result.</summary>
+/// <param name="Outcome">Closed decision returned by the stock transition.</param>
+public sealed record StockResult(StockOutcome Outcome);
+/// <summary>Closed reservation creation outcome.</summary>
+[JsonConverter(typeof(JsonStringEnumConverter<ReservationCreationOutcome>))]
+public enum ReservationCreationOutcome
+{
+    /// <summary>The reservation fact was created.</summary>
+    Created,
+    /// <summary>Reservation quantity must be positive.</summary>
+    InvalidQuantity
+}
+
+/// <summary>Reservations are created through the same conditional commit and receipt protocol as other entities.</summary>
+public sealed class ReservationTransitions
+{
+    /// <summary>Creates an absent reservation; retries resolve the original creation receipt.</summary>
+    public Transition<Reservation, Reservation, ReservationCreationOutcome> Create { get; }
+    /// <summary>Declares reservation creation against the canonical entity.</summary>
+    /// <param name="reservations">Canonical reservation entity.</param>
+    public ReservationTransitions(DomainEntity<Reservation> reservations)
+    {
+        Create = reservations.Transition<Reservation, ReservationCreationOutcome>(
+            id: new("fulfillment/reservation/create"), revision: new("1"), transition => transition
+                .CreatesFrom(new("reservation/initialize"), input => new Reservation(input.Id, input.Partition, input.OrderId, input.Sku, input.Quantity))
+                .Requires((reservation, _) => reservation.Quantity > 0, (_, _) => ReservationCreationOutcome.InvalidQuantity)
+                .Return(ReservationCreationOutcome.Created));
+    }
+}
 
 /// <summary>Pure guarded stock decisions, independent of persistence and orchestration.</summary>
 public sealed class InventoryTransitions
 {
     /// <summary>Checks stock and decrements it atomically with the operation receipt.</summary>
-    public Transition<InventoryItem, FulfillOrder, StockResult> Reserve { get; }
+    public Transition<InventoryItem, StockQuantity, StockResult> Reserve { get; }
     /// <summary>Compensates a previously accepted reservation in this process.</summary>
-    public Transition<InventoryItem, FulfillOrder, StockResult> Release { get; }
+    public Transition<InventoryItem, StockQuantity, StockResult> Release { get; }
 
     /// <summary>Declares guarded stock operations.</summary>
     /// <param name="inventory">Canonical inventory entity authority.</param>
     public InventoryTransitions(DomainEntity<InventoryItem> inventory)
     {
-        Reserve = inventory.Transition<FulfillOrder, StockResult>(
-            id: new("fulfillment/reserve"), revision: new("1"), transition => transition
-                .Requires((item, input) => item.Sku == input.Sku && input.Quantity > 0,
-                    (_, _) => new StockResult(false, "Invalid reservation."))
+        Reserve = inventory.Transition<StockQuantity, StockResult>(
+            id: new("fulfillment/reserve"), revision: new("2"), transition => transition
+                .Requires((item, input) => input.Quantity > 0,
+                    (_, _) => new StockResult(StockOutcome.InvalidQuantity))
                 .Requires((item, input) => item.Available >= input.Quantity,
-                    (_, _) => new StockResult(false, "Insufficient stock."))
+                    (_, _) => new StockResult(StockOutcome.InsufficientStock))
                 .Set(new("stock/update"), item => item.Available, (item, input) => item.Available - input.Quantity)
-                .Return(new StockResult(true, "Stock reserved.")));
+                .Return(new StockResult(StockOutcome.Reserved)));
 
-        Release = inventory.Transition<FulfillOrder, StockResult>(
-            id: new("fulfillment/release"), revision: new("1"), transition => transition
-                .Requires((item, input) => item.Sku == input.Sku && input.Quantity > 0,
-                    (_, _) => new StockResult(false, "Invalid release."))
+        Release = inventory.Transition<StockQuantity, StockResult>(
+            id: new("fulfillment/release"), revision: new("2"), transition => transition
+                .Requires((item, input) => input.Quantity > 0,
+                    (_, _) => new StockResult(StockOutcome.InvalidQuantity))
                 .Set(new("stock/update"), item => item.Available, (item, input) => item.Available + input.Quantity)
-                .Return(new StockResult(true, "Stock released.")));
+                .Return(new StockResult(StockOutcome.Released)));
     }
 }
 
 /// <summary>Canonical multi-entity sequence. This syntax is compiled into Process IR, never executed as C#.</summary>
 /// <param name="domain">Entity and transition authority used by the process.</param>
-[Process(id: "fulfillment/submit", revision: "5")]
+[Process(id: "fulfillment/submit", revision: "6")]
 public sealed partial class FulfillmentProcess(FulfillmentDomain domain) : ProcessModel<FulfillOrder, FulfillmentResult>
 {
     /// <inheritdoc />
@@ -172,18 +253,28 @@ public sealed partial class FulfillmentProcess(FulfillmentDomain domain) : Proce
         var stock = await process.PointRead(domain.Inventory, input.Sku,
             policy: new ProcessReadPolicy(timeout: TimeSpan.FromSeconds(2)));
         if (stock.Entity == null)
-            return new FulfillmentResult("Rejected", "Inventory does not exist.");
+            return new FulfillmentResult(FulfillmentStatus.Rejected, FulfillmentOutcome.InventoryMissing);
         // The query is advisory. A retry may observe less stock after its own prior reservation;
         // exact operation replay and the authoritative transition decide whether to mutate.
-        var reserved = await process.Transition(domain.InventoryTransitions.Reserve, input.Sku, input);
-        if (!reserved.Accepted)
-            return new FulfillmentResult("Rejected", reserved.Reason);
+        var reserved = await process.Transition(domain.InventoryTransitions.Reserve, input.Sku, new StockQuantity(input.Quantity));
+        if (reserved.Outcome == StockOutcome.InvalidQuantity)
+            return new FulfillmentResult(FulfillmentStatus.Rejected, FulfillmentOutcome.InvalidQuantity);
+        if (reserved.Outcome == StockOutcome.InsufficientStock)
+            return new FulfillmentResult(FulfillmentStatus.Rejected, FulfillmentOutcome.InsufficientStock);
         var submitted = await process.Transition(domain.OrderTransitions.Submit, input.OrderId);
         if (submitted.Outcome == SubmissionOutcome.Submitted)
-            return new FulfillmentResult("Submitted", "Stock reserved and order submitted.");
-        var released = await process.Transition(domain.InventoryTransitions.Release, input.Sku, input);
-        if (!released.Accepted)
-            return new FulfillmentResult("NeedsAttention", "Order rejected; stock compensation rejected.");
-        return new FulfillmentResult("Rejected", "Order rejected; stock released.");
+        {
+            // This one-item workflow owns one reservation per order. Creation is a receipted transition,
+            // so replay after order submission can complete this step without reserving inventory again.
+            var reservation = await process.Transition(domain.ReservationTransitions.Create, input.OrderId,
+                new Reservation(input.OrderId, stock.Entity.Partition, input.OrderId, input.Sku, input.Quantity));
+            if (reservation != ReservationCreationOutcome.Created)
+                return new FulfillmentResult(FulfillmentStatus.NeedsAttention, FulfillmentOutcome.ReservationRejected);
+            return new FulfillmentResult(FulfillmentStatus.Submitted, FulfillmentOutcome.ReservedAndSubmitted);
+        }
+        var released = await process.Transition(domain.InventoryTransitions.Release, input.Sku, new StockQuantity(input.Quantity));
+        if (released.Outcome != StockOutcome.Released)
+            return new FulfillmentResult(FulfillmentStatus.NeedsAttention, FulfillmentOutcome.CompensationRejected);
+        return new FulfillmentResult(FulfillmentStatus.Rejected, FulfillmentOutcome.OrderRejected);
     }
 }

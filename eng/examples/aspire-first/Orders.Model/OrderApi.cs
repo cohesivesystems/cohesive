@@ -17,7 +17,7 @@ public sealed class OrderApi : ApiModel
     public OrderApi(FulfillmentDomain domain, FulfillmentProcess process)
     {
         Fulfill = Endpoints.Process(process).Accepted<ServiceProcessCommand<FulfillOrder>>(
-            id: new("fulfillment"), revision: new("2"),
+            id: new("fulfillment"), revision: new("3"),
             configure: service => service
                 .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
                 .ReturnAfterAdmission(ProcessExecutionLifetime.Host)
