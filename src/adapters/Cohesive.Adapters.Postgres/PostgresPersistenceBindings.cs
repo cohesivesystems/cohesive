@@ -16,6 +16,7 @@ namespace Cohesive.Adapters.Postgres;
 public sealed partial class PostgresPersistenceBindings
 {
     readonly AuthoringState<PostgresPersistenceBindings> state;
+    readonly WeakPreparationCache<RelationQueryCompilationRequest, PostgresRelationQueryCompiledArtifact> preparedQueries = new();
     ExceptionDispatchInfo? preparationFailure;
     internal readonly Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> Tables = [];
     /// <summary>Creates offline bindings for one explicitly identified database.</summary>
@@ -27,6 +28,24 @@ public sealed partial class PostgresPersistenceBindings
         Database = database;
         state = new(() => { preparationFailure?.Throw(); return this; });
     }
+    /// <summary>Optional native receipt policy, owned by these mappings rather than service binding.</summary>
+    public PostgresTransitionReceiptOptions? ReceiptOptions { get; private set; }
+
+    /// <summary>Declares atomic operation receipts for repositories bound from this database.</summary>
+    /// <param name="options">Native schema/table and trusted partition policy.</param>
+    /// <returns>This authoring builder.</returns>
+    /// <exception cref="InvalidOperationException">Already configured or frozen.</exception>
+    public PostgresPersistenceBindings TransitionReceipts(PostgresTransitionReceiptOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return state.Edit(() =>
+        {
+            if (ReceiptOptions is not null) throw new InvalidOperationException("Receipt policy is already declared.");
+            ReceiptOptions = options;
+            return this;
+        });
+    }
+
     /// <summary>Database identity covered by these mappings.</summary>
     public PostgresRelationQueryDatabaseId Database { get; }
 
@@ -139,6 +158,11 @@ public sealed partial class PostgresPersistenceBindings
     {
         ArgumentNullException.ThrowIfNull(request);
         _ = state.Value;
+        return preparedQueries.Get(request, PrepareCore);
+    }
+
+    PostgresRelationQueryCompiledArtifact PrepareCore(RelationQueryCompilationRequest request)
+    {
         var compilation = RelationQueryStaticCompiler.Compile(request);
         if (!compilation.IsSuccessful) throw new RelationQueryPreparationException("query preparation", compilation);
         var plan = compilation.Plan!;

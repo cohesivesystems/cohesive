@@ -95,6 +95,26 @@ public sealed class TransitionFailureLoggingTests
         Assert.Equal(2, logs.Messages.Count);
     }
 
+    [Fact]
+    public async Task Prepared_DI_lifetime_reuses_scoped_logging_and_releases_on_stop()
+    {
+        var (process, fail) = await CreateProcess();
+        var logs = new FailureLogger();
+        using var factory = LoggerFactory.Create(builder => builder.SetMinimumLevel(LogLevel.Debug).AddProvider(logs));
+        using var lifetime = new ServiceProcessLifetime(factory);
+        lifetime.Log(process);
+        lifetime.Log(process);
+        await fail();
+        Assert.Empty(logs.Messages);
+        await lifetime.StartAsync(CancellationToken.None);
+        await fail();
+        Assert.Single(logs.Messages);
+        await lifetime.StopAsync(CancellationToken.None);
+        await fail();
+        Assert.Single(logs.Messages);
+        Assert.Throws<InvalidOperationException>(() => lifetime.Log(process));
+    }
+
     static IHost BuildHost(HostedServiceProcess process, FailureLogger logs)
     {
         var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();

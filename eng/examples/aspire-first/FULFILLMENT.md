@@ -1,6 +1,6 @@
 > Current entry point: `model.Endpoints` composes partial entity/query/process implementations;
-> `Build(builder.Services, persistence.ForServices(receipts))` resolves their storage and logging;
-> `app.MapServices(prepared)` maps the complete API. The standalone binding APIs below remain available.
+> `builder.Services.AddCohesiveServices(model.Endpoints, ...)` registers preparation from native DI resources;
+> `await app.MapServicesAsync<OrderEndpoints>()` prepares and maps the complete API before traffic. The standalone binding APIs below remain available.
 
 # From implied creation to a multi-entity process
 
@@ -9,8 +9,8 @@ attach to the same domain definitions. `FulfillmentProcess.Execute` is authoring
 Process IR, not an async application coordinator. Its class-level `[Process]` declaration generates an instance-owned, cached definition that can be inspected and fingerprinted.
 `FulfillmentApplication` supplies shared instances of the domain, queries, transitions and process.
 `OrderApi` colocates service policy with its process endpoint pair. Generated process dependencies supply
-the transitions and stock lookup; HTTP relations remain separate API query bindings. `ServiceApiBindingsBuilder.Build(..., persistence.ForServices(receipts))` prepares exact links, catalogs
-and the shared runtime at startup, matching repositories against the declared entity contracts. Receipt schema must be bound and validated before constructing receipt-capable repositories.
+the transitions and stock lookup; HTTP relations remain separate API query bindings. `AddCohesiveServices` and `MapServicesAsync` prepare exact links, catalogs
+and the shared runtime once from the final host provider, matching repositories against the declared entity contracts. Receipt policy is declared on the storage mappings. Composition validates its schema before constructing receipt-capable repositories.
 The binding phase retains canonical compiler diagnostics;
 applications bind domain operations to repositories without recreating adapters and dispatch catalogs.
 

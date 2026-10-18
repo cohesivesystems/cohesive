@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Infra;
 using Cohesive.Infra.Realization;
@@ -13,6 +15,23 @@ namespace Cohesive.Adapters.Postgres.Services;
 /// <summary>Prepares endpoint-selected heterogeneous queries once for native binding and infrastructure inference.</summary>
 public static class PostgresComposedServiceExtensions
 {
+    /// <summary>Prepares a composite storage model using each source's canonical acquisition declaration.</summary>
+    /// <param name="bindings">Local native database mappings and receipt policy.</param>
+    /// <param name="plan">Endpoint requirements, including consistency.</param>
+    /// <param name="sources">Exact native contributions declared by the storage model.</param>
+    /// <param name="policy">Explicit bounded query policy.</param>
+    /// <returns>One preparation for infrastructure evidence and DI runtime binding.</returns>
+    public static PostgresComposedServicePreparation ComposeServices(this PostgresPersistenceBindings bindings,
+        ServiceImplementationPlan plan, IEnumerable<IEntityStorageBinding> sources,
+        Func<int, long, PostgresRelationQueryComposedPolicy> policy)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        var selected = sources.ToImmutableArray();
+        var result = bindings.PrepareComposedService(plan, new(selected.Select(source => source.Source)), policy);
+        result.AttachSources(selected);
+        return result;
+    }
+
     /// <summary>Derives source acquisition requirements and bounded evaluation requirements from actual physical preparation.</summary>
     /// <param name="bindings">Offline PostgreSQL mappings.</param><param name="plan">Authoritative endpoint selections.</param>
     /// <param name="sources">Offline remote source contracts.</param><param name="policy">Explicit bounds/partition policy for each selected query.</param>
@@ -43,9 +62,30 @@ public static class PostgresComposedServiceExtensions
 /// <summary>Exact selected plans and evidence for independently observed sources.</summary>
 /// <remarks>Requirements describe bounded plan execution, not live access or schema readiness. A native prefix's
 /// SQL snapshot never extends to remote reads. Physical-plan and source fingerprints remain evidence, not capability IDs.</remarks>
-public sealed class PostgresComposedServicePreparation
+public sealed class PostgresComposedServicePreparation : IServiceStorageComposition
 {
     readonly PostgresPersistenceBindings bindings;
+    ImmutableArray<IEntityStorageBinding> nativeSources = [];
+    /// <inheritdoc />
+    public ImmutableArray<object> Bindings => [bindings, .. nativeSources];
+
+    internal void AttachSources(ImmutableArray<IEntityStorageBinding> sources) => nativeSources = sources;
+
+    /// <inheritdoc />
+    public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        if (Sources.Keys.Any(id => !nativeSources.Any(source => source.Source.Source.Id == id)))
+            throw new InvalidOperationException("DI composition requires declared native sources; use ComposeServices or explicit Bind.");
+        var database = services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value);
+        var receipts = bindings.ReceiptOptions is { } options
+            ? await options.BindAsync(database, cancellationToken).ConfigureAwait(false) : null;
+        var sources = new EntityStorageRegistration[nativeSources.Length];
+        for (var index = 0; index < sources.Length; index++)
+            sources[index] = await nativeSources[index].BindAsync(services, cancellationToken).ConfigureAwait(false);
+        return Bind(bindings.Bind(database, "di/" + bindings.Database.Value), receipts, sources);
+    }
+
     readonly Dictionary<object, (ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries;
     /// <summary>Local database acquisition requirements and evidence.</summary>
     public ComposedQueryResourceEvidence Postgres { get; }

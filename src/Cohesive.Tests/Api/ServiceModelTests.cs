@@ -432,6 +432,102 @@ public sealed class ServiceModelTests
         Assert.Contains(error.Validation.Diagnostics, diagnostic => diagnostic.Code == "services.api.querySelectionMismatch");
     }
 
+    sealed class QueryBindings : ApiBindingModel
+    {
+        public QueryBindings() { var api = new Catalog(); Bindings.Implement(api, First).Implement(api, Second); }
+    }
+    sealed class OwnedResource : IDisposable
+    {
+        public int Disposals;
+        public void Dispose() => Disposals++;
+    }
+
+    [Fact]
+    public async Task DI_prepares_once_from_shared_resources_before_mapping_and_disposes_only_at_host_end()
+    {
+        var builder = WebApplication.CreateBuilder();
+        var created = 0;
+        var resource = new OwnedResource();
+        builder.Services.AddKeyedSingleton<OwnedResource>("existing-resource", (_, _) => { created++; return resource; });
+        var preparations = 0;
+        var persistence = new Persistence();
+        builder.Services.AddCohesiveServices(new QueryBindings(), (services, token) =>
+        {
+            preparations++;
+            Assert.Same(resource, services.GetRequiredKeyedService<OwnedResource>("existing-resource"));
+            return ValueTask.FromResult<IServicePersistence>(persistence);
+        });
+        Assert.Equal(0, created);
+        var app = builder.Build();
+        try
+        {
+            await app.MapServicesAsync<QueryBindings>();
+            app.Urls.Add("http://127.0.0.1:0");
+            await app.StartAsync();
+            using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+            Assert.Equal("one", (await client.GetFromJsonAsync<Detail>("/first/one"))!.Id);
+            Assert.Equal(1, preparations);
+            Assert.Equal(1, created);
+            Assert.Equal(2, persistence.Prepared);
+            Assert.Equal(0, resource.Disposals);
+            await app.StopAsync();
+        }
+        finally { await app.DisposeAsync(); }
+        Assert.Equal(1, resource.Disposals);
+    }
+
+    [Fact]
+    public async Task Failed_DI_preparation_is_retained_and_borrowed_resources_are_not_disposed()
+    {
+        var builder = WebApplication.CreateBuilder();
+        var resource = new OwnedResource();
+        builder.Services.AddKeyedSingleton("existing-resource", resource);
+        var attempts = 0;
+        builder.Services.AddCohesiveServices(new QueryBindings(), (services, token) =>
+        {
+            attempts++;
+            Assert.Same(resource, services.GetRequiredKeyedService<OwnedResource>("existing-resource"));
+            throw new InvalidOperationException("schema requires migration");
+        });
+        await using (var app = builder.Build())
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => app.MapServicesAsync<QueryBindings>());
+            await Assert.ThrowsAsync<InvalidOperationException>(() => app.MapServicesAsync<QueryBindings>());
+            Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
+        }
+        Assert.Equal(1, attempts);
+        Assert.Equal(0, resource.Disposals);
+        resource.Dispose();
+    }
+
+    [Fact]
+    public async Task Canceled_initial_preparation_does_not_allocate_or_publish_routes()
+    {
+        var builder = WebApplication.CreateBuilder();
+        var attempts = 0;
+        builder.Services.AddCohesiveServices(new QueryBindings(), (_, _) =>
+        {
+            attempts++;
+            return ValueTask.FromResult<IServicePersistence>(new Persistence());
+        });
+        await using var app = builder.Build();
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => app.MapServicesAsync<QueryBindings>(cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => app.MapServicesAsync<QueryBindings>());
+        Assert.Equal(0, attempts);
+        Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
+    }
+
+    [Fact]
+    public void Duplicate_DI_model_registration_fails_before_resource_preparation()
+    {
+        var services = new ServiceCollection();
+        services.AddCohesiveServices(new QueryBindings(), (_, _) => ValueTask.FromResult<IServicePersistence>(new Persistence()));
+        Assert.Throws<InvalidOperationException>(() => services.AddCohesiveServices(new QueryBindings(),
+            (_, _) => ValueTask.FromResult<IServicePersistence>(new Persistence())));
+    }
+
     sealed class Persistence(RelationQueryConsistency suppliedConsistency = RelationQueryConsistency.SingleSnapshot) : IServicePersistence
     {
         internal int Prepared;

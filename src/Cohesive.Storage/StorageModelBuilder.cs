@@ -9,6 +9,30 @@ namespace Cohesive.Storage;
 public sealed class StorageModelBuilder
 {
     readonly List<object> bindings = [];
+    IStorageComposition? composition;
+
+    /// <summary>Optional prepared composition over declared native sources.</summary>
+    public IStorageComposition? Composition => composition;
+
+    /// <summary>Prepares and retains one composition over this model's exact declared sources.</summary>
+    /// <typeparam name="T">Adapter-owned offline preparation.</typeparam>
+    /// <param name="prepare">Offline recipe; must reference only contributions already declared here.</param>
+    /// <returns>The shared preparation, also available through the model.</returns>
+    /// <exception cref="ArgumentNullException">The recipe is null.</exception>
+    /// <exception cref="InvalidOperationException">Already composed, frozen, or a source is foreign.</exception>
+    public T Compose<T>(Func<T> prepare) where T : class, IStorageComposition
+    {
+        ArgumentNullException.ThrowIfNull(prepare);
+        return state.Edit(() =>
+        {
+            if (composition is not null) throw new InvalidOperationException("Storage composition is already declared.");
+            var result = prepare() ?? throw new InvalidOperationException("Storage preparation returned null.");
+            if (result.Bindings.IsDefaultOrEmpty || result.Bindings.Any(source => !bindings.Any(item => ReferenceEquals(item, source))))
+                throw new InvalidOperationException("A storage composition must reference this model's declared binding instances.");
+            composition = result;
+            return result;
+        });
+    }
     readonly AuthoringState<ImmutableArray<object>> state;
 
     /// <summary>Starts an independent storage declaration lifetime.</summary>
@@ -26,6 +50,7 @@ public sealed class StorageModelBuilder
         ArgumentNullException.ThrowIfNull(define);
         return state.Edit(() =>
         {
+            if (composition is not null) throw new InvalidOperationException("Declare every storage binding before composing them.");
             var result = define() ?? throw new InvalidOperationException("Storage authoring returned no bindings.");
             bindings.Add(result);
             return result;

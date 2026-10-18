@@ -1,5 +1,6 @@
 using Cohesive.Adapters.Postgres;
 using Cohesive.Storage;
+using Cohesive.Adapters.Postgres.Services;
 
 namespace AspireFirst.Orders;
 
@@ -8,16 +9,19 @@ public sealed class FulfillmentStorage : StorageModel
 {
     /// <summary>Builds immutable offline mappings without opening a connection.</summary>
     /// <param name="domain">Shared canonical entities.</param>
+    /// <param name="endpoints">Shared endpoint selections.</param>
     /// <param name="mappings">Shared native table mappings.</param>
-    public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings)
+    public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints)
     {
         Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
             new(FulfillmentStoragePolicy.OrdersDatabaseName), storage =>
             {
+                storage.TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition));
                 storage.Entity(domain.Orders, mappings.Orders);
                 storage.Entity(domain.Reservations, mappings.Reservations);
                 storage.Entity(domain.Inventory, mappings.Inventory);
             }));
+        Storage.Compose(() => new PostgresStorageComposition(Bindings, endpoints.Plan));
     }
 
     /// <summary>Native mappings for the primary database.</summary>

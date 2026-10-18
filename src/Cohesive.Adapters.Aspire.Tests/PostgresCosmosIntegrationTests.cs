@@ -11,6 +11,7 @@ using Cohesive.Prelude;
 using Cohesive.Storage;
 using Microsoft.Azure.Cosmos;
 using Npgsql;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
@@ -31,9 +32,13 @@ public sealed class PostgresCosmosIntegrationTests
             PostgresCosmosStorage.PartitionPath)).Container;
         using (var schema = new StreamReader(typeof(PostgresCosmosStorage).Assembly.GetManifestResourceStream("Orders.PostgresCosmos.schema.sql")!))
         await using (var initialize = orders.CreateCommand(await schema.ReadToEndAsync())) await initialize.ExecuteNonQueryAsync();
-        var receiptOptions = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
+        var receiptOptions = model.Storage.PostgresBindings.ReceiptOptions!;
         await using (var initialize = orders.CreateCommand(receiptOptions.SchemaSql)) await initialize.ExecuteNonQueryAsync();
-        var persistence = model.Storage.Bind(orders, container, await receiptOptions.BindAsync(orders));
+        var services = new ServiceCollection();
+        services.AddKeyedSingleton(FulfillmentStoragePolicy.OrdersDatabaseName, orders);
+        services.AddKeyedSingleton(PostgresCosmosStorage.CosmosAccount, cosmos);
+        await using var provider = services.BuildServiceProvider();
+        var persistence = await model.Storage.RequireComposition<IServiceStorageComposition>().BindAsync(provider);
         var inventory = persistence.Repository(ValueContract.FromShape(model.Domain.Inventory.Definition.Shape));
         var sku = "mixed-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create();

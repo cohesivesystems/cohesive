@@ -117,7 +117,7 @@ setup, including when that reader was already cached for an independent-source r
 
 `PostgresCosmosStorage` declares inventory once with `CosmosEntityStorageBinding`: its entity, canonical
 identity, native container, fixed partition and acquisition limits supply both the repository and query
-source. `Preparation.Bind(postgres, receipts, Inventory.Bind(container))` resolves every query selected
+source. `Storage.Compose(...)` retains the selected preparation; its DI binding resolves every query selected
 by the endpoint plan; adding an endpoint query does not require another registration in `Bind`. Readers
 are shared within that persistence instance, while inputs and results remain invocation-scoped. A foreign
 query, changed bound or stronger consistency request is rejected even after a reader has been cached.
@@ -182,3 +182,34 @@ the worker. `PostgresCosmosStorage` owns the SQL mappings, offline Cosmos contai
 physical preparation. Native account/database/container names are checked when associated; the worker
 gets its connection from the corresponding native Aspire reference. Its `Bind` supplies runtime clients
 to those plans without rediscovering the split or recompiling the physical remainder.
+
+## Storage preparation and native resource ownership
+
+`StorageModel` owns native mappings, receipt configuration and a single offline composition. The PostgreSQL
+example composes its endpoint plan with `PostgresStorageComposition`; the mixed example uses
+`ComposeServices` with its declared Cosmos source. Infrastructure consumes this same preparation through
+`RequireComposition<T>()`. There is no extra `Preparation` property or application-owned mixed-store `Bind` recipe.
+
+The workers register keyed native singleton clients using the **existing Aspire connection names** (`orders`
+and `inventory-cosmos`). No additional resource catalog is introduced. A PostgreSQL data source owns its pool;
+a Cosmos client owns its connections/caches. Repositories and readers borrow these resources. The Marten store
+uses the exact DI data source selected for the relational repositories.
+
+```csharp
+// For a database whose schema is already migrated:
+builder.Services.AddCohesiveServices(model.Endpoints, model.Storage);
+await using var app = builder.Build();
+await app.MapServicesAsync<OrderEndpoints>();
+await app.RunAsync();
+```
+
+The runnable demo uses the asynchronous preparation overload to perform **explicit demo schema initialization**
+and attach Marten history/outbox before returning the composed service persistence. Library binding only
+validates receipt and Cosmos container metadata; it never creates cloud resources or changes schema.
+Registration performs no native IO. Mapping awaits one cached preparation; failure or cancellation prevents
+route publication and remains failed for that host. Rebuild the host after correcting configuration.
+
+DI factory registrations own client disposal; registrations of externally supplied instances leave disposal to
+the caller. Stop the host before disposing it so admitted workers stop before native clients are released.
+Do not build a second service provider, allocate clients in repositories, or put request identity, transactions,
+query iterators or results in singleton state. Direct native binding APIs remain available without DI.

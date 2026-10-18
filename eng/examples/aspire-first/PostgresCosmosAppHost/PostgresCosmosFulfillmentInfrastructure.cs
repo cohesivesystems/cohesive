@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Postgres.Services;
 using AspireFirst.Orders;
 using Aspire.Hosting;
 using Cohesive.Infra;
@@ -29,7 +30,7 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
             bindingProfileId: new("example/orders-postgres-cosmos/bindings"),
             infra =>
             {
-                var prepared = model.Storage.Preparation;
+                var prepared = model.Storage.RequireComposition<PostgresComposedServicePreparation>();
                 infra.Resource(Orders).Persistent().Prepared(prepared.Postgres);
                 infra.Resource(Inventory).Persistent().Prepared(prepared.Sources[model.Storage.Inventory.Query.Binding.Source.Id]);
                 var worker = infra.Workload(Worker).Requires(AspireInfrastructure.DotNetProjectExecution)
@@ -63,7 +64,7 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
             variant: new("development"),
             associations =>
             {
-                var prepared = Application.Storage.Preparation;
+                var prepared = Application.Storage.RequireComposition<PostgresComposedServicePreparation>();
                 var source = Application.Storage.Inventory.Query;
                 // Native names are shared with the source declaration; no account endpoint is invented offline.
                 if (cosmos.Resource.Name != source.Account || database.Resource.DatabaseName != source.Database

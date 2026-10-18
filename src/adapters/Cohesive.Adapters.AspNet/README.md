@@ -474,3 +474,18 @@ explicit `bind`/`project` overloads. No additional encoding or compilation is in
 through protected `Bindings`; activation freezes recipes and validates their complete API coverage before
 infrastructure consumers inspect `Plan`. Runtime `Build(services, persistence)` remains explicit and cached
 for the exact host. Direct builder authoring remains supported.
+
+### DI-backed storage preparation
+
+`services.AddCohesiveServices(apiBindingModel, storageModel)` registers offline contracts and lifecycle support
+without constructing a second provider or resolving clients. The storage model must own an
+`IServiceStorageComposition`. After building the host, `await app.MapServicesAsync<TBindings>()` awaits native
+metadata validation, resolves each repository/query and maps the prepared API. Startup reuses this preparation
+and starts its host-owned process workers. A preparation failure publishes no routes; the failed task remains
+attached to that host rather than silently retrying metadata or allocation work.
+
+An asynchronous factory overload permits explicit schema migration and optional native attachments. Resources
+are borrowed from the final host provider and remain under their original DI ownership. This callback runs once;
+request/tenant state and transaction lifetimes must not be captured in its singleton result. Use keyed singleton
+SDK registrations under existing infrastructure connection names. The original explicit `Build` and
+`MapServices` APIs remain available for callers that prepare native persistence themselves.
