@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using Cohesive.Api.Execution.Services;
 using AspireFirst.Orders;
 using System.Diagnostics;
@@ -19,7 +20,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 [Collection("Order PostgreSQL schema")]
 public sealed partial class OrderStorageIntegrationTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
     const string ConnectionVariable = "COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING";
 
     [PostgresFact]

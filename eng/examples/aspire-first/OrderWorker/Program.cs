@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using AspireFirst;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
@@ -7,7 +8,7 @@ using Cohesive.Adapters.Postgres.Services;
 using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
-var model = new FulfillmentApplication();
+var model = ModelActivator.Create<FulfillmentApplication>();
 builder.Services.AddRequestOperationContext();
 builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
 builder.Services.AddCohesiveExceptionHandling();
@@ -26,7 +27,7 @@ await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync
 await using (var initializeReceipts = database.CreateCommand(receipts.SchemaSql))
     await initializeReceipts.ExecuteNonQueryAsync();
 var receiptStorage = await receipts.BindAsync(database);
-var services = model.Services.Build(builder.Services, persistence.ForServices(receiptStorage));
+var services = model.Endpoints.Build(builder.Services, persistence.ForServices(receiptStorage));
 
 var app = builder.Build();
 app.UseExceptionHandler();

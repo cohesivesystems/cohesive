@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Api;
 using Cohesive.Execution;
@@ -12,7 +13,7 @@ public sealed class CompositionModelTests
     [Fact]
     public void Colocated_and_separate_service_authoring_produce_identical_contracts()
     {
-        var model = new FulfillmentApplication();
+        var model = ModelActivator.Create<FulfillmentApplication>();
         var process = model.Process;
         var separate = Service.Define(new("fulfillment"), new("2"), process.Provenance)
             .Use(new ServiceDependencies().Process(process))
@@ -29,7 +30,7 @@ public sealed class CompositionModelTests
     [Fact]
     public void Accepted_fulfillment_reuses_process_and_declares_independent_receipt_and_polling_contracts()
     {
-        var model = new FulfillmentApplication();
+        var model = ModelActivator.Create<FulfillmentApplication>();
         var api = model.Api;
         Assert.Equal(7, api.Definition.Endpoints.Count);
         Assert.Equal(api.Fulfill.Service.Build().Reference, api.Fulfill.Declaration.Reference);
@@ -61,9 +62,12 @@ public sealed class CompositionModelTests
     [Fact]
     public void Independent_program_models_keep_typed_authorities_isolated_but_semantically_equal()
     {
-        var appHost = new FulfillmentApplication();
-        var worker = new FulfillmentApplication();
+        var appHost = ModelActivator.Create<FulfillmentApplication>();
+        var worker = ModelActivator.Create<FulfillmentApplication>();
         Assert.NotSame(appHost.Domain, worker.Domain);
+        Assert.Collection(appHost.Storage.Definition,
+            value => Assert.Same(appHost.Storage.Bindings, value),
+            value => Assert.Same(appHost.Storage.InventoryBindings, value));
         Assert.Same(appHost.Storage.Bindings.Mapping(appHost.Domain.Inventory),
             appHost.Storage.InventoryBindings.Mapping(appHost.Domain.Inventory));
         Assert.NotSame(appHost.Domain.Orders.Definition, worker.Domain.Orders.Definition);

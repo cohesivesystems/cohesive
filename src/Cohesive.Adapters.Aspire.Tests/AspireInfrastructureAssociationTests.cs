@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using Cohesive.Adapters.Aspire.Postgres;
 using Cohesive.Relations.Infra;
 using Aspire.Hosting;
@@ -13,7 +14,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class AspireInfrastructureAssociationTests
 {
-    static readonly OrdersApp ExampleApp = new();
+    static readonly OrdersApp ExampleApp = ModelActivator.Create<OrdersApp>();
 
     static readonly SourceReference Source = SourceReference.Create("test", "aspire-first");
     static InfrastructureTargetImplementation Storage => ResourceImplementation(new("test/storage"),
@@ -51,7 +52,7 @@ public sealed class AspireInfrastructureAssociationTests
     public void Project_inference_requires_native_metadata_and_does_not_claim_durable_execution()
     {
         var builder = Builder();
-        var configured = new OrdersApp().Configure(builder);
+        var configured = ModelActivator.Create<OrdersApp>().Configure(builder);
         var project = builder.CreateResourceBuilder((ProjectResource)configured.Resources[OrdersApp.Worker]);
         var definition = Infrastructure.Define(new("test/project"), new("1"), new("test/project/bindings"), infra =>
             infra.Workload(OrdersApp.Worker).Requires(AspireInfrastructure.DotNetProjectExecution)
@@ -103,7 +104,7 @@ public sealed class AspireInfrastructureAssociationTests
     public void Runnable_example_uses_generated_project_metadata_and_existing_native_database()
     {
         var builder = Builder();
-        var association = new OrdersApp().Configure(builder);
+        var association = ModelActivator.Create<OrdersApp>().Configure(builder);
         Assert.True(association.Deployment.IsComplete,
             string.Join(Environment.NewLine, association.Deployment.Diagnostics.Select(d => d.Message)));
         Assert.Equal(2, association.Resources.Count);

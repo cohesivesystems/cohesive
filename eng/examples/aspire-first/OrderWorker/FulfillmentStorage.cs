@@ -1,52 +1,46 @@
 using Cohesive.Adapters.Postgres;
 using Npgsql;
+using Cohesive.Storage;
 
 namespace AspireFirst.Orders;
 
 /// <summary>Instance-owned native storage attachments to the exact domain supplied by composition.</summary>
-public sealed class FulfillmentStorage
+public sealed class FulfillmentStorage : StorageModel
 {
-    readonly FulfillmentDomain domain;
-
     /// <summary>Builds immutable offline mappings without opening a connection.</summary>
     /// <param name="domain">Shared canonical entities.</param>
     public FulfillmentStorage(FulfillmentDomain domain)
     {
-        this.domain = domain;
-        Bindings = PostgresPersistenceBindings.Define(new(FulfillmentResources.DatabaseName), Configure);
-        InventoryBindings = PostgresPersistenceBindings.Define(new(FulfillmentResources.InventoryDatabaseName),
-            storage => storage.Entity(domain.Inventory, Bindings.Mapping(domain.Inventory)));
+        Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
+            new(FulfillmentResources.DatabaseName), storage =>
+            {
+                storage.Entity(domain.Orders, order => order
+                    .Table("public", "cohesive_orders")
+                    .Identity(value => value.Id, "order_id")
+                    .Partition(value => value.Partition, "partition_key")
+                    .Column(value => value.Status, "status"));
+                storage.Entity(domain.Reservations, reservation => reservation
+                    .Table("public", "cohesive_reservations")
+                    .Identity(value => value.Id, "reservation_id")
+                    .Partition(value => value.Partition, "partition_key")
+                    .Column(value => value.OrderId, "order_id")
+                    .Column(value => value.Sku, "sku")
+                    .Column(value => value.Quantity, "quantity"));
+                storage.Entity(domain.Inventory, item => item
+                    .Table("public", "cohesive_inventory")
+                    .Identity(value => value.Sku, "sku")
+                    .Partition(value => value.Partition, "partition_key")
+                    .Column(value => value.Available, "available"));
+            }));
+        InventoryBindings = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentResources.InventoryDatabaseName),
+            storage => storage.Entity(domain.Inventory, Bindings.Mapping(domain.Inventory))));
     }
 
-    /// <summary>All entities colocated in the native database.</summary>
+    /// <summary>Native mappings for the primary database.</summary>
     public PostgresPersistenceBindings Bindings { get; }
+
     /// <summary>Only inventory for the independently placed remote source.</summary>
     public PostgresPersistenceBindings InventoryBindings { get; }
-
-    /// <summary>Contributes native mappings; the same recipe can be applied inline.</summary>
-    /// <param name="storage">Caller-owned PostgreSQL authoring builder.</param>
-    public void Configure(PostgresPersistenceBindings storage)
-    {
-        storage.Entity(domain.Orders, order => order
-            .Table("public", "cohesive_orders")
-            .Identity(value => value.Id, "order_id")
-            .Partition(value => value.Partition, "partition_key")
-            .Column(value => value.Status, "status"));
-        storage.Entity(domain.Reservations, reservation => reservation
-            .Table("public", "cohesive_reservations")
-            .Identity(value => value.Id, "reservation_id")
-            .Partition(value => value.Partition, "partition_key")
-            .Column(value => value.OrderId, "order_id")
-            .Column(value => value.Sku, "sku")
-            .Column(value => value.Quantity, "quantity"));
-        ConfigureInventory(storage);
-    }
-
-    void ConfigureInventory(PostgresPersistenceBindings storage) => storage.Entity(domain.Inventory, item => item
-        .Table("public", "cohesive_inventory")
-        .Identity(value => value.Sku, "sku")
-        .Partition(value => value.Partition, "partition_key")
-        .Column(value => value.Available, "available"));
 
     /// <summary>Attaches the configured native data source; ownership remains with the caller.</summary>
     /// <param name="database">Native data source.</param><returns>A runtime persistence registration.</returns>

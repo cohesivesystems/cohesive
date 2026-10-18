@@ -469,3 +469,8 @@ policies invoke the same authorization object as runtime admission, with separat
 capability-name collisions. Supplying `authorizationPolicyResolver` explicitly retains native policy ownership.
 Identity acquisition and authentication remain host responsibilities. Custom transport contracts retain the
 explicit `bind`/`project` overloads. No additional encoding or compilation is introduced per request.
+
+`ApiBindingModel` is an optional constructor-authoring shell over `ServiceApiBindingsBuilder`. Contribute
+through protected `Bindings`; activation freezes recipes and validates their complete API coverage before
+infrastructure consumers inspect `Plan`. Runtime `Build(services, persistence)` remains explicit and cached
+for the exact host. Direct builder authoring remains supported.

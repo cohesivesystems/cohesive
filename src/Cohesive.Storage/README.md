@@ -236,3 +236,19 @@ retain explicit host/context placement. Physical placement is not authorization.
 cases used by memory, SQLite, PostgreSQL and the environment-gated Cosmos suite. Native corruption and rollback
 cases remain with their providers. See `TransitionReceiptValidationBenchmarks` for warm encoding cost; no cache
 bypasses validation of retained or externally modified evidence.
+
+## Optional instance authoring
+
+`StorageModel` groups any number of native offline bindings, including different databases or providers.
+Assign strongly typed properties in the constructor with `Storage.Define(() => AdapterBindings.Define(...))`.
+Each recipe runs once during declaration and must return frozen, validated bindings without IO. Adapter errors
+surface immediately; failed recipes add nothing. Activation freezes membership, and `Definition` exposes the
+same native objects in declaration order without re-preparing them. It is an authoring collection, not a new
+portable storage IR. Use `StorageModelBuilder` directly when a subclass is unnecessary, or use adapter builders
+alone. Runtime connections remain explicit attachments.
+
+
+For example, one `FulfillmentStorage : StorageModel` declares both `Bindings` and `InventoryBindings`
+using `Storage.Define(...)`. Both properties retain `PostgresPersistenceBindings` as their type; the base
+class does not select a provider or require another subclass for each database. Different adapters can
+contribute their own immutable binding types through the same builder.

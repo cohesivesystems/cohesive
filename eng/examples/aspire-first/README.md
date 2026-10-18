@@ -50,17 +50,17 @@ There is no global singleton. The AppHost prepares offline evidence from this re
 Aspire's connection configuration to its own equivalent recipe. They share source declarations, not runtime objects.
 
 ```csharp
-var model = new FulfillmentApplication();
+var model = ModelActivator.Create<FulfillmentApplication>();
 var persistence = model.Storage.Bind(database);
-var services = OrderEndpoints.Define(model)
+var services = model.Endpoints
     .Build(builder.Services, persistence.ForServices(receiptStorage));
 // After builder.Build() and middleware:
 app.MapServices(services);
 ```
 
-`DomainModel`, `QueryModel` and `ApiModel` provide their immutable definitions automatically. Reading
-`ApplicationModelBuilder` resolves the explicitly registered declaration types by constructor dependency and freezes
-their catalogs during Build. No hand-ordered construction or forced Definition reads are required. Missing or cyclic
+`DomainModel`, `QueryModel` and `ApiModel` provide their immutable definitions automatically.
+`ModelActivator` discovers concrete constructor dependencies, resolves them through DI, and freezes
+each dependency before constructing its consumer. No hand-ordered construction or forced Definition reads are required. Missing or cyclic
 dependencies and duplicate process revisions fail at setup. Direct builders remain supported.
 PostgreSQL `Define(databaseId, configure)` accepts extracted configuration methods or inline lambdas through
 the same native builder and freezes the resulting mappings. The inventory-only placement uses the same
@@ -119,7 +119,7 @@ references that exact declaration in the canonical API and passes it to the shar
 The binding compiles once during registration and retains the plan for requests; invalid declarations
 fail registration with a `TransitionApiPreparationException` retaining structured compiler diagnostics. No global compilation cache or per-request compilation is added.
 All order routes and the fulfillment start/result endpoints are declared as instance-owned portable handles in `OrderApi`.
-`OrderEndpoints.Define(model)` contributes implementations through `ServiceApiBindingsBuilder.Implement(model.Api, ...)`.
+`model.Endpoints` contributes implementations through `ServiceApiBindingsBuilder.Implement(model.Api, ...)`.
 Entity operations retain the existing typed entity binding; queries use typed endpoint selectors with explicit bounds.
 A second contribution binds Fulfill to the existing service through the bounded host-owned worker. Native route input and response
 policies remain at the ASP.NET seam, and `app.MapServices` publishes the complete validated surface. Callbacks receive
@@ -570,7 +570,7 @@ model belongs to one route builder; build another model for another host. Native
 
 
 
-Endpoint implementation coverage is inspectable offline through `model.Services.Plan.Definition`.
+Endpoint implementation coverage is inspectable offline through `model.Endpoints.Plan.Definition`.
 The portable plan in `Cohesive.Api.Execution` owns query selections used by AppHost; HTTP recipes attach
 in the ASP.NET adapter. Wrong or duplicate query/process endpoint handles fail during contribution,
 and missing coverage fails before storage resolution. Repeated host preparation reuses the same prepared
@@ -593,9 +593,9 @@ Fulfill = Endpoints.Process(process).Accepted<ServiceProcessCommand<FulfillOrder
     startRoute: "/fulfillment", resultRoute: "/fulfillment/results/{instanceId}");
 ```
 
-`OrderEndpoints.Define` binds this pair through `BindHosted(api => api.Fulfill, ...)`; the pair retains the
+`OrderEndpoints` binds this pair through `BindHosted(api => api.Fulfill, ...)`; the pair retains the
 service and process recipe, so neither is repeated at binding.
-`Program` still calls `model.Services.Build(...)` and `app.MapServices(...)`. Authoring and AppHost inspection
+`Program` still calls `model.Endpoints.Build(...)` and `app.MapServices(...)`. Authoring and AppHost inspection
 perform no execution or database access; Build prepares the exact native dependencies once and registers the
 worker with the generic host. There is no parallel accepted API or second service declaration.
 

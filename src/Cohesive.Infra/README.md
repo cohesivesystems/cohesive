@@ -256,3 +256,10 @@ Artifacts are produced once at the deployment boundary; they neither execute nor
 health or runtime capability, contain no provider options or credential payload by design, and do not
 self-authenticate. Trust source/run provenance independently. Do not relabel historical handoff evidence
 as a new deployment artifact: the source reference domain is deliberately distinct.
+
+## Optional instance authoring
+
+Derive from `InfrastructureModel` and call protected `Define(id, revision, bindingProfileId, configure)` once
+in the constructor. It uses the same coordinated builder as `Infrastructure.Define`; `Definition` is cached
+and activation completes it through `IAuthoringModel`. Native resource construction stays in explicit adapter
+methods. The model never wraps provider options or creates resources during preparation.

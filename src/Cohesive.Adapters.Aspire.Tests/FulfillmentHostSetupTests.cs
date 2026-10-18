@@ -1,3 +1,4 @@
+using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Api.Execution.Services;
@@ -10,7 +11,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class FulfillmentHostSetupTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = new();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
 
     [Fact]
     public void Hosting_requires_receipt_capability_before_build_or_io()
