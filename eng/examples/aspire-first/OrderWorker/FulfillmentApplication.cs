@@ -16,10 +16,6 @@ public sealed class FulfillmentApplication : ApplicationModel
     public required FulfillmentQueries Queries { get; init; }
     /// <summary>Offline native storage attachments.</summary>
     public required FulfillmentStorage Storage { get; init; }
-    /// <summary>Order transitions.</summary>
-    public required OrderTransitions Orders { get; init; }
-    /// <summary>Inventory transitions.</summary>
-    public required InventoryTransitions Inventory { get; init; }
     /// <summary>Generated multi-entity process.</summary>
     public required FulfillmentProcess Process { get; init; }
 }

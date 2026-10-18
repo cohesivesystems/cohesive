@@ -12,8 +12,8 @@ public sealed class OrderApi : ApiModel
 {
     /// <summary>Declares the public contract using the exact transition reference.</summary>
     /// <param name="process">Execution contract.</param>
-    /// <param name="transitions">Order behavior declarations, without runtime bindings.</param>
-    public OrderApi(OrderTransitions transitions, FulfillmentProcess process)
+    /// <param name="domain">Canonical entities and order behavior, without runtime bindings.</param>
+    public OrderApi(FulfillmentDomain domain, FulfillmentProcess process)
     {
         Fulfill = Endpoints.Process(process).Accepted<ServiceProcessCommand<FulfillOrder>>(
             id: new("fulfillment"), revision: new("2"),
@@ -32,7 +32,7 @@ public sealed class OrderApi : ApiModel
         Submit = orders.Command("Submit")
             .Route("POST", "/orders/{id}/submit").RouteParameter<string>("id")
             .Result<ProblemDetails>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound)
-            .Transition(transitions.Submit.Reference).Build<OrderSummary>();
+            .Transition(domain.OrderTransitions.Submit.Reference).Build<OrderSummary>();
         Details = orders.Query("Details").Route("GET", "/orders/{id}/details")
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<OrderDetails>();
         Availability = orders.Query("availability").Route("GET", "/orders/{id}/availability")
@@ -58,8 +58,8 @@ public sealed class OrderEndpoints : ApiBindingModel
 {
     /// <summary>Authors offline bindings using the same declaration instances as the rest of the application.</summary>
     /// <param name="api">API contract.</param><param name="domain">Canonical entities.</param>
-    /// <param name="queries">Declared queries.</param><param name="transitions">Order transition contracts.</param>
-    public OrderEndpoints(OrderApi api, FulfillmentDomain domain, FulfillmentQueries queries, OrderTransitions transitions)
+    /// <param name="queries">Declared queries.</param>
+    public OrderEndpoints(OrderApi api, FulfillmentDomain domain, FulfillmentQueries queries)
     {
         Bindings.Implement(api, bindings =>
         {
@@ -69,7 +69,7 @@ public sealed class OrderEndpoints : ApiBindingModel
                     identity: order => order.Id,
                     respond: order => TypedResults.Created($"/orders/{order.Id}", new OrderCreated(order.Id)))
                 .Get(api.Get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
-                .Transition(api.Submit, transitions.Submit)
+                .Transition(api.Submit, domain.OrderTransitions.Submit)
                     .OnApplied((order, outcome) => TypedResults.Ok(new OrderSummary(order.Id, order.Status)))
                     .OnRejected(outcome => outcome.Outcome, codePrefix: "orders.submit", responses => responses
                         .Conflict(SubmissionOutcome.NotDraft, title: "Order cannot be submitted", detail: "Order must be Draft to submit.")

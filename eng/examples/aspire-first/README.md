@@ -14,7 +14,10 @@ process and API are compiled once in `Orders.Model` and referenced by both worke
 
 ## Declare → attach → bind → run
 
-1. **Declare:** `Orders.Model/FulfillmentDomain.cs` colocates entities, transitions and the process as separate types;
+1. **Declare:** `Orders.Model/FulfillmentDomain.cs` colocates entities, transitions and the process as separate types.
+   `FulfillmentDomain` owns `OrderTransitions` and `InventoryTransitions`, each authored once from its
+   canonical entity handle. API bindings and the independently registered `FulfillmentProcess` consume
+   these domain-owned authorities; transitions are not separately registered application components.
    `FulfillmentQueries.cs` defines their joined read views. The generated process sequences stock lookup,
    reservation, order submission and compensation. `OrderApi.cs` colocates the API contract and `OrderEndpoints` bindings, including fulfillment admission
    and linked result polling alongside entity/query endpoints.

@@ -26,7 +26,14 @@ public sealed class FulfillmentDomain : DomainModel
         Reservations = Entity<Reservation>("example/reservation");
         ReservationOrder = Reservations.References(reservation => reservation.OrderId, Orders);
         ReservationItem = Reservations.References(reservation => reservation.Sku, Inventory);
+        OrderTransitions = new(Orders);
+        InventoryTransitions = new(Inventory);
     }
+
+    /// <summary>Canonical order behavior, authored once against this domain's order entity.</summary>
+    public OrderTransitions OrderTransitions { get; }
+    /// <summary>Canonical stock behavior, authored once against this domain's inventory entity.</summary>
+    public InventoryTransitions InventoryTransitions { get; }
 
     /// <summary>Canonical order state authority.</summary>
     public DomainEntity<Order> Orders { get; }
@@ -102,11 +109,11 @@ public sealed class OrderTransitions
     /// <summary>Only draft orders may be submitted; a rejected decision produces no commit.</summary>
     public Transition<Order, Cohesive.Prelude.Unit, SubmitOrderResult> Submit { get; }
 
-    /// <summary>Declares guarded order operations against the supplied domain.</summary>
-    /// <param name="domain">Shared entity authority.</param>
-    public OrderTransitions(FulfillmentDomain domain)
+    /// <summary>Declares guarded order operations against the supplied entity.</summary>
+    /// <param name="orders">Canonical order entity authority.</param>
+    public OrderTransitions(DomainEntity<Order> orders)
     {
-        Submit = domain.Orders.Transition<SubmitOrderResult>(
+        Submit = orders.Transition<SubmitOrderResult>(
             id: new("example/order/submit"), revision: new("4"),
             transition => transition
                 .Requires(order => order.Status == OrderStatus.Draft, order => new SubmitOrderResult(order.Status, SubmissionOutcome.NotDraft))
@@ -133,10 +140,10 @@ public sealed class InventoryTransitions
     public Transition<InventoryItem, FulfillOrder, StockResult> Release { get; }
 
     /// <summary>Declares guarded stock operations.</summary>
-    /// <param name="domain">Shared inventory authority.</param>
-    public InventoryTransitions(FulfillmentDomain domain)
+    /// <param name="inventory">Canonical inventory entity authority.</param>
+    public InventoryTransitions(DomainEntity<InventoryItem> inventory)
     {
-        Reserve = domain.Inventory.Transition<FulfillOrder, StockResult>(
+        Reserve = inventory.Transition<FulfillOrder, StockResult>(
             id: new("fulfillment/reserve"), revision: new("1"), transition => transition
                 .Requires((item, input) => item.Sku == input.Sku && input.Quantity > 0,
                     (_, _) => new StockResult(false, "Invalid reservation."))
@@ -145,7 +152,7 @@ public sealed class InventoryTransitions
                 .Set(new("stock/update"), item => item.Available, (item, input) => item.Available - input.Quantity)
                 .Return(new StockResult(true, "Stock reserved.")));
 
-        Release = domain.Inventory.Transition<FulfillOrder, StockResult>(
+        Release = inventory.Transition<FulfillOrder, StockResult>(
             id: new("fulfillment/release"), revision: new("1"), transition => transition
                 .Requires((item, input) => item.Sku == input.Sku && input.Quantity > 0,
                     (_, _) => new StockResult(false, "Invalid release."))
@@ -155,14 +162,9 @@ public sealed class InventoryTransitions
 }
 
 /// <summary>Canonical multi-entity sequence. This syntax is compiled into Process IR, never executed as C#.</summary>
-/// <param name="domain">Inventory authority used by the native point-read contract.</param>
-/// <param name="inventory">Stock transitions.</param>
-/// <param name="orders">Submission transition.</param>
+/// <param name="domain">Entity and transition authority used by the process.</param>
 [Process(id: "fulfillment/submit", revision: "5")]
-public sealed partial class FulfillmentProcess(
-    FulfillmentDomain domain,
-    InventoryTransitions inventory,
-    OrderTransitions orders) : ProcessModel<FulfillOrder, FulfillmentResult>
+public sealed partial class FulfillmentProcess(FulfillmentDomain domain) : ProcessModel<FulfillOrder, FulfillmentResult>
 {
     /// <inheritdoc />
     protected override async ProcessTask<FulfillmentResult> Execute(ProcessContext process, FulfillOrder input)
@@ -173,13 +175,13 @@ public sealed partial class FulfillmentProcess(
             return new FulfillmentResult("Rejected", "Inventory does not exist.");
         // The query is advisory. A retry may observe less stock after its own prior reservation;
         // exact operation replay and the authoritative transition decide whether to mutate.
-        var reserved = await process.Transition(inventory.Reserve, input.Sku, input);
+        var reserved = await process.Transition(domain.InventoryTransitions.Reserve, input.Sku, input);
         if (!reserved.Accepted)
             return new FulfillmentResult("Rejected", reserved.Reason);
-        var submitted = await process.Transition(orders.Submit, input.OrderId);
+        var submitted = await process.Transition(domain.OrderTransitions.Submit, input.OrderId);
         if (submitted.Outcome == SubmissionOutcome.Submitted)
             return new FulfillmentResult("Submitted", "Stock reserved and order submitted.");
-        var released = await process.Transition(inventory.Release, input.Sku, input);
+        var released = await process.Transition(domain.InventoryTransitions.Release, input.Sku, input);
         if (!released.Accepted)
             return new FulfillmentResult("NeedsAttention", "Order rejected; stock compensation rejected.");
         return new FulfillmentResult("Rejected", "Order rejected; stock released.");

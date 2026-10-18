@@ -19,7 +19,7 @@ public sealed class FulfillmentHostSetupTests
         using var database = NpgsqlDataSource.Create("Host=localhost;Port=1;Database=unused;Username=unused");
         var inventory = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment").Repository(Model.Domain.Inventory);
         var failure = Assert.Throws<ServiceBindingValidationException>(() => Service.Define(new("test"), new("1"), Model.Process.Provenance)
-            .Operation("fulfill").Run(Model.Process.Definition, bindings => bindings.Transition(Model.Inventory.Reserve, inventory)));
+            .Operation("fulfill").Run(Model.Process.Definition, bindings => bindings.Transition(Model.Domain.InventoryTransitions.Reserve, inventory)));
         Assert.Equal("services.binding.receiptCapabilityMissing", Assert.Single(failure.Validation.Diagnostics).Code);
     }
 
@@ -30,6 +30,6 @@ public sealed class FulfillmentHostSetupTests
             Model.Domain.Inventory.Definition, EntityPartitionKeyPolicy.FromField(FulfillmentDomain.PartitionField)), item => item.Sku);
         Assert.Throws<ArgumentException>(() => Service.Define(new("test"), new("1"), Model.Process.Provenance)
             .Operation("fulfill").Run(Model.Process.Definition, bindings => bindings
-                .Transition(Model.Inventory.Reserve, inventory).Transition(Model.Inventory.Reserve, inventory)));
+                .Transition(Model.Domain.InventoryTransitions.Reserve, inventory).Transition(Model.Domain.InventoryTransitions.Reserve, inventory)));
     }
 }
