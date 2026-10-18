@@ -231,7 +231,7 @@ internal static class PreparedDeclaredObservationProjection
                     ProjectValue(entry.Value, typeof(AnnotationValue), options, depth + 1, active)))
                     throw new JsonException("Duplicate annotation property.");
             }
-            return ReuseCandidate(ObservationValue.FromOwnedObject(fields), candidate);
+            return ReuseCandidate(ObservationValue.FromOwnedObjectInOrdinalOrder(fields), candidate);
         }
         if (info.Converter is SingleValueWrapperJsonConverter.IObservationStringProjection wrapper
             && wrapper.TryGetString(value, out var wrapped))

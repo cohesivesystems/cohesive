@@ -44,6 +44,20 @@ public sealed class PreparedGraphRepresentationTests(Xunit.Abstractions.ITestOut
     }
 
     [Fact]
+    public void AnnotationProjectionPreservesDeclaredObservationByteOrdering()
+    {
+        // Constant hashes make the source enumeration insertion-ordered on every platform.
+        var annotations = ImmutableDictionary.Create<AnnotationKey, AnnotationValue>(
+            EqualityComparer<AnnotationKey>.Create(static (left, right) => left == right, static _ => 0))
+            .Add(new("z-last"), AnnotationValue.FromString("last"))
+            .Add(new("a-first"), AnnotationValue.FromString("first"));
+        Assert.Equal("z-last", annotations.First().Key.Value);
+        var source = ShapeGraphDocument.FromGraph(new(new("annotations"), [new(new("root"), [])], annotations: annotations));
+        Assert.Equal(JsonSerializer.SerializeToUtf8Bytes(Expected(source)),
+            JsonSerializer.SerializeToUtf8Bytes(ObservationValue.FromObject(source)));
+    }
+
+    [Fact]
     public void CachedInterpretationsDoNotFollowChangedOrExternalPayloads()
     {
         var source = PreparedGraphProjectionTests.Graph(1);

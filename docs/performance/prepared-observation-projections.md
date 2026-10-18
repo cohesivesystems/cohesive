@@ -289,3 +289,9 @@ python3 eng/runtime-performance/durable-bookkeeping/compare-ari.py \
 The comparator now retains optional `cpu_ms` from the existing Ari harness. Benchmark commands remain
 those above; freeze the same benchmark binary in both directories and use each variant's Core DLL.
 Raw traces stay outside Git and are identified by hashes in the manifest.
+
+Publication qualification also covers hash-independent annotation byte ordering: Linux CI exposed
+that the new annotation dictionary projection had retained source hash enumeration order. It now
+uses the existing token-reader ordering helper. A constant-hash comparer regression fails before
+this correction and passes after it. The source measurements above precede this small ordering
+correction; they remain identified by the checked-in runtime manifest.

@@ -1865,7 +1865,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     }
 
     // Called only with invocation-owned storage; the ordering helper copies before it is cleared.
-    static ObservationValue FromOwnedObjectInOrdinalOrder(Dictionary<string, ObservationValue> values)
+    internal static ObservationValue FromOwnedObjectInOrdinalOrder(Dictionary<string, ObservationValue> values)
     {
         if (values.Count == 0) return FromObject(EmptyObjectValues);
         using var ordered = new OrderedObservationFields(values);
