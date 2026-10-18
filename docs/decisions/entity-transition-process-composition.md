@@ -51,7 +51,12 @@ reconstitution contract. A checkpoint is an indexed retained replacement action;
 unverified copy of the current row. Append fences use stream position independently of semantic
 version and native row `xmin`. An event-owned update without its expected stream fence fails.
 
-PostgreSQL owns native atomicity, schema validation, locking and explicit projection rebuilding.
+The separate `Cohesive.Adapters.Marten` package owns the event realization. Marten provides
+stream storage and version checks; the existing PostgreSQL repository owns the transaction,
+relational mapping, receipts, outbox and explicit projection rebuilding. Marten sessions borrow
+that transaction without owning commit. Custom history tables from the initial proposal were
+removed after evaluating Marten and Eventuous; Marten supplies the PostgreSQL event infrastructure
+and a future native projection path without introducing a parallel domain aggregate model.
 The shared `EntityTransitionCommitProtocol` still owns receipt retry/identity semantics. Direct
 transition envelopes use the existing `EntityOutboxCommit` contract and publication authority;
 process receipt emissions do not enter that outbox. No generic transaction wrapper or example-local

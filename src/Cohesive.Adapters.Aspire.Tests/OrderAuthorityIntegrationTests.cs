@@ -1,3 +1,6 @@
+using Cohesive.Adapters.Marten;
+using Marten;
+using JasperFx.Events;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
@@ -22,14 +25,21 @@ public sealed partial class OrderStorageIntegrationTests
         {
             var model = Cohesive.Host.Composition.ModelActivator.Create<FulfillmentApplication>();
             var prefix = "authority_" + Guid.NewGuid().ToString("N");
-            var options = new PostgresEntityHistoryOptions("public", prefix, authority, checkpointInterval: 1);
-            await using (var command = database.CreateCommand(options.SchemaSql)) await command.ExecuteNonQueryAsync();
+            using var store = DocumentStore.For(options =>
+            {
+                options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
+                options.Connection(database); options.DatabaseSchemaName = prefix;
+                options.Events.StreamIdentity = StreamIdentity.AsString;
+                options.Events.AddEventType<EntityStateEvent>();
+            });
+            await store.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
+            var history = await MartenEntityHistoryStorage.BindAsync(database, store, authority, checkpointInterval: 1);
             string? id = null;
             try
             {
                 var persistence = model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
                 var builder = WebApplication.CreateBuilder();
-                var services = await OrderHttpTestHost.Prepare(builder, model, persistence, database, history: await options.BindAsync(database));
+                var services = await OrderHttpTestHost.Prepare(builder, model, persistence, database, history: history);
                 await using var app = builder.Build();
                 app.UseRequestOperationContext(); app.UseAuthorization(); app.MapServices(services);
                 app.Urls.Add("http://127.0.0.1:0");
@@ -51,7 +61,7 @@ public sealed partial class OrderStorageIntegrationTests
             }
             finally
             {
-                await using (var drop = database.CreateCommand($"DROP TABLE public.{prefix}_actions; DROP TABLE public.{prefix}_heads")) await drop.ExecuteNonQueryAsync();
+                await using (var drop = database.CreateCommand($"DROP SCHEMA {prefix} CASCADE")) await drop.ExecuteNonQueryAsync();
                 await using var cleanup = database.CreateCommand("DELETE FROM public.cohesive_orders WHERE order_id=$1");
                 cleanup.Parameters.AddWithValue(id ?? "unused");
                 await cleanup.ExecuteNonQueryAsync();

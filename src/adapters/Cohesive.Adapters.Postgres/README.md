@@ -247,8 +247,9 @@ logical replication connections, and retains its database-identity mismatch chec
 
 ## Entity state authority and delivery
 
-`PostgresEntityHistoryOptions.BindAsync` attaches schema-validated current-state or event authority
-to the existing repository. `PostgresEntityOutboxOptions.BindAsync` independently attaches direct
+`Cohesive.Adapters.Marten` attaches schema-validated current-state or event authority
+to the existing repository through its borrowed-transaction history seam. This package itself
+does not reference Marten. `PostgresEntityOutboxOptions.BindAsync` independently attaches direct
 transition delivery intents. Both compose with native transition receipts in the same transaction.
 See the [PostgreSQL example authority walkthrough](../../../eng/examples/aspire-first/STATE-AUTHORITY.md)
 for the replacement-action contract, bounds, concurrency and migration limits.

@@ -181,7 +181,7 @@ public sealed partial class PostgresEntityRepository : IEntityTransitionOperatio
             throw new ArgumentException("Receipt storage was validated against a different native data source.", nameof(transitionReceipts));
         if (stateHistory is not null && !ReferenceEquals(stateHistory.DataSource, runtime.DataSource))
             throw new ArgumentException("State history belongs to a different native data source.", nameof(stateHistory));
-        history = stateHistory?.Options;
+        history = stateHistory;
         receipts = transitionReceipts?.Options;
         receiptFenceNames = transitionReceipts?.FenceNames;
         layout = ObservationLayout.Create(entityDefinition.StateShape, mapping.Fields.Select(static field => field.FieldName));

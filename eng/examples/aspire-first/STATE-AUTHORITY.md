@@ -1,6 +1,6 @@
 # Compose state authority without replacing the order model
 
-The PostgreSQL example now runs the same `FulfillmentDomain`, `OrderApi`, transitions,
+The PostgreSQL example uses `Cohesive.Adapters.Marten` and runs the same `FulfillmentDomain`, `OrderApi`, transitions,
 queries and process with either current-state or event authority. Select the storage policy;
 do not introduce another order type, transition evaluator or endpoint implementation.
 
@@ -20,7 +20,7 @@ EntityState__Authority=Events EntityState__Reconstitution=FullReplay \
 
 The native Aspire connection name stays `orders`. The event configuration uses a separate
 physical database, `orders_events`, so selecting it does not silently reinterpret existing
-state-only rows. Switching authority on an existing history is rejected; migration is a
+state-only rows. Switching authority on a retained stream is rejected when it is acquired; migration is a
 separate operation. Both modes use the same PostgreSQL mappings and canonical entity model.
 
 ## Concrete proof
@@ -57,7 +57,7 @@ and full replay, corruption, and transaction rollback.
 | Direct-transition outbox | Atomic delivery intent for authored durable envelopes |
 
 `TransitionStateProjector` still prepares candidates. `EntityTransitionCommitProtocol` still
-resolves exact process retries. The PostgreSQL transaction now also retains the state action
+resolves exact process retries. A borrowed Marten session in the PostgreSQL transaction retains the state action
 when history is attached. A receipt failure rolls back the row **and** history. Process-owned
 emissions stay in process receipts; they are not republished through the direct entity outbox.
 
@@ -86,8 +86,9 @@ contain full state, a checkpoint is an indexed position rather than a second ser
 No retention or compaction runs automatically.
 
 Appends acquire only the latest action; they do not replay a growing stream on each write.
-Reads have explicit action, per-action byte and aggregate byte bounds and fail rather than
-truncate. Each selected action is decoded once. No throughput or allocation improvement is
+Reads admit an action-count bound before fetching and check canonical payload byte bounds
+before decoding. Marten buffers fetched event objects: these are not hard network/peak-memory
+limits against a database modified outside this protocol. Bounds fail rather than truncate. Each selected action is decoded once. No throughput or allocation improvement is
 claimed: full replacement payloads trade space for a small, explicit initial action contract.
 
 ## Boundaries
@@ -104,3 +105,17 @@ claimed: full replacement payloads trade space for a small, explicit initial act
   migration/upcasting, tombstones, a distributed snapshot, or crash-durable process execution.
   Those remain subsequent composition work. PostgreSQL-only policy does not change the
   Postgres+Cosmos example's explicitly independent-source consistency.
+
+## Native Marten realization
+
+The worker configures a native `DocumentStore`, explicitly migrates its schema for the demo,
+and calls `MartenEntityHistoryStorage.BindAsync` to validate it before serving requests. The
+PostgreSQL package remains independently usable. Marten sessions borrow the repository's
+transaction with `shouldAutoCommit: false`; no event flush can commit a receipt or row early.
+Deferred-trigger tests fail the final database COMMIT and verify that relational state,
+events and the applicable receipt/outbox evidence all roll back.
+
+Custom history head/action tables from the initial PR have been removed. Existing local
+databases from that unreleased implementation need a fresh database or explicit migration;
+there is no automatic conversion. Native Marten projection infrastructure is available for
+subsequent CQRS work but is not activated by this example.

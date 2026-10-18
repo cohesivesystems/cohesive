@@ -1,3 +1,6 @@
+using Cohesive.Adapters.Marten;
+using Marten;
+using JasperFx.Events;
 using Cohesive.Host.Composition;
 using AspireFirst;
 using AspireFirst.Orders;
@@ -32,10 +35,16 @@ var receiptStorage = await receipts.BindAsync(database);
 // Use a fresh database when changing authority; an existing history requires explicit migration.
 var authority = builder.Configuration.GetValue("EntityState:Authority", EntityStateAuthority.State);
 var replay = builder.Configuration.GetValue("EntityState:Reconstitution", EntityReconstitutionMode.CheckpointAndTail);
-var history = new PostgresEntityHistoryOptions("public", "cohesive_entity_history", authority, replay);
-await using (var initializeHistory = database.CreateCommand(history.SchemaSql))
-    await initializeHistory.ExecuteNonQueryAsync();
-var historyStorage = await history.BindAsync(database);
+using var eventStore = DocumentStore.For(options =>
+{
+    options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
+                options.Connection(database);
+    options.DatabaseSchemaName = "cohesive_events";
+    options.Events.StreamIdentity = StreamIdentity.AsString;
+    options.Events.AddEventType<EntityStateEvent>();
+});
+await eventStore.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
+var historyStorage = await MartenEntityHistoryStorage.BindAsync(database, eventStore, authority, replay);
 var outbox = new PostgresEntityOutboxOptions("public", "cohesive_transition_outbox");
 await using (var initializeOutbox = database.CreateCommand(outbox.SchemaSql))
     await initializeOutbox.ExecuteNonQueryAsync();
