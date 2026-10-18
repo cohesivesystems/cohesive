@@ -18,6 +18,13 @@ public sealed class FulfillmentStorage : StorageModel
         Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
             new(FulfillmentStoragePolicy.OrdersDatabaseName), storage =>
             {
+                storage.SchemaPreparation(async (database, cancellationToken) =>
+                {
+                    using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")
+                        ?? throw new InvalidOperationException("The product schema resource is missing."));
+                    await using var initialize = database.CreateCommand(await schema.ReadToEndAsync(cancellationToken));
+                    await initialize.ExecuteNonQueryAsync(cancellationToken);
+                });
                 storage.TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition),
                 initialization: PostgresSchemaInitialization.CreateIfMissing);
                 storage.History(new MartenEntityHistoryConfiguration(history.Authority, history.Reconstitution,

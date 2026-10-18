@@ -4,11 +4,50 @@ using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres.Services;
 using Npgsql;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class ServicePersistenceTests
 {
+    [Fact]
+    public async Task Product_schema_preparation_is_deferred_and_fails_before_attachment_admission()
+    {
+        var model = ModelActivator.Create<FulfillmentApplication>();
+        var calls = 0;
+        var failure = new InvalidOperationException("Explicit migration failed.");
+        var bindings = PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
+            .SchemaPreparation((_, _) => { calls++; return Task.FromException(failure); })
+            .Entity(model.Domain.Orders, model.Storage.Bindings.Mapping(model.Domain.Orders))
+            .Entity(model.Domain.Inventory, model.Storage.Bindings.Mapping(model.Domain.Inventory))
+            .Entity(model.Domain.Reservations, model.Storage.Bindings.Mapping(model.Domain.Reservations)));
+        var composition = new PostgresStorageComposition(bindings, model.Endpoints.Plan);
+        Assert.Equal(0, calls);
+        Assert.Throws<InvalidOperationException>(() => bindings.SchemaPreparation((_, _) => Task.CompletedTask));
+        await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=unused;Username=unused");
+        await using var provider = new ServiceCollection()
+            .AddKeyedSingleton(FulfillmentStoragePolicy.OrdersDatabaseName, database).BuildServiceProvider();
+        Assert.Same(failure, await Assert.ThrowsAsync<InvalidOperationException>(() => composition.BindAsync(provider).AsTask()));
+        Assert.Equal(1, calls);
+    }
+
+    [Fact]
+    public async Task Product_schema_preparation_is_optional_and_observes_cancellation_before_callback()
+    {
+        await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=unused;Username=unused");
+        var empty = PostgresPersistenceBindings.Define(new("test"), _ => { });
+        await empty.PrepareSchemaAsync(database);
+        var calls = 0;
+        var bindings = PostgresPersistenceBindings.Define(new("test"), storage => storage
+            .SchemaPreparation((_, _) => { calls++; return Task.CompletedTask; }));
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => bindings.PrepareSchemaAsync(database, canceled.Token));
+        Assert.Equal(0, calls);
+        Assert.Throws<InvalidOperationException>(() => PostgresPersistenceBindings.Define(new("duplicate"), storage => storage
+            .SchemaPreparation((_, _) => Task.CompletedTask).SchemaPreparation((_, _) => Task.CompletedTask)));
+    }
+
     [Fact]
     public void Unknown_receipt_initialization_fails_during_authoring()
     {

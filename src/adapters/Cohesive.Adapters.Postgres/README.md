@@ -259,6 +259,10 @@ initialization: PostgresSchemaInitialization.CreateIfMissing)`. Native and compo
 share `PrepareReceiptsAsync`: create a missing receipt table in an existing schema, then validate it.
 The default is `ValidateOnly`; incompatible tables are never altered. Offline model construction performs no IO.
 Host preparation runs once before route/worker admission; direct rebinding repeats validation. Coordinate
-bootstrap between concurrent hosts externally. Product table migrations remain explicit. `History(configuration)` and `Outbox(options, initialization)`
+bootstrap between concurrent hosts externally. Product table migrations remain explicit and can be attached using `SchemaPreparation(async (database, token) => ...)`.
+Native and composed async preparation run that callback first, before auxiliary attachments. No callback means
+no product-schema work; there is no inferred validation, generated schema or create-only promise for arbitrary
+SQL. The callback borrows the native source, owns its commands/transactions, and defines migration policy.
+Host preparation retains failures without retry; direct rebinding repeats the callback. `History(configuration)` and `Outbox(options, initialization)`
 are optional model-owned attachments. History is prepared by its adapter; PostgreSQL remains independent
 of Marten. Outbox initialization follows the same validation-only default and explicit create/validate policy.

@@ -6,8 +6,6 @@ using AspireFirst;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
-using Cohesive.Adapters.Postgres;
-using Cohesive.Adapters.Postgres.Services;
 using Npgsql;
 using Cohesive.Storage;
 
@@ -32,19 +30,7 @@ builder.Services.AddKeyedSingleton<IDocumentStore>(FulfillmentStoragePolicy.Orde
     options.Events.StreamIdentity = StreamIdentity.AsString;
     options.Events.AddEventType<EntityStateEvent>();
 }));
-// Product table migrations remain explicit; auxiliary persistence policy belongs to the storage model.
-builder.Services.AddCohesiveServices(model.Endpoints, async (services, cancellationToken) =>
-{
-    var database = services.GetRequiredKeyedService<NpgsqlDataSource>(FulfillmentStoragePolicy.OrdersDatabaseName);
-
-    // Initialize product tables before preparing the configured history, outbox and receipts.
-    using (var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")
-        ?? throw new InvalidOperationException("The explicit order schema resource is missing.")))
-    await using (var initialize = database.CreateCommand(await schema.ReadToEndAsync(cancellationToken)))
-        await initialize.ExecuteNonQueryAsync(cancellationToken);
-
-    return await model.Storage.RequireComposition<PostgresStorageComposition>().BindAsync(services, cancellationToken);
-});
+builder.Services.AddCohesiveServices(model.Endpoints, model.Storage);
 
 await using var app = builder.Build();
 app.UseExceptionHandler();

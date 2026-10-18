@@ -4,6 +4,45 @@ namespace Cohesive.Adapters.Postgres;
 
 public sealed partial class PostgresPersistenceBindings
 {
+    Func<NpgsqlDataSource, CancellationToken, Task>? prepareSchema;
+
+    /// <summary>Declares native product-schema validation or migration before persistence admission.</summary>
+    /// <param name="prepare">Setup callback borrowing the DI-owned data source. It owns its commands and
+    /// transactions, must honor cancellation, and must explicitly implement any migration or validation policy.</param>
+    /// <returns>This authoring builder.</returns>
+    /// <remarks>Declaring the callback performs no IO. Without a callback no product-schema work is implied.
+    /// This is not a schema generator or a create-only guarantee; native SQL or a migration library remains
+    /// authoritative. Host preparation runs once, retains failures and publishes no routes on failure.
+    /// Direct rebinding runs the callback again. Coordinate multi-host migrations externally.</remarks>
+    /// <exception cref="ArgumentNullException">Callback is null.</exception>
+    /// <exception cref="InvalidOperationException">Already declared or frozen.</exception>
+    public PostgresPersistenceBindings SchemaPreparation(Func<NpgsqlDataSource, CancellationToken, Task> prepare)
+    {
+        ArgumentNullException.ThrowIfNull(prepare);
+        return state.Edit(() =>
+        {
+            if (prepareSchema is not null) throw new InvalidOperationException("Product schema preparation is already declared.");
+            prepareSchema = prepare;
+            return this;
+        });
+    }
+
+    /// <summary>Executes the explicitly declared native product-schema preparation.</summary>
+    /// <param name="database">Borrowed native data source; never disposed by this operation.</param>
+    /// <param name="cancellationToken">Cancellation before and during preparation.</param>
+    /// <returns>The callback completion, or a completed task when no preparation is declared.</returns>
+    /// <remarks>Callback exceptions propagate unchanged. Partial migration effects are governed by the native
+    /// callback's transaction policy; no retry, rollback emulation or schema validation is inferred.</remarks>
+    /// <exception cref="ArgumentNullException">Database is null.</exception>
+    /// <exception cref="OperationCanceledException">Preparation is canceled.</exception>
+    public Task PrepareSchemaAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        cancellationToken.ThrowIfCancellationRequested();
+        _ = state.Value;
+        return prepareSchema?.Invoke(database, cancellationToken) ?? Task.CompletedTask;
+    }
+
     /// <summary>Optional adapter-owned history declaration; contains no native clients.</summary>
     public IPostgresEntityHistoryConfiguration? HistoryConfiguration { get; private set; }
     /// <summary>Optional outbox table and payload policy.</summary>

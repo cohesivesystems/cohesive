@@ -25,6 +25,13 @@ public sealed class PostgresCosmosStorage : StorageModel
     public PostgresCosmosStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints)
     {
         PostgresBindings = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
+            .SchemaPreparation(async (database, cancellationToken) =>
+            {
+                using var schema = new StreamReader(typeof(PostgresCosmosStorage).Assembly.GetManifestResourceStream("Orders.PostgresCosmos.schema.sql")
+                    ?? throw new InvalidOperationException("The product schema resource is missing."));
+                await using var initialize = database.CreateCommand(await schema.ReadToEndAsync(cancellationToken));
+                await initialize.ExecuteNonQueryAsync(cancellationToken);
+            })
             .TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition),
                 initialization: PostgresSchemaInitialization.CreateIfMissing)
             .Entity(domain.Orders, mappings.Orders)

@@ -23,7 +23,7 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Declared_join_returns_empty_and_multiple_reservations_with_local_partition_isolation()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
         var context = OperationContext.Create();
         var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");

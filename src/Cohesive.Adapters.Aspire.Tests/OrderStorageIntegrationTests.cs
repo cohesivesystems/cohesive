@@ -98,7 +98,7 @@ public sealed partial class OrderStorageIntegrationTests
     {
         // Only point this opt-in test at a disposable example database.
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
         var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
@@ -181,7 +181,7 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Concurrent_HTTP_submits_return_one_commit_and_one_sanitized_conflict_without_middleware()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
         var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");

@@ -11,7 +11,6 @@
     <ProjectReference Include="../../../../src/Cohesive.Host/Cohesive.Host.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres.Services/Cohesive.Adapters.Postgres.Services.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.AspNet/Cohesive.Adapters.AspNet.csproj" />
-    <EmbeddedResource Include="schema.sql" LogicalName="Orders.schema.sql" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Marten/Cohesive.Adapters.Marten.csproj" />

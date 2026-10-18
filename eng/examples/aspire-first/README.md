@@ -52,7 +52,7 @@ demand; selecting it with the ephemeral executor fails at setup. See [process po
 
 A `StorageModel` can own multiple providers. `StorageModelBuilder` is available directly; the base
 class is optional authoring convenience. Binding recipes never open connections during activation.
-The workers explicitly initialize local schemas before preparing runtime API bindings.
+The storage models explicitly initialize local schemas during async preparation, before publishing runtime API bindings.
 
 `FulfillmentStoragePolicy` owns the fixed demo partition and orders connection name. Queries still compile
 that fixed partition as a literal; invocation-scoped partition selection is not introduced by this file cleanup.
@@ -203,18 +203,19 @@ await app.MapServicesAsync<OrderEndpoints>();
 await app.RunAsync();
 ```
 
-The runnable demo uses the asynchronous preparation overload to perform **explicit demo schema initialization**
-for product tables. The PostgreSQL model declares history authority, reconstitution and outbox options;
-async preparation resolves the keyed DI Marten store and validates its exact shared data source before
-initialization. Receipts, history and outbox default to `ValidateOnly`. The demos explicitly opt into
-`CreateIfMissing`; Marten uses native `CreateOnly` and then checks schema equality. Receipt initialization
-also belongs to the storage declaration: both demos opt into
-`TransitionReceipts(options, initialization: PostgresSchemaInitialization.CreateIfMissing)`.
-Async composition creates the receipt table if missing, then validates its columns and uniqueness fences.
-The default `ValidateOnly` performs no DDL; incompatible tables always require an explicit migration.
-Receipt/outbox bootstrap does not create the enclosing schema or cloud resources. Marten owns its
-configured schema objects, including its event schema. Cosmos container metadata remains validation-only.
-Coordinate concurrent-host schema bootstrap externally; failures are not automatically retried.
+Both Programs register native clients and call `AddCohesiveServices(model.Endpoints, model.Storage)`.
+Product-table SQL is attached through `SchemaPreparation` in each storage model and runs first, before
+receipt/history/outbox preparation. The PostgreSQL-only script lives beside its model in `Orders.Model/Storage`.
+This is explicit native SQL, including the existing status-column migration; it is not a generated schema or
+a create-only promise. No callback means no product-schema work; applications can attach a validation-only
+callback or their migration library instead. Callback failures prevent admission and are retained by the host;
+partial changes follow the native callback's transaction policy. Coordinate multi-host migrations externally.
+
+The PostgreSQL model declares history authority, reconstitution and outbox options. Async preparation resolves
+the keyed DI Marten store and validates its exact shared data source before history initialization. Auxiliary
+schema policies default to `ValidateOnly`; the demos opt into `CreateIfMissing`. Marten uses native `CreateOnly`
+followed by validation. Receipt/outbox bootstrap requires an existing schema, while Marten owns its configured
+event-schema objects. Cosmos metadata remains validation-only. None of these declarations allocate clients.
 Registration performs no native IO. Mapping awaits one cached preparation; failure or cancellation prevents
 route publication and remains failed for that host. Rebuild the host after correcting configuration.
 

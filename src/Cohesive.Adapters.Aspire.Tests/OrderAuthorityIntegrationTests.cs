@@ -19,7 +19,7 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Same_OrderApi_and_transition_use_state_or_events_without_parallel_bindings()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
+        using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
         foreach (var authority in new[] { EntityStateAuthority.State, EntityStateAuthority.Events })
         {

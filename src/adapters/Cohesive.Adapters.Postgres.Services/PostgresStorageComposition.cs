@@ -44,6 +44,7 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
         if (history is not null && bindings.HistoryConfiguration is not null || outbox is not null && bindings.OutboxOptions is not null)
             throw new InvalidOperationException("Explicit attachments cannot override model-owned history or outbox.");
         var database = services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value);
+        await bindings.PrepareSchemaAsync(database, cancellationToken).ConfigureAwait(false);
         if (bindings.HistoryConfiguration is { } configuration)
             history = await configuration.PrepareAsync(services, bindings.Database.Value, database, cancellationToken).ConfigureAwait(false);
         outbox ??= await bindings.PrepareOutboxAsync(database, cancellationToken).ConfigureAwait(false);
