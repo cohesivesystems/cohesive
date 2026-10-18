@@ -146,3 +146,12 @@ populates the root before returning it. Domain, query, API and binding models ke
 for declaration authoring in their constructors. Required-init injection is also available to those models
 when dependent authoring runs during completion; no property attributes, partial classes or `null!`
 initializers are needed.
+
+
+`FulfillmentInfrastructure` contributes PostgreSQL requirements through
+`infra.Resource(Store).Persistent().Postgres(model.Storage.Bindings, model.Endpoints.Plan)`.
+The adapter derives both requirements and evidence from the same selected query bindings; no
+`StorageQueries` forwarding property or separate implementation ID is needed.
+`builder.AttachCohesive(model: this, ...)` then associates the existing database and project.
+Database association reuses that preparation and checks the actual native database name.
+This is offline evidence, not database or runtime qualification; native-only resources remain supported.

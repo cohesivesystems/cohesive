@@ -353,7 +353,8 @@ public sealed class InfrastructureDefinitionBuilder
             profileId,
             [InfrastructureDefinitionDocument.CurrentSchemaVersion],
             rules);
-        return new(definition, profile);
+        return new(definition, profile, resources.Where(resource => resource.Preparation is not null)
+            .ToImmutableDictionary(resource => resource.Id, resource => resource.Preparation!));
     }
 
     internal InfrastructureDefinitionBuilder CompleteBinding(
@@ -512,7 +513,7 @@ public sealed class InfrastructureWorkloadBuilder
 /// <summary>Fluent producer for one canonical infrastructure resource node.</summary>
 public sealed class InfrastructureResourceBuilder
 {
-    readonly InfrastructureRequirementBuilder requirements;
+    InfrastructureRequirementBuilder requirements;
     InfrastructureResourceLifecycle? lifecycle;
 
     internal InfrastructureResourceBuilder(
@@ -528,6 +529,31 @@ public sealed class InfrastructureResourceBuilder
 
     /// <summary>Stable identity of the resource being authored.</summary>
     public InfrastructureNodeId Id { get; }
+
+    internal IInfrastructureResourcePreparation? Preparation { get; private set; }
+
+    /// <summary>Attaches one immutable adapter preparation and derives its capability requirements atomically.</summary>
+    /// <param name="preparation">Offline prepared declarations; must be immutable and perform no runtime IO.</param>
+    /// <returns>This resource builder.</returns>
+    /// <exception cref="ArgumentNullException">Preparation is null.</exception>
+    /// <exception cref="ArgumentException">Requirements are invalid or duplicated.</exception>
+    /// <exception cref="InvalidOperationException">A preparation is already attached.</exception>
+    public InfrastructureResourceBuilder Prepared(IInfrastructureResourcePreparation preparation)
+    {
+        ArgumentNullException.ThrowIfNull(preparation);
+        if (Preparation is not null)
+            throw new InvalidOperationException($"Resource '{Id.Value}' already has a preparation.");
+        var capabilities = preparation.Requirements;
+        if (capabilities.IsDefault)
+            throw new ArgumentException("Prepared resource requirements must be initialized.", nameof(preparation));
+        var combined = new InfrastructureRequirementBuilder(Id);
+        foreach (var requirement in requirements.ToImmutable()) combined.Add(requirement);
+        foreach (var capability in capabilities)
+            combined.Add(InfrastructureCapabilityRequirement.ForNode(Id, capability));
+        requirements = combined;
+        Preparation = preparation;
+        return this;
+    }
 
     /// <summary>Declares that the resource normally survives workload replacement.</summary>
     /// <returns>This resource builder.</returns>

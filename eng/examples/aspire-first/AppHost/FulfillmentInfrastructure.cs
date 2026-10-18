@@ -5,7 +5,6 @@ using Cohesive.Infra;
 using Cohesive.Infra.Realization;
 using Cohesive.Model;
 using AspireFirst.Orders;
-using Cohesive.Adapters.Postgres.Infra;
 using Cohesive.Adapters.Postgres.Services;
 
 namespace AspireFirst;
@@ -17,8 +16,6 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
     public static InfrastructureNodeId Worker { get; } = new("workloads/orders");
-    /// <summary>Derived entirely from the service's selected query registrations and native mappings.</summary>
-    public PostgresPreparedQueryEvidence StorageQueries { get; }
     /// <summary>Required application execution capability.</summary>
     public static InfrastructureCapabilityId ApplicationExecution { get; } = AspireInfrastructure.DotNetProjectExecution;
 
@@ -28,15 +25,14 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     /// <param name="model">Same activated application graph consumed by the worker.</param>
     public FulfillmentInfrastructure(FulfillmentApplication model)
     {
-        StorageQueries = model.Storage.Bindings.PrepareService(model.Endpoints.Plan, new("example/postgres"));
         Define(
             id: new("example/orders"),
             revision: new("4"),
             bindingProfileId: new("example/orders/bindings"),
             infra =>
             {
-                var storage = infra.Resource(Store).Persistent();
-                foreach (var requirement in StorageQueries.Requirements) storage.Requires(requirement);
+                infra.Resource(Store).Persistent()
+                    .Postgres(model.Storage.Bindings, model.Endpoints.Plan);
                 infra.Workload(Worker).Requires(ApplicationExecution).RequiresReady(Store);
             });
     }
@@ -57,13 +53,12 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
         _ = builder.AddContainer("native-only", "redis", "7.4");
 
         // Associate existing Aspire resources with the canonical requirements and implementations.
-        return AspireInfrastructureAssociation.Attach(
-            application: builder,
-            definition: Definition,
+        return builder.AttachCohesive(
+            model: this,
             id: new("example/orders/local"),
             variant: new("development"),
             associations => associations
-                .Resource(Store, database, StorageQueries, new("aspire/example/orders"), [Source])
+                .Resource(Store, database, authority: new("aspire/example/orders"), sources: [Source])
                 .Workload(Worker, worker, sources: [Source])
             );
     }

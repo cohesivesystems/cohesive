@@ -3,6 +3,15 @@
 Optional integration of `Cohesive.Api.Execution` service selections with PostgreSQL runtime readers and
 `Cohesive.Infra` evidence. The base PostgreSQL adapter does not depend on service hosting.
 
+For infrastructure authoring, use
+`infra.Resource(store).Persistent().Postgres(bindings, endpoints.Plan)`.
+This prepares the selected queries once, contributes provider-neutral requirements and retains the exact
+immutable PostgreSQL evidence on that resource. The default implementation ID is
+`postgres/{node.Value}/implementation`; pass `implementation:` to override it.
+The application still selects the database bindings and endpoint plan explicitly, so multiple databases
+cannot be silently conflated. The portable definition contains requirements; native preparation is an
+in-memory authoring attachment, not a serialized second authority.
+
 Declare relational queries through API implementation Bind calls (or explicit `ServiceDependencies.Query` for separately authored services).
 `bindings.PrepareService(endpoints.Plan, implementationId)` validates endpoint coverage and derives
 provider-neutral snapshot requirements and native PostgreSQL evidence directly from the portable

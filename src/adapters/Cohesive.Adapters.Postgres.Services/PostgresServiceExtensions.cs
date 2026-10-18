@@ -11,6 +11,27 @@ namespace Cohesive.Adapters.Postgres.Services;
 /// <summary>Prepares selected service queries through the existing PostgreSQL compiler, for runtime and Infra.</summary>
 public static class PostgresServiceExtensions
 {
+    /// <summary>Prepares endpoint-selected queries once and contributes their requirements and native evidence.</summary>
+    /// <param name="resource">Canonical resource receiving the prepared attachment.</param>
+    /// <param name="bindings">Offline database mappings.</param>
+    /// <param name="plan">Validated endpoint selections, including query bounds and consistency.</param>
+    /// <param name="implementation">Optional explicit implementation identity; defaults to postgres/{node}/implementation.</param>
+    /// <returns>The resource with requirements and prepared evidence attached.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="InvalidOperationException">The resource already has a preparation.</exception>
+    /// <exception cref="ArgumentException">Requirements conflict or no queries are selected.</exception>
+    /// <exception cref="ServiceBindingValidationException">Endpoint coverage or placement is invalid.</exception>
+    /// <exception cref="RelationQueryPreparationException">Semantic preparation fails.</exception>
+    /// <exception cref="PostgresQueryPreparationException">Native compilation fails.</exception>
+    public static InfrastructureResourceBuilder Postgres(this InfrastructureResourceBuilder resource,
+        PostgresPersistenceBindings bindings, ServiceImplementationPlan plan,
+        InfrastructureTargetFacilityId? implementation = null)
+    {
+        ArgumentNullException.ThrowIfNull(resource);
+        return resource.Prepared(bindings.PrepareService(plan,
+            implementation ?? new InfrastructureTargetFacilityId($"postgres/{resource.Id.Value}/implementation")));
+    }
+
     /// <summary>Derives native snapshot requirements and evidence from the service's selected query registrations.</summary>
     /// <param name="bindings">Offline database mappings.</param><param name="service">Service with explicit selected relational queries.</param>
     /// <param name="implementation">Stable target implementation identity.</param><returns>Database-affine prepared query evidence.</returns>

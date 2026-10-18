@@ -50,7 +50,7 @@ public sealed class AspireInfrastructureAssociation
             new($"{id.Value}/facilities"), new($"{id.Value}/profile"), Target, variant,
             [InfrastructureDefinitionDocument.CurrentSchemaVersion], deployment =>
             {
-                associations = new(application, deployment, id);
+                associations = new(application, definition, deployment, id);
                 try { configure(associations); }
                 finally { associations.Freeze(); }
             });
@@ -62,6 +62,7 @@ public sealed class AspireInfrastructureAssociation
 public sealed class AspireInfrastructureAssociationBuilder
 {
     readonly IDistributedApplicationBuilder application;
+    readonly InfrastructureAuthoringResult definition;
     readonly InfrastructureTargetDeploymentManifestId manifestId;
     readonly InfrastructureTargetDeploymentManifestBuilder deployment;
     readonly Dictionary<InfrastructureNodeId, IResource> resources = [];
@@ -69,12 +70,24 @@ public sealed class AspireInfrastructureAssociationBuilder
     bool frozen;
 
     internal AspireInfrastructureAssociationBuilder(IDistributedApplicationBuilder application,
-        InfrastructureTargetDeploymentManifestBuilder deployment, InfrastructureTargetDeploymentManifestId manifestId)
+        InfrastructureAuthoringResult definition, InfrastructureTargetDeploymentManifestBuilder deployment, InfrastructureTargetDeploymentManifestId manifestId)
     {
         this.application = application;
+        this.definition = definition;
         this.manifestId = manifestId;
         this.deployment = deployment;
         existing = new(application.Resources, ReferenceEqualityComparer.Instance);
+    }
+
+    /// <summary>Resolves setup evidence retained by the canonical resource's authoring session.</summary>
+    /// <typeparam name="T">Expected adapter preparation.</typeparam>
+    /// <param name="node">Canonical resource identity.</param>
+    /// <returns>The exact immutable preparation; no compilation is repeated.</returns>
+    /// <exception cref="InvalidOperationException">Authoring ended or the requested preparation is missing.</exception>
+    public T RequireResourcePreparation<T>(InfrastructureNodeId node) where T : class, IInfrastructureResourcePreparation
+    {
+        EnsureMutable();
+        return definition.RequireResourcePreparation<T>(node);
     }
 
     void EnsureMutable()

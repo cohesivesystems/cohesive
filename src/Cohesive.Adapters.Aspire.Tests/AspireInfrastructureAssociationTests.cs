@@ -1,4 +1,7 @@
 using Cohesive.Host.Composition;
+using Cohesive.Adapters.Postgres.Infra;
+using Cohesive.Adapters.Postgres.Services;
+using AspireFirst.Orders;
 using Cohesive.Adapters.Aspire.Postgres;
 using Cohesive.Relations.Infra;
 using Aspire.Hosting;
@@ -18,7 +21,7 @@ public sealed class AspireInfrastructureAssociationTests
 
     static readonly SourceReference Source = SourceReference.Create("test", "aspire-first");
     static InfrastructureTargetImplementation Storage => ResourceImplementation(new("test/storage"),
-        ExampleApp.StorageQueries.Requirements.Select((capability, index) => new InfrastructureCapabilityEvidence(
+        ExampleApp.Definition.Definition.Definition.Resources.Single(resource => resource.Id == FulfillmentInfrastructure.Store).Requirements.Select(requirement => requirement.Capability).Select((capability, index) => new InfrastructureCapabilityEvidence(
             new($"test/storage/{index}"), capability, CapabilityRealizationKind.Native, sourceReferences: [Source])).ToArray());
     static InfrastructureTargetImplementation Process => WorkloadImplementation(new("test/process"),
         [new(new("test/process/evidence"), FulfillmentInfrastructure.ApplicationExecution, CapabilityRealizationKind.Native, sourceReferences: [Source])]);
@@ -33,17 +36,61 @@ public sealed class AspireInfrastructureAssociationTests
             builder, ExampleApp.Definition, new("test/association"), new("development"), configure);
 
     [Fact]
+    public void Inferred_preparation_matches_explicit_requirements_and_is_reused_for_association()
+    {
+        var model = ModelActivator.Create<FulfillmentApplication>();
+        var inferred = Infrastructure.Define(new("test/prepared"), new("1"), new("test/prepared/bindings"),
+            infra => infra.Resource(FulfillmentInfrastructure.Store).Persistent()
+                .Postgres(model.Storage.Bindings, model.Endpoints.Plan));
+        var evidence = inferred.RequireResourcePreparation<PostgresPreparedQueryEvidence>(FulfillmentInfrastructure.Store);
+        var explicitEvidence = model.Storage.Bindings.PrepareService(model.Endpoints.Plan,
+            new("postgres/resources/orders/implementation"));
+        var explicitDefinition = Infrastructure.Define(new("test/prepared"), new("1"), new("test/prepared/bindings"), infra =>
+        {
+            var storage = infra.Resource(FulfillmentInfrastructure.Store).Persistent();
+            foreach (var requirement in explicitEvidence.Requirements) storage.Requires(requirement);
+        });
+        Assert.Equal(explicitDefinition.Definition.Fingerprint, inferred.Definition.Fingerprint);
+        var builder = Builder();
+        var db = builder.AddPostgres("postgres").AddDatabase("orders");
+        var implicitAssociation = builder.AttachCohesive(inferred, new("test/native"), new("dev"), associations =>
+        {
+            Assert.Same(evidence, associations.RequireResourcePreparation<PostgresPreparedQueryEvidence>(FulfillmentInfrastructure.Store));
+            associations.Resource(FulfillmentInfrastructure.Store, db, authority: new("test/owner"));
+        });
+        var explicitAssociation = AspireInfrastructureAssociation.Attach(builder, explicitDefinition, new("test/native"), new("dev"),
+            associations => associations.Resource(FulfillmentInfrastructure.Store, db, explicitEvidence, new("test/owner")));
+        Assert.True(implicitAssociation.Deployment.IsComplete);
+        Assert.Equal(explicitAssociation.Deployment.Manifest.Fingerprint, implicitAssociation.Deployment.Manifest.Fingerprint);
+        Assert.Same(evidence, inferred.RequireResourcePreparation<PostgresPreparedQueryEvidence>(FulfillmentInfrastructure.Store));
+        using var app = builder.Build();
+    }
+
+    [Fact]
+    public void Implicit_database_association_rejects_missing_preparation()
+    {
+        var definition = Infrastructure.Define(new("test/no-preparation"), new("1"), new("test/bindings"),
+            infra => infra.Resource(FulfillmentInfrastructure.Store).Persistent());
+        var builder = Builder();
+        var db = builder.AddPostgres("postgres").AddDatabase("orders");
+        var error = Assert.Throws<InvalidOperationException>(() => builder.AttachCohesive(definition,
+            new("test/native"), new("dev"), associations => associations.Resource(FulfillmentInfrastructure.Store, db)));
+        Assert.Contains(FulfillmentInfrastructure.Store.Value, error.Message);
+        using var app = builder.Build();
+    }
+
+    [Fact]
     public void Prepared_evidence_checks_actual_database_name_before_association()
     {
         var builder = Builder();
         var server = builder.AddPostgres("postgres");
         var wrong = server.AddDatabase("orders-label", "inventory");
         Assert.Throws<ArgumentException>(() => Attach(builder, associations =>
-            associations.Resource(FulfillmentInfrastructure.Store, wrong, ExampleApp.StorageQueries, new("test/authority"))));
+            associations.Resource(FulfillmentInfrastructure.Store, wrong, authority: new("test/authority"))));
         var correct = server.AddDatabase("different-label", "orders");
         var worker = builder.AddExecutable("worker", "dotnet", ".", "--info");
         Assert.True(Attach(builder, associations => associations
-            .Resource(FulfillmentInfrastructure.Store, correct, ExampleApp.StorageQueries, new("test/authority"))
+            .Resource(FulfillmentInfrastructure.Store, correct, authority: new("test/authority"))
             .Workload(FulfillmentInfrastructure.Worker, worker, Process)).Deployment.IsComplete);
         using var app = builder.Build();
     }
