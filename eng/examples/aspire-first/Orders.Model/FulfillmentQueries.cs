@@ -27,7 +27,7 @@ public sealed class FulfillmentQueries : QueryModel
                         .Field(result => result.Sku, inventory, item => item.Sku)
                         .Field(result => result.Quantity, reservations, reservation => reservation.Quantity)
                         .Field(result => result.AvailableStock, inventory, item => item.Available));
-        }, name: "OrderDetails");
+        });
 
         ReservationAvailability = queries.Array("fulfillment/reservation-availability", (query, orderId) =>
         {
@@ -39,7 +39,7 @@ public sealed class FulfillmentQueries : QueryModel
                 .LeftJoin(inventory, (row, item) => row.Sku == item.Sku)
                 .Select((row, item) => new ReservationAvailability(
                     row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available));
-        }, name: "ReservationAvailability");
+        });
     }
 
     /// <summary>Canonical query plus portable nested-result assembly; no compilation or PostgreSQL configuration.</summary>
