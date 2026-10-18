@@ -177,16 +177,32 @@ public static class AnnotationMap
     public static ImmutableDictionary<AnnotationKey, AnnotationValue> Normalize(ImmutableDictionary<AnnotationKey, AnnotationValue>? annotations)
         => annotations ?? [];
     
-    /// <summary>Merges annotation sets using later values for duplicate keys.</summary>
+    /// <summary>Merges annotation sets using later values for duplicate keys and default key/value equality.</summary>
+    /// <param name="annotationSets">Maps in overlay order. Later unequal values replace earlier values.</param>
+    /// <returns>An immutable map with default equality. Structurally equal values may retain earlier storage.</returns>
+    /// <remarks>Inputs remain immutable. Compatible persistent storage is shared; custom input comparers
+    /// never change the result's equality policy.</remarks>
     public static ImmutableDictionary<AnnotationKey, AnnotationValue> Merge(params ImmutableDictionary<AnnotationKey, AnnotationValue>[] annotationSets)
     {
-        var builder = ImmutableDictionary.CreateBuilder<AnnotationKey, AnnotationValue>();
+        var first = ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty;
+        ImmutableDictionary<AnnotationKey, AnnotationValue>.Builder? builder = null;
         foreach (var set in annotationSets)
         {
+            if (set.IsEmpty) continue;
+            // Merge has always used default key/value equality, independently of its inputs.
+            // Reuse a persistent root only when both comparer policies already match.
+            if (builder is null && first.IsEmpty
+                && ReferenceEquals(set.KeyComparer, EqualityComparer<AnnotationKey>.Default)
+                && ReferenceEquals(set.ValueComparer, EqualityComparer<AnnotationValue>.Default))
+            {
+                first = set;
+                continue;
+            }
+            builder ??= first.ToBuilder();
             foreach (var (key, value) in set)
                 builder[key] = value;
         }
-        return builder.ToImmutable();
+        return builder?.ToImmutable() ?? first;
     }
 
     /// <summary>Projects nonempty annotation scalars into dotted property and indexed array paths.</summary>

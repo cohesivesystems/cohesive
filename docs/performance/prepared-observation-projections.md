@@ -381,3 +381,22 @@ For longer diagnostic runs, the comparison driver accepts `--iterations 2..64` w
 harness. Default two-phase comparisons remain compatible with the original harness; stale harnesses
 cannot silently supply fewer phases than requested. A fixed invocation count alone does not establish
 steady state.
+
+## Immutable annotation-map overlays
+
+`AnnotationMap.Merge` now shares the first compatible immutable map instead of rebuilding it before
+applying overlays. It still uses default key/value equality, preserves later unequal values and leaves
+inputs unchanged. Custom input comparers never become the result's policy; a single default map can
+retain its root unchanged. This extends the existing collection operation and introduces no cache,
+new annotation representation or retention authority.
+
+A synthetic 128-entry map plus one new annotation falls from **8,296 B / 5.968 µs** to
+**608 B / 0.152 µs**. Small balanced maps benefit less; the benchmark covers 8, 128 and 1,024 retained
+entries with one/eight additions. These are isolated merge results, not X12 or service CPU claims.
+The [compact benchmark](evidence/annotation-map-merge/benchmarks.csv) retains error/stddev and settings;
+[identity/environment](evidence/annotation-map-merge/manifest.json). BenchmarkDotNet InProcessEmit,
+three warmups, five 250 ms iterations, one launch, Apple M5 Max arm64, .NET 10.0.13, Release.
+
+All **4,931 Core tests pass**, with 41 existing integration skips. Tests cover custom key and value
+comparers independently, structural equality, input independence and concurrent overlays. A median-of-seven
+4 KiB allocation ceiling on a 1,024-entry root plus one addition rejects rebuilding the whole root.
