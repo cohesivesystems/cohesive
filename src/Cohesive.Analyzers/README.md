@@ -37,3 +37,9 @@ For Process authoring, `GenerateProcessDefinition` lowers a syntax-only C# `asyn
 generated `Define` factory over canonical persisted IR. See the
 [`Cohesive.Processes` authoring guide](../Cohesive.Processes/README.md) for the executable example, supported
 constructs, identity compatibility boundary, and the distinction between authoring source and restored execution.
+
+Generated code-set `All`, `Definitions` and enum `GetAll()` catalogs expose read-only collection storage:
+callers cannot recover and mutate the backing array or write through `IList`. The declarations remain
+authoritative, and the existing `IReadOnlyList` signatures, order, values and metadata are unchanged.
+This protects consumers that prepare deterministic interpretations of constant code-set metadata.
+The guarantee applies to collection storage; it does not make an arbitrary reference-valued code immutable.

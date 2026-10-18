@@ -55,6 +55,10 @@ public sealed class CodeSetGeneratorCompileTimeTests
         Assert.Contains("""new("AlphaCode", AlphaCode, "Alpha Code", null)""", generatedText);
         Assert.Contains("""new("BetaCode", BetaCode, "Beta Label", "Beta description")""", generatedText);
         Assert.Contains("public static bool TryGet(string value", generatedText);
+        var assembly = Emit(outputCompilation);
+        var codes = assembly.GetType("Sample.SampleCodes")!;
+        AssertReadOnlyCatalog(codes.GetProperty("All")!.GetValue(null)!);
+        AssertReadOnlyCatalog(codes.GetProperty("Definitions")!.GetValue(null)!);
     }
 
     [Fact]
@@ -197,6 +201,28 @@ public sealed class CodeSetGeneratorCompileTimeTests
         Assert.Contains("public static global::Sample.ShipmentWeightCode Parse(string code)", generatedText);
         Assert.Contains("GetAll() => Definitions", generatedText);
         Assert.Contains("/// Gets the external code value for this enum value.", generatedText);
+        var assembly = Emit(outputCompilation);
+        AssertReadOnlyCatalog(assembly.GetType("Sample.Usage")!.GetProperty("All")!.GetValue(null)!);
+    }
+
+    static Assembly Emit(Compilation compilation)
+    {
+        using var stream = new MemoryStream();
+        var result = compilation.Emit(stream);
+        Assert.True(result.Success, string.Join(Environment.NewLine, result.Diagnostics));
+        return Assembly.Load(stream.ToArray());
+    }
+
+    static void AssertReadOnlyCatalog(object catalog)
+    {
+        Assert.False(catalog is Array);
+        var list = Assert.IsAssignableFrom<System.Collections.IList>(catalog);
+        Assert.True(list.IsReadOnly);
+        Assert.NotEmpty(list);
+        var first = list[0];
+        Assert.Throws<NotSupportedException>(() => list[0] = first);
+        Assert.Throws<NotSupportedException>(() => list.Clear());
+        Assert.Equal(first, list[0]);
     }
 
     static GeneratorDriverRunResult RunGenerator(CSharpCompilation compilation, out Compilation outputCompilation)
