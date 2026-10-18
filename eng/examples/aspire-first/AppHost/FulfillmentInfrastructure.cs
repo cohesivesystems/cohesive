@@ -4,6 +4,7 @@ using Cohesive.Adapters.Aspire.Postgres;
 using Cohesive.Infra;
 using Cohesive.Infra.Realization;
 using Cohesive.Model;
+using Cohesive.Storage;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres.Services;
 
@@ -46,10 +47,16 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     {
         ArgumentNullException.ThrowIfNull(builder);
         var postgres = builder.AddPostgres("postgres").WithDataVolume();
-        var database = postgres.AddDatabase(FulfillmentStoragePolicy.OrdersDatabaseName);
+        var authorityText = builder.Configuration["EntityState:Authority"] ?? nameof(EntityStateAuthority.State);
+        if (!Enum.TryParse<EntityStateAuthority>(authorityText, out var authority) || !Enum.IsDefined(authority))
+            throw new ArgumentException("EntityState:Authority must be State or Events.");
+        var database = postgres.AddDatabase(FulfillmentStoragePolicy.OrdersDatabaseName,
+            databaseName: authority == EntityStateAuthority.Events ? "orders_events" : "orders");
         var worker = builder.AddProject<Projects.OrderWorker>("worker")
             .WithHttpEndpoint(env: "ASPNETCORE_HTTP_PORTS")
-            .WithReference(database).WaitFor(database);
+            .WithReference(database).WaitFor(database)
+            .WithEnvironment("EntityState__Authority", authority.ToString())
+            .WithEnvironment("EntityState__Reconstitution", builder.Configuration["EntityState:Reconstitution"] ?? nameof(EntityReconstitutionMode.CheckpointAndTail));
         _ = builder.AddContainer("native-only", "redis", "7.4");
 
         // Associate existing Aspire resources with the canonical requirements and implementations.

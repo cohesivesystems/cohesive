@@ -254,3 +254,11 @@ class does not select a provider or require another subclass for each database. 
 contribute their own immutable binding types through the same builder.
 
 `EntityPartitionKeyPolicy.Fixed(value, observationField)` exposes fixed partition evidence and rejects writes whose declared field differs. Cosmos repositories propagate that evidence to process lookup/receipt admission; delegate policies do not manufacture fixed evidence.
+
+## Replacement-action reconstitution
+
+`EntityReconstitution` validates consecutive `EntityStateAction` replacements against the canonical
+entity definition. Stream position is separate from semantic version; replay never reevaluates a
+transition or publishes an envelope. PostgreSQL supplies conditional append, exact checkpoints and
+atomic composition with existing transition receipts and outbox contracts. This initial action
+contract stores complete canonical state; it is not a custom domain-event reducer.

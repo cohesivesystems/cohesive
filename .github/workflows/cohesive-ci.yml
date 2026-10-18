@@ -70,6 +70,11 @@ jobs:
           COHESIVE_MIMESIS_PYTHON: python
           COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=cohesive-test-only
 
+      - name: Test PostgreSQL entity commits and authority
+        run: dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj -c Release --no-build --filter FullyQualifiedName~PostgresRepositoryConformanceTests
+        env:
+          COHESIVE_POSTGRES_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=cohesive-test-only
+
       - name: Validate NuGet package APIs
         run: bash ./eng/api-check.sh
 

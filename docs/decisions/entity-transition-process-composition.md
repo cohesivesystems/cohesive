@@ -32,30 +32,48 @@ receipts, retry identity, and process-owned emissions. Those are different owner
 and must not be erased by a universal execution wrapper. The retired declarative entity
 runtime is not reinstated.
 
+## State authority composition
+
+The existing candidate projector, conditional creation, process operation receipt protocol and
+interaction-envelope outbox remain the owning seams. PostgreSQL can now attach explicit state
+history and independent direct-transition outbox storage to those same transactions.
+
+`EntityReconstitution` applies retained canonical replacement actions. This is deliberately a
+small first state-action contract, rather than inventing domain events for every existing CRUD
+or transition operation. Complete replacement payloads cost more storage than domain-specific
+or delta events, but need no parallel reducer catalog and never reevaluate decisions or effects.
+Custom event reducers and stream evolution are future extensions, not claimed capabilities.
+
+Current-state authority reads mapped rows and treats history as audit. Event authority reads
+ordered actions and treats mapped rows as synchronous query projections. The same domain and
+API use either policy. Full replay and exact checkpoint-plus-tail acquisition share the pure
+reconstitution contract. A checkpoint is an indexed retained replacement action; it is not an
+unverified copy of the current row. Append fences use stream position independently of semantic
+version and native row `xmin`. An event-owned update without its expected stream fence fails.
+
+PostgreSQL owns native atomicity, schema validation, locking and explicit projection rebuilding.
+The shared `EntityTransitionCommitProtocol` still owns receipt retry/identity semantics. Direct
+transition envelopes use the existing `EntityOutboxCommit` contract and publication authority;
+process receipt emissions do not enter that outbox. No generic transaction wrapper or example-local
+stream coordinator was added. Native direct SQL is an explicit bypass and cannot inherit these
+guarantees. Existing state-only rows and histories require explicit migration before changing authority.
+
+Tests prove the same order HTTP transition under both policies, reconstruction after removing a
+derived row, stale/concurrent writers, bounded acquisition, exact retry and atomic rollback of
+state/history when receipt or outbox persistence fails. They do not establish event-driven read
+models, external delivery, distributed atomicity or crash-durable example process execution.
+See the [state authority walkthrough](../../eng/examples/aspire-first/STATE-AUTHORITY.md).
+
 ## Remaining composition work
 
-1. **CRUD lowering.** The API create initializer currently commits without a canonical
-   decision, and its repository upsert can overwrite when no concurrency token is supplied.
-   Define create-if-absent versus replacement/upsert explicitly before lowering those actions
-   into canonical transitions. Never advertise absence enforcement with an unconditional upsert.
-2. **Process example.** Compose availability query, inventory reservation, and order transition
-   in one canonical Process, with an in-memory interpretation first. Durable execution must
-   preserve the same business graph while supplying retry/recovery guarantees. PostgreSQL's
-   current entity repository does not implement the process transition receipt repository;
-   that missing atomic state-plus-receipt capability needs an adapter implementation before
-   claiming reliable process transition execution on that backend.
-3. **History and reconstitution.** Choose event authority independently of delivery. An outbox
-   supplies atomic delivery intent, not a complete authoritative history. Event-sourced state
-   needs ordered, versioned state actions, conditional append, and reconstruction equivalence
-   for full replay, snapshot-plus-tail, and eagerly maintained state. The current decision patch
-   projector is not that stream contract. Extend the responsible storage and transition contracts
-   rather than adding an example-local event store or copying persistence types.
-4. **Read models and guarantees.** Attach query projections independently, then declare ordering,
-   audit retention, orchestration, and recovery requirements. Actor placement or distributed
-   locking must satisfy those requirements; neither name alone establishes the guarantees.
-
-Tests exercise pure decision preparation and existing API, service, and process consumers.
-They do not establish event replay, distributed atomicity, or durable PostgreSQL execution.
+1. **Event contracts and evolution.** Add domain-specific state actions/reducers, tombstones,
+   explicit schema evolution and retention where needed. Preserve canonical contract provenance.
+2. **Read models.** Add asynchronous projection checkpoints, idempotent acquisition, catch-up and
+   rebuild independently of authoritative entity reconstitution.
+3. **Durable processes.** Preserve the existing business graph while attaching durable execution,
+   timers and recovery. Request/ack/poll response behavior remains independent of durability.
+4. **Infrastructure requirements.** Expose the newly supported history/rebuild guarantees through
+   capability evidence; do not infer cross-store atomicity or an actor/lock guarantee from a label.
 
 ## Preparation diagnostics and work lifetime
 
