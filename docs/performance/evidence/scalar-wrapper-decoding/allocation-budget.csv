@@ -1,0 +1,87 @@
+variant,source,phase,category,mean_sampled_bytes
+baseline,004010,cold,Catalog authoring,6840013
+baseline,004010,cold,Catalog/context,1651712
+baseline,004010,cold,Commit/checkpoint hash,212517
+baseline,004010,cold,Hosted decode,15492541
+baseline,004010,cold,Observation projection,11040437
+baseline,004010,cold,Other,78997504
+baseline,004010,cold,Other EDI compilation,14235435
+baseline,004010,cold,Protocol JSON,15392589
+baseline,004010,cold,Protocol hashes,36675
+baseline,004010,cold,Query physical planning,1170893
+baseline,004010,cold,Query realization hashes,2840277
+baseline,004010,cold,Storage content hashes,7377995
+baseline,004010,repeated,Catalog authoring,1202365
+baseline,004010,repeated,Catalog/context,648733
+baseline,004010,repeated,Hosted decode,3642501
+baseline,004010,repeated,Observation projection,6209669
+baseline,004010,repeated,Other,6308157
+baseline,004010,repeated,Other EDI compilation,5326120
+baseline,004010,repeated,Protocol JSON,1443507
+baseline,004010,repeated,Query physical planning,710667
+baseline,004010,repeated,Query realization hashes,497467
+baseline,004010,repeated,Storage content hashes,141451
+baseline,005030,cold,Catalog authoring,6992739
+baseline,005030,cold,Catalog/context,1615320
+baseline,005030,cold,Commit/checkpoint hash,213200
+baseline,005030,cold,Hosted decode,15998819
+baseline,005030,cold,Observation projection,12218141
+baseline,005030,cold,Other,79070952
+baseline,005030,cold,Other EDI compilation,15242541
+baseline,005030,cold,Protocol JSON,15234555
+baseline,005030,cold,Query physical planning,1348901
+baseline,005030,cold,Query realization hashes,2663107
+baseline,005030,cold,Storage content hashes,7388291
+baseline,005030,repeated,Catalog authoring,1233445
+baseline,005030,repeated,Catalog/context,650496
+baseline,005030,repeated,Hosted decode,4169672
+baseline,005030,repeated,Observation projection,7626307
+baseline,005030,repeated,Other,6482952
+baseline,005030,repeated,Other EDI compilation,5720789
+baseline,005030,repeated,Protocol JSON,1763504
+baseline,005030,repeated,Query physical planning,673427
+baseline,005030,repeated,Query realization hashes,494432
+baseline,005030,repeated,Storage content hashes,248392
+candidate,004010,cold,Catalog authoring,6758763
+candidate,004010,cold,Catalog/context,1615381
+candidate,004010,cold,Commit/checkpoint hash,177325
+candidate,004010,cold,Hosted decode,15135608
+candidate,004010,cold,Observation projection,10753968
+candidate,004010,cold,Other,79278389
+candidate,004010,cold,Other EDI compilation,14386453
+candidate,004010,cold,Protocol JSON,15137960
+candidate,004010,cold,Query physical planning,1418440
+candidate,004010,cold,Query realization hashes,2698485
+candidate,004010,cold,Storage content hashes,7316741
+candidate,004010,repeated,Catalog authoring,1235869
+candidate,004010,repeated,Catalog/context,648101
+candidate,004010,repeated,Hosted decode,3358235
+candidate,004010,repeated,Observation projection,5387341
+candidate,004010,repeated,Other,6461080
+candidate,004010,repeated,Other EDI compilation,5545008
+candidate,004010,repeated,Protocol JSON,1407973
+candidate,004010,repeated,Query physical planning,675133
+candidate,004010,repeated,Query realization hashes,497467
+candidate,004010,repeated,Storage content hashes,177325
+candidate,005030,cold,Catalog authoring,6887840
+candidate,005030,cold,Catalog/context,1616880
+candidate,005030,cold,Commit/checkpoint hash,213200
+candidate,005030,cold,EDI provenance,35533
+candidate,005030,cold,Hosted decode,15712955
+candidate,005030,cold,Observation projection,12253424
+candidate,005030,cold,Other,78737333
+candidate,005030,cold,Other EDI compilation,14418267
+candidate,005030,cold,Protocol JSON,15385101
+candidate,005030,cold,Query physical planning,1348560
+candidate,005030,cold,Query realization hashes,2911344
+candidate,005030,cold,Storage content hashes,7350603
+candidate,005030,repeated,Catalog authoring,1116829
+candidate,005030,repeated,Catalog/context,717291
+candidate,005030,repeated,Hosted decode,3851877
+candidate,005030,repeated,Observation projection,6530925
+candidate,005030,repeated,Other,6975675
+candidate,005030,repeated,Other EDI compilation,6146224
+candidate,005030,repeated,Protocol JSON,1762888
+candidate,005030,repeated,Query physical planning,708920
+candidate,005030,repeated,Query realization hashes,425035
+candidate,005030,repeated,Storage content hashes,70384

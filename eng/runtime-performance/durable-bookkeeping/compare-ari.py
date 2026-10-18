@@ -9,9 +9,12 @@ parser.add_argument("--baseline", type=Path, required=True)
 parser.add_argument("--candidate", type=Path, required=True)
 parser.add_argument("--output", type=Path, required=True)
 parser.add_argument("--runs", type=int, default=5)
+parser.add_argument("--iterations", type=int, default=2)
 args = parser.parse_args()
 if args.runs < 1:
     parser.error("--runs must be positive")
+if not 2 <= args.iterations <= 64:
+    parser.error("--iterations must be between 2 and 64")
 for harness in [args.baseline, args.candidate]:
     if not harness.is_file():
         parser.error(f"Missing harness: {harness}")
@@ -25,9 +28,13 @@ with args.output.open("w", newline="") as output:
             if run % 2 == 0:
                 variants.reverse()
             for variant, harness in variants:
-                result = subprocess.run(["dotnet", str(harness.resolve()), source], check=True, capture_output=True, text=True)
+                command = ["dotnet", str(harness.resolve()), source]
+                if args.iterations != 2:
+                    command += ["--iterations", str(args.iterations)]
+                result = subprocess.run(command, check=True, capture_output=True, text=True)
                 rows = list(csv.DictReader(result.stdout.splitlines()))
-                if len(rows) != 2 or {row["phase"] for row in rows} != {"cold", "repeated"}:
+                expected = {"cold", "repeated"} | {f"warm-{i}" for i in range(3, args.iterations + 1)}
+                if len(rows) != args.iterations or {row["phase"] for row in rows} != expected:
                     raise RuntimeError(f"Unexpected harness output: {result.stdout}")
                 for row in rows:
                     if row["source"] != source:

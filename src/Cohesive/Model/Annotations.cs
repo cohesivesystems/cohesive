@@ -125,12 +125,7 @@ public sealed record AnnotationValue
     {
         // The prior serializer normalizes unpaired UTF-16 surrogates. Preserve that edge contract.
         if (value is null) return new(JsonSerializer.SerializeToElement(value));
-        for (var index = 0; index < value.Length; index++)
-        {
-            if (!char.IsSurrogate(value[index])) continue;
-            if (!char.IsHighSurrogate(value[index]) || index + 1 == value.Length || !char.IsLowSurrogate(value[++index]))
-                return new(JsonSerializer.SerializeToElement(value));
-        }
+        if (!JsonText.IsWellFormed(value)) return new(JsonSerializer.SerializeToElement(value));
         return new AnnotationValue(value);
     }
 
