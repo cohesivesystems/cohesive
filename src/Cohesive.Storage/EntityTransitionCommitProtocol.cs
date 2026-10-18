@@ -27,7 +27,11 @@ public static class EntityTransitionCommitProtocol
         var attempt = await tryCommit(context, commit).ConfigureAwait(false);
         if (attempt.Disposition == EntityTransitionOperationDisposition.Committed)
         {
-            if (attempt.Receipt?.Commit.Fingerprint != commit.Fingerprint)
+            var retained = attempt.Receipt?.Commit;
+            // Native stores normally retain the exact immutable candidate. The atomic fence proves the
+            // write succeeded; hashing that same object adds no evidence. Reconstructed receipts still
+            // require exact content comparison, and external readers keep their own integrity checks.
+            if (retained is null || (!ReferenceEquals(retained, commit) && retained.Fingerprint != commit.Fingerprint))
                 throw new InvalidOperationException("Native commit returned different canonical evidence.");
             return attempt;
         }

@@ -232,3 +232,11 @@ not an automatic downgrade based on the number of databases.
 `RelationQueryPhysicalPreparation` retains validated interpreter and physical planning evidence for reuse
 at runtime binding. Affinity checks preserve the exact semantic compilation, placement and policy; this
 never caches parameters, source observations or results.
+
+### Hosted typed query admission
+
+Hosted typed Query admission prepares the framework CLR contract once and reads ordinary envelopes directly
+from observation fields. Customized members retain their owning JSON converters; explicitly immutable
+projections can be reused without rebuilding their graph. Portable contract admission still runs per decode.
+See [prepared observation projections](../../docs/performance/prepared-observation-projections.md) for scope
+and qualification.

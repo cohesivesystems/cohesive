@@ -1,0 +1,5 @@
+source,phase,closest_fingerprint_frame,managed_samples
+004010,repeated,"Cohesive.Protocols.ProtocolConformanceJson.ComputeUncachedHash(!!0,class Cohesive.Model.Serialization.CanonicalJsonPropertyExclusions)",112
+004010,repeated,Cohesive.Storage.EntityTransitionOperationFingerprints.Request(class Cohesive.Storage.EntityTransitionOperationRequest),53
+005030,repeated,"Cohesive.Protocols.ProtocolConformanceJson.ComputeUncachedHash(!!0,class Cohesive.Model.Serialization.CanonicalJsonPropertyExclusions)",130
+005030,repeated,Cohesive.Storage.EntityTransitionOperationFingerprints.Request(class Cohesive.Storage.EntityTransitionOperationRequest),72

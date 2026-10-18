@@ -22,7 +22,9 @@ public static class HostedQueryValueDiagnosticCodes
 
 /// <summary>Shared portable value admission for typed hosted Query implementations.</summary>
 /// <remarks>Pure conversion and validation only; it does not dispatch handlers or establish authorization.
-/// Frozen serializer metadata is shared. Values and diagnostics are invocation-scoped.</remarks>
+/// Frozen serializer metadata is shared. Values and diagnostics are invocation-scoped. Member codecs
+/// interpret their own payload; converters requiring enclosing JSON context belong on the owning envelope.
+/// Explicit deeply immutable projections may be shared by the exact observation storage.</remarks>
 public static class HostedQueryValueAdapter
 {
     static readonly JsonSerializerOptions JsonOptions = ExecutionDefinitionJsonSerializer.GetClrContractReadOnlyOptions();
@@ -49,7 +51,11 @@ public static class HostedQueryValueAdapter
                 "/input/state");
         }
 
-        var inputValidation = PortableExecutionValidator.Validate(inputValue);
+        var requiresJsonRoundTrip = false;
+        var inputValidation = typeof(T) == typeof(ObservationValue)
+            ? PortableExecutionValidator.Validate(inputValue)
+            : PortableExecutionValidator.ValidateForClrProjection(inputValue,
+                JsonOptions.MaxDepth == 0 ? 64 : JsonOptions.MaxDepth, out requiresJsonRoundTrip);
         var inputError = inputValidation.Diagnostics.FirstOrDefault(
             static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
         if (inputError is not null)
@@ -63,7 +69,9 @@ public static class HostedQueryValueAdapter
         T input;
         try
         {
-            input = inputValue.Value.Value.Deserialize<T>(JsonOptions)
+            input = (requiresJsonRoundTrip
+                ? inputValue.Value.Value.Deserialize<T>(JsonOptions)
+                : Projection<T>.Read(inputValue.Value.Value))
                 ?? throw new JsonException("The concrete invocation decoded as null.");
         }
         catch (Exception exception) when (IsConversionFailure(exception))
@@ -117,6 +125,14 @@ public static class HostedQueryValueAdapter
 
         static Result<PortableValue, DocumentValidationDiagnostic> Failed(string code, string message, string location) =>
             Result<PortableValue, DocumentValidationDiagnostic>.FromFailure(new(code, DiagnosticSeverity.Error, message, location));
+    }
+
+    static class Projection<T>
+    {
+        static readonly PreparationSlot<Func<ObservationValue, T?>> Slot = new();
+        internal static T? Read(ObservationValue value) => Slot.Get(typeof(T), static type =>
+            DefaultObservationValueConverterCache.PrepareClrContract(type, JsonOptions) is Func<ObservationValue, T?> prepared
+                ? prepared : static observed => observed.Deserialize<T>(JsonOptions))(value);
     }
 
     static bool IsConversionFailure(Exception exception) => exception is

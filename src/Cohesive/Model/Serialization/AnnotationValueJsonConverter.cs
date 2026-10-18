@@ -19,6 +19,6 @@ public sealed class AnnotationValueJsonConverter : JsonConverter<AnnotationValue
     public override void Write(Utf8JsonWriter writer, AnnotationValue value, JsonSerializerOptions options)
     {
         ArgumentNullException.ThrowIfNull(writer);
-        value.Value.WriteTo(writer);
+        value.WriteTo(writer);
     }
 }

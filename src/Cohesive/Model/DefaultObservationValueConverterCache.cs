@@ -1,7 +1,11 @@
+using System.Buffers.Text;
 using System.Collections;
+using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Model;
 
@@ -23,6 +27,14 @@ static class DefaultObservationValueConverterCache
     internal static Delegate? GetStrict(Type targetType) => StrictConverters.Get(targetType,
         static type => new(new ConverterBuilder(strict: true).Build(type))).Converter;
 
+    // The hosted adapter owns this frozen, case-sensitive CLR profile and its preparation lifetime.
+    // Consumer-configured profiles retain the serializer compatibility path.
+    internal static Delegate? PrepareClrContract(Type targetType, JsonSerializerOptions options) =>
+        // These policies can also be enabled by host feature switches. Their complete checks
+        // remain serializer-owned rather than being partially reproduced by field materialization.
+        options.RespectNullableAnnotations || options.RespectRequiredConstructorParameters
+            ? null : new ConverterBuilder(strict: true, options).Build(targetType);
+
     sealed record ConverterEntry(Delegate? Converter);
 
     // Mutable CLR output must own its bytes; keep the default JSON compatibility fallback in one place.
@@ -31,7 +43,7 @@ static class DefaultObservationValueConverterCache
             ? value.Bytes.ToArray()
             : value.Deserialize<byte[]>(ObservationMaterializerDefaults.SerializerOptions);
 
-    sealed class ConverterBuilder(bool strict = false)
+    sealed class ConverterBuilder(bool strict = false, JsonSerializerOptions? options = null)
     {
         static readonly MethodInfo ReadArrayMethod = GetGenericMethod(nameof(ReadArray));
         static readonly MethodInfo ReadNullableMethod = GetGenericMethod(nameof(ReadNullable));
@@ -62,7 +74,7 @@ static class DefaultObservationValueConverterCache
                 // Keep a customized or unsupported member on its JSON contract without
                 // forcing its otherwise conventional parent through a full JSON round trip.
                 if (body is null && strict && !targetType.IsPointer && !targetType.IsByRefLike && !targetType.IsByRef)
-                    body = Expression.Call(GetGenericMethod(nameof(DeserializeStrict)).MakeGenericMethod(targetType), value);
+                    body = DeserializeExpression(targetType, value);
                 if (body is null)
                 {
                     converters[targetType] = null;
@@ -80,8 +92,68 @@ static class DefaultObservationValueConverterCache
             }
         }
 
-        Expression? BuildExpression(Type targetType, Expression value)
+        Expression? BuildExpression(Type targetType, Expression value, bool prepareImmutable = true)
         {
+            if (prepareImmutable && options is not null && typeof(IImmutableObservationProjection).IsAssignableFrom(targetType))
+            {
+                // Build the interpretation once; its result still belongs to the exact observation/profile.
+                // Unsupported roots must use the independent serializer, not recurse into this cache.
+                var body = BuildExpression(targetType, value, prepareImmutable: false)
+                    ?? Expression.Call(GetGenericMethod(nameof(DeserializeIndependent)).MakeGenericMethod(targetType),
+                        value, Expression.Constant(options));
+                var reader = Expression.Lambda(ConverterType(targetType), body, (ParameterExpression)value).Compile();
+                return Expression.Call(GetGenericMethod(nameof(ReadImmutable)).MakeGenericMethod(targetType),
+                    value, Expression.Constant(options), Expression.Constant(reader, ConverterType(targetType)));
+            }
+
+            if (options is not null && targetType == typeof(ImmutableDictionary<AnnotationKey, AnnotationValue>)
+                && CanReadAnnotations(options))
+                return StrictContainer(targetType, value, Expression.Call(typeof(ConverterBuilder),
+                    nameof(ReadAnnotations), null, value, Expression.Constant(options)), ObservationValueKind.Object);
+            if (options is not null && targetType.IsEnum && SerializedEnumMemberCatalog.TryCreate(targetType,
+                out var members, out _, out _))
+            {
+                // The serializer remains the authority. This is only an exact-literal fast path;
+                // flags, compatibility spellings and undefined numeric values keep its full reader.
+                var literals = new Dictionary<string, object>(StringComparer.Ordinal);
+                foreach (var wire in members!.WireMembers)
+                {
+                    try
+                    {
+                        var parsed = JsonSerializer.Deserialize(JsonSerializer.SerializeToUtf8Bytes(wire), targetType, options);
+                        if (parsed is not null) literals[wire] = parsed;
+                    }
+                    catch (JsonException) { }
+                }
+                return Expression.Call(GetGenericMethod(nameof(ReadPreparedEnum)).MakeGenericMethod(targetType),
+                    value, Expression.Constant(literals, typeof(IReadOnlyDictionary<string, object>)),
+                    Expression.Constant(options));
+            }
+
+            // Use the owning serializer's discriminator declarations, never a parallel union catalog.
+            // Custom converters and conflicting metadata names keep the complete serializer path.
+            if (options is not null && options.ReferenceHandler is null && options.AllowOutOfOrderMetadataProperties
+                && options.GetTypeInfo(targetType).PolymorphismOptions is { } polymorphism
+                && polymorphism.DerivedTypes.Count > 0
+                && polymorphism.DerivedTypes.All(derived => derived.TypeDiscriminator is string
+                    && options.GetTypeInfo(derived.DerivedType).Kind == System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object
+                    && !options.GetTypeInfo(derived.DerivedType).Properties.Any(property =>
+                        property.Name == polymorphism.TypeDiscriminatorPropertyName)))
+            {
+                var readers = new Dictionary<string, Delegate>(StringComparer.Ordinal);
+                foreach (var derived in polymorphism.DerivedTypes)
+                    if (Build(derived.DerivedType) is { } reader)
+                    {
+                        var argument = Expression.Parameter(typeof(ObservationValue));
+                        readers.Add((string)derived.TypeDiscriminator!, Expression.Lambda(ConverterType(targetType),
+                            Expression.Convert(Expression.Invoke(Expression.Constant(reader), argument), targetType), argument).Compile());
+                    }
+                if (readers.Count == polymorphism.DerivedTypes.Count)
+                    return Expression.Call(GetGenericMethod(nameof(ReadPolymorphic)).MakeGenericMethod(targetType), value,
+                        Expression.Constant(FieldPath.FromField(polymorphism.TypeDiscriminatorPropertyName)), Expression.Constant(readers),
+                        Expression.Constant(options));
+            }
+
             if (targetType == typeof(ObservationValue)) return strict ? null : value;
 
             if (targetType == typeof(string))
@@ -164,6 +236,15 @@ static class DefaultObservationValueConverterCache
             if (strict && targetType.IsGenericType && !HasJsonContractCustomization(targetType))
             {
                 var definition = targetType.GetGenericTypeDefinition();
+                if (definition == typeof(ImmutableArray<>))
+                {
+                    var element = targetType.GetGenericArguments()[0];
+                    var converter = Build(element);
+                    if (converter is not null)
+                        return StrictContainer(targetType, value, Expression.Call(
+                            GetGenericMethod(nameof(ReadImmutableArray)).MakeGenericMethod(element), value,
+                            ConverterConstant(element, converter)), ObservationValueKind.Array);
+                }
                 if (definition == typeof(List<>) || definition == typeof(IReadOnlyList<>)
                     || definition == typeof(IReadOnlyCollection<>) || definition == typeof(IList<>)
                     || definition == typeof(ICollection<>) || definition == typeof(IEnumerable<>))
@@ -189,11 +270,17 @@ static class DefaultObservationValueConverterCache
                 || targetType.IsByRefLike
                 || typeof(IEnumerable).IsAssignableFrom(targetType)
                 || HasJsonContractCustomization(targetType)
+                || (options is not null && options.GetTypeInfo(targetType).Kind != System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object)
                 || (strict && (typeof(IJsonOnDeserializing).IsAssignableFrom(targetType)
                     || typeof(IJsonOnDeserialized).IsAssignableFrom(targetType))))
             {
                 return null;
             }
+
+            if (options is not null && (options.GetTypeInfo(targetType).Properties.Any(static property => property.AttributeProvider is not PropertyInfo)
+                || targetType.GetProperties(BindingFlags.Public | BindingFlags.Instance).Any(static property =>
+                    property.GetMethod?.IsPublic != true && property.SetMethod?.IsPublic == true)))
+                return null;
 
             var properties = ShapeTypeInspector.GetReadableProperties(targetType);
             if (properties.Length == 0
@@ -204,16 +291,21 @@ static class DefaultObservationValueConverterCache
                 return null;
             }
 
+            var declaredConstructor = options is null ? null : targetType
+                .GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+                .SingleOrDefault(static constructor => constructor.IsDefined(typeof(JsonConstructorAttribute)));
+            if (declaredConstructor is { IsPublic: false }) return null;
+
             // Plain JSON prefers a public parameterless constructor and public setters.
             // Keep customized and write-only contracts on the serializer compatibility path.
-            if (strict && targetType.GetConstructor(Type.EmptyTypes) is { } emptyConstructor)
+            if (strict && declaredConstructor is null && targetType.GetConstructor(Type.EmptyTypes) is { } emptyConstructor)
             {
                 if (targetType.GetProperties(BindingFlags.Public | BindingFlags.Instance)
                     .Any(static property => property.GetMethod is null && property.SetMethod?.IsPublic == true)) return null;
                 var instance = Expression.Variable(targetType, "instance");
                 var statements = new List<Expression>
                 {
-                    Expression.Call(RequireObjectMethod, value),
+                    RequireExpression(targetType, value, properties),
                     Expression.Assign(instance, Expression.New(emptyConstructor))
                 };
                 foreach (var property in properties.OrderBy(static property => property.Name, StringComparer.Ordinal))
@@ -236,18 +328,23 @@ static class DefaultObservationValueConverterCache
                 return StrictContainer(targetType, value, result, ObservationValueKind.Object);
             }
 
+            if (properties.Select(static property => property.Name).Distinct(StringComparer.OrdinalIgnoreCase).Count() != properties.Length)
+                return null;
+
             var byProperty = properties.ToDictionary(
                 static property => property.Name,
                 StringComparer.OrdinalIgnoreCase);
             var constructors = targetType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-            if (constructors.Length != 1 || constructors.Any(HasJsonContractCustomization))
-            {
+            if (declaredConstructor is null && (constructors.Length != 1 || constructors.Any(HasJsonContractCustomization)))
                 return null;
-            }
-
-            var constructor = constructors[0];
+            var constructor = declaredConstructor ?? constructors[0];
+            if (options is not null && constructor.GetCustomAttributes().Any(static attribute =>
+                attribute.GetType().Namespace == typeof(JsonConstructorAttribute).Namespace
+                    && attribute is not JsonConstructorAttribute)) return null;
             var constructorParameters = constructor.GetParameters();
-            if (constructorParameters.Length != properties.Length)
+            if (constructorParameters.Length != properties.Length && (options is null
+                || properties.Any(property => property.SetMethod is not null
+                    && !constructorParameters.Any(parameter => string.Equals(parameter.Name, property.Name, StringComparison.OrdinalIgnoreCase)))))
             {
                 return null;
             }
@@ -279,10 +376,22 @@ static class DefaultObservationValueConverterCache
                     parameter.HasDefaultValue ? parameter.DefaultValue : null);
             }
 
-            Expression materialize = Expression.New(constructor, constructorArguments);
-            materialize = Expression.Block(
-                Expression.Call(RequireObjectMethod, value),
-                materialize);
+            Expression materialize;
+            if (options is not null)
+            {
+                // The existing JSON writer orders fields ordinally. Preserve member-converter
+                // evaluation order even when constructor parameters use another order.
+                var locals = constructorParameters.Select((parameter, index) =>
+                    Expression.Variable(parameter.ParameterType, $"argument{index}")).ToArray();
+                var reads = Enumerable.Range(0, locals.Length)
+                    .OrderBy(index => byProperty[constructorParameters[index].Name!].Name, StringComparer.Ordinal)
+                    .Select(index => (Expression)Expression.Assign(locals[index], constructorArguments[index]));
+                materialize = Expression.Block(locals,
+                    new[] { RequireExpression(targetType, value, properties) }.Concat(reads)
+                        .Append(Expression.New(constructor, locals)));
+            }
+            else materialize = Expression.Block(RequireExpression(targetType, value, properties),
+                Expression.New(constructor, constructorArguments));
             if (!targetType.IsValueType)
             {
                 materialize = Expression.Condition(
@@ -303,7 +412,7 @@ static class DefaultObservationValueConverterCache
             if (!target.IsValueType) matches = Expression.OrElse(matches,
                 Expression.Equal(kind, Expression.Constant(ObservationValueKind.Null)));
             return Expression.Condition(matches, direct,
-                Expression.Call(GetGenericMethod(nameof(DeserializeStrict)).MakeGenericMethod(target), value));
+                DeserializeExpression(target, value));
         }
 
         MethodCallExpression ReadProperty(
@@ -340,11 +449,114 @@ static class DefaultObservationValueConverterCache
                 Expression.Equal(kind, Expression.Constant(ObservationValueKind.Double)),
                 Expression.Not(Expression.Call(typeof(double), nameof(double.IsFinite), null,
                     Expression.Property(value, nameof(ObservationValue.Double)))));
-            var fallback = Expression.Call(GetGenericMethod(nameof(DeserializeStrict)).MakeGenericMethod(target), value);
+            var fallback = DeserializeExpression(target, value);
             return Expression.Condition(Expression.OrElse(stringValue, invalidDouble), fallback, direct);
         }
 
-        static T DeserializeStrict<T>(ObservationValue value) => value.Deserialize<T>()!;
+        Expression RequireExpression(Type target, Expression value, PropertyInfo[] properties) => options is null
+            ? Expression.Call(RequireObjectMethod, value)
+            : Expression.Call(GetGenericMethod(nameof(RequireContractObject)).MakeGenericMethod(target), value,
+                Expression.Constant(properties.Select(static property => property.Name).ToHashSet(StringComparer.Ordinal)));
+
+        Expression DeserializeExpression(Type target, Expression value) => Expression.Call(
+            GetGenericMethod(nameof(DeserializeStrict)).MakeGenericMethod(target), value,
+            Expression.Constant(options, typeof(JsonSerializerOptions)));
+
+        static void RequireContractObject<T>(ObservationValue value, HashSet<string> knownNames)
+        {
+            RequireObject(value);
+            var visitor = new KnownNamesVisitor(knownNames);
+            ObservationFieldTraversal.Visit(value.Fields!, ref visitor);
+            if (visitor.UnknownName is { } name)
+                throw new JsonException($"JSON property '{name}' is not mapped on '{typeof(T)}'.");
+        }
+
+        struct KnownNamesVisitor(HashSet<string> knownNames) : IObservationFieldVisitor
+        {
+            internal string? UnknownName;
+            public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+                where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+            {
+                using (fields)
+                    while (fields.MoveNext())
+                        if (!knownNames.Contains(fields.Current.Key)
+                            && (UnknownName is null || StringComparer.Ordinal.Compare(fields.Current.Key, UnknownName) < 0))
+                            UnknownName = fields.Current.Key;
+            }
+        }
+
+        static TEnum ReadPreparedEnum<TEnum>(ObservationValue value, IReadOnlyDictionary<string, object> literals,
+            JsonSerializerOptions options) where TEnum : struct, Enum =>
+            value.Kind == ObservationValueKind.String && value.String is { } text && literals.TryGetValue(text, out var literal)
+                ? (TEnum)literal : value.Deserialize<TEnum>(options);
+
+        static T? ReadPolymorphic<T>(ObservationValue value, FieldPath discriminator, Dictionary<string, Delegate> readers,
+            JsonSerializerOptions options)
+        {
+            if (value.Kind == ObservationValueKind.Object && value.TryGetField(discriminator, out var tag)
+                && tag.Kind == ObservationValueKind.String && readers.TryGetValue(tag.String!, out var reader))
+                return ((Func<ObservationValue, T?>)reader)(value.WithoutField(discriminator));
+            // A marked root can already be inside its projection slot; re-entering Deserialize would recurse.
+            return value.DeserializeIndependent<T>(options);
+        }
+
+        static T? ReadImmutable<T>(ObservationValue value, JsonSerializerOptions options, Func<ObservationValue, T?> read) =>
+            value.Kind == ObservationValueKind.Object && value.Fields is { Count: > 0 } && options.IsReadOnly
+                ? ImmutableObservationProjectionCache.Read(value, options, ObservationBytesJsonEncoding.Throw, read)
+                : read(value);
+
+        static T? DeserializeIndependent<T>(ObservationValue value, JsonSerializerOptions options) =>
+            value.DeserializeIndependent<T>(options);
+
+        static bool CanReadAnnotations(JsonSerializerOptions options) => options.ReferenceHandler is null
+            && options.GetConverter(typeof(ImmutableDictionary<AnnotationKey, AnnotationValue>)) is AnnotationMapJsonConverter
+            && options.GetConverter(typeof(AnnotationKey)) is AnnotationKeyJsonConverter
+            && options.GetConverter(typeof(AnnotationValue)) is AnnotationValueJsonConverter
+            && options.GetConverter(typeof(JsonElement)).GetType() == JsonSerializerOptions.Default.GetConverter(typeof(JsonElement)).GetType()
+            && options.GetConverter(typeof(JsonDocument)).GetType() == JsonSerializerOptions.Default.GetConverter(typeof(JsonDocument)).GetType();
+
+        static ImmutableDictionary<AnnotationKey, AnnotationValue>? ReadAnnotations(ObservationValue value, JsonSerializerOptions options)
+        {
+            if (value.Kind == ObservationValueKind.Null) return null;
+            if (value.Fields!.Count == 0) return ImmutableDictionary<AnnotationKey, AnnotationValue>.Empty;
+            var values = ImmutableDictionary.CreateBuilder<AnnotationKey, AnnotationValue>();
+            var visitor = new AnnotationVisitor(values, options);
+            ObservationFieldTraversal.Visit(value.Fields, ref visitor);
+            return values.ToImmutable();
+        }
+
+        struct AnnotationVisitor(ImmutableDictionary<AnnotationKey, AnnotationValue>.Builder values,
+            JsonSerializerOptions options) : IObservationFieldVisitor
+        {
+            public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+                where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+            {
+                using (fields)
+                    while (fields.MoveNext())
+                    {
+                        var field = fields.Current;
+                        if (string.IsNullOrWhiteSpace(field.Key)) throw new JsonException("Annotation key property names must be non-empty.");
+                        values[new(field.Key)] = field.Value.Kind switch
+                        {
+                            ObservationValueKind.Null => null!,
+                            // The observation's JSON writer already owns string normalization. Structured values
+                            // retain serializer-created snapshots, including their numeric spelling.
+                            ObservationValueKind.String => AnnotationValue.FromString(field.Value.String!),
+                            _ => new AnnotationValue(field.Value.Deserialize<JsonElement>(options))
+                        };
+                    }
+            }
+        }
+
+        static ImmutableArray<T> ReadImmutableArray<T>(ObservationValue value, Func<ObservationValue, T> read)
+        {
+            var items = value.EnumerateArray();
+            var result = ImmutableArray.CreateBuilder<T>(items.Length);
+            foreach (var item in items) result.Add(read(item));
+            return result.MoveToImmutable();
+        }
+
+        static T DeserializeStrict<T>(ObservationValue value, JsonSerializerOptions? options) => value.Deserialize<T>(options)!;
 
         static bool HasJsonContractCustomization(MemberInfo member) =>
             member.GetCustomAttributes(inherit: true).Any(static attribute =>
@@ -437,23 +649,38 @@ static class DefaultObservationValueConverterCache
                 ? value.Int64
                 : DeserializeDefault<long>(value);
 
-        static double ReadDouble(ObservationValue value) =>
-            value.Kind is ObservationValueKind.Int64
-                or ObservationValueKind.Double
-                or ObservationValueKind.Decimal
-                ? value.GetDouble()
-                : DeserializeDefault<double>(value);
+        static double ReadDouble(ObservationValue value)
+        {
+            if (value.Kind == ObservationValueKind.Decimal)
+            {
+                // Decimal's direct binary cast can differ by one ULP from the JSON reader.
+                // Interpret the same numeric token without a string or heap buffer.
+                Span<byte> token = stackalloc byte[64];
+                if (Utf8Formatter.TryFormat(value.Decimal, token, out var length))
+                {
+                    var reader = new Utf8JsonReader(token[..length]);
+                    reader.Read();
+                    return reader.GetDouble();
+                }
+            }
+            return value.Kind is ObservationValueKind.Int64 or ObservationValueKind.Double
+                ? value.GetDouble() : DeserializeDefault<double>(value);
+        }
 
         static decimal ReadDecimal(ObservationValue value)
         {
-            if (value.Kind is ObservationValueKind.Int64
-                    or ObservationValueKind.Double
-                    or ObservationValueKind.Decimal
-                && value.TryGetCanonicalNumericDecimal(out var direct))
+            if (value.Kind == ObservationValueKind.Double && double.IsFinite(value.Double))
             {
-                return direct;
+                Span<byte> token = stackalloc byte[64];
+                if (Utf8Formatter.TryFormat(value.Double, token, out var length))
+                {
+                    var reader = new Utf8JsonReader(token[..length]);
+                    reader.Read();
+                    if (reader.TryGetDecimal(out var parsed)) return parsed;
+                }
             }
-
+            else if (value.Kind is ObservationValueKind.Int64 or ObservationValueKind.Decimal
+                && value.TryGetCanonicalNumericDecimal(out var direct)) return direct;
             return DeserializeDefault<decimal>(value);
         }
 

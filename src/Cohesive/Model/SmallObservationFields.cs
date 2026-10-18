@@ -4,7 +4,7 @@ using System.Text.Json;
 namespace Cohesive.Model;
 
 // Owns a bounded, sorted field vector. No caller can access its mutable array; lookup is linear
-// over at most eight keys. Unlike graph-qualified ordinal layouts, names belong to this value.
+// over a bounded number of keys. Unlike graph-qualified ordinal layouts, names belong to this value.
 internal sealed class SmallObservationFields : IReadOnlyDictionary<string, ObservationValue>
 {
     readonly KeyValuePair<string, ObservationValue>[] fields;
@@ -12,22 +12,45 @@ internal sealed class SmallObservationFields : IReadOnlyDictionary<string, Obser
     SmallObservationFields(KeyValuePair<string, ObservationValue>[] fields, int count)
     { this.fields = fields; Count = count; }
 
-    internal static SmallObservationFields Read(JsonElement element, int capacity)
+    internal static SmallObservationFields Read(JsonElement element, int capacity, ObservationJsonPropertyNames? names, bool rejectDuplicates = false)
     {
         System.Diagnostics.Debug.Assert(capacity is > 0 and <= 8);
         var fields = new KeyValuePair<string, ObservationValue>[capacity];
         var count = 0;
         foreach (var property in element.EnumerateObject())
         {
-            var key = property.Name;
-            var value = ObservationValue.FromJsonElement(property.Value);
+            var key = names?.Get(property) ?? property.Name;
+            var value = ObservationValue.FromJsonElement(property.Value, names, rejectDuplicates);
             var index = 0;
             while (index < count && !StringComparer.Ordinal.Equals(fields[index].Key, key)) index++;
+            if (rejectDuplicates && index < count) throw new JsonException("Duplicate object property.");
             fields[index] = new(key, value); // Token acquisition retains last-property-wins semantics.
             if (index == count) count++;
         }
         fields.AsSpan(0, count).Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
         return new(fields, count);
+    }
+
+    // Prepared framework contracts have a fixed small member set. The caller transfers exclusive
+    // ownership of this vector; unlike Read, names already come from frozen serializer metadata.
+    internal static SmallObservationFields FromOwnedProperties(KeyValuePair<string, ObservationValue>[] fields, int count)
+    {
+        System.Diagnostics.Debug.Assert(count <= 16 && count <= fields.Length);
+        fields.AsSpan(0, count).Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
+        for (var i = 1; i < count; i++)
+            if (StringComparer.Ordinal.Equals(fields[i - 1].Key, fields[i].Key)) throw new JsonException("Duplicate graph property.");
+        return new(fields, count);
+    }
+
+    internal SmallObservationFields Without(string name)
+    {
+        var index = 0;
+        while (index < Count && !StringComparer.Ordinal.Equals(fields[index].Key, name)) index++;
+        if (index == Count) return this;
+        var remaining = new KeyValuePair<string, ObservationValue>[Count - 1];
+        fields.AsSpan(0, index).CopyTo(remaining);
+        fields.AsSpan(index + 1, Count - index - 1).CopyTo(remaining.AsSpan(index));
+        return new(remaining, remaining.Length);
     }
 
     internal KeyValuePair<string, ObservationValue> At(int index) => fields[index];
