@@ -31,7 +31,7 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
             {
                 var prepared = model.Storage.Preparation;
                 infra.Resource(Orders).Persistent().Prepared(prepared.Postgres);
-                infra.Resource(Inventory).Persistent().Prepared(prepared.Sources[model.Storage.InventoryBinding.Binding.Source.Id]);
+                infra.Resource(Inventory).Persistent().Prepared(prepared.Sources[model.Storage.Inventory.Query.Binding.Source.Id]);
                 var worker = infra.Workload(Worker).Requires(AspireInfrastructure.DotNetProjectExecution)
                     .RequiresReady(Orders).RequiresReady(Inventory);
                 foreach (var requirement in prepared.Requirements) worker.Requires(requirement);
@@ -64,7 +64,7 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
             associations =>
             {
                 var prepared = Application.Storage.Preparation;
-                var source = Application.Storage.InventoryBinding;
+                var source = Application.Storage.Inventory.Query;
                 // Native names are shared with the source declaration; no account endpoint is invented offline.
                 if (cosmos.Resource.Name != source.Account || database.Resource.DatabaseName != source.Database
                     || inventory.Resource.ContainerName != source.Container

@@ -36,7 +36,7 @@ public static class PostgresComposedServiceExtensions
                     DiagnosticSeverity.Error, "Composed policy must preserve the selected result bounds.", "/bindings/queries/bounds")]));
             return (selection, bindings.PrepareComposed(selection.Request, sources, selectedPolicy));
         }).ToImmutableArray();
-        return new(bindings.Database, queries);
+        return new(bindings, queries);
     }
 }
 
@@ -45,7 +45,8 @@ public static class PostgresComposedServiceExtensions
 /// SQL snapshot never extends to remote reads. Physical-plan and source fingerprints remain evidence, not capability IDs.</remarks>
 public sealed class PostgresComposedServicePreparation
 {
-    readonly ImmutableArray<(ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries;
+    readonly PostgresPersistenceBindings bindings;
+    readonly Dictionary<object, (ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries;
     /// <summary>Local database acquisition requirements and evidence.</summary>
     public ComposedQueryResourceEvidence Postgres { get; }
     /// <summary>Remote acquisition requirements keyed by canonical source identity.</summary>
@@ -55,11 +56,12 @@ public sealed class PostgresComposedServicePreparation
     /// <summary>Explicit independent-source requirements for the workload.</summary>
     public ImmutableArray<InfrastructureCapabilityId> Requirements => [.. ExecutionEvidence.Select(item => item.Capability)];
 
-    internal PostgresComposedServicePreparation(PostgresRelationQueryDatabaseId database,
+    internal PostgresComposedServicePreparation(PostgresPersistenceBindings bindings,
         ImmutableArray<(ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries)
     {
         if (queries.IsEmpty) throw new ArgumentException("At least one selected query is required.", nameof(queries));
-        this.queries = queries;
+        this.bindings = bindings;
+        this.queries = queries.ToDictionary(item => (object)item.Selection.Request, ReferenceEqualityComparer.Instance);
         List<InfrastructureCapabilityEvidence> local = [], execution = [];
         Dictionary<RelationQuerySourceInstanceId, List<InfrastructureCapabilityEvidence>> remote = [];
         foreach (var (selection, prepared) in queries)
@@ -91,9 +93,57 @@ public sealed class PostgresComposedServicePreparation
             }
             execution.Add(Leaf("bounded-evaluation", "relations/physical-executor/v1"));
         }
-        Postgres = new(database.Value, "postgres", local);
+        Postgres = new(bindings.Database.Value, "postgres", local);
         Sources = remote.ToImmutableDictionary(pair => pair.Key, pair => new ComposedQueryResourceEvidence(pair.Key.Value, "source", pair.Value));
         ExecutionEvidence = [.. execution];
+    }
+
+    /// <summary>Binds all endpoint-selected queries and declared repositories without repeating the query catalog.</summary>
+    /// <param name="persistence">Caller-owned PostgreSQL runtime for the prepared mappings.</param>
+    /// <param name="receipts">Optional validated native receipt storage.</param>
+    /// <param name="sources">Remote repositories and acquisition readers from their storage declarations.</param>
+    /// <returns>Host-scoped resolver caching readers by exact query. Results and invocation context are never cached.</returns>
+    /// <exception cref="ArgumentNullException">Persistence or source registrations are null.</exception>
+    /// <exception cref="ArgumentException">Runtime mappings differ from preparation, or source registrations duplicate a repository or source.</exception>
+    /// <remarks>Query resolution validates the selected authority, bounds, source affinity and consistency before IO.
+    /// Unselected queries never fall back to a different execution strategy.</remarks>
+    public IServicePersistence Bind(PostgresPersistenceRegistration persistence,
+        PostgresTransitionReceiptStorage? receipts = null, params EntityStorageRegistration[] sources)
+    {
+        ArgumentNullException.ThrowIfNull(persistence);
+        ArgumentNullException.ThrowIfNull(sources);
+        RequirePersistence(persistence);
+        var repositories = new ServicePersistenceBuilder(persistence.ForServices(receipts));
+        foreach (var source in sources)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            repositories.Repository(source.Repository);
+        }
+        return new Persistence(this, persistence, new(sources.Select(source => source.Source)), repositories.Build());
+    }
+
+    sealed class Persistence(PostgresComposedServicePreparation preparation, PostgresPersistenceRegistration postgres,
+        EntityRelationQuerySourceCatalog sources, IServicePersistence repositories) : IServicePersistence
+    {
+        readonly Dictionary<object, object> readers = new(ReferenceEqualityComparer.Instance);
+        public IEntityRepository Repository(ValueContract observation) => repositories.Repository(observation);
+        public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query,
+            int maximumRows, long maximumBytes, RelationQueryConsistency consistency)
+        {
+            ArgumentNullException.ThrowIfNull(query);
+            // Check every request, including cached readers: a later caller cannot widen bounds or guarantees.
+            preparation.RequireSelection(query, maximumRows, maximumBytes);
+            if (!Enum.IsDefined(consistency)) throw new ArgumentOutOfRangeException(nameof(consistency));
+            if (consistency != RelationQueryConsistency.IndependentSources)
+                throw new ServiceBindingValidationException(new([new(ServiceBindingDiagnosticCodes.QueryPlacementUnsupported,
+                    DiagnosticSeverity.Error, "Composed readers cannot satisfy a shared snapshot.", "/bindings/queries/consistency")]));
+            lock (readers)
+            {
+                if (!readers.TryGetValue(query, out var reader))
+                    readers.Add(query, reader = preparation.Bind(postgres, query, sources, maximumRows, maximumBytes));
+                return (IRelationQueryReader<TInput, TResult>)reader;
+            }
+        }
     }
 
     /// <summary>Binds an exactly selected query using its already prepared plan and requested bounds.</summary>
@@ -104,11 +154,27 @@ public sealed class PostgresComposedServicePreparation
     public IRelationQueryReader<TInput, TResult> Bind<TInput, TResult>(PostgresPersistenceRegistration persistence,
         RelationQuery<TInput, TResult> query, EntityRelationQuerySourceCatalog sources, int rows, long bytes)
     {
-        var entry = queries.SingleOrDefault(item => ReferenceEquals(item.Selection.Request, query.CompilationRequest));
-        if (entry.Selection is null || entry.Selection.MaximumRows != rows || entry.Selection.MaximumBytes != bytes)
+        RequirePersistence(persistence);
+        var entry = RequireSelection(query, rows, bytes);
+        return persistence.BindComposed(query, entry.Prepared, sources);
+    }
+
+    void RequirePersistence(PostgresPersistenceRegistration persistence)
+    {
+        ArgumentNullException.ThrowIfNull(persistence);
+        if (!ReferenceEquals(persistence.Bindings, bindings))
+            throw new ArgumentException("Runtime must be bound from the exact prepared PostgreSQL mappings.", nameof(persistence));
+    }
+
+    (ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared) RequireSelection<TInput, TResult>(
+        RelationQuery<TInput, TResult> query, int rows, long bytes)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (!queries.TryGetValue(query.CompilationRequest, out var entry)
+            || entry.Selection.MaximumRows != rows || entry.Selection.MaximumBytes != bytes)
             throw new ServiceBindingValidationException(new([new(ServiceBindingDiagnosticCodes.QueryUnselected, DiagnosticSeverity.Error,
                 "Query authority and bounds must match the prepared endpoint selection.", "/bindings/queries")]));
-        return persistence.BindComposed(query, entry.Prepared, sources);
+        return entry;
     }
 }
 

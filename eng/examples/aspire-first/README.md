@@ -113,6 +113,16 @@ an application consistency choice, not a consequence inferred from placement. Th
 reader supplies the stronger statement snapshot. Selecting `SingleSnapshot` for a mixed reader fails at
 setup, including when that reader was already cached for an independent-source request.
 
+`PostgresCosmosStorage` declares inventory once with `CosmosEntityStorageBinding`: its entity, canonical
+identity, native container, fixed partition and acquisition limits supply both the repository and query
+source. `Preparation.Bind(postgres, receipts, Inventory.Bind(container))` resolves every query selected
+by the endpoint plan; adding an endpoint query does not require another registration in `Bind`. Readers
+are shared within that persistence instance, while inputs and results remain invocation-scoped. A foreign
+query, changed bound or stronger consistency request is rejected even after a reader has been cached.
+The PostgreSQL runtime must come from the exact prepared mappings. The fixed-partition helper intentionally
+uses the standard Cosmos observation envelope; broader/custom source declarations remain available through
+the query adapter, without inventing repository guarantees.
+
 Both AppHosts derive infrastructure evidence from prepared bindings. The mixed storage model prepares
 its endpoint-selected queries offline, with no PostgreSQL connection or Cosmos SDK client. PostgreSQL
 acquisition evidence attaches to the order database, Cosmos source-profile evidence to the inventory

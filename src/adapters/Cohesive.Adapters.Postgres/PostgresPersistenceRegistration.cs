@@ -22,6 +22,9 @@ public sealed partial class PostgresPersistenceRegistration
     internal PostgresPersistenceRegistration(PostgresNpgsqlRuntimeBinding runtime, PostgresPersistenceBindings bindings)
     { this.runtime = runtime; this.bindings = bindings; }
 
+    /// <summary>Exact immutable mappings from which this native runtime was bound.</summary>
+    public PostgresPersistenceBindings Bindings => bindings;
+
     /// <summary>Creates a repository from the same entity attachment used by query preparation.</summary>
     /// <typeparam name="T">Canonical entity state type.</typeparam>
     /// <param name="entity">Exact entity handle registered on this persistence binding.</param>

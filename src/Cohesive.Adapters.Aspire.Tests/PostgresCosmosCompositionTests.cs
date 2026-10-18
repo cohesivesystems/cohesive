@@ -31,9 +31,9 @@ public sealed class PostgresCosmosCompositionTests
         Assert.Throws<ArgumentException>(() => mixed.Storage.PostgresBindings.Mapping(mixed.Domain.Inventory));
         Assert.NotNull(single.Storage.Bindings.Mapping(single.Domain.Inventory));
         Assert.Single(single.Storage.Definition);
-        Assert.Equal(4, mixed.Storage.Definition.Length);
+        Assert.Equal(3, mixed.Storage.Definition.Length);
         Assert.Same(mixed.Storage.PostgresBindings, mixed.Storage.Definition[0]);
-        Assert.Same(mixed.Storage.InventoryPolicy, mixed.Storage.Definition[1]);
+        Assert.Same(mixed.Storage.Inventory, mixed.Storage.Definition[1]);
         Assert.Same(mixed.Domain, mixed.Composition.Get<FulfillmentDomain>());
         Assert.Same(mixed.Process, mixed.Api.Fulfill.Process);
         Assert.Same(mixed.Process, mixed.Composition.Get<FulfillmentProcess>());
@@ -50,7 +50,7 @@ public sealed class PostgresCosmosCompositionTests
         using var client = Client();
         var inventory = client.GetContainer(PostgresCosmosStorage.InventoryDatabase, PostgresCosmosStorage.InventoryContainer);
         var source = CosmosEntityRelationQuerySourceRegistration.Create(model.Domain.Inventory.Definition.StateShape.QualifiedId,
-            inventory, inventory.Database.Id, inventory.Id, model.Storage.InventoryPolicy,
+            inventory, inventory.Database.Id, inventory.Id, model.Storage.Inventory.Query.Policy,
             identitySemanticPath: FieldPath.FromField(FulfillmentDomain.InventoryIdField));
         var catalog = new EntityRelationQuerySourceCatalog([source]);
         var orders = model.Storage.PostgresBindings.Bind(database, authority: "test");
@@ -105,7 +105,7 @@ public sealed class PostgresCosmosCompositionTests
     public void Mixed_evidence_comes_from_offline_sources_and_never_advertises_a_shared_snapshot()
     {
         var model = ModelActivator.Create<PostgresCosmosApplication>();
-        var source = model.Storage.InventoryBinding.Binding;
+        var source = model.Storage.Inventory.Query.Binding;
         var offline = new EntityRelationQuerySourceCatalog([source]);
         Assert.Throws<InvalidOperationException>(() => offline.SourceReaders);
         Assert.All(model.Endpoints.Plan.QueryDependencies.Queries,
@@ -134,7 +134,7 @@ public sealed class PostgresCosmosCompositionTests
         foreach (var endpoint in model.Api.Definition.Endpoints) plan.Implement(model.Api.Definition, endpoint);
         plan.Query(model.Queries.OrderDetails, new("1"), 1000, 1_000_000, RelationQueryConsistency.SingleSnapshot);
         var error = Assert.Throws<ServiceBindingValidationException>(() => model.Storage.PostgresBindings.PrepareComposedService(
-            plan, new([model.Storage.InventoryBinding.Binding]), PostgresCosmosStorage.Policy));
+            plan, new([model.Storage.Inventory.Query.Binding]), PostgresCosmosStorage.Policy));
         Assert.Contains(error.Validation.Diagnostics, diagnostic => diagnostic.Code == ServiceBindingDiagnosticCodes.QueryPlacementUnsupported);
     }
 
@@ -145,22 +145,49 @@ public sealed class PostgresCosmosCompositionTests
         using var db = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=orders;Username=test");
         using var client = Client();
         var container = client.GetContainer(PostgresCosmosStorage.InventoryDatabase, PostgresCosmosStorage.InventoryContainer);
-        var registration = model.Storage.InventoryBinding.Bind(container);
+        var registration = model.Storage.Inventory.Query.Bind(container);
         var catalog = new EntityRelationQuerySourceCatalog([registration]);
         var postgres = model.Storage.PostgresBindings.Bind(db, "test/composed");
         var reader = model.Storage.Preparation.Bind(postgres, model.Queries.ReservationAvailability, catalog, 1000, 1_000_000);
         Assert.Equal(RelationQueryConsistency.IndependentSources, reader.Consistency);
         Assert.Throws<ServiceBindingValidationException>(() => ServiceQueryConsistencyValidation.Require(reader, RelationQueryConsistency.SingleSnapshot));
         Assert.Throws<ServiceBindingValidationException>(() => model.Storage.Preparation.Bind(postgres, model.Queries.ReservationAvailability, catalog, 999, 1_000_000));
-        Assert.Throws<ArgumentException>(() => model.Storage.InventoryBinding.Bind(client.GetContainer("wrong", "stock")));
+        Assert.Throws<ArgumentException>(() => model.Storage.Inventory.Query.Bind(client.GetContainer("wrong", "stock")));
         var changedSelectors = new EntityRelationQuerySourceRegistration(registration.Shape, registration.Source, registration.Reader,
             registration.IdentitySourceSelector, registration.IdentitySemanticPath, _ => "observation.wrong");
         Assert.Throws<ArgumentException>(() => model.Storage.Preparation.Bind(postgres, model.Queries.ReservationAvailability,
             new([changedSelectors]), 1000, 1_000_000));
         var wrong = CosmosEntityRelationQuerySourceRegistration.Create(model.Domain.Inventory.Definition.StateShape.QualifiedId,
-            container, container.Database.Id, container.Id, model.Storage.InventoryPolicy);
+            container, container.Database.Id, container.Id, model.Storage.Inventory.Query.Policy);
         Assert.Throws<ArgumentException>(() => model.Storage.Preparation.Bind(postgres, model.Queries.ReservationAvailability,
             new([wrong]), 1000, 1_000_000));
+    }
+
+    [Fact]
+    public void Declared_storage_resolves_selected_queries_once_without_repeating_registrations()
+    {
+        var model = ModelActivator.Create<PostgresCosmosApplication>();
+        using var db = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=orders;Username=test");
+        using var client = Client();
+        var remote = model.Storage.Inventory.Bind(client.GetContainer(PostgresCosmosStorage.InventoryDatabase, PostgresCosmosStorage.InventoryContainer));
+        var postgres = model.Storage.PostgresBindings.Bind(db, "test/composed");
+        var persistence = model.Storage.Preparation.Bind(postgres, sources: [remote]);
+        Assert.Same(remote.Repository, persistence.Repository(ValueContract.FromShape(model.Domain.Inventory.Definition.Shape)));
+        Assert.Same(model.Domain.Orders.Definition, persistence.Repository(ValueContract.FromShape(model.Domain.Orders.Definition.Shape)).EntityDefinition);
+        var details = persistence.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.IndependentSources);
+        var availability = persistence.Query(model.Queries.ReservationAvailability, 1000, 1_000_000, RelationQueryConsistency.IndependentSources);
+        Assert.Same(details, persistence.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.IndependentSources));
+        Assert.Same(availability, persistence.Query(model.Queries.ReservationAvailability, 1000, 1_000_000, RelationQueryConsistency.IndependentSources));
+        Assert.Equal(RelationQueryConsistency.IndependentSources, details.Consistency);
+        Assert.Throws<ServiceBindingValidationException>(() => persistence.Query(model.Queries.OrderDetails, 999, 1_000_000, RelationQueryConsistency.IndependentSources));
+        Assert.Throws<ServiceBindingValidationException>(() => persistence.Query(model.Queries.OrderDetails, 1000, 1_000_001, RelationQueryConsistency.IndependentSources));
+        Assert.Throws<ServiceBindingValidationException>(() => persistence.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.SingleSnapshot));
+        var foreign = ModelActivator.Create<PostgresCosmosApplication>();
+        Assert.Throws<ArgumentException>(() => model.Storage.Preparation.Bind(foreign.Storage.PostgresBindings.Bind(db, "foreign"), sources: [remote]));
+        Assert.Throws<ServiceBindingValidationException>(() => persistence.Query(foreign.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.IndependentSources));
+        var missing = model.Storage.Preparation.Bind(postgres);
+        Assert.Throws<ArgumentException>(() => missing.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.IndependentSources));
+        Assert.Throws<ArgumentException>(() => model.Storage.Preparation.Bind(postgres, sources: [remote, remote]));
     }
 
     [Fact]

@@ -21,37 +21,28 @@ public sealed class PostgresCosmosStorage : StorageModel
     public const string InventoryContainer = "stock";
     /// <summary>Required native Cosmos partition-key path.</summary>
     public const string PartitionPath = "/partitionKey";
-    readonly FulfillmentDomain domain;
-    readonly FulfillmentQueries queries;
     /// <summary>Places orders in SQL and defines bounded inventory acquisition.</summary>
     /// <param name="domain">Shared entity declarations.</param>
-    /// <param name="queries">Shared logical queries.</param>
     /// <param name="endpoints">Portable query selections and consistency requirements.</param>
     /// <param name="mappings">Native table mappings, independent of placement.</param>
-    public PostgresCosmosStorage(FulfillmentDomain domain, FulfillmentQueries queries, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints)
+    public PostgresCosmosStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints)
     {
-        this.domain = domain;
-        this.queries = queries;
         PostgresBindings = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
             .Entity(domain.Orders, mappings.Orders)
             .Entity(domain.Reservations, mappings.Reservations)));
-        InventoryPolicy = Storage.Define(() => new CosmosRelationQuerySourcePolicy(
-            partitionSourceSelector: "partitionKey", logicalPartition: new(FulfillmentStoragePolicy.LogicalPartition),
-            fixedPartitionKey: new PartitionKey(FulfillmentStoragePolicy.LocalPartition), maximumEnumerationRows: 1000,
-            maximumKeysPerQuery: 100, maximumQueryChunks: 10, maximumSdkPageSize: 100));
-        InventoryBinding = Storage.Define(() => new CosmosEntityQueryBinding(domain.Inventory.Definition.StateShape.QualifiedId,
-            CosmosAccount, InventoryDatabase, InventoryContainer, InventoryPolicy,
-            Cohesive.Model.FieldPath.FromField(FulfillmentDomain.InventoryIdField)));
+        Inventory = Storage.Define(() => new CosmosEntityStorageBinding(
+            entity: domain.Inventory.Definition, identityField: FulfillmentDomain.InventoryIdField,
+            account: CosmosAccount, database: InventoryDatabase, container: InventoryContainer,
+            logicalPartition: new(FulfillmentStoragePolicy.LogicalPartition),
+            partitionKey: FulfillmentStoragePolicy.LocalPartition, partitionField: FulfillmentDomain.PartitionField,
+            maximumEnumerationRows: 1000, maximumKeysPerQuery: 100, maximumQueryChunks: 10, maximumSdkPageSize: 100));
         Preparation = Storage.Define(() => PostgresBindings.PrepareComposedService(endpoints.Plan,
-            new EntityRelationQuerySourceCatalog([InventoryBinding.Binding]), Policy));
+            new EntityRelationQuerySourceCatalog([Inventory.Query.Binding]), Policy));
     }
     /// <summary>PostgreSQL placement of orders and reservations only.</summary>
     public PostgresPersistenceBindings PostgresBindings { get; }
-    /// <summary>Native bounded Cosmos source policy for the local demo partition.</summary>
-    public CosmosRelationQuerySourcePolicy InventoryPolicy { get; }
-
-    /// <summary>Offline Cosmos acquisition contract shared with its runtime reader.</summary>
-    public CosmosEntityQueryBinding InventoryBinding { get; }
+    /// <summary>One inventory placement supplying repository access, acquisition and infrastructure evidence.</summary>
+    public CosmosEntityStorageBinding Inventory { get; }
     /// <summary>Selected physical plans shared by runtime and infrastructure.</summary>
     public PostgresComposedServicePreparation Preparation { get; }
 
@@ -64,20 +55,9 @@ public sealed class PostgresCosmosStorage : StorageModel
     /// <returns>Host-scoped persistence resolving each shared contract to its selected store.</returns>
     /// <exception cref="ArgumentException">The container address differs from this composition.</exception>
     public IServicePersistence Bind(NpgsqlDataSource orders, Container inventory, PostgresTransitionReceiptStorage receipts)
-    {
-        if (inventory.Id != InventoryContainer || inventory.Database.Id != InventoryDatabase)
-            throw new ArgumentException("Inventory container does not match this composition.", nameof(inventory));
-        var postgres = PostgresBindings.Bind(orders, authority: "aspire-first/postgres-cosmos");
-        var repository = new CosmosEntityOutboxRepository(domain.Inventory.Definition, inventory,
-            partitionKeyPolicy: EntityPartitionKeyPolicy.Fixed(FulfillmentStoragePolicy.LocalPartition, FulfillmentDomain.PartitionField),
-            identityField: FulfillmentDomain.InventoryIdField);
-        var source = InventoryBinding.Bind(inventory);
-        var catalog = new EntityRelationQuerySourceCatalog([source]);
-        return new ServicePersistenceBuilder(postgres.ForServices(receipts)).Repository(repository)
-            .Query(queries.OrderDetails, (rows, bytes) => Preparation.Bind(postgres, queries.OrderDetails, catalog, rows, bytes))
-            .Query(queries.ReservationAvailability, (rows, bytes) => Preparation.Bind(postgres, queries.ReservationAvailability, catalog, rows, bytes))
-            .Build();
-    }
+        => Preparation.Bind(
+            PostgresBindings.Bind(orders, authority: "aspire-first/postgres-cosmos"),
+            receipts, Inventory.Bind(inventory));
 
     /// <summary>Defines bounded acquisition without asserting a cross-store snapshot.</summary>
     /// <param name="rows">Maximum rows for buffering and complete results.</param>

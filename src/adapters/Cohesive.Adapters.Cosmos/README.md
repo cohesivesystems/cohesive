@@ -131,3 +131,14 @@ For commit profiles below Strong, an item conflict or token mismatch followed by
 returns `Unknown`, including Session profiles after restart. Reconcile the exact intent when visibility
 catches up; do not treat this as a definitive precondition failure. `executor.Validate(intent)` measures
 native documents and the receipt before any I/O, using the same encoding and byte budget as execution.
+
+## Declared entity storage and query acquisition
+
+`CosmosEntityStorageBinding` declares one canonical entity in the standard observation container format.
+Its identity field and fixed string partition policy supply both `CosmosEntityOutboxRepository` and
+bounded relation-query acquisition. `Query.Binding` is offline metadata for placement and infrastructure
+evidence; `Bind(container)` supplies the matching `EntityStorageRegistration` without opening a connection.
+The host retains native client ownership and verifies actual partition-key metadata. Account association
+remains an infrastructure responsibility; database/container names are checked during binding. Custom
+query-only envelopes and non-fixed acquisition policies remain on `CosmosEntityQueryBinding` and do not
+imply repository write guarantees. Neither path implies a cross-source snapshot.

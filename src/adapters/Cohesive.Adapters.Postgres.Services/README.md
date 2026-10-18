@@ -48,6 +48,14 @@ rejects a `SingleSnapshot` selection. Runtime `Bind` consumes that exact prepara
 partition, selector, query and result-bound affinity before constructing readers. Native prefix physical
 preparation is reused, not compiled again at reader construction.
 
+`preparation.Bind(postgres, receipts, remoteRegistrations)` creates the host-scoped `IServicePersistence`
+for the entire selected query set, without a second list of `.Query(...)` registrations. Each
+`EntityStorageRegistration` pairs an adapter-declared repository with its query acquisition source.
+Local repositories use the PostgreSQL fallback; unselected queries do not fall back to another placement.
+Readers are cached by exact query authority within this resolver; requested bounds and consistency are
+checked on every resolution, including cached readers. Failed preparation is not cached. Native PostgreSQL
+bindings must be the same immutable declaration used by preparation.
+
 Infrastructure inference decomposes the preparation into source acquisition requirements and workload
 evaluation requirements. Evidence retains canonical query, placement, physical-plan and native SQL
 fingerprints plus result bounds. Capability identities are based on semantic query identity/revision;
