@@ -70,11 +70,15 @@ stop/start, disposal without stop, duplicate registration, disabled logging and 
 
 `ModelActivator.Create<T>()` discovers concrete constructor dependencies and prepares one offline graph.
 For `ApplicationModel` roots, public `required ... { get; init; }` properties also declare dependencies,
-including inherited required properties. Other models retain constructor injection. The optional callback
+including inherited required properties. Required members on other declarations are rejected, including
+factory registrations; those models use constructor injection. The optional callback
 accepts ordinary `IServiceCollection` singleton registrations for interfaces/factories.
 
 Dependencies complete before the root is constructed. The activator then assigns its required init
-properties before authoring completion or publication. Constructors must not read init properties; use
+properties before authoring completion or publication. Automatic property-injected roots require one public
+parameterless constructor; mixed constructor/property dependencies require an explicit factory.
+Reflection cannot prevent arbitrary constructor code from reading properties early: constructor failures
+report this initialization boundary and preserve the original exception. Constructors must not read init properties; use
 constructors for models that actively author declarations from dependencies. No partially populated root
 is exposed to resolve a cycle. Property metadata is retained only within the composition builder, and
 reflection-based assignment runs once during activation, never per invocation. No source generator,
@@ -92,7 +96,8 @@ The direct builder still requires explicit registrations for all dependencies. A
 roots resolve properties through the same singleton registry as constructor parameters. Explicit factory
 or instance registrations retain responsibility for initialization: their values are not overwritten, but
 null required components are rejected before model completion. Required fields, mutable setters,
-non-public accessors and value-type component properties are unsupported.
+non-public accessors and value-type component properties are unsupported. Init modifiers are recognized
+by full metadata name, including library-local IsExternalInit polyfills.
 
 The underlying `ApplicationModelBuilder` also supports direct explicit registration. `Build()` returns
 `PreparedApplicationModel`, with shared instances and a validated canonical execution catalog. The optional

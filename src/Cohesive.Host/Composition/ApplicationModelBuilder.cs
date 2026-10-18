@@ -1,6 +1,5 @@
 using Cohesive.Model.Serialization;
 using System.Reflection;
-using System.Runtime.CompilerServices;
 
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -13,6 +12,7 @@ namespace Cohesive.Host.Composition;
 /// <remarks>No runtime services or resources are created implicitly. Registrations and instances belong to this
 /// builder alone. Constructor dependencies must also be registered; cycles fail at setup. Build caches failures.
 /// Application-root required init properties are resolved before construction and assigned before authoring completion.
+/// Automatic property-injected roots require a parameterless constructor. Required members on non-root declarations are rejected.
 /// Model constructors must not read init properties, perform IO or own disposable resources. This is not an invocation service container.</remarks>
 public sealed class ApplicationModelBuilder
 {
@@ -126,22 +126,27 @@ public sealed class ApplicationModelBuilder
         registrations.Add(root, CreateDeclarationFactory(root));
     }
 
-    IEnumerable<Type> Dependencies(Type type) => RequireConstructor(type).GetParameters()
+    IEnumerable<Type> Dependencies(Type type) => RequireActivationConstructor(type).GetParameters()
         .Select(parameter => parameter.ParameterType).Concat(RequiredComponents(type).Select(property => property.PropertyType));
 
     PropertyInfo[] RequiredComponents(Type type)
     {
-        if (!typeof(ApplicationModel).IsAssignableFrom(type)) return [];
         if (componentProperties.TryGetValue(type, out var cached)) return cached;
-        if (type.GetFields(BindingFlags.Public | BindingFlags.Instance).Any(field => field.IsDefined(typeof(RequiredMemberAttribute))))
+        var requiredMembers = type.GetMembers(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .Where(member => member is PropertyInfo or FieldInfo)
+            .Where(member => member.CustomAttributes.Any(attribute =>
+                attribute.AttributeType.FullName == "System.Runtime.CompilerServices.RequiredMemberAttribute"))
+            .OrderBy(member => member.Name, StringComparer.Ordinal).ToArray();
+        if (requiredMembers.Length != 0 && !typeof(ApplicationModel).IsAssignableFrom(type))
+            throw new InvalidOperationException($"Declaration '{type}' has unsupported required members: {string.Join(", ", requiredMembers.Select(member => member.Name))}. Required-member injection is supported only on ApplicationModel roots; use constructor injection for other declarations.");
+        if (requiredMembers.Any(member => member is FieldInfo))
             throw new InvalidOperationException($"Application model '{type}' must declare required components as init-only properties, not fields.");
-        var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
-            .Where(property => property.IsDefined(typeof(RequiredMemberAttribute), inherit: true))
-            .OrderBy(property => property.Name, StringComparer.Ordinal).ToArray();
+        var properties = requiredMembers.OfType<PropertyInfo>().ToArray();
         foreach (var property in properties)
             if (property.GetIndexParameters().Length != 0 || property.GetMethod is not { IsPublic: true }
                 || property.SetMethod is not { IsPublic: true } setter
-                || !setter.ReturnParameter.GetRequiredCustomModifiers().Contains(typeof(IsExternalInit))
+                || !setter.ReturnParameter.GetRequiredCustomModifiers().Any(modifier =>
+                    modifier.FullName == "System.Runtime.CompilerServices.IsExternalInit")
                 || property.PropertyType.IsValueType)
                 throw new InvalidOperationException($"Required component '{type.Name}.{property.Name}' must be a public readable init-only reference property.");
         componentProperties.Add(type, properties);
@@ -151,6 +156,7 @@ public sealed class ApplicationModelBuilder
     Func<IServiceProvider, object> CreateDeclarationFactory(Type type)
     {
         var properties = RequiredComponents(type);
+        RequireActivationConstructor(type);
         var construct = ActivatorUtilities.CreateFactory(type, Type.EmptyTypes);
         if (properties.Length == 0) return provider => construct(provider, null);
         return provider =>
@@ -160,7 +166,14 @@ public sealed class ApplicationModelBuilder
             for (var index = 0; index < properties.Length; index++)
                 values[index] = provider.GetService(properties[index].PropertyType)
                     ?? throw new InvalidOperationException($"Required component '{type.Name}.{properties[index].Name}' is unresolved.");
-            var instance = construct(provider, null);
+            object instance;
+            try { instance = construct(provider, null); }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                throw new InvalidOperationException(
+                    $"Application model '{type}' constructor failed before required init components were assigned. Constructors must not read these properties; use authoring completion or an explicit factory for dependent initialization.",
+                    exception);
+            }
             for (var index = 0; index < properties.Length; index++) properties[index].SetValue(instance, values[index]);
             return instance;
         };
@@ -172,6 +185,15 @@ public sealed class ApplicationModelBuilder
         foreach (var property in RequiredComponents(instance.GetType()))
             if (property.GetValue(instance) is null)
                 throw new InvalidOperationException($"Required component '{instance.GetType().Name}.{property.Name}' is null.");
+    }
+
+    ConstructorInfo RequireActivationConstructor(Type type)
+    {
+        var properties = RequiredComponents(type);
+        var constructor = RequireConstructor(type);
+        if (properties.Length != 0 && constructor.GetParameters().Length != 0)
+            throw new InvalidOperationException($"Application model '{type}' combines constructor dependencies with required init components. Automatic property injection requires a parameterless constructor; use constructor-only dependencies or an explicit factory.");
+        return constructor;
     }
 
     static System.Reflection.ConstructorInfo RequireConstructor(Type type)

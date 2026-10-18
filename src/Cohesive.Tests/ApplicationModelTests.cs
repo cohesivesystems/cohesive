@@ -102,6 +102,102 @@ public sealed class ApplicationModelTests
     }
 
     [Fact]
+    public void Init_polyfill_from_another_assembly_is_supported()
+    {
+        var assembly = System.Reflection.Emit.AssemblyBuilder.DefineDynamicAssembly(
+            new System.Reflection.AssemblyName("InitPolyfillFixture"),
+            System.Reflection.Emit.AssemblyBuilderAccess.RunAndCollect);
+        var module = assembly.DefineDynamicModule("fixture");
+        var marker = module.DefineType("System.Runtime.CompilerServices.IsExternalInit",
+            System.Reflection.TypeAttributes.Public).CreateType()!;
+        Assert.NotEqual(typeof(System.Runtime.CompilerServices.IsExternalInit), marker);
+        var type = module.DefineType("PolyfillRoot", System.Reflection.TypeAttributes.Public, typeof(ApplicationModel));
+        type.DefineDefaultConstructor(System.Reflection.MethodAttributes.Public);
+        var field = type.DefineField("_dependency", typeof(Dependency), System.Reflection.FieldAttributes.Private);
+        var property = type.DefineProperty("Dependency", System.Reflection.PropertyAttributes.None, typeof(Dependency), null);
+        var getter = type.DefineMethod("get_Dependency", System.Reflection.MethodAttributes.Public |
+            System.Reflection.MethodAttributes.SpecialName, typeof(Dependency), Type.EmptyTypes);
+        var il = getter.GetILGenerator();
+        il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+        il.Emit(System.Reflection.Emit.OpCodes.Ldfld, field);
+        il.Emit(System.Reflection.Emit.OpCodes.Ret);
+        var setter = type.DefineMethod("set_Dependency", System.Reflection.MethodAttributes.Public |
+            System.Reflection.MethodAttributes.SpecialName, System.Reflection.CallingConventions.HasThis,
+            typeof(void), [marker], null, [typeof(Dependency)], null, null);
+        il = setter.GetILGenerator();
+        il.Emit(System.Reflection.Emit.OpCodes.Ldarg_0);
+        il.Emit(System.Reflection.Emit.OpCodes.Ldarg_1);
+        il.Emit(System.Reflection.Emit.OpCodes.Stfld, field);
+        il.Emit(System.Reflection.Emit.OpCodes.Ret);
+        property.SetGetMethod(getter);
+        property.SetSetMethod(setter);
+        property.SetCustomAttribute(new System.Reflection.Emit.CustomAttributeBuilder(
+            typeof(System.Runtime.CompilerServices.RequiredMemberAttribute).GetConstructor(Type.EmptyTypes)!, []));
+        var rootType = type.CreateType()!;
+        var services = new ServiceCollection();
+        services.AddSingleton(typeof(ApplicationModel), rootType);
+        services.AddSingleton<Dependency>();
+        var prepared = new ApplicationModelBuilder(services).Build();
+        Assert.Same(prepared.Get<Dependency>(), rootType.GetProperty("Dependency")!.GetValue(prepared.Get<ApplicationModel>()));
+    }
+
+    public sealed class RequiredNonRoot
+    {
+        public required Dependency Dependency { get; init; }
+    }
+    public sealed class MixedRoot(Dependency dependency) : ApplicationModel
+    {
+        public Dependency ConstructorDependency { get; } = dependency;
+        public required Dependency Dependency { get; init; }
+    }
+    public sealed class EarlyReadRoot : ApplicationModel
+    {
+        public required Dependency Dependency { get; init; }
+        public EarlyReadRoot() => _ = Dependency!.Completed;
+    }
+
+    [Fact]
+    public void Non_root_required_members_fail_before_automatic_activation()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<RequiredNonRoot>());
+        Assert.Contains("RequiredNonRoot", error.Message);
+        Assert.Contains("Dependency", error.Message);
+        Assert.Contains("constructor injection", error.Message);
+    }
+
+    [Fact]
+    public void Factory_cannot_hide_unsupported_required_members()
+    {
+        var builder = new ApplicationModelBuilder().Add(_ => new RequiredNonRoot { Dependency = null! });
+        Assert.Contains("unsupported required members", Assert.Throws<InvalidOperationException>(() => builder.Build()).Message);
+    }
+
+    [Fact]
+    public void Automatic_property_injection_rejects_mixed_constructor_dependencies()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<MixedRoot>());
+        Assert.Contains("parameterless constructor", error.Message);
+    }
+
+    [Fact]
+    public void Explicit_factory_owns_mixed_root_initialization()
+    {
+        var dependency = new Dependency();
+        var root = ModelActivator.Create<MixedRoot>(services =>
+            services.AddSingleton(_ => new MixedRoot(dependency) { Dependency = dependency }));
+        Assert.Same(root.ConstructorDependency, root.Dependency);
+    }
+
+    [Fact]
+    public void Early_property_read_reports_boundary_and_original_cause()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<EarlyReadRoot>());
+        Assert.Contains("EarlyReadRoot", error.Message);
+        Assert.Contains("before required init components were assigned", error.Message);
+        Assert.IsType<NullReferenceException>(error.GetBaseException());
+    }
+
+    [Fact]
     public void Required_init_components_share_completed_dependencies_and_support_inherited_members()
     {
         var first = ModelActivator.Create<InitApplication>();
