@@ -30,8 +30,7 @@ public sealed class PostgresCosmosIntegrationTests
         var database = await cosmos.CreateDatabaseIfNotExistsAsync(PostgresCosmosStorage.InventoryDatabase);
         var container = (await database.Database.CreateContainerIfNotExistsAsync(PostgresCosmosStorage.InventoryContainer,
             PostgresCosmosStorage.PartitionPath)).Container;
-        using (var schema = new StreamReader(typeof(PostgresCosmosStorage).Assembly.GetManifestResourceStream("Orders.PostgresCosmos.schema.sql")!))
-        await using (var initialize = orders.CreateCommand(await schema.ReadToEndAsync())) await initialize.ExecuteNonQueryAsync();
+        await model.Storage.PostgresBindings.PrepareSchemaAsync(orders);
         var receiptOptions = model.Storage.PostgresBindings.ReceiptOptions!;
         await using (var initialize = orders.CreateCommand(receiptOptions.SchemaSql)) await initialize.ExecuteNonQueryAsync();
         var services = new ServiceCollection();

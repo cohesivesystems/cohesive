@@ -56,8 +56,8 @@ The storage models explicitly initialize local schemas during async preparation,
 
 `FulfillmentStoragePolicy` owns the fixed demo partition and orders connection name. Queries still compile
 that fixed partition as a literal; invocation-scoped partition selection is not introduced by this file cleanup.
-The order-registration helper is test-only. Storage mappings live in the shared model assembly; native schema
-resources and executable startup remain in their workers.
+The order-registration helper is test-only. Storage mappings and native schema additions live with their
+storage models; executable startup only registers native clients and configures the host.
 
 ## Run either composition
 
@@ -204,12 +204,21 @@ await app.RunAsync();
 ```
 
 Both Programs register native clients and call `AddCohesiveServices(model.Endpoints, model.Storage)`.
-Product-table SQL is attached through `SchemaPreparation` in each storage model and runs first, before
-receipt/history/outbox preparation. The PostgreSQL-only script lives beside its model in `Orders.Model/Storage`.
-This is explicit native SQL, including the existing status-column migration; it is not a generated schema or
-a create-only promise. No callback means no product-schema work; applications can attach a validation-only
-callback or their migration library instead. Callback failures prevent admission and are retained by the host;
-partial changes follow the native callback's transaction policy. Coordinate multi-host migrations externally.
+Product columns, scalar types, nullability, partitioned identity and selected foreign keys are projected
+from the canonical entities and PostgreSQL mappings through `Schema(...)`. Validation-only is the library
+default; the demos explicitly select `CreateIfMissing`. `Bindings.ProductSchema.CreateSql` exposes the
+initial DDL for inspection. Creation contains no ALTER/backfill, and validation rejects drift before admission.
+Relationship enforcement is selected explicitly with `ForeignKey(domain.ReservationOrder)`; the mixed model
+never declares an inventory FK across PostgreSQL and Cosmos.
+
+The remaining `schema.sql` files contain native additions only: local checks, global identity indexes and
+the Draft SQL default. They run through `SchemaPreparation` after generated-schema validation, followed by another contract check. They are
+not inferred from transition rules and are not covered by the generated validator. Their migration and
+verification remain operator/native-SQL responsibilities. The validator covers exact columns/types/nullability,
+explicit collations, immediate non-partial partition/identity uniqueness and validated selected foreign keys.
+Existing tables with the old inventory FK or missing status column need a reviewed migration; startup no
+longer silently adds mapped columns. Cyclic foreign-key graphs require native migrations in this first slice.
+Callbacks own transaction policy; failures prevent admission. Coordinate multi-host migrations externally.
 
 The PostgreSQL model declares history authority, reconstitution and outbox options. Async preparation resolves
 the keyed DI Marten store and validates its exact shared data source before history initialization. Auxiliary

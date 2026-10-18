@@ -11,6 +11,106 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed partial class OrderStorageIntegrationTests
 {
     [PostgresFact]
+    public async Task Native_schema_additions_cannot_invalidate_projected_contract_before_admission()
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var table = "override_" + Guid.NewGuid().ToString("N");
+        var source = Model.Storage.Bindings.Mapping(Model.Domain.Inventory);
+        var mapping = new PostgresEntityRepositoryMapping(new Cohesive.Adapters.Sql.SqlQualifiedTable("public", table),
+            source.Fields, source.IdentityField, source.PartitionField, source.VersionColumn.Value);
+        var bindings = PostgresPersistenceBindings.Define(new("isolated"), b => b.Entity(Model.Domain.Inventory, mapping)
+            .Schema(PostgresSchemaInitialization.CreateIfMissing)
+            .SchemaPreparation(async (native, token) =>
+            {
+                await using var change = native.CreateCommand($"ALTER TABLE public.{table} ALTER COLUMN available TYPE bigint");
+                await change.ExecuteNonQueryAsync(token);
+            }));
+        try
+        {
+            var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => bindings.PrepareSchemaAsync(database));
+            Assert.Equal("postgres.schema.columnMismatch", failure.Code);
+        }
+        finally { await using var drop = database.CreateCommand($"DROP TABLE IF EXISTS public.{table}"); await drop.ExecuteNonQueryAsync(); }
+    }
+
+    [PostgresTheory]
+    [InlineData("ADD COLUMN unexpected text", "postgres.schema.undeclaredColumns")]
+    [InlineData("DROP CONSTRAINT {table}_pkey", "postgres.schema.keyMismatch")]
+    [InlineData("ALTER COLUMN sku TYPE text COLLATE \"default\"", "postgres.schema.columnMismatch")]
+    [InlineData("ALTER COLUMN available TYPE bigint", "postgres.schema.columnMismatch")]
+    public async Task Projected_schema_rejects_key_collation_type_and_extra_column_drift(string mutation, string code)
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var table = "projection_" + Guid.NewGuid().ToString("N");
+        var source = Model.Storage.Bindings.Mapping(Model.Domain.Inventory);
+        var mapping = new PostgresEntityRepositoryMapping(new Cohesive.Adapters.Sql.SqlQualifiedTable("public", table),
+            source.Fields, source.IdentityField, source.PartitionField, source.VersionColumn.Value);
+        var bindings = PostgresPersistenceBindings.Define(new("isolated"), b => b.Entity(Model.Domain.Inventory, mapping)
+            .Schema(PostgresSchemaInitialization.CreateIfMissing, s => s.Collation(Model.Domain.Inventory, x => x.Sku, "C")));
+        try
+        {
+            await bindings.PrepareSchemaAsync(database);
+            await using (var change = database.CreateCommand($"ALTER TABLE public.{table} {mutation.Replace("{table}", table, StringComparison.Ordinal)}"))
+                await change.ExecuteNonQueryAsync();
+            var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => bindings.PrepareSchemaAsync(database));
+            Assert.Equal(code, failure.Code);
+        }
+        finally { await using var drop = database.CreateCommand($"DROP TABLE IF EXISTS public.{table}"); await drop.ExecuteNonQueryAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task Projected_schema_validates_without_creation_and_rejects_native_drift()
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var schema = "projected_" + Guid.NewGuid().ToString("N");
+        await using (var createNamespace = database.CreateCommand($"CREATE SCHEMA {schema}")) await createNamespace.ExecuteNonQueryAsync();
+        PostgresEntityRepositoryMapping Relocate<T>(Cohesive.Transitions.Authoring.DomainEntity<T> entity) where T : notnull
+        {
+            var source = Model.Storage.Bindings.Mapping(entity);
+            return new(new Cohesive.Adapters.Sql.SqlQualifiedTable(schema, source.Table.TableName.Value), source.Fields,
+                source.IdentityField, source.PartitionField, source.VersionColumn.Value);
+        }
+        PostgresPersistenceBindings Bindings(PostgresSchemaInitialization initialization) => PostgresPersistenceBindings.Define(new("isolated"), b => b
+            .Entity(Model.Domain.Reservations, Relocate(Model.Domain.Reservations))
+            .Entity(Model.Domain.Orders, Relocate(Model.Domain.Orders))
+            .Entity(Model.Domain.Inventory, Relocate(Model.Domain.Inventory))
+            .Schema(initialization, s => s.ForeignKey(Model.Domain.ReservationOrder).ForeignKey(Model.Domain.ReservationItem)));
+        var validate = Bindings(PostgresSchemaInitialization.ValidateOnly);
+        var create = Bindings(PostgresSchemaInitialization.CreateIfMissing);
+        try
+        {
+            var missing = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => validate.PrepareSchemaAsync(database));
+            Assert.Equal("postgres.schema.columnMismatch", missing.Code);
+            await using (var count = database.CreateCommand("SELECT count(*) FROM information_schema.tables WHERE table_schema=$1"))
+            {
+                count.Parameters.AddWithValue(schema);
+                Assert.Equal(0L, await count.ExecuteScalarAsync());
+            }
+            await create.PrepareSchemaAsync(database);
+            await validate.PrepareSchemaAsync(database);
+            await using (var change = database.CreateCommand($"ALTER TABLE {schema}.cohesive_inventory ALTER COLUMN available DROP NOT NULL"))
+                await change.ExecuteNonQueryAsync();
+            var drift = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => create.PrepareSchemaAsync(database));
+            Assert.Equal("postgres.schema.columnMismatch", drift.Code);
+            Assert.Equal("available", drift.Column);
+            await using (var repair = database.CreateCommand($"ALTER TABLE {schema}.cohesive_inventory ALTER COLUMN available SET NOT NULL"))
+                await repair.ExecuteNonQueryAsync();
+            string constraint;
+            await using (var name = database.CreateCommand($"SELECT conname FROM pg_constraint WHERE conrelid='{schema}.cohesive_reservations'::regclass AND contype='f' LIMIT 1"))
+                constraint = (string)(await name.ExecuteScalarAsync())!;
+            await using (var dropReference = database.CreateCommand($"ALTER TABLE {schema}.cohesive_reservations DROP CONSTRAINT \"{constraint}\""))
+                await dropReference.ExecuteNonQueryAsync();
+            var reference = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => create.PrepareSchemaAsync(database));
+            Assert.Equal("postgres.schema.referenceMismatch", reference.Code);
+        }
+        finally
+        {
+            await using var cleanup = database.CreateCommand($"DROP SCHEMA {schema} CASCADE");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
     public async Task Outbox_model_defaults_to_validation_and_opt_in_creates_without_repairing_drift()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);

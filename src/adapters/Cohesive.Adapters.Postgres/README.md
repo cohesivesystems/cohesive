@@ -266,3 +266,24 @@ SQL. The callback borrows the native source, owns its commands/transactions, and
 Host preparation retains failures without retry; direct rebinding repeats the callback. `History(configuration)` and `Outbox(options, initialization)`
 are optional model-owned attachments. History is prepared by its adapter; PostgreSQL remains independent
 of Marten. Outbox initialization follows the same validation-only default and explicit create/validate policy.
+
+## Product schema projection
+
+`bindings.Schema()` opts into validation of the schema derived from the canonical field contracts and
+native entity mappings. `Schema(PostgresSchemaInitialization.CreateIfMissing, schema => ...)` additionally
+creates missing tables in existing schemas. `bindings.ProductSchema.CreateSql` is deterministic, inspectable
+initial DDL, prepared once with the mappings. It does not generate migrations or backfills.
+
+Use `schema.ForeignKey(domain.Reference)` to explicitly enforce a direct observation-identity relationship
+within the same database and partition. Cross-database endpoints and cyclic FK graphs are rejected offline.
+Query correlation alone does not select a database constraint. `schema.Collation(entity, x => x.Field, "C")`
+attaches a native collation without repeating physical column names. Scalar type names come from the existing
+PostgreSQL scalar catalog; domain nullability and mapping key selections remain authoritative.
+
+Admission checks exact mapped columns/types/nullability, explicit collations, immediate non-partial unique
+partition/identity keys, and validated non-deferrable selected FKs with NO ACTION semantics. Drift raises
+`PostgresSchemaValidationException` with a stable code and native table/column context. Existing objects are
+never altered to force a match. Additional CHECKs, defaults and native indexes remain explicit native SQL,
+may be applied in `SchemaPreparation` afterward, and are outside generated validation. Do not interpret a
+successful projected-schema check as full native schema equivalence. Keep external migrations coordinated
+and revalidate after DDL changes; admission evidence does not lock schema against later changes.

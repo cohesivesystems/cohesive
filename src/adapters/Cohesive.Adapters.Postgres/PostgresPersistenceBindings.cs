@@ -26,7 +26,12 @@ public sealed partial class PostgresPersistenceBindings
     {
         if (string.IsNullOrWhiteSpace(database.Value)) throw new ArgumentException("Database identity is required.", nameof(database));
         Database = database;
-        state = new(() => { preparationFailure?.Throw(); return this; });
+        state = new(() =>
+        {
+            preparationFailure?.Throw();
+            if (schemaSelected) productSchema = new(Tables, configureSchema);
+            return this;
+        });
     }
     /// <summary>Optional native receipt policy, owned by these mappings rather than service binding.</summary>
     public PostgresTransitionReceiptOptions? ReceiptOptions { get; private set; }

@@ -1,11 +1,14 @@
--- Explicit local bootstrap. Inventory lives only in Cosmos; no SQL inventory table or cross-store FK.
-CREATE TABLE IF NOT EXISTS public.cohesive_orders (
-    partition_key text NOT NULL, order_id text NOT NULL, observation_version bigint NOT NULL,
-    status text NOT NULL DEFAULT 'Draft', PRIMARY KEY (partition_key, order_id));
-CREATE TABLE IF NOT EXISTS public.cohesive_reservations (
-    reservation_id text COLLATE "C" PRIMARY KEY,
-    partition_key text NOT NULL CHECK (partition_key = 'local'),
-    order_id text COLLATE "C" NOT NULL, sku text COLLATE "C" NOT NULL,
-    quantity integer NOT NULL CHECK (quantity > 0), observation_version bigint NOT NULL,
-    FOREIGN KEY (partition_key, order_id) REFERENCES public.cohesive_orders(partition_key, order_id));
-CREATE UNIQUE INDEX IF NOT EXISTS cohesive_reservations_partition_id ON public.cohesive_reservations(partition_key, reservation_id);
+-- Native demo additions after generated columns, keys and selected foreign keys validate.
+-- These checks/defaults/indexes are explicit native policy, not inferred from transition rules.
+ALTER TABLE public.cohesive_orders ALTER COLUMN status SET DEFAULT 'Draft';
+CREATE UNIQUE INDEX IF NOT EXISTS cohesive_reservations_global_id ON public.cohesive_reservations(reservation_id);
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.cohesive_reservations'::regclass AND conname='reservation_local') THEN
+        ALTER TABLE public.cohesive_reservations ADD CONSTRAINT reservation_local CHECK (partition_key = 'local');
+    END IF;
+END $$;
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='public.cohesive_reservations'::regclass AND conname='reservation_quantity') THEN
+        ALTER TABLE public.cohesive_reservations ADD CONSTRAINT reservation_quantity CHECK (quantity > 0);
+    END IF;
+END $$;

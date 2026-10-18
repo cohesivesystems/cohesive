@@ -377,6 +377,16 @@ internal static class PostgresNpgsqlBoundedResult
 
 internal static class PostgresRelationQueryScalarCatalog
 {
+    internal static string SchemaTypeName(PostgresRelationQueryScalarType type) => type switch
+    {
+        PostgresRelationQueryScalarType.Boolean => "boolean", PostgresRelationQueryScalarType.Int32 => "integer",
+        PostgresRelationQueryScalarType.Int64 => "bigint", PostgresRelationQueryScalarType.Numeric => "numeric",
+        PostgresRelationQueryScalarType.Text => "text", PostgresRelationQueryScalarType.Uuid => "uuid",
+        PostgresRelationQueryScalarType.Date => "date", PostgresRelationQueryScalarType.Timestamp => "timestamp without time zone",
+        PostgresRelationQueryScalarType.TimestampWithTimeZone => "timestamp with time zone", PostgresRelationQueryScalarType.Bytea => "bytea",
+        _ => throw new ArgumentOutOfRangeException(nameof(type))
+    };
+
     const uint BooleanTypeId = 16;
     const uint ByteaTypeId = 17;
     const uint Int64TypeId = 20;

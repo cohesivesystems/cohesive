@@ -5,12 +5,37 @@ namespace Cohesive.Adapters.Postgres;
 public sealed partial class PostgresPersistenceBindings
 {
     Func<NpgsqlDataSource, CancellationToken, Task>? prepareSchema;
+    bool schemaSelected;
+    Action<PostgresEntitySchemaBuilder>? configureSchema;
+    PostgresSchemaInitialization schemaInitialization;
+    PostgresEntitySchema? productSchema;
 
-    /// <summary>Declares native product-schema validation or migration before persistence admission.</summary>
+    /// <summary>Projected schema, or null when native schema ownership was selected instead.</summary>
+    public PostgresEntitySchema? ProductSchema { get { _ = state.Value; return productSchema; } }
+
+    /// <summary>Projects product DDL and validation from the exact entity mappings at definition completion.</summary>
+    /// <param name="initialization">Validate only by default; explicit creation never updates existing tables.</param>
+    /// <param name="configure">Optional native collation and explicit relationship enforcement.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Policy is unknown.</exception>
+    /// <exception cref="InvalidOperationException">Already selected or frozen.</exception>
+    public PostgresPersistenceBindings Schema(PostgresSchemaInitialization initialization = PostgresSchemaInitialization.ValidateOnly,
+        Action<PostgresEntitySchemaBuilder>? configure = null)
+    {
+        if (!Enum.IsDefined(initialization)) throw new ArgumentOutOfRangeException(nameof(initialization));
+        return state.Edit(() =>
+        {
+            if (schemaSelected) throw new InvalidOperationException("Product schema projection is already selected.");
+            schemaSelected = true; schemaInitialization = initialization; configureSchema = configure;
+            return this;
+        });
+    }
+
+    /// <summary>Declares native product-schema validation or migration after optional projected-schema admission.</summary>
     /// <param name="prepare">Setup callback borrowing the DI-owned data source. It owns its commands and
     /// transactions, must honor cancellation, and must explicitly implement any migration or validation policy.</param>
     /// <returns>This authoring builder.</returns>
-    /// <remarks>Declaring the callback performs no IO. Without a callback no product-schema work is implied.
+    /// <remarks>Declaring the callback performs no IO. Without a callback no additional native work is implied.
     /// This is not a schema generator or a create-only guarantee; native SQL or a migration library remains
     /// authoritative. Host preparation runs once, retains failures and publishes no routes on failure.
     /// Direct rebinding runs the callback again. Coordinate multi-host migrations externally.</remarks>
@@ -27,20 +52,34 @@ public sealed partial class PostgresPersistenceBindings
         });
     }
 
-    /// <summary>Executes the explicitly declared native product-schema preparation.</summary>
+    /// <summary>Creates/validates the projected schema, then runs explicit native preparation and revalidates.</summary>
     /// <param name="database">Borrowed native data source; never disposed by this operation.</param>
     /// <param name="cancellationToken">Cancellation before and during preparation.</param>
-    /// <returns>The callback completion, or a completed task when no preparation is declared.</returns>
+    /// <returns>Completion after projected and native schema preparation, or no work when neither is declared.</returns>
     /// <remarks>Callback exceptions propagate unchanged. Partial migration effects are governed by the native
-    /// callback's transaction policy; no retry, rollback emulation or schema validation is inferred.</remarks>
+    /// callback's transaction policy; no retry or rollback emulation is inferred. A selected projection is
+    /// validated again after native additions so they cannot invalidate its contract.</remarks>
     /// <exception cref="ArgumentNullException">Database is null.</exception>
     /// <exception cref="OperationCanceledException">Preparation is canceled.</exception>
-    public Task PrepareSchemaAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
+    public async Task PrepareSchemaAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(database);
         cancellationToken.ThrowIfCancellationRequested();
         _ = state.Value;
-        return prepareSchema?.Invoke(database, cancellationToken) ?? Task.CompletedTask;
+        if (productSchema is { } schema)
+        {
+            if (schemaInitialization == PostgresSchemaInitialization.CreateIfMissing)
+            {
+                await using var create = database.CreateCommand(schema.CreateSql);
+                await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+            }
+            await schema.ValidateAsync(database, cancellationToken).ConfigureAwait(false);
+        }
+        if (prepareSchema is { } prepare)
+        {
+            await prepare(database, cancellationToken).ConfigureAwait(false);
+            if (productSchema is { } projected) await projected.ValidateAsync(database, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     /// <summary>Optional adapter-owned history declaration; contains no native clients.</summary>
