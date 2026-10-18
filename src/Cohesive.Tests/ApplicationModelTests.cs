@@ -141,8 +141,26 @@ public sealed class ApplicationModelTests
         Assert.Same(prepared.Get<Dependency>(), rootType.GetProperty("Dependency")!.GetValue(prepared.Get<ApplicationModel>()));
     }
 
-    public sealed class RequiredNonRoot
+    public sealed class RequiredNonRoot : IAuthoringModel
     {
+        public required Dependency Dependency { get; init; }
+        public int CompletionCount { get; private set; }
+        public void Complete()
+        {
+            Assert.True(Dependency.Completed);
+            CompletionCount++;
+        }
+    }
+    public sealed class RequiredConsumer(RequiredNonRoot model, Dependency dependency)
+    {
+        public RequiredNonRoot Model { get; } = model;
+        public bool ReadyAtConstruction { get; } = model.CompletionCount == 1 && ReferenceEquals(model.Dependency, dependency);
+    }
+    public sealed class RequiredCycleA { public required RequiredCycleB Other { get; init; } }
+    public sealed class RequiredCycleB(RequiredCycleA other) { public RequiredCycleA Other { get; } = other; }
+    public sealed class MixedInvalidDependency(InvalidDependency invalid)
+    {
+        public InvalidDependency Invalid { get; } = invalid;
         public required Dependency Dependency { get; init; }
     }
     public sealed class MixedRoot(Dependency dependency) : ApplicationModel
@@ -157,26 +175,53 @@ public sealed class ApplicationModelTests
     }
 
     [Fact]
-    public void Non_root_required_members_fail_before_automatic_activation()
+    public void Non_root_required_components_complete_before_constructor_consumers()
     {
-        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<RequiredNonRoot>());
-        Assert.Contains("RequiredNonRoot", error.Message);
-        Assert.Contains("Dependency", error.Message);
-        Assert.Contains("constructor injection", error.Message);
+        var model = ModelActivator.Create<RequiredConsumer>();
+        Assert.True(model.ReadyAtConstruction);
+        Assert.Equal(1, model.Model.CompletionCount);
     }
 
     [Fact]
-    public void Factory_cannot_hide_unsupported_required_members()
+    public void Factory_cannot_leave_non_root_required_members_null()
     {
         var builder = new ApplicationModelBuilder().Add(_ => new RequiredNonRoot { Dependency = null! });
-        Assert.Contains("unsupported required members", Assert.Throws<InvalidOperationException>(() => builder.Build()).Message);
+        Assert.Contains("RequiredNonRoot.Dependency", Assert.Throws<InvalidOperationException>(() => builder.Build()).Message);
     }
 
     [Fact]
-    public void Automatic_property_injection_rejects_mixed_constructor_dependencies()
+    public void Constructor_and_property_injection_share_completed_dependencies()
     {
-        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<MixedRoot>());
-        Assert.Contains("parameterless constructor", error.Message);
+        var root = ModelActivator.Create<MixedRoot>();
+        Assert.Same(root.ConstructorDependency, root.Dependency);
+        Assert.True(root.Dependency.Completed);
+        Assert.Equal(1, root.Dependency.CompletionCount);
+    }
+
+    [Fact]
+    public void Mixed_non_root_dependency_cycle_fails_without_publishing_partial_instances()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<RequiredCycleA>());
+        Assert.Contains("Cyclic", error.Message);
+        Assert.Contains(nameof(RequiredCycleA), error.Message);
+        Assert.Contains(nameof(RequiredCycleB), error.Message);
+    }
+
+    [Fact]
+    public void Direct_builder_resolves_non_root_required_properties_once()
+    {
+        var builder = new ApplicationModelBuilder().Add<RequiredNonRoot>().Add<Dependency>();
+        var prepared = builder.Build();
+        Assert.Same(prepared, builder.Build());
+        Assert.Same(prepared.Get<Dependency>(), prepared.Get<RequiredNonRoot>().Dependency);
+        Assert.Equal(1, prepared.Get<RequiredNonRoot>().CompletionCount);
+    }
+
+    [Fact]
+    public void Constructor_dependency_failure_is_not_misreported_as_an_early_property_read()
+    {
+        var error = Assert.Throws<InvalidOperationException>(() => ModelActivator.Create<MixedInvalidDependency>());
+        Assert.Equal("invalid declaration", error.Message);
     }
 
     [Fact]

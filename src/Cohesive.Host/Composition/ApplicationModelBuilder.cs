@@ -8,11 +8,11 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace Cohesive.Host.Composition;
 
-/// <summary>Composes offline declarations by constructor dependencies and application-root required init properties, then freezes them.</summary>
+/// <summary>Composes offline declarations by constructor dependencies and required init properties, then freezes them.</summary>
 /// <remarks>No runtime services or resources are created implicitly. Registrations and instances belong to this
 /// builder alone. Constructor dependencies must also be registered; cycles fail at setup. Build caches failures.
-/// Application-root required init properties are resolved before construction and assigned before authoring completion.
-/// Automatic property-injected roots require a parameterless constructor. Required members on non-root declarations are rejected.
+/// Required init properties are resolved before construction and assigned before authoring completion.
+/// Constructor and property dependencies share the same registry; properties become available only after construction.
 /// Model constructors must not read init properties, perform IO or own disposable resources. This is not an invocation service container.</remarks>
 public sealed class ApplicationModelBuilder
 {
@@ -126,7 +126,7 @@ public sealed class ApplicationModelBuilder
         registrations.Add(root, CreateDeclarationFactory(root));
     }
 
-    IEnumerable<Type> Dependencies(Type type) => RequireActivationConstructor(type).GetParameters()
+    IEnumerable<Type> Dependencies(Type type) => RequireConstructor(type).GetParameters()
         .Select(parameter => parameter.ParameterType).Concat(RequiredComponents(type).Select(property => property.PropertyType));
 
     PropertyInfo[] RequiredComponents(Type type)
@@ -137,10 +137,8 @@ public sealed class ApplicationModelBuilder
             .Where(member => member.CustomAttributes.Any(attribute =>
                 attribute.AttributeType.FullName == "System.Runtime.CompilerServices.RequiredMemberAttribute"))
             .OrderBy(member => member.Name, StringComparer.Ordinal).ToArray();
-        if (requiredMembers.Length != 0 && !typeof(ApplicationModel).IsAssignableFrom(type))
-            throw new InvalidOperationException($"Declaration '{type}' has unsupported required members: {string.Join(", ", requiredMembers.Select(member => member.Name))}. Required-member injection is supported only on ApplicationModel roots; use constructor injection for other declarations.");
         if (requiredMembers.Any(member => member is FieldInfo))
-            throw new InvalidOperationException($"Application model '{type}' must declare required components as init-only properties, not fields.");
+            throw new InvalidOperationException($"Model '{type}' must declare required components as init-only properties, not fields.");
         var properties = requiredMembers.OfType<PropertyInfo>().ToArray();
         foreach (var property in properties)
             if (property.GetIndexParameters().Length != 0 || property.GetMethod is not { IsPublic: true }
@@ -156,22 +154,32 @@ public sealed class ApplicationModelBuilder
     Func<IServiceProvider, object> CreateDeclarationFactory(Type type)
     {
         var properties = RequiredComponents(type);
-        RequireActivationConstructor(type);
-        var construct = ActivatorUtilities.CreateFactory(type, Type.EmptyTypes);
-        if (properties.Length == 0) return provider => construct(provider, null);
+        var constructor = RequireConstructor(type);
+        if (properties.Length == 0)
+        {
+            var constructOnly = ActivatorUtilities.CreateFactory(type, Type.EmptyTypes);
+            return provider => constructOnly(provider, null);
+        }
+        var parameters = constructor.GetParameters();
+        var construct = ActivatorUtilities.CreateFactory(type, parameters.Select(parameter => parameter.ParameterType).ToArray());
         return provider =>
         {
-            // Resolve complete dependencies before constructing the root; never publish a partial root to break cycles.
+            // Resolve both dependency styles before construction; never publish a partial model to break cycles.
             var values = new object[properties.Length];
             for (var index = 0; index < properties.Length; index++)
                 values[index] = provider.GetService(properties[index].PropertyType)
                     ?? throw new InvalidOperationException($"Required component '{type.Name}.{properties[index].Name}' is unresolved.");
+            var arguments = new object?[parameters.Length];
+            for (var index = 0; index < parameters.Length; index++)
+                arguments[index] = provider.GetService(parameters[index].ParameterType)
+                    ?? (parameters[index].HasDefaultValue ? parameters[index].DefaultValue
+                        : throw new InvalidOperationException($"Constructor dependency '{type.Name}.{parameters[index].Name}' is unresolved."));
             object instance;
-            try { instance = construct(provider, null); }
+            try { instance = construct(provider, arguments); }
             catch (Exception exception) when (exception is not OutOfMemoryException)
             {
                 throw new InvalidOperationException(
-                    $"Application model '{type}' constructor failed before required init components were assigned. Constructors must not read these properties; use authoring completion or an explicit factory for dependent initialization.",
+                    $"Model '{type}' constructor failed before required init components were assigned. Constructors must not read these properties; use authoring completion or an explicit factory for dependent initialization.",
                     exception);
             }
             for (var index = 0; index < properties.Length; index++) properties[index].SetValue(instance, values[index]);
@@ -185,15 +193,6 @@ public sealed class ApplicationModelBuilder
         foreach (var property in RequiredComponents(instance.GetType()))
             if (property.GetValue(instance) is null)
                 throw new InvalidOperationException($"Required component '{instance.GetType().Name}.{property.Name}' is null.");
-    }
-
-    ConstructorInfo RequireActivationConstructor(Type type)
-    {
-        var properties = RequiredComponents(type);
-        var constructor = RequireConstructor(type);
-        if (properties.Length != 0 && constructor.GetParameters().Length != 0)
-            throw new InvalidOperationException($"Application model '{type}' combines constructor dependencies with required init components. Automatic property injection requires a parameterless constructor; use constructor-only dependencies or an explicit factory.");
-        return constructor;
     }
 
     static System.Reflection.ConstructorInfo RequireConstructor(Type type)
@@ -237,7 +236,7 @@ public sealed class PreparedApplicationModel
     public T Get<T>() where T : class => (T)instances[typeof(T)];
 }
 
-/// <summary>Discovers constructor dependencies and application-root required init properties, then activates one offline graph.</summary>
+/// <summary>Discovers constructor dependencies and required init properties, then activates one offline graph.</summary>
 public static class ModelActivator
 {
     /// <summary>Constructs dependencies before consumers, completes each declaration, and validates the whole catalog.</summary>

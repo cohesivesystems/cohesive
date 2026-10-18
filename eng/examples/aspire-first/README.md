@@ -140,4 +140,6 @@ resultKey)` and the keyed collection mapping preserve the existing portable asse
 `FulfillmentApplication` exposes its components as public required init-only properties. `ModelActivator`
 resolves those through the same graph as constructor dependencies, shares each component instance, and
 populates the root before returning it. Domain, query, API and binding models keep constructor injection
-for declaration authoring; no property attributes, partial classes or `null!` initializers are needed.
+for declaration authoring in their constructors. Required-init injection is also available to those models
+when dependent authoring runs during completion; no property attributes, partial classes or `null!`
+initializers are needed.
