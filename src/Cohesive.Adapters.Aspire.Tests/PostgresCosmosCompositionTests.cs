@@ -43,7 +43,7 @@ public sealed class PostgresCosmosCompositionTests
             inventory, inventory.Database.Id, inventory.Id, model.Storage.InventoryPolicy,
             identitySemanticPath: FieldPath.FromField(FulfillmentDomain.InventoryIdField));
         var catalog = new EntityRelationQuerySourceCatalog([source]);
-        var orders = model.Storage.Orders.Bind(new(new("orders"), database, "test"));
+        var orders = model.Storage.Orders.Bind(database, authority: "test");
         Assert.Same(model.Queries.OrderDetails, orders.QueryComposed(model.Queries.OrderDetails, catalog, PostgresCosmosStorage.Policy(1000, 1_000_000)).Definition);
         var inferred = Assert.IsType<Cohesive.Relations.Execution.RelationQuerySubplanReader<string, ReservationAvailability[]>>(
             orders.QueryComposed(model.Queries.ReservationAvailability, catalog, PostgresCosmosStorage.Policy(1000, 1_000_000)));
@@ -63,7 +63,7 @@ public sealed class PostgresCosmosCompositionTests
         var missing = Assert.Throws<RelationQueryPreparationException>(() => orders.QueryComposed(model.Queries.OrderDetails,
             new EntityRelationQuerySourceCatalog([]), PostgresCosmosStorage.Policy(1000, 1_000_000)));
         Assert.Equal("postgres.composed.remoteMappingMissing", missing.Code);
-        var full = new FulfillmentStorage(model.Domain, new FulfillmentPostgresMappings(model.Domain)).Bind(database);
+        var full = new FulfillmentStorage(model.Domain, new FulfillmentPostgresMappings(model.Domain)).Bindings.Bind(database, authority: "test/fulfillment");
         var ambiguous = Assert.Throws<RelationQueryPreparationException>(() => full.QueryComposed(model.Queries.OrderDetails,
             catalog, PostgresCosmosStorage.Policy(1000, 1_000_000)));
         Assert.Equal("postgres.composed.placementAmbiguous", ambiguous.Code);
@@ -90,7 +90,7 @@ public sealed class PostgresCosmosCompositionTests
     {
         var model = ModelActivator.Create<FulfillmentApplication>();
         using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=orders;Username=test");
-        var postgres = model.Storage.Bind(database);
+        var postgres = model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var calls = 0;
         var builder = new ServicePersistenceBuilder().Query(model.Queries.OrderDetails, (rows, bytes) =>
         { calls++; return postgres.Query(model.Queries.OrderDetails, rows, bytes); });

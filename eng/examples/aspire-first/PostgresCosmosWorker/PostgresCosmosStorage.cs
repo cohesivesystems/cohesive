@@ -53,7 +53,7 @@ public sealed class PostgresCosmosStorage : StorageModel
     {
         if (inventory.Id != InventoryContainer || inventory.Database.Id != InventoryDatabase)
             throw new ArgumentException("Inventory container does not match this composition.", nameof(inventory));
-        var postgres = Orders.Bind(new(new(FulfillmentStoragePolicy.OrdersDatabaseName), orders, "aspire-first/postgres-cosmos"));
+        var postgres = Orders.Bind(orders, authority: "aspire-first/postgres-cosmos");
         var repository = new CosmosEntityOutboxRepository(domain.Inventory.Definition, inventory,
             partitionKeyPolicy: EntityPartitionKeyPolicy.Fixed(FulfillmentStoragePolicy.LocalPartition, FulfillmentDomain.PartitionField),
             identityField: FulfillmentDomain.InventoryIdField);

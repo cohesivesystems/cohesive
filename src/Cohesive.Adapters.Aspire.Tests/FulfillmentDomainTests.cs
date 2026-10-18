@@ -30,7 +30,7 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
         var allocated = GC.GetAllocatedBytesForCurrentThread();
         var started = System.Diagnostics.Stopwatch.StartNew();
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var reader = Model.Storage.Bind(database).Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
+        var reader = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment").Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
         IRelationQueryReader<string, OrderDetails?> contract = reader;
         Assert.Same(Model.Queries.OrderDetails, contract.Definition);
         var artifact = reader.Artifact;
@@ -61,7 +61,7 @@ public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper 
     public void Persistence_reuses_entity_authority_and_selects_only_consumed_mappings()
     {
         using var database = Npgsql.NpgsqlDataSource.Create("Host=localhost;Database=unused;Username=test");
-        var persistence = Model.Storage.Bind(database);
+        var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         Cohesive.Storage.IEntityRepository<Order> repository = persistence.Repository(Model.Domain.Orders);
         Assert.Same(Model.Domain.Orders.Definition, repository.EntityDefinition);
         var prefix = Cohesive.Relations.Compilation.RelationQuerySubplan.Compile(

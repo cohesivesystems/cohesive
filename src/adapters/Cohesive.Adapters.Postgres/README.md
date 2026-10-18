@@ -237,3 +237,10 @@ the physical executor acquires local PostgreSQL and registered remote inputs. A 
 locally and remotely. Partition identity and source selectors are validated before IO. Both paths prepare
 once and enforce complete-result row/scalar-byte bounds; neither asserts a cross-source snapshot.
 See `eng/examples/aspire-first/PostgresCosmosWorker` for the running consumer.
+
+At host composition, `bindings.Bind(dataSource, authority: "application/host")` attaches a caller-owned
+single-host Npgsql data source using the database identity already declared by those bindings. No wrapper
+method or repeated database ID is required. The authority remains explicit and non-secret. This attests an
+association without database IO; it does not verify the live database name. The explicit
+`Bind(PostgresNpgsqlRuntimeBinding)` overload remains available for advanced configuration, including
+logical replication connections, and retains its database-identity mismatch check.

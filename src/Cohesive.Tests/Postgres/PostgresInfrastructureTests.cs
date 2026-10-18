@@ -59,6 +59,30 @@ public sealed class PostgresInfrastructureTests
     }
 
     [Fact]
+    public void Direct_data_source_binding_reuses_declared_identity_and_native_artifact()
+    {
+        var bindings = Bindings("declared-orders");
+        using var data = NpgsqlDataSource.Create("Host=invalid.invalid;Database=physical_name;Username=test");
+        var explicitRuntime = bindings.Bind(new PostgresNpgsqlRuntimeBinding(bindings.Database, data, "test/binding"));
+        var direct = bindings.Bind(data, authority: "test/binding");
+        Assert.Equal(explicitRuntime.Query(Query(), 10, 1000).Artifact.Fingerprint,
+            direct.Query(Query(), 10, 1000).Artifact.Fingerprint);
+        Assert.Same(Entity.Definition, direct.Repository(Entity).EntityDefinition);
+    }
+
+    [Fact]
+    public void Direct_data_source_binding_preserves_runtime_validation()
+    {
+        var bindings = Bindings();
+        using var data = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test");
+        using var multiHost = new NpgsqlDataSourceBuilder("Host=primary,secondary;Database=unused;Username=test").BuildMultiHost();
+        Assert.Throws<ArgumentNullException>(() => bindings.Bind((NpgsqlDataSource)null!, "test"));
+        Assert.Throws<ArgumentNullException>(() => bindings.Bind(data, null!));
+        Assert.Throws<ArgumentException>(() => bindings.Bind(data, "Password=not-an-authority"));
+        Assert.Throws<ArgumentException>(() => bindings.Bind(multiHost, "test"));
+    }
+
+    [Fact]
     public void Evidence_is_exact_to_semantic_plan_and_changes_with_native_mapping()
     {
         var query = Query();

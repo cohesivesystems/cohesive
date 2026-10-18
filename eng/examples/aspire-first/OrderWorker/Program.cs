@@ -15,7 +15,7 @@ builder.Services.AddCohesiveExceptionHandling();
 var connectionString = builder.Configuration.GetConnectionString(FulfillmentStoragePolicy.OrdersDatabaseName)
     ?? throw new InvalidOperationException("The native Aspire orders database reference is required.");
 await using var database = NpgsqlDataSource.Create(connectionString);
-var persistence = model.Storage.Bind(database);
+var persistence = model.Storage.Bindings.Bind(database, authority: "aspire-first/apphost");
 var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
 
 // The shared repository owns DML and validation, not schema lifecycle.

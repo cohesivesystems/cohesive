@@ -24,7 +24,7 @@ public sealed partial class OrderStorageIntegrationTests
         var id = Guid.NewGuid().ToString("D");
         var sku = "subplan-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create();
-        var persistence = Model.Storage.Bind(orders);
+        var persistence = Model.Storage.Bindings.Bind(orders, authority: "test/fulfillment");
         var inventoryPersistence = PostgresSplitFixture.BindInventory(Model, inventoryDatabase);
         var orderRepository = persistence.Repository(Model.Domain.Orders);
         var reservations = persistence.Repository(Model.Domain.Reservations);

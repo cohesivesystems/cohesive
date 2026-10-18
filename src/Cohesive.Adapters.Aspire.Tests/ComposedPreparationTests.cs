@@ -14,7 +14,7 @@ public sealed class ComposedPreparationTests
     public void Native_prefix_recipe_rejects_queries_without_a_supported_closed_row_boundary()
     {
         using var database = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test");
-        var local = Model.Storage.Bind(database);
+        var local = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var remote = PostgresSplitFixture.BindInventory(Model, database);
         var policy = new PostgresRelationQueryComposedPolicy(
             ReservationAvailabilityQueryBindings.PlanningPolicy, 1000, 1000, 1_000_000,
@@ -38,7 +38,7 @@ public sealed class ComposedPreparationTests
     public void Invalid_registration_fails_without_opening_a_database(string failure)
     {
         using var db = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test;Timeout=1");
-        var orders = Model.Storage.Bind(db);
+        var orders = Model.Storage.Bindings.Bind(db, authority: "test/fulfillment");
         var remote = failure == "missing-mapping"
             ? PostgresPersistenceBindings.Define(new("inventory"), _ => { }).Bind(new(new("inventory"), db, "test"))
             : PostgresSplitFixture.BindInventory(Model, db);

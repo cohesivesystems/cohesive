@@ -33,7 +33,7 @@ public sealed partial class OrderStorageIntegrationTests
         using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
-        var persistence = Model.Storage.Bind(database);
+        var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var repository = persistence.Repository(Model.Domain.Orders);
         var context = OperationContext.Create();
         var id = Guid.NewGuid();
@@ -116,7 +116,7 @@ public sealed partial class OrderStorageIntegrationTests
         using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
             await command.ExecuteNonQueryAsync();
-        var persistence = Model.Storage.Bind(database);
+        var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var repository = persistence.Repository(Model.Domain.Orders);
         var context = OperationContext.Create();
         var id = Guid.NewGuid();

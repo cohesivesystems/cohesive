@@ -17,7 +17,7 @@ public sealed class FulfillmentHostSetupTests
     public void Hosting_requires_receipt_capability_before_build_or_io()
     {
         using var database = NpgsqlDataSource.Create("Host=localhost;Port=1;Database=unused;Username=unused");
-        var inventory = Model.Storage.Bind(database).Repository(Model.Domain.Inventory);
+        var inventory = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment").Repository(Model.Domain.Inventory);
         var failure = Assert.Throws<ServiceBindingValidationException>(() => Service.Define(new("test"), new("1"), Model.Process.Provenance)
             .Operation("fulfill").Run(Model.Process.Definition, bindings => bindings.Transition(Model.Inventory.Reserve, inventory)));
         Assert.Equal("services.binding.receiptCapabilityMissing", Assert.Single(failure.Validation.Diagnostics).Code);

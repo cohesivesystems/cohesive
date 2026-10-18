@@ -26,7 +26,7 @@ public sealed partial class OrderStorageIntegrationTests
         using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
         await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
         var context = OperationContext.Create();
-        var persistence = Model.Storage.Bind(database);
+        var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var orders = persistence.Repository(Model.Domain.Orders);
         var runtime = new PostgresNpgsqlRuntimeBinding(new("orders"), database, "tests/fulfillment");
         var inventory = persistence.Repository(Model.Domain.Inventory);

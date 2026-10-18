@@ -42,7 +42,7 @@ public sealed class FulfillmentProcessIntegrationTests
         var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
         await using (var command = database.CreateCommand(receipts.SchemaSql)) await command.ExecuteNonQueryAsync();
         var receiptStorage = await receipts.BindAsync(database);
-        var persistence = Model.Storage.Bind(database);
+        var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var orders = persistence.Repository(Model.Domain.Orders, transitionReceipts: receiptStorage);
         var inventory = persistence.Repository(Model.Domain.Inventory, transitionReceipts: receiptStorage);
         var orderId = Guid.NewGuid().ToString("D");
@@ -100,7 +100,7 @@ public sealed class FulfillmentProcessIntegrationTests
         var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
         await using (var command = database.CreateCommand(receipts.SchemaSql)) await command.ExecuteNonQueryAsync();
         var receiptStorage = await receipts.BindAsync(database);
-        var persistence = model.Storage.Bind(database);
+        var persistence = model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var inventory = persistence.Repository(model.Domain.Inventory, transitionReceipts: receiptStorage);
         var sku = "http-sku-" + Guid.NewGuid().ToString("N");
         string? orderId = null;

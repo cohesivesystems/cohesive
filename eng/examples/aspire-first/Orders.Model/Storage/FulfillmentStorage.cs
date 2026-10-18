@@ -1,5 +1,4 @@
 using Cohesive.Adapters.Postgres;
-using Npgsql;
 using Cohesive.Storage;
 
 namespace AspireFirst.Orders;
@@ -24,10 +23,6 @@ public sealed class FulfillmentStorage : StorageModel
     /// <summary>Native mappings for the primary database.</summary>
     public PostgresPersistenceBindings Bindings { get; }
 
-    /// <summary>Attaches the configured native data source; ownership remains with the caller.</summary>
-    /// <param name="database">Native data source.</param><returns>A runtime persistence registration.</returns>
-    public PostgresPersistenceRegistration Bind(NpgsqlDataSource database) =>
-        Bindings.Bind(new(new(FulfillmentStoragePolicy.OrdersDatabaseName), database, "aspire-first/apphost"));
 
 }
 
