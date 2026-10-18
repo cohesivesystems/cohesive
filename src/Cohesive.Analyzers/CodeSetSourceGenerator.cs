@@ -484,7 +484,7 @@ public sealed class CodeSetSourceGenerator : IIncrementalGenerator
     static void EmitEnumDefinitions(StringBuilder builder, string indent, ImmutableArray<EnumCodeDefinition> definitions)
     {
         builder.Append(indent)
-            .AppendLine("static global::System.Collections.Generic.IReadOnlyList<global::Cohesive.Domain.CodeDefinition<string>> Definitions { get; } = new global::Cohesive.Domain.CodeDefinition<string>[]");
+            .AppendLine("static global::System.Collections.Generic.IReadOnlyList<global::Cohesive.Domain.CodeDefinition<string>> Definitions { get; } = global::System.Array.AsReadOnly(new global::Cohesive.Domain.CodeDefinition<string>[]");
         builder.Append(indent).AppendLine("{");
         foreach (var definition in definitions)
         {
@@ -500,7 +500,7 @@ public sealed class CodeSetSourceGenerator : IIncrementalGenerator
                 .AppendLine("),");
         }
 
-        builder.Append(indent).AppendLine("};");
+        builder.Append(indent).AppendLine("});");
     }
 
     static void EmitEnumGetAll(StringBuilder builder, string indent, string extensionReceiverTypeName)
@@ -667,13 +667,13 @@ public sealed class CodeSetSourceGenerator : IIncrementalGenerator
         builder.Append(indent)
             .Append("public static global::System.Collections.Generic.IReadOnlyList<")
             .Append(valueTypeName)
-            .Append("> All { get; } = new ")
+            .Append("> All { get; } = global::System.Array.AsReadOnly(new ")
             .Append(valueTypeName)
             .AppendLine("[]");
         builder.Append(indent).AppendLine("{");
         foreach (var definition in definitions)
             builder.Append(indent).Append("    ").Append(EscapeIdentifier(definition.FieldName)).AppendLine(",");
-        builder.Append(indent).AppendLine("};");
+        builder.Append(indent).AppendLine("});");
     }
 
     static void EmitDefinitions(StringBuilder builder, string indent, string valueTypeName, ImmutableArray<CodeFieldDefinition> definitions)
@@ -684,7 +684,7 @@ public sealed class CodeSetSourceGenerator : IIncrementalGenerator
         builder.Append(indent)
             .Append("public static global::System.Collections.Generic.IReadOnlyList<global::Cohesive.Domain.CodeDefinition<")
             .Append(valueTypeName)
-            .Append(">> Definitions { get; } = new global::Cohesive.Domain.CodeDefinition<")
+            .Append(">> Definitions { get; } = global::System.Array.AsReadOnly(new global::Cohesive.Domain.CodeDefinition<")
             .Append(valueTypeName)
             .AppendLine(">[]");
         builder.Append(indent).AppendLine("{");
@@ -702,7 +702,7 @@ public sealed class CodeSetSourceGenerator : IIncrementalGenerator
                 .AppendLine("),");
         }
 
-        builder.Append(indent).AppendLine("};");
+        builder.Append(indent).AppendLine("});");
     }
 
     static void EmitTryGet(StringBuilder builder, string indent, string valueTypeName)
