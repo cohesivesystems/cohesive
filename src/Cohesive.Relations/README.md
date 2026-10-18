@@ -203,3 +203,9 @@ The unshipped PR408 terminal `ToArray` is now `BuildArrayQuery`. These are sourc
 no compatibility aliases are retained. Alpha.132 contains the previous surface (as does alpha.131 for
 APIs present there); publishing this PR and upgrading downstream consumers are separate steps. This PR
 updates in-repository consumers only and does not claim Ari or Ito have adopted the changes.
+
+Hosted typed Query admission prepares the framework CLR contract once and reads ordinary envelopes directly
+from observation fields. Customized members retain their owning JSON converters; explicitly immutable
+projections can be reused without rebuilding their graph. Portable contract admission still runs per decode.
+See [prepared observation projections](../../docs/performance/prepared-observation-projections.md) for scope
+and qualification.

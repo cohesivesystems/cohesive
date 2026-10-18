@@ -1,0 +1,42 @@
+variant,source,category,sampled_bytes
+control,004010,Observation projection,11290216
+control,004010,Protocol JSON,8745304
+control,004010,Other EDI compilation,6835480
+control,004010,Hosted decode,6657032
+control,004010,Other,6587000
+control,004010,Catalog authoring,1203064
+control,004010,Query physical planning,849592
+control,004010,Catalog/context,650208
+control,004010,Query realization hashes,425376
+control,004010,Storage content hashes,106600
+control,005030,Observation projection,13714504
+control,005030,Protocol JSON,10518184
+control,005030,Hosted decode,7969640
+control,005030,Other EDI compilation,7781512
+control,005030,Other,6333048
+control,005030,Catalog authoring,1104664
+control,005030,Catalog/context,654720
+control,005030,Query physical planning,637552
+control,005030,Query realization hashes,533000
+control,005030,Storage content hashes,106600
+candidate,004010,Protocol JSON,9066384
+candidate,004010,Observation projection,9048456
+candidate,004010,Hosted decode,6667440
+candidate,004010,Other,6613160
+candidate,004010,Other EDI compilation,6510304
+candidate,004010,Catalog authoring,1305824
+candidate,004010,Catalog/context,646560
+candidate,004010,Query physical planning,639600
+candidate,004010,Query realization hashes,426400
+candidate,004010,Storage content hashes,319800
+candidate,005030,Protocol JSON,11041120
+candidate,005030,Observation projection,10402352
+candidate,005030,Hosted decode,7768736
+candidate,005030,Other EDI compilation,7677256
+candidate,005030,Other,6324856
+candidate,005030,Catalog authoring,1293424
+candidate,005030,Query physical planning,740992
+candidate,005030,Catalog/context,654720
+candidate,005030,Query realization hashes,423608
+candidate,005030,Storage content hashes,213200
+candidate,005030,EDI provenance,106600

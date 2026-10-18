@@ -1,0 +1,45 @@
+source,phase,category,mean_sampled_bytes
+004010,cold,Catalog authoring,6905936
+004010,cold,Catalog/context,1617445
+004010,cold,Commit/checkpoint hash,248051
+004010,cold,EDI provenance,35533
+004010,cold,Hosted decode,15237013
+004010,cold,Observation projection,10966149
+004010,cold,Other,79244843
+004010,cold,Other EDI compilation,14374936
+004010,cold,Protocol JSON,15027635
+004010,cold,Query physical planning,1313091
+004010,cold,Query realization hashes,2734365
+004010,cold,Storage content hashes,7534453
+004010,repeated,Catalog authoring,1200355
+004010,repeated,Catalog/context,648979
+004010,repeated,Hosted decode,3749443
+004010,repeated,Observation projection,5852483
+004010,repeated,Other,6083176
+004010,repeated,Other EDI compilation,5330477
+004010,repeated,Protocol JSON,1584547
+004010,repeated,Query physical planning,639600
+004010,repeated,Query realization hashes,533000
+004010,repeated,Storage content hashes,177325
+005030,cold,Catalog authoring,6931165
+005030,cold,Catalog/context,1616179
+005030,cold,Commit/checkpoint hash,142133
+005030,cold,Hosted decode,16025555
+005030,cold,Observation projection,11856531
+005030,cold,Other,79501704
+005030,cold,Other EDI compilation,14416272
+005030,cold,Protocol JSON,15429885
+005030,cold,Protocol hashes,35859
+005030,cold,Query physical planning,1242301
+005030,cold,Query realization hashes,2769211
+005030,cold,Storage content hashes,7279536
+005030,repeated,Catalog authoring,1224675
+005030,repeated,Catalog/context,649448
+005030,repeated,Hosted decode,4135117
+005030,repeated,Observation projection,7130773
+005030,repeated,Other,6627904
+005030,repeated,Other EDI compilation,5615691
+005030,repeated,Protocol JSON,1727355
+005030,repeated,Query physical planning,743811
+005030,repeated,Query realization hashes,425299
+005030,repeated,Storage content hashes,106259

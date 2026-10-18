@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Cohesive.Api.Execution")]
 [assembly: InternalsVisibleTo("Cohesive.Relations")]
 [assembly: InternalsVisibleTo("Cohesive.Transitions")]
+[assembly: InternalsVisibleTo("Cohesive.Storage")]
 
 [assembly: InternalsVisibleTo("Cohesive.Tests")]
 [assembly: InternalsVisibleTo("Cohesive.Relations.Benchmarks")]

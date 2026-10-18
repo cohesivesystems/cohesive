@@ -1,0 +1,5 @@
+variant,source,all_phase_samples,missing_stacks,lost_events,repeated_missing_stack_bytes,repeated_sampled_bytes,repeated_precise_bytes
+control,004010,1906,0,0,0,45981472,45880640
+control,005030,2014,1,0,106600,52196768,52165976
+candidate,004010,1828,0,0,0,43369160,43417448
+candidate,005030,1927,0,0,0,49383040,49269960

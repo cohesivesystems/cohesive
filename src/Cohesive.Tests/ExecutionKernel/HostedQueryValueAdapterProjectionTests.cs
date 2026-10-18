@@ -13,6 +13,8 @@ public sealed class HostedQueryValueAdapterProjectionTests
     {
         var payload = new Payload(Enumerable.Range(0, 1024).Select(i => new Row(i, "é<>&🙂", 1.2300m)).ToArray());
         var input = PortableValue.Concrete(Contract, ObservationValue.FromObject(payload));
+        PortableExecutionValidator.ValidateForClrProjection(input, 64, out var requiresJsonRoundTrip);
+        Assert.False(requiresJsonRoundTrip);
         for (var warm = 0; warm < 4; warm++) HostedQueryValueAdapter.Decode<Payload>(input, Contract);
         var samples = new long[7];
         Result<Payload, DocumentValidationDiagnostic> actual = default;
@@ -25,7 +27,7 @@ public sealed class HostedQueryValueAdapterProjectionTests
         Array.Sort(samples);
         Assert.Equal(ResultType.Success, actual.Type);
         Assert.Equal(payload.Rows, actual.Success!.Rows);
-        Assert.True(samples[3] <= 304L * 1024, $"Median hosted decode allocation {samples[3]} exceeds 304 bytes per row.");
+        Assert.True(samples[3] <= 96L * 1024, $"Median hosted decode allocation {samples[3]} exceeds 96 bytes per row.");
     }
 
     [Fact]

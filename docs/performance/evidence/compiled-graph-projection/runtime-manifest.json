@@ -1,0 +1,22 @@
+{
+  "ari_commit": "299c73e",
+  "control_core_commit": "eb8c9b4d53b99d23894d2853fd6a690de8c40a6d",
+  "candidate_core_source": "this change",
+  "runtime": "10.0.13",
+  "sdk": "10.0.402",
+  "os": "macOS 27.0.1",
+  "architecture": "arm64",
+  "only_changed_runtime_assembly": [
+    "Cohesive.dll"
+  ],
+  "harness_sha256": "32c96987cafb52b0ef832ed3ba288d09d60d235d01f7fc02af308f0a8e728200",
+  "control_core_sha256": "ec30b134719b5c33bfc6dd4a8e2c46bd29c4f68d6ce42170559fbca51c7aae90",
+  "candidate_core_sha256": "342b437d927ec9941e58be96614049a14bbdf40bd4a936705480ac50fa842629",
+  "unchanged_dll_count": 124,
+  "unchanged_dll_closure_sha256": "90753f097f0c0b56cb47319fa9b5790b40a13b5b243f1e16785fb1607f46327d",
+  "graph_fingerprints": {
+    "004010": "sha256:7967751c7bbda5edb53770ba3f7889126f8a5f6c23b33c35abc1954555f85452",
+    "005030": "sha256:90a9a3760f81a4df020d03c2595726ea4e776fbbf1efb3724576cd38a093b172"
+  },
+  "micro_harness_sha256": "e45923f1f5f7c95247607d848dce567b6e7a0c746ec9a2df1ac9d871c26b10c3"
+}

@@ -199,6 +199,7 @@ exceptions and ambiguous acknowledgements propagate without retry. Conditional c
 `/write/subjectCondition` or `/write/expectedConcurrencyToken` locations and preserve subject, fence and native
 provider status details for repository/operator callers; do not expose these native diagnostics directly to clients.
 The process adapter preserves code and location but projects a safe message without provider evidence.
+
 Before sanitizing it, the adapter delivers the original result and trace context to subscribers attached
 through `adapter.SubscribeTransitionFailures(Action<EntityTransitionFailureDiagnostic>)` or the same method
 on the built `HostedServiceProcess`. The returned `IDisposable` releases that observer. Subscriptions belong
@@ -214,6 +215,14 @@ and exclusion from serialized portable failures. The fulfillment example consume
 host-owned debug logger through `AddCohesiveTransitionFailureLogging(hostedProcess)` in `Cohesive.Host.Services`.
 The native host starts subscriptions and releases them on stop or disposal; an unstarted host never subscribes.
 Repeated registration of a process subscribes once per host, and disabled Debug logging skips argument construction.
+
+Fresh success returning the exact immutable candidate also needs no full commit-content hash. Request
+fingerprints remain eager for exact locators; creation-intent and full commit fingerprints are prepared
+on demand and reused for that live request/commit. A distinct returned candidate still requires complete
+fingerprint comparison. Persistence and external receipt admission retain their canonical fingerprints and
+integrity checks; this optimization does not turn object identity into external evidence or change digest formats.
+See [entity-transition fingerprint measurements](../../docs/performance/entity-transition-fingerprints.md).
+
 PostgreSQL and SQLite rely on their native unique receipt fences, with no receipt SELECT inside a successful
 commit. A unique violation rolls back the entity write before shared conflict resolution reads and validates
 retained evidence. Provider locks, transactions and encoding

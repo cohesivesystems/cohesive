@@ -1,0 +1,9 @@
+rows,name_length,unique_names,median_allocated_bytes
+1,8,False,224
+1,8,True,224
+1,256,False,720
+1,256,True,720
+1024,8,False,131200
+1024,8,True,172120
+1024,256,False,131696
+1024,256,True,680024

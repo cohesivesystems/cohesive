@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Processes.IR;
 using Cohesive.Relations.IR;
 using Cohesive.Transitions.IR;
@@ -31,6 +32,16 @@ public sealed class ExecutionImmutabilityContractTests
         var errors = new List<string>();
         Inspect(typeof(TypeRef), nameof(TypeRef), new(), errors);
         Assert.True(errors.Count == 0, string.Join("\n", errors));
+    }
+
+    [Fact]
+    public void ImmutableObservationProjectionsExposeNoMutableState()
+    {
+        var errors = new List<string>();
+        foreach (var type in typeof(ShapeGraphDocument).Assembly.GetTypes()
+            .Where(type => type.IsClass && typeof(IImmutableObservationProjection).IsAssignableFrom(type)))
+            Inspect(type, type.Name, new(), errors);
+        Assert.Empty(errors);
     }
 
     [Fact]

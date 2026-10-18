@@ -52,8 +52,23 @@ SHA-256 digest; the consuming block owns its fingerprint profile and prefix. See
 
 Declared converter/polymorphic values project directly into owned observations without a mutable
 JSON tree. See [typed projection qualification](../../docs/performance/hosted-value-projection.md).
+JSON-to-observation conversion reuses repeated property names and string values within large input traversals;
+its temporary bounded table never retains parser data after return. Small inputs bypass preparation.
+See [property-name qualification](../../docs/performance/observation-name-reuse.md).
 `ObservationValue.Deserialize<T>` uses pooled UTF-8 storage; results own retained JSON data.
+Explicit `IImmutableObservationProjection` types (including `ShapeGraphDocument`) can reuse decoded
+interpretations of the same immutable payload under the same frozen serializer profile and binary encoding.
+Mutable results remain independent. Reuse conveys no validation or admission evidence.
+Shape graph documents prepare their observation representation once by immutable object identity;
+new envelopes over the same graph share its payload and typed interpretation. First decoding and
+external admission still run normally. Preparation remains owned by the live document/graph.
+The hosted materializer reads immutable collections and supported polymorphic members directly from observations;
+customized contracts retain their serializer. See [prepared projection qualification](../../docs/performance/prepared-observation-projections.md).
 `CanonicalJsonWriter.GetCanonicalSequenceText` returns owned text using the same explicit profile, encoder and exclusions as streaming canonical output.
+`AnnotationValue.FromString` retains well-formed strings directly; ordinary serialization and scalar
+flattening do not need a JSON document. Requesting `Value` lazily produces an owned compatibility view.
+Parsed annotations retain their original owned JSON snapshots. See
+[native annotation qualification](../../docs/performance/native-string-annotations.md).
 `AnnotationMapJsonConverter` optionally shares owned backing for annotation maps up to 64 KiB of encoded JSON; use it for buffered messages and budget for parsing the complete map (including parser metadata).
 See [decoding contracts and allocation budgets](../../docs/performance/pooled-observation-decoding.md).
 
