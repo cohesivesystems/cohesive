@@ -14,6 +14,7 @@
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
+    <EmbeddedResource Include="../../eng/examples/aspire-first/migrations/001-explicit-collations.sql" LogicalName="Migration001.sql" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../eng/examples/aspire-first/AppHost/AppHost.csproj" />

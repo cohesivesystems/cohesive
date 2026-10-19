@@ -44,7 +44,7 @@ public sealed class CosmosEntityStorageBinding : IEntityStorageBinding
         this.identityField = identityField;
         partition = EntityPartitionKeyPolicy.Fixed(partitionKey, partitionField);
         Query = new(entity.StateShape.QualifiedId, account, database, container,
-            new("partitionKey", logicalPartition, fixedPartitionKey: new PartitionKey(partitionKey),
+            new(CosmosObservationContainerDocument.PartitionField, logicalPartition, fixedPartitionKey: new PartitionKey(partitionKey),
                 maximumEnumerationRows: maximumEnumerationRows, maximumKeysPerQuery: maximumKeysPerQuery,
                 maximumQueryChunks: maximumQueryChunks, maximumSdkPageSize: maximumSdkPageSize),
             FieldPath.FromField(identityField));
@@ -63,7 +63,7 @@ public sealed class CosmosEntityStorageBinding : IEntityStorageBinding
         var client = services.GetRequiredKeyedService<CosmosClient>(Query.Account);
         var container = client.GetContainer(Query.Database, Query.Container);
         var metadata = await container.ReadContainerAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
-        if (metadata.Resource.PartitionKeyPath != "/partitionKey")
+        if (metadata.Resource.PartitionKeyPath != CosmosObservationContainerDocument.PartitionPath)
             throw new InvalidOperationException("The observation envelope requires container partition path /partitionKey.");
         return Bind(container);
     }

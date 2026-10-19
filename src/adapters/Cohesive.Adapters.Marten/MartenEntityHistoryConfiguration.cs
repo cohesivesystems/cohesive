@@ -30,6 +30,10 @@ public sealed class MartenEntityHistoryConfiguration : IPostgresEntityHistoryCon
     /// <summary>Schema admission policy.</summary>
     public PostgresSchemaInitialization Initialization { get; }
     /// <inheritdoc />
+    public void ValidateNativeResources(IServiceProvider services, string database, NpgsqlDataSource dataSource) =>
+        MartenEntityHistoryStorage.RequireNativeStore(dataSource, services.GetRequiredKeyedService<IDocumentStore>(database));
+
+    /// <inheritdoc />
     /// <remarks>Uses the store keyed by the existing database resource identity. Native schema creation covers
     /// all objects configured on that store; use a dedicated history store when isolating schema ownership.
     /// CreateOnly never updates existing objects. Failed preparation is not retried; already-created objects

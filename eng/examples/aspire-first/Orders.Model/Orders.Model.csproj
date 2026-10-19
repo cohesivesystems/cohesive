@@ -7,8 +7,6 @@
     <EnableCohesiveGlobalUsings>false</EnableCohesiveGlobalUsings>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="Storage/schema.sql" LogicalName="Orders.schema.sql" />
-    <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Marten/Cohesive.Adapters.Marten.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres.Services/Cohesive.Adapters.Postgres.Services.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres/Cohesive.Adapters.Postgres.csproj" />
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

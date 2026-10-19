@@ -7,6 +7,7 @@
     <EnableCohesiveGlobalUsings>false</EnableCohesiveGlobalUsings>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="../Orders.Model/Storage/schema.sql" LogicalName="Orders.schema.sql" />
     <ProjectReference Include="../Orders.Model/Orders.Model.csproj" />
     <ProjectReference Include="../../../../src/Cohesive.Host/Cohesive.Host.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres.Services/Cohesive.Adapters.Postgres.Services.csproj" />

@@ -10,7 +10,7 @@ namespace Cohesive.Adapters.Cosmos;
 [JsonSerializable(typeof(CosmosObservationContainerDocument))]
 sealed record CosmosObservationContainerDocument(
     [property: JsonPropertyName("id")] string Id,
-    [property: JsonPropertyName("partitionKey")] string PartitionKey,
+    [property: JsonPropertyName(CosmosObservationContainerDocument.PartitionField)] string PartitionKey,
     [property: JsonPropertyName("documentKind")] string DocumentKind,
     [property: JsonPropertyName("observationType")] string ObservationType,
     [property: JsonPropertyName("observationId")] string ObservationId,
@@ -74,4 +74,8 @@ sealed record CosmosObservationContainerDocument(
     string? ETag = null,
     [property: JsonPropertyName("entityConcurrencyToken")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    string? EntityConcurrencyToken = null);
+    string? EntityConcurrencyToken = null)
+{
+    internal const string PartitionField = "partitionKey";
+    internal const string PartitionPath = "/" + PartitionField;
+}

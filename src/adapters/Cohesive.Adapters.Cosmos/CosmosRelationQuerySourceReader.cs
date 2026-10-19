@@ -42,7 +42,7 @@ public sealed class CosmosRelationQuerySourceReader : IEntityRelationQuerySource
     public const string ConcurrencyTokenSourceSelector = "$concurrencyToken";
 
     /// <summary>Conventional entity-envelope scalar partition-coordinate property.</summary>
-    public const string ObservationPartitionSourceSelector = "partitionKey";
+    public const string ObservationPartitionSourceSelector = CosmosObservationContainerDocument.PartitionField;
 
     /// <summary>Conventional entity-envelope semantic observation property.</summary>
     public const string ObservationEnvelopeSourceSelector = "observation";

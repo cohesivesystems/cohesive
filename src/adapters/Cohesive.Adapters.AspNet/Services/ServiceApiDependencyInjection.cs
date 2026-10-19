@@ -16,7 +16,7 @@ public static class ServiceApiDependencyInjection
     /// <param name="services">Host services, including keyed native clients.</param>
     /// <param name="bindings">Offline API binding model.</param><param name="storage">Offline storage composition.</param>
     /// <returns>The original service collection.</returns>
-    /// <remarks>No resources are resolved during registration. Preparation validates metadata but never creates schema.</remarks>
+    /// <remarks>No resources are resolved during registration. Preparation follows the storage model’s explicit validation or creation policy.</remarks>
     public static IServiceCollection AddCohesiveServices<TBindings>(this IServiceCollection services,
         TBindings bindings, StorageModel storage) where TBindings : ApiBindingModel
     {
@@ -56,6 +56,7 @@ public static class ServiceApiDependencyInjection
         ArgumentNullException.ThrowIfNull(routes);
         var runtime = routes.ServiceProvider.GetRequiredService<ServiceApiRuntime<TBindings>>();
         routes.MapServices(await runtime.PrepareAsync(cancellationToken).ConfigureAwait(false));
+        runtime.MarkMapped();
         return routes;
     }
 }
@@ -68,6 +69,8 @@ internal sealed class ServiceApiRuntime<TBindings>(IServiceProvider provider, TB
     readonly ServiceProcessLifetime lifetime = new(provider.GetRequiredService<ILoggerFactory>());
     Task<ServiceApiBindings>? preparation;
     bool disposed;
+    bool mapped;
+    public void MarkMapped() { lock (gate) mapped = true; }
     public Task<ServiceApiBindings> PrepareAsync(CancellationToken token)
     {
         lock (gate)
@@ -89,6 +92,8 @@ internal sealed class ServiceApiRuntime<TBindings>(IServiceProvider provider, TB
     }
     public async Task StartAsync(CancellationToken token)
     {
+        lock (gate)
+            if (!mapped) throw new InvalidOperationException($"Call MapServicesAsync<{typeof(TBindings).Name}> before starting the host.");
         await PrepareAsync(token).ConfigureAwait(false);
         await lifetime.StartAsync(token).ConfigureAwait(false);
     }

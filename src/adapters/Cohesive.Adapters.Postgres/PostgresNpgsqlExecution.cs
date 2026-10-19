@@ -377,27 +377,26 @@ internal static class PostgresNpgsqlBoundedResult
 
 internal static class PostgresRelationQueryScalarCatalog
 {
-    sealed record ScalarMetadata(ScalarTypeKind SemanticKind, string SchemaName,
+    sealed record ScalarMetadata(PostgresRelationQueryScalarType Type, ScalarTypeKind SemanticKind, string SchemaName,
         PostgresRelationQueryValueEncoding Encoding, NpgsqlDbType NativeType, bool Toast, uint[] TypeIds);
     // One row owns each scalar's semantic, schema, wire and native metadata.
-    static readonly IReadOnlyDictionary<PostgresRelationQueryScalarType, ScalarMetadata> Metadata =
-        new Dictionary<PostgresRelationQueryScalarType, ScalarMetadata>
-        {
-            [PostgresRelationQueryScalarType.Boolean] = new(ScalarTypeKind.Bool, "boolean", PostgresRelationQueryValueEncoding.Boolean, NpgsqlDbType.Boolean, false, [16]),
-            [PostgresRelationQueryScalarType.Int32] = new(ScalarTypeKind.Int32, "integer", PostgresRelationQueryValueEncoding.Int32, NpgsqlDbType.Integer, false, [23]),
-            [PostgresRelationQueryScalarType.Int64] = new(ScalarTypeKind.Int64, "bigint", PostgresRelationQueryValueEncoding.Int64, NpgsqlDbType.Bigint, false, [20]),
-            [PostgresRelationQueryScalarType.Numeric] = new(ScalarTypeKind.Decimal, "numeric", PostgresRelationQueryValueEncoding.Numeric, NpgsqlDbType.Numeric, true, [1700]),
-            [PostgresRelationQueryScalarType.Text] = new(ScalarTypeKind.String, "text", PostgresRelationQueryValueEncoding.Text, NpgsqlDbType.Text, true, [25, 1042, 1043]),
-            [PostgresRelationQueryScalarType.Uuid] = new(ScalarTypeKind.Guid, "uuid", PostgresRelationQueryValueEncoding.Uuid, NpgsqlDbType.Uuid, false, [2950]),
-            [PostgresRelationQueryScalarType.Date] = new(ScalarTypeKind.Date, "date", PostgresRelationQueryValueEncoding.Date, NpgsqlDbType.Date, false, [1082]),
-            [PostgresRelationQueryScalarType.Timestamp] = new(ScalarTypeKind.DateTime, "timestamp without time zone", PostgresRelationQueryValueEncoding.Timestamp, NpgsqlDbType.Timestamp, false, [1114]),
-            [PostgresRelationQueryScalarType.TimestampWithTimeZone] = new(ScalarTypeKind.Instant, "timestamp with time zone", PostgresRelationQueryValueEncoding.TimestampWithTimeZone, NpgsqlDbType.TimestampTz, false, [1184]),
-            [PostgresRelationQueryScalarType.Bytea] = new(ScalarTypeKind.Bytes, "bytea", PostgresRelationQueryValueEncoding.Bytea, NpgsqlDbType.Bytea, true, [17]),
-        };
+    static readonly ScalarMetadata[] Metadata =
+        [
+            new(PostgresRelationQueryScalarType.Boolean, ScalarTypeKind.Bool, "boolean", PostgresRelationQueryValueEncoding.Boolean, NpgsqlDbType.Boolean, false, [16]),
+            new(PostgresRelationQueryScalarType.Int32, ScalarTypeKind.Int32, "integer", PostgresRelationQueryValueEncoding.Int32, NpgsqlDbType.Integer, false, [23]),
+            new(PostgresRelationQueryScalarType.Int64, ScalarTypeKind.Int64, "bigint", PostgresRelationQueryValueEncoding.Int64, NpgsqlDbType.Bigint, false, [20]),
+            new(PostgresRelationQueryScalarType.Numeric, ScalarTypeKind.Decimal, "numeric", PostgresRelationQueryValueEncoding.Numeric, NpgsqlDbType.Numeric, true, [1700]),
+            new(PostgresRelationQueryScalarType.Text, ScalarTypeKind.String, "text", PostgresRelationQueryValueEncoding.Text, NpgsqlDbType.Text, true, [25, 1042, 1043]),
+            new(PostgresRelationQueryScalarType.Uuid, ScalarTypeKind.Guid, "uuid", PostgresRelationQueryValueEncoding.Uuid, NpgsqlDbType.Uuid, false, [2950]),
+            new(PostgresRelationQueryScalarType.Date, ScalarTypeKind.Date, "date", PostgresRelationQueryValueEncoding.Date, NpgsqlDbType.Date, false, [1082]),
+            new(PostgresRelationQueryScalarType.Timestamp, ScalarTypeKind.DateTime, "timestamp without time zone", PostgresRelationQueryValueEncoding.Timestamp, NpgsqlDbType.Timestamp, false, [1114]),
+            new(PostgresRelationQueryScalarType.TimestampWithTimeZone, ScalarTypeKind.Instant, "timestamp with time zone", PostgresRelationQueryValueEncoding.TimestampWithTimeZone, NpgsqlDbType.TimestampTz, false, [1184]),
+            new(PostgresRelationQueryScalarType.Bytea, ScalarTypeKind.Bytes, "bytea", PostgresRelationQueryValueEncoding.Bytea, NpgsqlDbType.Bytea, true, [17]),
+        ];
     static readonly IReadOnlyDictionary<ScalarTypeKind, PostgresRelationQueryScalarType> SemanticTypes =
-        Metadata.ToDictionary(x => x.Value.SemanticKind, x => x.Key);
-    static ScalarMetadata Get(PostgresRelationQueryScalarType type) => Metadata.TryGetValue(type, out var metadata)
-        ? metadata : throw new ArgumentOutOfRangeException(nameof(type));
+        Metadata.ToDictionary(x => x.SemanticKind, x => x.Type);
+    static ScalarMetadata Get(PostgresRelationQueryScalarType type) => (uint)type < Metadata.Length && Metadata[(int)type].Type == type
+        ? Metadata[(int)type] : throw new ArgumentOutOfRangeException(nameof(type));
     internal static string SchemaTypeName(PostgresRelationQueryScalarType type) => Get(type).SchemaName;
     internal static bool MayUseUnchangedToast(PostgresRelationQueryScalarType type) => Get(type).Toast;
 
@@ -435,7 +434,7 @@ internal static class PostgresRelationQueryScalarCatalog
     internal static NpgsqlDbType ToNpgsqlDbType(PostgresRelationQueryScalarType type, bool array) =>
         Get(type).NativeType | (array ? NpgsqlDbType.Array : 0);
     internal static bool AcceptsPostgresType(PostgresRelationQueryScalarType type, uint effectiveDataTypeId) =>
-        Metadata.TryGetValue(type, out var metadata) && metadata.TypeIds.Contains(effectiveDataTypeId);
+        (uint)type < Metadata.Length && Metadata[(int)type].TypeIds.Contains(effectiveDataTypeId);
 
     internal static async ValueTask<object> ReadPgOutputAsync(
         Npgsql.Replication.PgOutput.ReplicationValue value,

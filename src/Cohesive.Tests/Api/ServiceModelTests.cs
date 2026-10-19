@@ -443,6 +443,20 @@ public sealed class ServiceModelTests
     }
 
     [Fact]
+    public async Task Unmapped_registered_API_fails_startup_before_storage_preparation()
+    {
+        var builder = WebApplication.CreateBuilder();
+        var preparations = 0;
+        builder.Services.AddCohesiveServices(new QueryBindings(), (_, _) =>
+        { preparations++; return ValueTask.FromResult<IServicePersistence>(new Persistence()); });
+        await using var app = builder.Build();
+        app.Urls.Add("http://127.0.0.1:0");
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() => app.StartAsync());
+        Assert.Contains("MapServicesAsync<QueryBindings>", failure.Message);
+        Assert.Equal(0, preparations);
+    }
+
+    [Fact]
     public async Task DI_prepares_once_from_shared_resources_before_mapping_and_disposes_only_at_host_end()
     {
         var builder = WebApplication.CreateBuilder();

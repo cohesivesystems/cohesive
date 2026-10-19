@@ -7,7 +7,6 @@ using System.Runtime.CompilerServices;
 [assembly: InternalsVisibleTo("Cohesive.Transitions")]
 [assembly: InternalsVisibleTo("Cohesive.Storage")]
 // Native preparation shares owner-scoped success-only slots with semantic preparation.
-[assembly: InternalsVisibleTo("Cohesive.Adapters.Postgres")]
 
 [assembly: InternalsVisibleTo("Cohesive.Tests")]
 [assembly: InternalsVisibleTo("Cohesive.Relations.Benchmarks")]

@@ -247,3 +247,20 @@ for another intent's reservation. This example does not claim cross-entity trans
 Stock rejection mapping is an exhaustive typed enum switch: adding a new outcome requires updating the
 process definition. Reservation creation and release cannot reject the positive quantity already admitted
 by Reserve; physical failures remain interruptions resolved by the original receipts.
+
+### Upgrading an existing demo database
+
+Fresh databases are generated from the storage model. A database created by the earlier demo can require explicit
+collation/check migration. Stop the demo, back up its database, review
+[`migrations/001-explicit-collations.sql`](migrations/001-explicit-collations.sql), then execute it once against that
+database before starting the new host. It keeps rows and native foreign keys, aligns the declared key collations,
+and validates the new partition/quantity checks; incompatible existing rows abort the transaction. This historical
+migration is tested against seeded legacy tables. It is not run implicitly and is not the fresh-schema authority.
+The migration supports both placements (the mixed placement has no local inventory table); unrelated/custom
+schemas need their own reviewed migration. Marten history format migrations remain separate.
+
+`FulfillmentStorage` and the environment-only `FulfillmentHistoryPolicy` now live with the PostgreSQL worker.
+`Orders.Model` owns only shared mappings/policy and no longer references Marten, so the Cosmos worker does not
+inherit that backend. Native clients remain DI-owned. The embedded native additions run through the model's
+`SchemaPreparation` declaration, including in integration tests. Built-in creation serializes competing host
+bootstraps with a transaction advisory lock; custom migration callbacks still own their coordination.

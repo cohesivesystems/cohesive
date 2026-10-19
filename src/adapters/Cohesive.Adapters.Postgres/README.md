@@ -258,12 +258,13 @@ Receipt schema admission can also be owned by `PostgresPersistenceBindings.Trans
 initialization: PostgresSchemaInitialization.CreateIfMissing)`. Native and composed service preparation
 share `PrepareReceiptsAsync`: create a missing receipt table in an existing schema, then validate it.
 The default is `ValidateOnly`; incompatible tables are never altered. Offline model construction performs no IO.
-Host preparation runs once before route/worker admission; direct rebinding repeats validation. Coordinate
-bootstrap between concurrent hosts externally. Product table migrations remain explicit and can be attached using `SchemaPreparation(async (database, token) => ...)`.
+Host preparation runs once before route/worker admission; explicit asynchronous preparation repeats validation.
+Synchronous `Bind(dataSource, authority)` constructs a binding and performs no schema IO. Built-in product, receipt
+and outbox creation share a transaction-scoped database advisory lock, including concurrent hosts. Product table migrations remain explicit and can be attached using `SchemaPreparation(async (database, token) => ...)`.
 Native and composed async preparation run that callback first, before auxiliary attachments. No callback means
 no product-schema work; there is no inferred validation, generated schema or create-only promise for arbitrary
 SQL. The callback borrows the native source, owns its commands/transactions, and defines migration policy.
-Host preparation retains failures without retry; direct rebinding repeats the callback. `History(configuration)` and `Outbox(options, initialization)`
+Host preparation retains failures without retry; explicit asynchronous preparation repeats the callback. `History(configuration)` and `Outbox(options, initialization)`
 are optional model-owned attachments. History is prepared by its adapter; PostgreSQL remains independent
 of Marten. Outbox initialization follows the same validation-only default and explicit create/validate policy.
 
@@ -310,3 +311,18 @@ Catalog validation submits one Npgsql batch per pass, with error barriers disabl
 one network exchange per table/key/reference. A native `SchemaPreparation` hook deliberately keeps admission
 checks both before and after it: do not mutate an incompatible schema, and do not admit a hook that damages
 the contract. Those are two batches, not duplicate preparation accidentally performed per repository.
+
+### Native initialization boundaries
+
+`SchemaPreparation(assembly, "Exact.Resource.sql")` rejects a missing resource at model definition and executes
+the embedded SQL during preparation. `SchemaPreparation((services, database, token) => ...)` allows a migration
+library to borrow host logging/configuration; direct preparation must then supply `services:`. Custom callbacks
+own transactions and multi-host coordination. Native history client identity/configuration is checked before any
+product or attachment DDL in both single-store and composed preparation. Projected schema validation runs before
+and after a native callback: these are distinct admission checks, each one batched round trip, because the callback
+can change the schema. Without a callback it runs once.
+
+Both service compositions use the same attachment lifecycle. Runtime authority defaults to the declared database
+identity and can be supplied explicitly. Native source contributions are immutable at composition; an offline-only
+composed preparation cannot be registered for DI without its concrete sources. `MapServicesAsync<T>()` is required
+before host start; forgetting it fails startup before resolving storage rather than serving an empty API.

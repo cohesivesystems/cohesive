@@ -20,16 +20,15 @@ public static class PostgresComposedServiceExtensions
     /// <param name="plan">Endpoint requirements, including consistency.</param>
     /// <param name="sources">Exact native contributions declared by the storage model.</param>
     /// <param name="policy">Explicit bounded query policy.</param>
+    /// <param name="authority">Runtime authority; defaults to the canonical database identity.</param>
     /// <returns>One preparation for infrastructure evidence and DI runtime binding.</returns>
     public static PostgresComposedServicePreparation ComposeServices(this PostgresPersistenceBindings bindings,
         ServiceImplementationPlan plan, IEnumerable<IEntityStorageBinding> sources,
-        Func<int, long, PostgresRelationQueryComposedPolicy> policy)
+        Func<int, long, PostgresRelationQueryComposedPolicy> policy, string? authority = null)
     {
         ArgumentNullException.ThrowIfNull(sources);
         var selected = sources.ToImmutableArray();
-        var result = bindings.PrepareComposedService(plan, new(selected.Select(source => source.Source)), policy);
-        result.AttachSources(selected);
-        return result;
+        return PrepareCore(bindings, plan, new(selected.Select(source => source.Source)), policy, selected, authority);
     }
 
     /// <summary>Derives source acquisition requirements and bounded evaluation requirements from actual physical preparation.</summary>
@@ -40,6 +39,13 @@ public static class PostgresComposedServiceExtensions
     public static PostgresComposedServicePreparation PrepareComposedService(this PostgresPersistenceBindings bindings,
         ServiceImplementationPlan plan, EntityRelationQuerySourceCatalog sources,
         Func<int, long, PostgresRelationQueryComposedPolicy> policy)
+    {
+        return PrepareCore(bindings, plan, sources, policy, []);
+    }
+
+    static PostgresComposedServicePreparation PrepareCore(PostgresPersistenceBindings bindings,
+        ServiceImplementationPlan plan, EntityRelationQuerySourceCatalog sources,
+        Func<int, long, PostgresRelationQueryComposedPolicy> policy, ImmutableArray<IEntityStorageBinding> nativeSources, string? authority = null)
     {
         ArgumentNullException.ThrowIfNull(bindings); ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(sources); ArgumentNullException.ThrowIfNull(policy);
@@ -55,7 +61,7 @@ public static class PostgresComposedServiceExtensions
                     DiagnosticSeverity.Error, "Composed policy must preserve the selected result bounds.", "/bindings/queries/bounds")]));
             return (selection, bindings.PrepareComposed(selection.Request, sources, selectedPolicy));
         }).ToImmutableArray();
-        return new(bindings, queries);
+        return new(bindings, queries, nativeSources, authority);
     }
 }
 
@@ -65,28 +71,29 @@ public static class PostgresComposedServiceExtensions
 public sealed class PostgresComposedServicePreparation : IServiceStorageComposition
 {
     readonly PostgresPersistenceBindings bindings;
-    ImmutableArray<IEntityStorageBinding> nativeSources = [];
+    readonly string authority;
+    readonly ImmutableArray<IEntityStorageBinding> nativeSources;
     /// <inheritdoc />
-    public ImmutableArray<object> Bindings => [bindings, .. nativeSources];
-
-    internal void AttachSources(ImmutableArray<IEntityStorageBinding> sources) => nativeSources = sources;
+    public ImmutableArray<object> Bindings
+    {
+        get
+        {
+            if (Sources.Keys.Any(id => !nativeSources.Any(source => source.Source.Source.Id == id)))
+                throw new InvalidOperationException("DI composition requires declared native sources; use ComposeServices or explicit Bind.");
+            return [bindings, .. nativeSources];
+        }
+    }
 
     /// <inheritdoc />
     public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(services);
-        if (Sources.Keys.Any(id => !nativeSources.Any(source => source.Source.Source.Id == id)))
-            throw new InvalidOperationException("DI composition requires declared native sources; use ComposeServices or explicit Bind.");
-        var database = services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value);
-        await bindings.PrepareSchemaAsync(database, cancellationToken).ConfigureAwait(false);
-        var receipts = await bindings.PrepareReceiptsAsync(database, cancellationToken).ConfigureAwait(false);
+        _ = Bindings;
         var sources = new EntityStorageRegistration[nativeSources.Length];
         for (var index = 0; index < sources.Length; index++)
             sources[index] = await nativeSources[index].BindAsync(services, cancellationToken).ConfigureAwait(false);
-        var history = bindings.HistoryConfiguration is { } configuration
-            ? await configuration.PrepareAsync(services, bindings.Database.Value, database, cancellationToken).ConfigureAwait(false) : null;
-        var outbox = await bindings.PrepareOutboxAsync(database, cancellationToken).ConfigureAwait(false);
-        return BindCore(bindings.Bind(database, "di/" + bindings.Database.Value), receipts, sources, history, outbox);
+        var runtime = await PostgresServiceStorageRuntime.PrepareAsync(bindings, services, authority, cancellationToken).ConfigureAwait(false);
+        return BindCore(runtime.Persistence, runtime.Receipts, sources, runtime.History, runtime.Outbox);
     }
 
     readonly Dictionary<object, (ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries;
@@ -100,8 +107,12 @@ public sealed class PostgresComposedServicePreparation : IServiceStorageComposit
     public ImmutableArray<InfrastructureCapabilityId> Requirements => [.. ExecutionEvidence.Select(item => item.Capability)];
 
     internal PostgresComposedServicePreparation(PostgresPersistenceBindings bindings,
-        ImmutableArray<(ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries)
+        ImmutableArray<(ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries,
+        ImmutableArray<IEntityStorageBinding> nativeSources, string? authority)
     {
+        this.authority = authority ?? bindings.Database.Value;
+        ArgumentException.ThrowIfNullOrWhiteSpace(this.authority);
+        this.nativeSources = nativeSources;
         if (queries.IsEmpty) throw new ArgumentException("At least one selected query is required.", nameof(queries));
         this.bindings = bindings;
         this.queries = queries.ToDictionary(item => (object)item.Selection.Request, ReferenceEqualityComparer.Instance);

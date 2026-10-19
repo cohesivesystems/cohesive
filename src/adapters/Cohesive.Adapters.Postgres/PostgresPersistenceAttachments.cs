@@ -4,8 +4,9 @@ namespace Cohesive.Adapters.Postgres;
 
 public sealed partial class PostgresPersistenceBindings
 {
-    Func<NpgsqlDataSource, CancellationToken, Task>? prepareSchema;
+    Func<IServiceProvider?, NpgsqlDataSource, CancellationToken, Task>? prepareSchema;
     bool schemaSelected;
+    bool schemaNeedsServices;
     Action<PostgresEntitySchemaBuilder>? configureSchema;
     PostgresSchemaInitialization schemaInitialization;
     PostgresEntitySchema? productSchema;
@@ -38,7 +39,8 @@ public sealed partial class PostgresPersistenceBindings
     /// <remarks>Declaring the callback performs no IO. Without a callback no additional native work is implied.
     /// This is not a schema generator or a create-only guarantee; native SQL or a migration library remains
     /// authoritative. Host preparation runs once, retains failures and publishes no routes on failure.
-    /// Direct rebinding runs the callback again. Coordinate multi-host migrations externally.</remarks>
+    /// Explicit asynchronous preparation runs the callback again; synchronous Bind performs no IO.
+    /// Coordinate custom multi-host migrations externally; built-in creation uses a transaction advisory lock.</remarks>
     /// <exception cref="ArgumentNullException">Callback is null.</exception>
     /// <exception cref="InvalidOperationException">Already declared or frozen.</exception>
     public PostgresPersistenceBindings SchemaPreparation(Func<NpgsqlDataSource, CancellationToken, Task> prepare)
@@ -47,37 +49,71 @@ public sealed partial class PostgresPersistenceBindings
         return state.Edit(() =>
         {
             if (prepareSchema is not null) throw new InvalidOperationException("Product schema preparation is already declared.");
-            prepareSchema = prepare;
+            prepareSchema = (_, database, token) => prepare(database, token);
             return this;
+        });
+    }
+
+    /// <summary>Registers a native migration callback borrowing host services such as logging or configuration.</summary>
+    /// <param name="prepare">Host-scoped callback. Schema policy and transactions remain explicit.</param>
+    /// <returns>This declaration.</returns>
+    public PostgresPersistenceBindings SchemaPreparation(Func<IServiceProvider, NpgsqlDataSource, CancellationToken, Task> prepare)
+    {
+        ArgumentNullException.ThrowIfNull(prepare);
+        return state.Edit(() =>
+        {
+            if (prepareSchema is not null) throw new InvalidOperationException("Product schema preparation is already declared.");
+            schemaNeedsServices = true;
+            prepareSchema = (services, database, token) => prepare(services!, database, token);
+            return this;
+        });
+    }
+
+    /// <summary>Declares an embedded native SQL migration; verifies the resource exists during definition.</summary>
+    /// <param name="assembly">Assembly owning the SQL resource.</param><param name="resourceName">Exact manifest resource name.</param>
+    /// <returns>This declaration.</returns>
+    /// <exception cref="ArgumentException">Resource is missing.</exception>
+    public PostgresPersistenceBindings SchemaPreparation(System.Reflection.Assembly assembly, string resourceName)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
+        if (assembly.GetManifestResourceInfo(resourceName) is null)
+            throw new ArgumentException($"Embedded schema resource '{resourceName}' does not exist in {assembly.GetName().Name}.", nameof(resourceName));
+        return SchemaPreparation(async (database, token) =>
+        {
+            using var stream = new StreamReader(assembly.GetManifestResourceStream(resourceName)!);
+            await using var command = database.CreateCommand(await stream.ReadToEndAsync(token).ConfigureAwait(false));
+            await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
         });
     }
 
     /// <summary>Creates/validates the projected schema, then runs explicit native preparation and revalidates.</summary>
     /// <param name="database">Borrowed native data source; never disposed by this operation.</param>
     /// <param name="cancellationToken">Cancellation before and during preparation.</param>
+    /// <param name="services">Host services when the selected migration callback requires them.</param>
     /// <returns>Completion after projected and native schema preparation, or no work when neither is declared.</returns>
     /// <remarks>Callback exceptions propagate unchanged. Partial migration effects are governed by the native
     /// callback's transaction policy; no retry or rollback emulation is inferred. A selected projection is
     /// validated again after native additions so they cannot invalidate its contract.</remarks>
     /// <exception cref="ArgumentNullException">Database is null.</exception>
     /// <exception cref="OperationCanceledException">Preparation is canceled.</exception>
-    public async Task PrepareSchemaAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
+    public async Task PrepareSchemaAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default, IServiceProvider? services = null)
     {
         ArgumentNullException.ThrowIfNull(database);
         cancellationToken.ThrowIfCancellationRequested();
         _ = state.Value;
+        if (schemaNeedsServices && services is null) throw new InvalidOperationException("This schema callback requires the host IServiceProvider.");
         if (productSchema is { } schema)
         {
             if (schemaInitialization == PostgresSchemaInitialization.CreateIfMissing)
             {
-                await using var create = database.CreateCommand(schema.CreateSql);
-                await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+                await PostgresSchemaPreparation.CreateAsync(database, schema.CreateSql, cancellationToken).ConfigureAwait(false);
             }
             await schema.ValidateAsync(database, cancellationToken).ConfigureAwait(false);
         }
         if (prepareSchema is { } prepare)
         {
-            await prepare(database, cancellationToken).ConfigureAwait(false);
+            await prepare(services, database, cancellationToken).ConfigureAwait(false);
             if (productSchema is { } projected) await projected.ValidateAsync(database, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -137,12 +173,7 @@ public sealed partial class PostgresPersistenceBindings
     {
         ArgumentNullException.ThrowIfNull(database);
         _ = state.Value;
-        if (OutboxOptions is not { } options) return null;
-        if (OutboxInitialization == PostgresSchemaInitialization.CreateIfMissing)
-        {
-            await using var create = database.CreateCommand(options.SchemaSql);
-            await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-        return await options.BindAsync(database, cancellationToken).ConfigureAwait(false);
+        return await PostgresSchemaPreparation.PrepareAsync(database, OutboxOptions, OutboxInitialization,
+            static options => options.SchemaSql, static (options, source, token) => options.BindAsync(source, token), cancellationToken).ConfigureAwait(false);
     }
 }

@@ -58,12 +58,12 @@ public sealed class PostgresEntitySchemaBuilder
     {
         RequireMutable();
         ArgumentNullException.ThrowIfNull(entity);
-        if (value is not string and not int || comparison is < SqlBinaryOperator.Equal or > SqlBinaryOperator.LessThanOrEqual)
+        if (value is not string and not int || comparison is not (SqlBinaryOperator.Equal or SqlBinaryOperator.NotEqual or SqlBinaryOperator.GreaterThan or SqlBinaryOperator.GreaterThanOrEqual or SqlBinaryOperator.LessThan or SqlBinaryOperator.LessThanOrEqual))
             throw new ArgumentException("Checks require a text or Int32 value and a scalar comparison.");
         ArgumentNullException.ThrowIfNull(field);
         var boxed = Expression.Lambda<Func<T, object?>>(Expression.Convert(field.Body, typeof(object)), field.Parameters);
         if (!FieldPath.Capture(boxed).TryGetDirectFieldName(out var name)) throw new ArgumentException("A direct field is required.", nameof(field));
-        if (value is string text) _ = new SqlConstant(SqlConstantKind.String, text);
+        if (value is string text) SqlUtf8.RequireText(text, nameof(value));
         Checks.Add(new(entity.Definition.StateShape.QualifiedId, name, comparison, value));
         return this;
     }
@@ -98,7 +98,11 @@ public sealed class PostgresEntitySchema
     sealed record Reference(Table Source, string Field, Table Target);
     sealed record Check(Table Table, string Field, string Operator, string Value, bool Text)
     {
-        public string Literal => Text ? "E'" + Value.Replace("\\", "\\\\").Replace("'", "''") + "'::text" : Value;
+        public string Literal => Text ? QuoteLiteral(Value, escape: true) + "::text" : Value;
+        public string DeparsedLiteral => Text ? QuoteLiteral(Value, escape: false) + "::text"
+            : Value.StartsWith('-') ? QuoteLiteral(Value, escape: false) + "::integer" : Value;
+        static string QuoteLiteral(string value, bool escape) => (escape ? "E'" : "'")
+            + (escape ? value.Replace("\\", "\\\\", StringComparison.Ordinal) : value).Replace("'", "''", StringComparison.Ordinal) + "'";
     }
     readonly ImmutableArray<Check> checks;
     readonly ImmutableArray<Table> tables;
@@ -165,13 +169,7 @@ public sealed class PostgresEntitySchema
                 throw new ArgumentException($"Check addresses an unmapped entity field: {check.Field}.");
             if (field.ScalarType != (check.Value is string ? PostgresRelationQueryScalarType.Text : PostgresRelationQueryScalarType.Int32))
                 throw new ArgumentException($"Check value does not match field {check.Field}.");
-            var op = check.Comparison switch
-            {
-                SqlBinaryOperator.Equal => "=", SqlBinaryOperator.NotEqual => "<>",
-                SqlBinaryOperator.GreaterThan => ">", SqlBinaryOperator.GreaterThanOrEqual => ">=",
-                SqlBinaryOperator.LessThan => "<", SqlBinaryOperator.LessThanOrEqual => "<=",
-                _ => throw new ArgumentOutOfRangeException(nameof(check.Comparison))
-            };
+            var op = SqlOperators.Text(check.Comparison);
             return new Check(selected[check.Shape], field.Column.Value, op,
                 Convert.ToString(check.Value, System.Globalization.CultureInfo.InvariantCulture)!, check.Value is string);
         }).Distinct().OrderBy(x => x.Table.Sql, StringComparer.Ordinal).ThenBy(x => x.Field, StringComparer.Ordinal)
@@ -215,6 +213,8 @@ public sealed class PostgresEntitySchema
     {
         ArgumentNullException.ThrowIfNull(database);
         await using var batch = database.CreateBatch();
+        // Normalize deparsing locally to this implicit batch transaction, never the pooled session.
+        batch.BatchCommands.Add(new("SELECT set_config('standard_conforming_strings','on',true)"));
         foreach (var table in tables)
         {
             Add("SELECT to_regclass($1) IS NOT NULL", table.Sql);
@@ -249,12 +249,10 @@ public sealed class PostgresEntitySchema
                 SELECT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.contype='c'
                   AND c.conrelid=to_regclass($1) AND c.convalidated AND NOT c.connoinherit
                   AND pg_get_expr(c.conbin,c.conrelid) = format('(%I %s %s)', $2::text, $3::text,
-                    CASE WHEN $5::boolean THEN chr(39) || replace(
-                      CASE WHEN current_setting('standard_conforming_strings')='on' THEN $4::text
-                        ELSE replace($4::text, chr(92), chr(92)||chr(92)) END, chr(39), chr(39)||chr(39)) || chr(39) || '::text'
-                      WHEN $4::text LIKE '-%' THEN quote_literal($4::text) || '::integer' ELSE $4::text END))
-                """, check.Table.Sql, check.Field, check.Operator, check.Value, check.Text);
+                    $4::text))
+                """, check.Table.Sql, check.Field, check.Operator, check.DeparsedLiteral);
         await using var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
         foreach (var table in tables)
         {
             await reader.ReadAsync(cancellationToken).ConfigureAwait(false);

@@ -45,7 +45,7 @@ public sealed partial class PostgresPersistenceBindings
     /// <returns>Validated storage, or null when receipts are not configured.</returns>
     /// <remarks>Called once by host preparation, never during offline definition. CreateIfMissing creates only
     /// the receipt table in an existing schema; it does not migrate incompatible tables or retry failures.
-    /// Concurrent hosts should coordinate schema bootstrap externally. Rebinding repeats admission checks.</remarks>
+    /// Concurrent identical bootstraps are serialized. Explicit asynchronous preparation repeats admission checks; synchronous Bind performs no I/O.</remarks>
     /// <exception cref="ArgumentNullException">Database is null.</exception>
     /// <exception cref="OperationCanceledException">Preparation is canceled.</exception>
     /// <exception cref="InvalidOperationException">Existing schema is incompatible.</exception>
@@ -54,13 +54,8 @@ public sealed partial class PostgresPersistenceBindings
     {
         ArgumentNullException.ThrowIfNull(database);
         _ = state.Value;
-        if (ReceiptOptions is not { } options) return null;
-        if (ReceiptInitialization == PostgresSchemaInitialization.CreateIfMissing)
-        {
-            await using var create = database.CreateCommand(options.SchemaSql);
-            await create.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
-        }
-        return await options.BindAsync(database, cancellationToken).ConfigureAwait(false);
+        return await PostgresSchemaPreparation.PrepareAsync(database, ReceiptOptions, ReceiptInitialization,
+            static options => options.SchemaSql, static (options, source, token) => options.BindAsync(source, token), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Declares atomic operation receipts for repositories bound from this database.</summary>
