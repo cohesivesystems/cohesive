@@ -31,13 +31,13 @@ public sealed partial class PostgresPersistenceBindings
         });
     }
 
-    /// <summary>Declares native product-schema validation or migration after optional projected-schema admission.</summary>
+    /// <summary>Declares native additions or validation after projected-schema admission; cannot repair projected drift.</summary>
     /// <param name="prepare">Setup callback borrowing the DI-owned data source. It owns its commands and
-    /// transactions, must honor cancellation, and must explicitly implement any migration or validation policy.</param>
+    /// transactions, must honor cancellation, and must explicitly implement its native additions or validation policy.</param>
     /// <returns>This authoring builder.</returns>
     /// <remarks>Declaring the callback performs no IO. Without a callback no additional native work is implied.
-    /// This is not a schema generator or a create-only guarantee; native SQL or a migration library remains
-    /// authoritative. Host preparation runs once, retains failures and publishes no routes on failure.
+    /// Projected drift rejects admission before this callback. Apply drift-repair migrations separately before
+    /// preparation. This callback is for additions such as indexes/defaults, not projected-contract migrations. Host preparation runs once, retains failures and publishes no routes on failure.
     /// Explicit asynchronous preparation runs the callback again; synchronous Bind performs no IO.
     /// Coordinate custom multi-host migrations externally; built-in creation uses a transaction advisory lock.</remarks>
     /// <exception cref="ArgumentNullException">Callback is null.</exception>
@@ -48,8 +48,8 @@ public sealed partial class PostgresPersistenceBindings
         return SchemaPreparation((_, database, token) => prepare(database, token));
     }
 
-    /// <summary>Registers a native migration callback borrowing host services such as logging or configuration.</summary>
-    /// <param name="prepare">Host-scoped callback. Schema policy and transactions remain explicit.</param>
+    /// <summary>Registers a post-admission native callback borrowing host services such as logging or configuration.</summary>
+    /// <param name="prepare">Host-scoped additions/validation callback; projected drift must be migrated before preparation.</param>
     /// <returns>This declaration.</returns>
     public PostgresPersistenceBindings SchemaPreparation(Func<IServiceProvider, NpgsqlDataSource, CancellationToken, Task> prepare)
     {
@@ -66,7 +66,7 @@ public sealed partial class PostgresPersistenceBindings
     /// <param name="assembly">Assembly owning the SQL resource.</param><param name="resourceName">Exact manifest resource name.</param>
     /// <returns>This declaration.</returns>
     /// <remarks>SQL must participate in the supplied transaction (no explicit transaction control or
-    /// nontransactional operations). Use the callback overload for custom migration protocols.</remarks>
+    /// nontransactional operations). Use the callback overload for custom native-addition protocols.</remarks>
     /// <exception cref="ArgumentException">Resource is missing.</exception>
     public PostgresPersistenceBindings SchemaPreparation(System.Reflection.Assembly assembly, string resourceName)
     {
@@ -98,9 +98,9 @@ public sealed partial class PostgresPersistenceBindings
     /// <summary>Creates/validates the projected schema, then runs explicit native preparation and revalidates.</summary>
     /// <param name="database">Borrowed native data source; never disposed by this operation.</param>
     /// <param name="cancellationToken">Cancellation before and during preparation.</param>
-    /// <param name="services">Host services when the selected migration callback requires them.</param>
+    /// <param name="services">Host services when the selected native callback requires them.</param>
     /// <returns>Completion after projected and native schema preparation, or no work when neither is declared.</returns>
-    /// <remarks>Callback exceptions propagate unchanged. Partial migration effects are governed by the native
+    /// <remarks>Callback exceptions propagate unchanged. Partial native effects are governed by the native
     /// callback's transaction policy; no retry or rollback emulation is inferred. A selected projection is
     /// validated again after native additions so they cannot invalidate its contract.</remarks>
     /// <exception cref="ArgumentNullException">Database or services is null.</exception>
@@ -108,26 +108,26 @@ public sealed partial class PostgresPersistenceBindings
     public async Task PrepareSchemaAsync(IServiceProvider services, NpgsqlDataSource database, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(services);
-        await AdmitAsync(database, cancellationToken).ConfigureAwait(false);
-        await PrepareAdmittedSchemaAsync(services, database, cancellationToken).ConfigureAwait(false);
+        var missing = await AdmitAsync(database, cancellationToken).ConfigureAwait(false);
+        await PrepareAdmittedSchemaAsync(services, database, missing, cancellationToken).ConfigureAwait(false);
     }
 
     // Admission belongs to the bindings, and is repeated per explicit preparation, never cached across startups.
-    async Task AdmitAsync(NpgsqlDataSource database, CancellationToken cancellationToken)
+    async Task<HashSet<string>?> AdmitAsync(NpgsqlDataSource database, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(database);
         cancellationToken.ThrowIfCancellationRequested();
         _ = state.Value;
-        if (productSchema is { } schema)
-            await schema.ValidateAsync(database, schemaInitialization, cancellationToken).ConfigureAwait(false);
+        return productSchema is { } schema
+            ? await schema.ValidateAsync(database, schemaInitialization, cancellationToken).ConfigureAwait(false) : null;
     }
 
-    async Task PrepareAdmittedSchemaAsync(IServiceProvider services, NpgsqlDataSource database, CancellationToken cancellationToken)
+    async Task PrepareAdmittedSchemaAsync(IServiceProvider services, NpgsqlDataSource database, HashSet<string>? missing, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(services);
         if (productSchema is { } schema)
         {
-            if (schemaInitialization == PostgresSchemaInitialization.CreateIfMissing)
+            if (missing is { Count: > 0 })
             {
                 await PostgresSchemaPreparation.CreateAsync(database, schema.CreateSql, cancellationToken).ConfigureAwait(false);
                 await schema.ValidateAsync(database, cancellationToken).ConfigureAwait(false);
@@ -160,10 +160,10 @@ public sealed partial class PostgresPersistenceBindings
     {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentException.ThrowIfNullOrWhiteSpace(authority);
-        await AdmitAsync(database, cancellationToken).ConfigureAwait(false);
+        var missing = await AdmitAsync(database, cancellationToken).ConfigureAwait(false);
         var history = HistoryConfiguration is { } configuration
             ? await configuration.PrepareAsync(services, Database.Value, database, cancellationToken).ConfigureAwait(false) : null;
-        await PrepareAdmittedSchemaAsync(services, database, cancellationToken).ConfigureAwait(false);
+        await PrepareAdmittedSchemaAsync(services, database, missing, cancellationToken).ConfigureAwait(false);
         var receipts = await PrepareReceiptsAsync(database, cancellationToken).ConfigureAwait(false);
         var outbox = await PrepareOutboxAsync(database, cancellationToken).ConfigureAwait(false);
         return new(Bind(database, authority), receipts, history, outbox);

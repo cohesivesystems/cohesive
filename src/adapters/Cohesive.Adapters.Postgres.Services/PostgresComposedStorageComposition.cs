@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using System.Collections.Immutable;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Storage;
@@ -38,7 +40,7 @@ public sealed class PostgresComposedStorageComposition : IServiceStorageComposit
         var registrations = new EntityStorageRegistration[sources.Length];
         for (var index = 0; index < registrations.Length; index++)
             registrations[index] = await sources[index].BindAsync(services, cancellationToken).ConfigureAwait(false);
-        var runtime = await PostgresServiceStorageRuntime.PrepareAsync(postgres, services, Authority, cancellationToken).ConfigureAwait(false);
+        var runtime = await postgres.PrepareAsync(services, services.GetRequiredKeyedService<NpgsqlDataSource>(postgres.Database.Value), Authority, cancellationToken).ConfigureAwait(false);
         return Preparation.BindCore(runtime.Persistence, runtime.Receipts, registrations, runtime.History, runtime.Outbox);
     }
 }

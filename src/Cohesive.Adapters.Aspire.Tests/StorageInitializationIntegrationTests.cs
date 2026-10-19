@@ -302,6 +302,26 @@ public sealed partial class OrderStorageIntegrationTests
                 Assert.Equal(0L, await count.ExecuteScalarAsync());
             }
             await create.PrepareSchemaAsync(database);
+            // Partial bootstrap must retain valid existing rows while restoring a missing FK-owning table.
+            await using (var partial = database.CreateCommand($"""
+                INSERT INTO {schema}.cohesive_inventory (sku,partition_key,available,observation_version)
+                VALUES ('preserved','local',7,1);
+                DROP TABLE {schema}.cohesive_reservations;
+                """)) await partial.ExecuteNonQueryAsync();
+            recording = true;
+            await create.PrepareSchemaAsync(database);
+            recording = false;
+            Assert.Equal(2, batches); // Existing-table admission, then complete post-creation validation.
+            await using (var retained = database.CreateCommand($"SELECT available FROM {schema}.cohesive_inventory WHERE sku='preserved'"))
+                Assert.Equal(7, await retained.ExecuteScalarAsync());
+            await validate.ProductSchema!.ValidateAsync(database);
+            batches = commands = 0;
+            recording = true;
+            await create.PrepareSchemaAsync(database);
+            recording = false;
+            Assert.Equal(1, batches);
+            Assert.Equal(0, commands); // No lock/DDL or redundant post-create catalog pass on unchanged startup.
+            batches = commands = 0;
             recording = true;
             await validate.PrepareSchemaAsync(database);
             recording = false;

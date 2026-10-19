@@ -263,4 +263,4 @@ schemas need their own reviewed migration. Marten history format migrations rema
 `Orders.Model` owns only shared mappings/policy and no longer references Marten, so the Cosmos worker does not
 inherit that backend. Native clients remain DI-owned. The embedded native additions run through the model's
 `SchemaPreparation` declaration in one transaction under the schema advisory lock, including in integration tests. Built-in creation serializes competing host
-bootstraps with a transaction advisory lock; custom migration callbacks still own their coordination.
+bootstraps with a transaction advisory lock; custom native-addition callbacks still own their coordination. These callbacks cannot repair projected-schema drift: run reviewed migrations before host preparation.

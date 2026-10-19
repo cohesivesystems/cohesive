@@ -34,7 +34,7 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
     public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(services);
-        var prepared = await PostgresServiceStorageRuntime.PrepareAsync(bindings, services, Authority, cancellationToken).ConfigureAwait(false);
-        return prepared.Persistence.ForServices(prepared.Receipts, prepared.History, prepared.Outbox);
+        var prepared = await bindings.PrepareAsync(services, services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value), Authority, cancellationToken).ConfigureAwait(false);
+        return prepared.ForServices();
     }
 }

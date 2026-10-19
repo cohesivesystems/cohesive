@@ -9,6 +9,16 @@ namespace Cohesive.Adapters.Postgres.Services;
 /// <summary>Attaches native PostgreSQL mappings to application service resolution.</summary>
 public static class PostgresServicePersistenceExtensions
 {
+    /// <summary>Exposes the prepared registration and its model-declared attachments to services.</summary>
+    /// <param name="prepared">Prepared persistence borrowing caller-owned native clients.</param>
+    /// <returns>A resolver sharing repositories and queries without opening a connection.</returns>
+    /// <exception cref="ArgumentNullException">Prepared persistence is null.</exception>
+    public static IServicePersistence ForServices(this PostgresPreparedPersistence prepared)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        return prepared.Persistence.ForServices(prepared.Receipts, prepared.History, prepared.Outbox);
+    }
+
     /// <summary>Creates one host-owned repository scope over existing native mappings.</summary>
     /// <param name="persistence">Caller-owned native persistence.</param>
     /// <param name="receipts">Optional validated receipt storage from the same data source.</param>
