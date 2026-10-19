@@ -29,8 +29,7 @@ public sealed partial class OrderStorageIntegrationTests
             {
                 options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
                 options.Connection(database); options.DatabaseSchemaName = prefix;
-                options.Events.StreamIdentity = StreamIdentity.AsString;
-                options.Events.AddEventType<EntityStateEvent>();
+                options.UseCohesiveEntityHistory();
             });
             await store.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
             var history = await MartenEntityHistoryStorage.BindAsync(database, store, authority, checkpointInterval: 1);

@@ -248,7 +248,8 @@ public sealed partial class PostgresEntityRepository
         while (await reader.ReadAsync(context.CancellationToken).ConfigureAwait(false))
         {
             var commit = DecodeOutbox(reader, storage.Options, out var size);
-            if ((total += size) > storage.Options.MaximumCommitBytes) throw new InvalidOperationException("Outbox read exceeds aggregate byte bound.");
+            if (total + size > storage.Options.MaximumCommitBytes) break;
+            total += size;
             result.Add(new(reader.GetInt64(3), commit));
         }
         return result.ToImmutable();

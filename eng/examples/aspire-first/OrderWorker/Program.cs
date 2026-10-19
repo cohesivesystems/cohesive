@@ -40,8 +40,7 @@ using var eventStore = DocumentStore.For(options =>
     options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
                 options.Connection(database);
     options.DatabaseSchemaName = "cohesive_events";
-    options.Events.StreamIdentity = StreamIdentity.AsString;
-    options.Events.AddEventType<EntityStateEvent>();
+    options.UseCohesiveEntityHistory();
 });
 await eventStore.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
 var historyStorage = await MartenEntityHistoryStorage.BindAsync(database, eventStore, authority, replay);
