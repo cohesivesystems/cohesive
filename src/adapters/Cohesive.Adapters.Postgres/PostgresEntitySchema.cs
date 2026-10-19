@@ -209,7 +209,10 @@ public sealed class PostgresEntitySchema
     /// <returns>Completion after all declared tables, references and checks validate in one native batch.</returns>
     /// <exception cref="PostgresSchemaValidationException">A table, column, key, foreign key or declared check requires migration.</exception>
     /// <exception cref="NpgsqlException">Metadata access fails.</exception>
-    public async Task ValidateAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
+    public Task ValidateAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default) =>
+        ValidateAsync(database, PostgresSchemaInitialization.ValidateOnly, cancellationToken);
+
+    internal async Task ValidateAsync(NpgsqlDataSource database, PostgresSchemaInitialization initialization, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(database);
         await using var batch = database.CreateBatch();
@@ -253,11 +256,21 @@ public sealed class PostgresEntitySchema
                 """, check.Table.Sql, check.Field, check.Operator, check.DeparsedLiteral);
         await using var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+        var missing = new HashSet<string>(StringComparer.Ordinal);
         foreach (var table in tables)
         {
             await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
             if (!reader.GetBoolean(0))
-                throw new PostgresSchemaValidationException("postgres.schema.tableMissing", table.Sql, $"Product table {table.Sql} is missing; create it or apply a reviewed migration.");
+            {
+                if (initialization == PostgresSchemaInitialization.ValidateOnly)
+                    throw new PostgresSchemaValidationException("postgres.schema.tableMissing", table.Sql, $"Product table {table.Sql} is missing; create it or apply a reviewed migration.");
+                missing.Add(table.Sql);
+                // Consume this absent table's column and key results, then continue checking existing tables.
+                await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+                await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+                await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+                continue;
+            }
             await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
             var found = new Dictionary<string, (string Type, bool Required, string? Collation, string? Schema)>();
             while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
@@ -277,14 +290,14 @@ public sealed class PostgresEntitySchema
         foreach (var reference in references)
         {
             await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (!reader.GetBoolean(0))
+            if (!reader.GetBoolean(0) && !missing.Contains(reference.Source.Sql))
                 throw new PostgresSchemaValidationException("postgres.schema.referenceMismatch", reference.Source.Sql, $"Product schema {reference.Source.Sql} reference {reference.Field} requires a validated partition-scoped foreign key.", reference.Field);
             await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
         }
         foreach (var check in checks)
         {
             await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (!reader.GetBoolean(0))
+            if (!reader.GetBoolean(0) && !missing.Contains(check.Table.Sql))
                 throw new PostgresSchemaValidationException("postgres.schema.checkMismatch", check.Table.Sql,
                     $"Product schema {check.Table.Sql} check on {check.Field} requires migration.", check.Field);
             await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);

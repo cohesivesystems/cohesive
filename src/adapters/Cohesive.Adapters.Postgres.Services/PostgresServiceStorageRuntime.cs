@@ -1,26 +1,11 @@
-using Cohesive.Api.Execution.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
 namespace Cohesive.Adapters.Postgres.Services;
 
-internal sealed record PostgresServiceStorageRuntime(PostgresPersistenceRegistration Persistence,
-    PostgresTransitionReceiptStorage? Receipts, PostgresEntityHistoryStorage? History, PostgresEntityOutboxStorage? Outbox)
+internal static class PostgresServiceStorageRuntime
 {
-    internal IServicePersistence Services => Persistence.ForServices(Receipts, History, Outbox);
-    internal static async Task<PostgresServiceStorageRuntime> PrepareAsync(PostgresPersistenceBindings bindings,
-        IServiceProvider services, string authority, CancellationToken token)
-    {
-        var database = services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value);
-        // Admission-only product checks precede every schema writer, including native history.
-        // CreateIfMissing is an explicit bootstrap policy and cannot require tables to exist here.
-        if (bindings.SchemaInitialization == PostgresSchemaInitialization.ValidateOnly && bindings.ProductSchema is { } schema)
-            await schema.ValidateAsync(database, token).ConfigureAwait(false);
-        var history = bindings.HistoryConfiguration is { } configuration
-            ? await configuration.PrepareAsync(services, bindings.Database.Value, database, token).ConfigureAwait(false) : null;
-        await bindings.PrepareSchemaAsync(services, database, token).ConfigureAwait(false);
-        var receipts = await bindings.PrepareReceiptsAsync(database, token).ConfigureAwait(false);
-        var outbox = await bindings.PrepareOutboxAsync(database, token).ConfigureAwait(false);
-        return new(bindings.Bind(database, authority), receipts, history, outbox);
-    }
+    internal static Task<PostgresPreparedPersistence> PrepareAsync(PostgresPersistenceBindings bindings,
+        IServiceProvider services, string authority, CancellationToken token) =>
+        bindings.PrepareAsync(services, services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value), authority, token);
 }

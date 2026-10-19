@@ -261,7 +261,7 @@ The default is `ValidateOnly`; incompatible tables are never altered. Offline mo
 Host preparation runs once before route/worker admission; explicit asynchronous preparation repeats validation.
 Synchronous `Bind(dataSource, authority)` constructs a binding and performs no schema IO. Built-in product, receipt
 and outbox creation share a transaction-scoped database advisory lock, including concurrent hosts. Product table migrations remain explicit and can be attached using `SchemaPreparation(async (database, token) => ...)`.
-Native and composed async preparation run that callback first, before auxiliary attachments. No callback means
+Native and composed async preparation run that callback after product admission and history preparation, before receipts/outbox. No callback means
 no product-schema work; there is no inferred validation, generated schema or create-only promise for arbitrary
 SQL. The callback borrows the native source, owns its commands/transactions, and defines migration policy.
 Host preparation retains failures without retry; explicit asynchronous preparation repeats the callback. `History(configuration)` and `Outbox(options, initialization)`
@@ -317,13 +317,13 @@ the contract. Those are two batches, not duplicate preparation accidentally perf
 `SchemaPreparation(assembly, "Exact.Resource.sql")` rejects a missing resource at model definition and executes
 the embedded SQL atomically under the same advisory lock as built-in creation during preparation. `SchemaPreparation((services, database, token) => ...)` allows a migration
 library to borrow host logging/configuration; direct preparation can supply `PrepareSchemaAsync(services, database, ct)`. The database-only overload supplies an empty provider. Custom callbacks
-own transactions and multi-host coordination; the embedded-SQL wrapper supplies both. For `Schema(ValidateOnly)`, product admission runs before any schema writer. History preparation then checks
+own transactions and multi-host coordination; the embedded-SQL wrapper supplies both. Product admission runs before any schema writer, including under `CreateIfMissing` for existing tables. History preparation then checks
 native identity/configuration before initializing/validating its schema.
 Product preparation and receipt/outbox admission follow in both single-store and composed preparation.
 Explicit `CreateIfMissing` bootstrap allows absent product tables and retains its create/validate lifecycle.
 A later migration or bootstrap failure can leave earlier prepared objects; no cross-phase rollback is implied. Projected schema validation runs before
 and after a native callback: these are distinct admission checks, each one batched round trip, because the callback
-can change the schema. Without a callback it runs once.
+can change the schema. In validation-only mode without a callback it runs once; creation also requires post-creation validation.
 
 Both service compositions use the same attachment lifecycle. Runtime authority defaults to `di/` followed by the declared database
 identity and can be supplied explicitly. `PrepareComposedService` returns offline `PostgresComposedServicePreparation` for evidence and explicit binding.
@@ -335,3 +335,18 @@ Internal preparation caching reuses Core's WeakPreparationCache/PreparationSlot 
 assembly. The mechanism stays internal and is compiled once, without adapter-specific namespaces or compiler
 symbols in Core. Schema unit tests check ordinal scalar coverage through the guarded slot lookup; the hot
 catalog has no explicit static constructor. No benchmarked speedup is claimed for the indexed representation.
+
+### Ordered storage preparation
+
+`bindings.PrepareAsync(services, database, authority)` is the shared native/composed host and direct-caller
+entry point for product schema, history, receipts and outbox. The bindings own admission before preparation:
+existing product tables must satisfy the contract before any history DDL or migration callback runs.
+`CreateIfMissing` tolerates absent tables, but still checks every existing table and its constraints first;
+it cannot repair an incompatible table. Missing source tables have their constraints checked after creation.
+An existing source missing a required foreign key still requires migration, even if its target is absent.
+
+Validation-only preparation uses one product catalog batch. Creating missing tables adds post-creation
+validation; a custom schema callback adds post-callback validation. `PrepareSchemaAsync` uses the same
+admission/preparation stages for schema-only callers. Neither caches admission across explicit invocations.
+This is ordered admission, not a cross-attachment DDL transaction: later failures can leave completed objects,
+and callers must coordinate external migrations. Native clients remain caller/DI-owned.

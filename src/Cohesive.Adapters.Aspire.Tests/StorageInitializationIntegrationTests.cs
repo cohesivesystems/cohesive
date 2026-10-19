@@ -11,9 +11,13 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed partial class OrderStorageIntegrationTests
 {
     [PostgresTheory]
-    [InlineData(false, "postgres.schema.tableMissing")]
-    [InlineData(true, "postgres.schema.columnMismatch")]
-    public async Task Validate_only_product_admission_prevents_history_DDL(bool existing, string code)
+    [InlineData(PostgresSchemaInitialization.ValidateOnly, false, false, false, "postgres.schema.tableMissing")]
+    [InlineData(PostgresSchemaInitialization.ValidateOnly, true, false, false, "postgres.schema.columnMismatch")]
+    [InlineData(PostgresSchemaInitialization.CreateIfMissing, true, false, false, "postgres.schema.columnMismatch")]
+    [InlineData(PostgresSchemaInitialization.CreateIfMissing, true, true, false, "postgres.schema.columnMismatch")]
+    [InlineData(PostgresSchemaInitialization.CreateIfMissing, true, true, true, "postgres.schema.columnMismatch")]
+    public async Task Product_admission_prevents_history_DDL(PostgresSchemaInitialization initialization,
+        bool existing, bool missingOrder, bool direct, string code)
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
         var productSchema = "product_admission_" + Guid.NewGuid().ToString("N");
@@ -29,7 +33,7 @@ public sealed partial class OrderStorageIntegrationTests
             .Entity(Model.Domain.Orders, Relocate(Model.Domain.Orders))
             .Entity(Model.Domain.Inventory, Relocate(Model.Domain.Inventory))
             .Entity(Model.Domain.Reservations, Relocate(Model.Domain.Reservations))
-            .Schema()
+            .Schema(initialization)
             .SchemaPreparation((_, _) => { callbacks++; return Task.CompletedTask; })
             .History(new MartenEntityHistoryConfiguration(initialization: PostgresSchemaInitialization.CreateIfMissing)));
         using var store = DocumentStore.For(options =>
@@ -50,8 +54,17 @@ public sealed partial class OrderStorageIntegrationTests
                     $"; ALTER TABLE {productSchema}.cohesive_inventory ALTER COLUMN available TYPE bigint");
                 await create.ExecuteNonQueryAsync();
             }
+            if (missingOrder)
+            {
+                await using var remove = database.CreateCommand($"DROP TABLE {productSchema}.cohesive_orders");
+                await remove.ExecuteNonQueryAsync();
+            }
             var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(bindings, Model.Endpoints.Plan);
-            var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => composition.BindAsync(provider).AsTask());
+            var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(async () =>
+            {
+                if (direct) await bindings.PrepareAsync(provider, database, "test");
+                else await composition.BindAsync(provider);
+            });
             Assert.Equal(code, failure.Code);
             Assert.Equal(0, callbacks);
             await using var retained = database.CreateCommand("SELECT count(*) FROM pg_namespace WHERE nspname=$1");
@@ -294,6 +307,31 @@ public sealed partial class OrderStorageIntegrationTests
             recording = false;
             Assert.Equal(1, batches);
             Assert.Equal(0, commands);
+            await using var provider = new ServiceCollection().AddKeyedSingleton("isolated", database).BuildServiceProvider();
+            batches = commands = 0;
+            recording = true;
+            await validate.PrepareAsync(provider, database, "test");
+            recording = false;
+            Assert.Equal(1, batches);
+            Assert.Equal(0, commands);
+            var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(validate, Model.Endpoints.Plan);
+            batches = commands = 0;
+            recording = true;
+            await composition.BindAsync(provider);
+            recording = false;
+            Assert.Equal(1, batches);
+            Assert.Equal(0, commands);
+            var callbacks = 0;
+            var withCallback = PostgresPersistenceBindings.Define(new("isolated"), b => b
+                .Entity(Model.Domain.Inventory, Relocate(Model.Domain.Inventory))
+                .Schema().SchemaPreparation((_, _) => { callbacks++; return Task.CompletedTask; }));
+            batches = commands = 0;
+            recording = true;
+            await withCallback.PrepareAsync(provider, database, "test");
+            recording = false;
+            Assert.Equal(2, batches); // One admission, one check after the potentially mutating callback.
+            Assert.Equal(0, commands);
+            Assert.Equal(1, callbacks);
             await using (var change = database.CreateCommand($"ALTER TABLE {schema}.cohesive_inventory ALTER COLUMN available DROP NOT NULL"))
                 await change.ExecuteNonQueryAsync();
             var drift = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => create.PrepareSchemaAsync(database));

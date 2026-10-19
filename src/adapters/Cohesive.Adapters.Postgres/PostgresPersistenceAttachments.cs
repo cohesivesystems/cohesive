@@ -10,9 +10,6 @@ public sealed partial class PostgresPersistenceBindings
     PostgresSchemaInitialization schemaInitialization;
     PostgresEntitySchema? productSchema;
 
-    /// <summary>Whether product admission may create missing objects; validation-only by default.</summary>
-    public PostgresSchemaInitialization SchemaInitialization => schemaInitialization;
-
     /// <summary>Projected schema, or null when native schema ownership was selected instead.</summary>
     public PostgresEntitySchema? ProductSchema { get { _ = state.Value; return productSchema; } }
 
@@ -110,23 +107,66 @@ public sealed partial class PostgresPersistenceBindings
     /// <exception cref="OperationCanceledException">Preparation is canceled.</exception>
     public async Task PrepareSchemaAsync(IServiceProvider services, NpgsqlDataSource database, CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(services);
+        await AdmitAsync(database, cancellationToken).ConfigureAwait(false);
+        await PrepareAdmittedSchemaAsync(services, database, cancellationToken).ConfigureAwait(false);
+    }
+
+    // Admission belongs to the bindings, and is repeated per explicit preparation, never cached across startups.
+    async Task AdmitAsync(NpgsqlDataSource database, CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(database);
         cancellationToken.ThrowIfCancellationRequested();
         _ = state.Value;
+        if (productSchema is { } schema)
+            await schema.ValidateAsync(database, schemaInitialization, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task PrepareAdmittedSchemaAsync(IServiceProvider services, NpgsqlDataSource database, CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(services);
         if (productSchema is { } schema)
         {
             if (schemaInitialization == PostgresSchemaInitialization.CreateIfMissing)
             {
                 await PostgresSchemaPreparation.CreateAsync(database, schema.CreateSql, cancellationToken).ConfigureAwait(false);
+                await schema.ValidateAsync(database, cancellationToken).ConfigureAwait(false);
             }
-            await schema.ValidateAsync(database, cancellationToken).ConfigureAwait(false);
         }
         if (prepareSchema is { } prepare)
         {
             await prepare(services, database, cancellationToken).ConfigureAwait(false);
             if (productSchema is { } projected) await projected.ValidateAsync(database, cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>Admits existing product tables before preparing history, schema, receipts and outbox.</summary>
+    /// <param name="services">Host services supplying adapter-owned native history clients.</param>
+    /// <param name="database">Borrowed native data source; ownership remains with the caller.</param>
+    /// <param name="authority">Authority for the resulting repository registration.</param>
+    /// <param name="cancellationToken">Cancellation of admission and preparation.</param>
+    /// <returns>Prepared registration and declared attachments, without ownership of native clients.</returns>
+    /// <remarks>Admission and preparation are scoped to this invocation. ValidateOnly uses one product catalog
+    /// batch; creation and custom callbacks require post-validation. Preparation is not a transaction across
+    /// attachments: failures after admission can retain completed DDL. No retries are implied. Concurrent
+    /// external schema migrations must be coordinated by the caller.</remarks>
+    /// <exception cref="ArgumentNullException">Services or database is null.</exception>
+    /// <exception cref="ArgumentException">Authority is empty or a native history client does not match this source.</exception>
+    /// <exception cref="PostgresSchemaValidationException">An existing product contract requires migration.</exception>
+    /// <exception cref="NpgsqlException">Database admission or initialization fails.</exception>
+    /// <exception cref="OperationCanceledException">Preparation is canceled.</exception>
+    public async Task<PostgresPreparedPersistence> PrepareAsync(IServiceProvider services, NpgsqlDataSource database,
+        string authority, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentException.ThrowIfNullOrWhiteSpace(authority);
+        await AdmitAsync(database, cancellationToken).ConfigureAwait(false);
+        var history = HistoryConfiguration is { } configuration
+            ? await configuration.PrepareAsync(services, Database.Value, database, cancellationToken).ConfigureAwait(false) : null;
+        await PrepareAdmittedSchemaAsync(services, database, cancellationToken).ConfigureAwait(false);
+        var receipts = await PrepareReceiptsAsync(database, cancellationToken).ConfigureAwait(false);
+        var outbox = await PrepareOutboxAsync(database, cancellationToken).ConfigureAwait(false);
+        return new(Bind(database, authority), receipts, history, outbox);
     }
 
     /// <summary>Optional adapter-owned history declaration; contains no native clients.</summary>
