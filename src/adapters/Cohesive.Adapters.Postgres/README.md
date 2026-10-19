@@ -356,3 +356,14 @@ callback runs. Use it for native additions (indexes/defaults) or extra validatio
 exist. Run a reviewed drift-repair migration separately **before** host/storage preparation, as in the
 legacy migration example. The callback is not a migration-before-admission hook. Its transaction policy
 still governs its additions, and post-validation prevents them from invalidating the projected contract.
+
+Receipt and outbox preparation also admit existing objects before creation. With `CreateIfMissing`, a fully
+valid attachment returns its validated binding without a creation lock or DDL. Missing tables trigger locked
+creation and a complete validation pass; incompatible existing tables fail before creation. A valid commits
+table with absent emissions is supported, but an existing emissions table without its required commit foreign
+key needs migration. Missing attachment tables in ValidateOnly report `postgres.schema.tableMissing`.
+These attachments still use their native catalog validators (several reads), not the product validator's
+single batch; the fast path eliminates mutation and duplicate validation, not all metadata reads.
+
+The Services adapter supplies `bindings.PrepareAsync(services, authority)` to resolve the native data source
+once using the declared database identity. Explicit native-source preparation remains available without DI.

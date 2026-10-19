@@ -73,7 +73,8 @@ public sealed partial class OrderStorageIntegrationTests
         var registrations = new ServiceCollection();
         registrations.AddKeyedSingleton(FulfillmentStoragePolicy.OrdersDatabaseName, database);
         await using var provider = registrations.BuildServiceProvider();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => composition.BindAsync(provider).AsTask());
+        var missing = await Assert.ThrowsAsync<Cohesive.Adapters.Postgres.PostgresSchemaValidationException>(() => composition.BindAsync(provider).AsTask());
+        Assert.Equal("postgres.schema.tableMissing", missing.Code);
         await using (var exists = database.CreateCommand("SELECT to_regclass($1) IS NULL"))
         {
             exists.Parameters.AddWithValue("public." + table);

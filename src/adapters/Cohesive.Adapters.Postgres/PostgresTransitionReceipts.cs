@@ -67,8 +67,14 @@ public sealed class PostgresTransitionReceiptOptions
     /// <exception cref="InvalidOperationException">Schema needs an explicit migration.</exception>
     /// <exception cref="NpgsqlException">The metadata query fails.</exception>
     public async Task<PostgresTransitionReceiptStorage> BindAsync(NpgsqlDataSource dataSource, CancellationToken cancellationToken = default)
+        => (await AdmitAsync(dataSource, PostgresSchemaInitialization.ValidateOnly, cancellationToken).ConfigureAwait(false))!;
+
+    internal async Task<PostgresTransitionReceiptStorage?> AdmitAsync(NpgsqlDataSource dataSource,
+        PostgresSchemaInitialization policy, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
+        if (!await PostgresSchemaPreparation.TableExistsAsync(dataSource, Table, policy, cancellationToken).ConfigureAwait(false))
+            return null;
         await using var columns = dataSource.CreateCommand("""
             SELECT attname, format_type(atttypid, atttypmod), attnotnull
             FROM pg_attribute WHERE attrelid=to_regclass($1) AND attnum>0 AND NOT attisdropped

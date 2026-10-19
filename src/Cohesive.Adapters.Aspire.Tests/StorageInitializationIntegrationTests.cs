@@ -10,6 +10,96 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed partial class OrderStorageIntegrationTests
 {
+    [PostgresFact]
+    public async Task Outbox_partial_bootstrap_cannot_repair_an_existing_foreign_key()
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var schema = "outbox_reference_" + Guid.NewGuid().ToString("N");
+        var bindings = PostgresPersistenceBindings.Define(new("attachments"), b =>
+            b.Outbox(new(schema, "outbox"), PostgresSchemaInitialization.CreateIfMissing));
+        try
+        {
+            await using (var create = database.CreateCommand($"CREATE SCHEMA {schema}")) await create.ExecuteNonQueryAsync();
+            await bindings.PrepareOutboxAsync(database);
+            await using (var drop = database.CreateCommand($"DROP TABLE {schema}.outbox_commits CASCADE")) await drop.ExecuteNonQueryAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => bindings.PrepareOutboxAsync(database));
+            await using var missing = database.CreateCommand($"SELECT to_regclass('{schema}.outbox_commits') IS NULL");
+            Assert.Equal(true, await missing.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await using var cleanup = database.CreateCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Attachment_admission_skips_unchanged_DDL_and_rejects_existing_drift(bool receipts)
+    {
+        var writes = 0;
+        var recording = false;
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Npgsql",
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) => System.Diagnostics.ActivitySamplingResult.AllData
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+        var builder = new NpgsqlDataSourceBuilder(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        builder.ConfigureTracing(tracing => tracing.ConfigureCommandEnrichmentCallback((_, command) =>
+        {
+            if (recording && (command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.Ordinal)
+                || command.CommandText.Contains("CREATE TABLE", StringComparison.OrdinalIgnoreCase)))
+                Interlocked.Increment(ref writes);
+        }));
+        await using var database = builder.Build();
+        var schema = "attachment_" + Guid.NewGuid().ToString("N");
+        var bindings = PostgresPersistenceBindings.Define(new("attachments"), b =>
+        {
+            if (receipts) b.TransitionReceipts(new(schema, "receipts", "local"), PostgresSchemaInitialization.CreateIfMissing);
+            else b.Outbox(new(schema, "outbox"), PostgresSchemaInitialization.CreateIfMissing);
+        });
+        async Task Prepare()
+        {
+            if (receipts) Assert.NotNull(await bindings.PrepareReceiptsAsync(database));
+            else Assert.NotNull(await bindings.PrepareOutboxAsync(database));
+        }
+        try
+        {
+            await using (var create = database.CreateCommand($"CREATE SCHEMA {schema}")) await create.ExecuteNonQueryAsync();
+            await Prepare();
+            recording = true;
+            await Prepare();
+            recording = false;
+            Assert.Equal(0, writes);
+            if (!receipts)
+            {
+                await using (var remove = database.CreateCommand($"DROP TABLE {schema}.outbox_emissions")) await remove.ExecuteNonQueryAsync();
+                await Prepare(); // Valid commit table plus missing emissions table is a supported partial bootstrap.
+                await using (var remove = database.CreateCommand($"DROP TABLE {schema}.outbox_emissions")) await remove.ExecuteNonQueryAsync();
+            }
+            var table = receipts ? "receipts" : "outbox_commits";
+            await using (var alter = database.CreateCommand($"ALTER TABLE {schema}.{table} ALTER COLUMN content TYPE text USING content::text"))
+                await alter.ExecuteNonQueryAsync();
+            recording = true;
+            await Assert.ThrowsAsync<InvalidOperationException>(Prepare);
+            recording = false;
+            Assert.Equal(0, writes);
+            if (!receipts)
+            {
+                await using var missing = database.CreateCommand($"SELECT to_regclass('{schema}.outbox_emissions') IS NULL");
+                Assert.Equal(true, await missing.ExecuteScalarAsync());
+            }
+        }
+        finally
+        {
+            recording = false;
+            await using var drop = database.CreateCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE");
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
     [PostgresTheory]
     [InlineData(PostgresSchemaInitialization.ValidateOnly, false, false, false, "postgres.schema.tableMissing")]
     [InlineData(PostgresSchemaInitialization.ValidateOnly, true, false, false, "postgres.schema.columnMismatch")]
@@ -382,7 +472,8 @@ public sealed partial class OrderStorageIntegrationTests
         var options = new PostgresEntityOutboxOptions("public", prefix);
         var validate = PostgresPersistenceBindings.Define(new("orders"), b => b.Outbox(options));
         var create = PostgresPersistenceBindings.Define(new("orders"), b => b.Outbox(options, PostgresSchemaInitialization.CreateIfMissing));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => validate.PrepareOutboxAsync(database));
+        var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => validate.PrepareOutboxAsync(database));
+        Assert.Equal("postgres.schema.tableMissing", failure.Code);
         await using (var missing = database.CreateCommand("SELECT to_regclass($1) IS NULL"))
         {
             missing.Parameters.AddWithValue("public." + prefix + "_commits");

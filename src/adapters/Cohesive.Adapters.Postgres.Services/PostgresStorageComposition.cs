@@ -4,8 +4,6 @@ using Cohesive.Api.Execution.Services;
 using Cohesive.Infra;
 using Cohesive.Infra.Realization;
 using Cohesive.Storage;
-using Microsoft.Extensions.DependencyInjection;
-using Npgsql;
 
 namespace Cohesive.Adapters.Postgres.Services;
 
@@ -34,7 +32,7 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
     public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(services);
-        var prepared = await bindings.PrepareAsync(services, services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value), Authority, cancellationToken).ConfigureAwait(false);
+        var prepared = await bindings.PrepareAsync(services, Authority, cancellationToken).ConfigureAwait(false);
         return prepared.ForServices();
     }
 }

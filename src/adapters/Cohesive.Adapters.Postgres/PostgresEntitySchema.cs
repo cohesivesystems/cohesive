@@ -212,7 +212,7 @@ public sealed class PostgresEntitySchema
     public Task ValidateAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default) =>
         ValidateAsync(database, PostgresSchemaInitialization.ValidateOnly, cancellationToken);
 
-    internal async Task<HashSet<string>> ValidateAsync(NpgsqlDataSource database, PostgresSchemaInitialization initialization, CancellationToken cancellationToken)
+    internal async Task<int> ValidateAsync(NpgsqlDataSource database, PostgresSchemaInitialization initialization, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(database);
         await using var batch = database.CreateBatch();
@@ -302,7 +302,7 @@ public sealed class PostgresEntitySchema
                     $"Product schema {check.Table.Sql} check on {check.Field} requires migration.", check.Field);
             await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
         }
-        return missing;
+        return missing.Count;
 
         void Add(string sql, params object[] parameters)
         {

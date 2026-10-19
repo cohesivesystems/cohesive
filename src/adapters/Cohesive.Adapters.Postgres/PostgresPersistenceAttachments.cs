@@ -113,21 +113,21 @@ public sealed partial class PostgresPersistenceBindings
     }
 
     // Admission belongs to the bindings, and is repeated per explicit preparation, never cached across startups.
-    async Task<HashSet<string>?> AdmitAsync(NpgsqlDataSource database, CancellationToken cancellationToken)
+    async Task<int> AdmitAsync(NpgsqlDataSource database, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(database);
         cancellationToken.ThrowIfCancellationRequested();
         _ = state.Value;
         return productSchema is { } schema
-            ? await schema.ValidateAsync(database, schemaInitialization, cancellationToken).ConfigureAwait(false) : null;
+            ? await schema.ValidateAsync(database, schemaInitialization, cancellationToken).ConfigureAwait(false) : 0;
     }
 
-    async Task PrepareAdmittedSchemaAsync(IServiceProvider services, NpgsqlDataSource database, HashSet<string>? missing, CancellationToken cancellationToken)
+    async Task PrepareAdmittedSchemaAsync(IServiceProvider services, NpgsqlDataSource database, int missing, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(services);
         if (productSchema is { } schema)
         {
-            if (missing is { Count: > 0 })
+            if (missing > 0)
             {
                 await PostgresSchemaPreparation.CreateAsync(database, schema.CreateSql, cancellationToken).ConfigureAwait(false);
                 await schema.ValidateAsync(database, cancellationToken).ConfigureAwait(false);
@@ -225,6 +225,6 @@ public sealed partial class PostgresPersistenceBindings
         ArgumentNullException.ThrowIfNull(database);
         _ = state.Value;
         return await PostgresSchemaPreparation.PrepareAsync(database, OutboxOptions, OutboxInitialization,
-            static options => options.SchemaSql, static (options, source, token) => options.BindAsync(source, token), cancellationToken).ConfigureAwait(false);
+            static options => options.SchemaSql, static (options, source, policy, token) => options.AdmitAsync(source, policy, token), cancellationToken).ConfigureAwait(false);
     }
 }

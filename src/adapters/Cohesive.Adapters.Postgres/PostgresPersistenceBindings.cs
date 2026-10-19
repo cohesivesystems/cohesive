@@ -55,7 +55,7 @@ public sealed partial class PostgresPersistenceBindings
         ArgumentNullException.ThrowIfNull(database);
         _ = state.Value;
         return await PostgresSchemaPreparation.PrepareAsync(database, ReceiptOptions, ReceiptInitialization,
-            static options => options.SchemaSql, static (options, source, token) => options.BindAsync(source, token), cancellationToken).ConfigureAwait(false);
+            static options => options.SchemaSql, static (options, source, policy, token) => options.AdmitAsync(source, policy, token), cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Declares atomic operation receipts for repositories bound from this database.</summary>

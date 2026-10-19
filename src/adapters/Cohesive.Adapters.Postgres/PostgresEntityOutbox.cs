@@ -58,16 +58,40 @@ public sealed class PostgresEntityOutboxOptions
     /// <exception cref="InvalidOperationException">Schema needs explicit migration.</exception>
     /// <exception cref="NpgsqlException">Metadata access fails.</exception>
     public async Task<PostgresEntityOutboxStorage> BindAsync(NpgsqlDataSource dataSource, CancellationToken cancellationToken = default)
+        => (await AdmitAsync(dataSource, PostgresSchemaInitialization.ValidateOnly, cancellationToken).ConfigureAwait(false))!;
+
+    internal async Task<PostgresEntityOutboxStorage?> AdmitAsync(NpgsqlDataSource dataSource,
+        PostgresSchemaInitialization policy, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(dataSource);
-        await PostgresEntityAuxiliarySchema.ValidateTable(dataSource, Commits,
-            ["sequence:bigint", "entity_type:text", "content:bytea", "content_hash:text", "format_version:integer"], ["sequence"], cancellationToken);
-        await PostgresEntityAuxiliarySchema.ValidateTable(dataSource, Emissions,
-            ["emission_id:text", "sequence:bigint"], ["emission_id"], cancellationToken);
-        await using var identity = dataSource.CreateCommand("SELECT attidentity::text FROM pg_attribute WHERE attrelid=to_regclass($1) AND attname='sequence'");
-        identity.Parameters.AddWithValue(Commits);
-        if (await identity.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not "a")
-            throw new InvalidOperationException("Outbox sequence requires its generated-always identity column.");
+        var commitsExist = await PostgresSchemaPreparation.TableExistsAsync(dataSource, Commits, policy, cancellationToken).ConfigureAwait(false);
+        var emissionsExist = await PostgresSchemaPreparation.TableExistsAsync(dataSource, Emissions, policy, cancellationToken).ConfigureAwait(false);
+        if (commitsExist)
+        {
+            await PostgresEntityAuxiliarySchema.ValidateTable(dataSource, Commits,
+                ["sequence:bigint", "entity_type:text", "content:bytea", "content_hash:text", "format_version:integer"], ["sequence"], cancellationToken);
+            await using var identity = dataSource.CreateCommand("SELECT attidentity::text FROM pg_attribute WHERE attrelid=to_regclass($1) AND attname='sequence'");
+            identity.Parameters.AddWithValue(Commits);
+            if (await identity.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not "a")
+                throw new InvalidOperationException("Outbox sequence requires its generated-always identity column.");
+        }
+        if (emissionsExist)
+        {
+            await PostgresEntityAuxiliarySchema.ValidateTable(dataSource, Emissions,
+                ["emission_id:text", "sequence:bigint"], ["emission_id"], cancellationToken);
+            await using var reference = dataSource.CreateCommand("""
+                SELECT EXISTS(SELECT 1 FROM pg_constraint c
+                WHERE c.conrelid=to_regclass($1) AND c.confrelid=to_regclass($2) AND c.contype='f'
+                  AND c.convalidated AND NOT c.condeferrable AND c.confupdtype='a' AND c.confdeltype='a'
+                  AND c.conkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=c.conrelid AND attname='sequence')]
+                  AND c.confkey=ARRAY[(SELECT attnum FROM pg_attribute WHERE attrelid=c.confrelid AND attname='sequence')])
+                """);
+            reference.Parameters.AddWithValue(Emissions);
+            reference.Parameters.AddWithValue(Commits);
+            if (await reference.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                throw new InvalidOperationException("Outbox emissions require their validated commit-sequence foreign key; apply an explicit migration.");
+        }
+        if (!commitsExist || !emissionsExist) return null;
         return new(dataSource, this);
     }
 }
