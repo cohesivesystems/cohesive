@@ -35,12 +35,12 @@ public sealed partial class OrderStorageIntegrationTests
     }
 
     [PostgresTheory]
-    [InlineData(true, "receipts DROP CONSTRAINT receipts_pkey", "postgres.schema.keyMismatch")]
-    [InlineData(true, "receipts DROP CONSTRAINT receipts_entity_type_partition_key_creation_subject_key", "postgres.schema.keyMismatch")]
-    [InlineData(false, "outbox_commits DROP CONSTRAINT outbox_commits_pkey CASCADE", "postgres.schema.keyMismatch")]
-    [InlineData(false, "outbox_commits ALTER COLUMN sequence DROP IDENTITY", "postgres.schema.identityMismatch")]
-    [InlineData(false, "outbox_emissions DROP CONSTRAINT outbox_emissions_sequence_fkey", "postgres.schema.referenceMismatch")]
-    public async Task Attachment_drift_reports_precise_diagnostics(bool receipts, string mutation, string code)
+    [InlineData(true, "receipts DROP CONSTRAINT receipts_pkey", "postgres.schema.keyMismatch", "immediate primary/unique key")]
+    [InlineData(true, "receipts DROP CONSTRAINT receipts_entity_type_partition_key_creation_subject_key", "postgres.schema.keyMismatch", "immediate primary/unique key")]
+    [InlineData(false, "outbox_commits DROP CONSTRAINT outbox_commits_pkey CASCADE", "postgres.schema.keyMismatch", "immediate primary/unique key")]
+    [InlineData(false, "outbox_commits ALTER COLUMN sequence DROP IDENTITY", "postgres.schema.identityMismatch", "generated-always identity")]
+    [InlineData(false, "outbox_emissions DROP CONSTRAINT outbox_emissions_sequence_fkey", "postgres.schema.referenceMismatch", "non-deferrable foreign key")]
+    public async Task Attachment_drift_reports_precise_diagnostics(bool receipts, string mutation, string code, string remedy)
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
         var schema = "attachment_drift_" + Guid.NewGuid().ToString("N");
@@ -61,13 +61,6 @@ public sealed partial class OrderStorageIntegrationTests
             await using (var change = database.CreateCommand($"ALTER TABLE {schema}.{mutation}")) await change.ExecuteNonQueryAsync();
             var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(Prepare);
             Assert.Equal(code, failure.Code);
-            var remedy = code switch
-            {
-                "postgres.schema.keyMismatch" => "immediate primary/unique key",
-                "postgres.schema.identityMismatch" => "generated-always identity",
-                "postgres.schema.referenceMismatch" => "non-deferrable foreign key",
-                _ => throw new InvalidOperationException("Add the expected remedy for this test case.")
-            };
             Assert.Contains(remedy, failure.Message);
             Assert.Contains(schema, failure.Table, StringComparison.Ordinal);
         }

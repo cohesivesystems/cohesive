@@ -365,7 +365,7 @@ key needs migration. Missing attachment tables in ValidateOnly report `postgres.
 Product and attachment requirements use one catalog validator and one Npgsql batch per admission pass.
 An unchanged receipt or outbox startup uses one batch and zero standalone commands, verified by tracing.
 Columns, immediate keys, generated identity, foreign keys and checks report structured `postgres.schema.*`
-diagnostics with table/column context. Receipt fences retain their exact constraint names for conflict handling.
+diagnostics with table/column context. Receipt fences retain their exact index names for conflict handling, including standalone unique indexes.
 This does not combine product, receipt and outbox admission into a single global batch or transaction.
 
 The Services adapter supplies `bindings.PrepareAsync(services, authority)` to resolve the native data source
@@ -375,5 +375,9 @@ once using the declared database identity. Explicit native-source preparation re
 work. The move to structured attachment diagnostics changes exact-type assertions, not that catch contract.
 Each diagnostic includes a remedy; missing tables mention reviewed creation or explicit `CreateIfMissing`.
 Receipt admission still requires the declared primary and unique constraint kinds. Conflict recognition also
-retains redundant immediate unique constraints over the same columns and NULL semantics, since PostgreSQL
-may report either constraint. A redundant unique constraint cannot replace the required primary key.
+retains redundant immediate unique indexes over the same columns and NULL semantics, whether or not
+a pg_constraint row exists, since PostgreSQL reports the violated index name. A redundant unique constraint or standalone index cannot replace the required primary key.
+
+Schema diagnostics are closed, typed definitions pairing each stable code with its remedy. Failure sites
+select a definition directly; there is no string lookup or throwing fallback that can replace schema drift
+with an unrelated error. Tests specify expected code/remedy pairs as independent case data.

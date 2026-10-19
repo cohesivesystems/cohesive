@@ -158,8 +158,11 @@ public sealed partial class PostgresRepositoryConformanceTests(ITestOutputHelper
     {
         await using (var add = database.CreateCommand($"ALTER TABLE {schema}.receipts ADD CONSTRAINT duplicate_operation_fence UNIQUE(entity_type,partition_key,operation_id)"))
             await add.ExecuteNonQueryAsync();
+        await using (var addIndex = database.CreateCommand($"CREATE UNIQUE INDEX standalone_operation_fence ON {schema}.receipts(entity_type,partition_key,operation_id)"))
+            await addIndex.ExecuteNonQueryAsync();
         var options = new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a");
         var storage = await options.BindAsync(database);
+        Assert.Contains("standalone_operation_fence", storage.FenceNames);
         Assert.Contains("duplicate_operation_fence", storage.FenceNames);
         Assert.Contains("receipts_pkey", storage.FenceNames);
         await using (var drop = database.CreateCommand($"ALTER TABLE {schema}.receipts DROP CONSTRAINT receipts_pkey"))

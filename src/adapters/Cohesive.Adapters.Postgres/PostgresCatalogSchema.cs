@@ -35,14 +35,15 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
                 WHERE a.attrelid=to_regclass($1) AND a.attnum>0 AND NOT a.attisdropped
                 """, table.Sql);
             Add($"""
-                SELECT array_agg(a.attname::text ORDER BY k.ordinality),coalesce(c.contype::text,''),c.conname,
+                SELECT array_agg(a.attname::text ORDER BY k.ordinality),coalesce(c.contype::text,''),index_class.relname,
                     NOT COALESCE((to_jsonb(i)->>'indnullsnotdistinct')::boolean,false)
-                FROM pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality)
+                FROM pg_index i JOIN pg_class index_class ON index_class.oid=i.indexrelid
+                CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality)
                 JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum
                 LEFT JOIN pg_constraint c ON c.conindid=i.indexrelid AND c.contype IN ('{PrimaryKey}','{UniqueConstraint}')
                 WHERE i.indrelid=to_regclass($1) AND i.indisunique AND i.indisvalid AND i.indisready AND i.indimmediate
                   AND i.indpred IS NULL AND i.indexprs IS NULL AND k.ordinality<=i.indnkeyatts
-                GROUP BY i.indexrelid,c.contype,c.conname,NOT COALESCE((to_jsonb(i)->>'indnullsnotdistinct')::boolean,false)
+                GROUP BY i.indexrelid,c.contype,index_class.relname,NOT COALESCE((to_jsonb(i)->>'indnullsnotdistinct')::boolean,false)
                 """, table.Sql);
             if (!table.References.IsDefaultOrEmpty)
                 foreach (var reference in table.References)
@@ -76,7 +77,7 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
             var exists = reader.GetBoolean(0);
             if (!exists)
             {
-                if (policy == PostgresSchemaInitialization.ValidateOnly) throw Failure("tableMissing", table.Sql);
+                if (policy == PostgresSchemaInitialization.ValidateOnly) throw Failure(Diagnostic.TableMissing, table.Sql);
                 missing++;
                 for (var i = 0; i < resultCount; i++) await reader.NextResultAsync(token).ConfigureAwait(false);
                 continue;
@@ -89,10 +90,10 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
             {
                 if (!found.TryGetValue(column.Name, out var actual) || actual.Type != column.Type || actual.Required != column.Required
                     || column.Collation is { } collation && (actual.Collation != collation || actual.Schema != "pg_catalog"))
-                    throw Failure("columnMismatch", table.Sql, column.Name);
-                if (column.Identity is { } identity && actual.Identity != identity) throw Failure("identityMismatch", table.Sql, column.Name);
+                    throw Failure(Diagnostic.ColumnMismatch, table.Sql, column.Name);
+                if (column.Identity is { } identity && actual.Identity != identity) throw Failure(Diagnostic.IdentityMismatch, table.Sql, column.Name);
             }
-            if (found.Count != table.Columns.Length) throw Failure("undeclaredColumns", table.Sql);
+            if (found.Count != table.Columns.Length) throw Failure(Diagnostic.UndeclaredColumns, table.Sql);
             await reader.NextResultAsync(token).ConfigureAwait(false);
             var matched = new bool[table.Keys.Length];
             var names = new HashSet<string>(StringComparer.Ordinal);
@@ -105,26 +106,26 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
                     if (columns.Length != key.Columns.Length || !key.Columns.All(columns.Contains)
                         || key.NullsDistinct && !reader.GetBoolean(3)) continue;
                     // Admission requires the declared constraint kind. Conflict recognition also includes
-                    // redundant immediate constraints over exactly the same columns/null semantics.
+                    // redundant immediate unique indexes over exactly the same columns/null semantics.
                     matched[i] |= key.Kind.Length == 0 || key.Kind == reader.GetString(1);
-                    if (!reader.IsDBNull(2)) names.Add(reader.GetString(2));
+                    names.Add(reader.GetString(2));
                 }
             }
-            if (matched.Any(value => !value)) throw Failure("keyMismatch", table.Sql);
+            if (matched.Any(value => !value)) throw Failure(Diagnostic.KeyMismatch, table.Sql);
             fences.Add(table.Sql, names);
             await reader.NextResultAsync(token).ConfigureAwait(false);
             if (!table.References.IsDefaultOrEmpty)
                 foreach (var reference in table.References)
                 {
                     await reader.ReadAsync(token).ConfigureAwait(false);
-                    if (!reader.GetBoolean(0)) throw Failure("referenceMismatch", table.Sql, reference.DiagnosticColumn);
+                    if (!reader.GetBoolean(0)) throw Failure(Diagnostic.ReferenceMismatch, table.Sql, reference.DiagnosticColumn);
                     await reader.NextResultAsync(token).ConfigureAwait(false);
                 }
             if (!table.Checks.IsDefaultOrEmpty)
                 foreach (var check in table.Checks)
                 {
                     await reader.ReadAsync(token).ConfigureAwait(false);
-                    if (!reader.GetBoolean(0)) throw Failure("checkMismatch", table.Sql, check.Field);
+                    if (!reader.GetBoolean(0)) throw Failure(Diagnostic.CheckMismatch, table.Sql, check.Field);
                     await reader.NextResultAsync(token).ConfigureAwait(false);
                 }
         }
@@ -137,20 +138,21 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
             batch.BatchCommands.Add(command);
         }
     }
-    static PostgresSchemaValidationException Failure(string code, string table, string? column = null)
+    sealed class Diagnostic
     {
-        var remedy = code switch
-        {
-            "tableMissing" => "Create the table with a reviewed migration or explicitly select CreateIfMissing for initial bootstrap.",
-            "columnMismatch" => "Migrate the column to its declared type, nullability and collation; creation does not repair existing columns.",
-            "undeclaredColumns" => "Reconcile extra columns with the declared mapping using a reviewed migration.",
-            "keyMismatch" => "Restore the declared immediate primary/unique key and required NULL semantics; partial or deferred keys do not qualify.",
-            "identityMismatch" => "Restore the declared generated-always identity column using a reviewed migration.",
-            "referenceMismatch" => "Restore the validated, non-deferrable foreign key with the declared target columns and NO ACTION behavior.",
-            "checkMismatch" => "Restore and validate the declared CHECK predicate using a reviewed migration.",
-            _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unknown schema diagnostic.")
-        };
-        return new("postgres.schema." + code, table,
-            $"Schema {table}{(column is null ? "" : " column " + column)} does not match the declaration ({code}). {remedy}", column);
+        Diagnostic(string code, string remedy) { Code = code; Remedy = remedy; }
+        internal string Code { get; }
+        internal string Remedy { get; }
+        internal static readonly Diagnostic TableMissing = new("postgres.schema.tableMissing", "Create the table with a reviewed migration or explicitly select CreateIfMissing for initial bootstrap.");
+        internal static readonly Diagnostic ColumnMismatch = new("postgres.schema.columnMismatch", "Migrate the column to its declared type, nullability and collation; creation does not repair existing columns.");
+        internal static readonly Diagnostic UndeclaredColumns = new("postgres.schema.undeclaredColumns", "Reconcile extra columns with the declared mapping using a reviewed migration.");
+        internal static readonly Diagnostic KeyMismatch = new("postgres.schema.keyMismatch", "Restore the declared immediate primary/unique key and required NULL semantics; partial or deferred keys do not qualify.");
+        internal static readonly Diagnostic IdentityMismatch = new("postgres.schema.identityMismatch", "Restore the declared generated-always identity column using a reviewed migration.");
+        internal static readonly Diagnostic ReferenceMismatch = new("postgres.schema.referenceMismatch", "Restore the validated, non-deferrable foreign key with the declared target columns and NO ACTION behavior.");
+        internal static readonly Diagnostic CheckMismatch = new("postgres.schema.checkMismatch", "Restore and validate the declared CHECK predicate using a reviewed migration.");
     }
+
+    static PostgresSchemaValidationException Failure(Diagnostic diagnostic, string table, string? column = null) =>
+        new(diagnostic.Code, table,
+            $"Schema {table}{(column is null ? "" : " column " + column)} does not match the declaration ({diagnostic.Code}). {diagnostic.Remedy}", column);
 }
