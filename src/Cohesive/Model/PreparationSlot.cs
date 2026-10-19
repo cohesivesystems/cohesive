@@ -1,9 +1,4 @@
-// Source-linked adapters isolate internal types without changing the preparation algorithm.
-#if COHESIVE_POSTGRES_INTERNAL_PREPARATION
-namespace Cohesive.Adapters.Postgres.Internal;
-#else
 namespace Cohesive.Model;
-#endif
 
 // One owner-scoped preparation publishes only completed factories. Exceptions leave this same
 // slot retryable, so no removal can race with a later successful publication.

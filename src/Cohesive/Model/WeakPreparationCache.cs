@@ -1,11 +1,6 @@
 using System.Runtime.CompilerServices;
 
-// Source-linked adapters isolate internal types without changing the preparation algorithm.
-#if COHESIVE_POSTGRES_INTERNAL_PREPARATION
-namespace Cohesive.Adapters.Postgres.Internal;
-#else
 namespace Cohesive.Model;
-#endif
 
 // A key-owned preparation slot publishes successes only. Failed factories leave the same slot
 // retryable, so an older failure can never remove a newer successful preparation.

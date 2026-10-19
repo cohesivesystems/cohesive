@@ -11,7 +11,8 @@ public sealed class PostgresComposedStorageComposition : IServiceStorageComposit
 {
     readonly PostgresPersistenceBindings postgres;
     readonly ImmutableArray<IEntityStorageBinding> sources;
-    readonly string authority;
+    /// <summary>Stable runtime provenance authority, defaulting to di/ plus the database identity.</summary>
+    public string Authority { get; }
     /// <summary>Offline evidence and explicit native binding, shared with infrastructure projections.</summary>
     public PostgresComposedServicePreparation Preparation { get; }
     /// <inheritdoc />
@@ -23,8 +24,8 @@ public sealed class PostgresComposedStorageComposition : IServiceStorageComposit
         this.postgres = postgres;
         Preparation = preparation;
         this.sources = sources;
-        this.authority = authority ?? "di/" + postgres.Database.Value;
-        ArgumentException.ThrowIfNullOrWhiteSpace(this.authority);
+        Authority = authority ?? "di/" + postgres.Database.Value;
+        ArgumentException.ThrowIfNullOrWhiteSpace(Authority);
         if (preparation.Sources.Keys.Any(id => !sources.Any(source => source.Source.Source.Id == id)))
             throw new ArgumentException("Composition requires a native binding for every prepared source.", nameof(sources));
         Bindings = [postgres, .. sources];
@@ -37,7 +38,7 @@ public sealed class PostgresComposedStorageComposition : IServiceStorageComposit
         var registrations = new EntityStorageRegistration[sources.Length];
         for (var index = 0; index < registrations.Length; index++)
             registrations[index] = await sources[index].BindAsync(services, cancellationToken).ConfigureAwait(false);
-        var runtime = await PostgresServiceStorageRuntime.PrepareAsync(postgres, services, authority, cancellationToken).ConfigureAwait(false);
+        var runtime = await PostgresServiceStorageRuntime.PrepareAsync(postgres, services, Authority, cancellationToken).ConfigureAwait(false);
         return Preparation.BindCore(runtime.Persistence, runtime.Receipts, registrations, runtime.History, runtime.Outbox);
     }
 }

@@ -13,7 +13,8 @@ namespace Cohesive.Adapters.Postgres.Services;
 public sealed class PostgresStorageComposition : IServiceStorageComposition
 {
     readonly PostgresPersistenceBindings bindings;
-    readonly string authority;
+    /// <summary>Stable runtime provenance authority, defaulting to di/ plus the database identity.</summary>
+    public string Authority { get; }
     /// <summary>Prepares native evidence from exact endpoint selections without opening a connection.</summary>
     /// <param name="bindings">Declared mappings, receipt, history and outbox policy.</param>
     /// <param name="plan">Canonical endpoint query requirements.</param>
@@ -21,8 +22,8 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
     public PostgresStorageComposition(PostgresPersistenceBindings bindings, ServiceImplementationPlan plan, string? authority = null)
     {
         this.bindings = bindings ?? throw new ArgumentNullException(nameof(bindings));
-        this.authority = authority ?? "di/" + bindings.Database.Value;
-        ArgumentException.ThrowIfNullOrWhiteSpace(this.authority);
+        Authority = authority ?? "di/" + bindings.Database.Value;
+        ArgumentException.ThrowIfNullOrWhiteSpace(Authority);
         Evidence = bindings.PrepareService(plan, new InfrastructureTargetFacilityId("postgres/" + bindings.Database.Value + "/implementation"));
     }
     /// <summary>Native evidence shared with infrastructure association.</summary>
@@ -33,6 +34,6 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
     public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(services);
-        return (await PostgresServiceStorageRuntime.PrepareAsync(bindings, services, authority, cancellationToken).ConfigureAwait(false)).Services;
+        return (await PostgresServiceStorageRuntime.PrepareAsync(bindings, services, Authority, cancellationToken).ConfigureAwait(false)).Services;
     }
 }

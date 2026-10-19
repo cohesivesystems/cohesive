@@ -317,9 +317,11 @@ the contract. Those are two batches, not duplicate preparation accidentally perf
 `SchemaPreparation(assembly, "Exact.Resource.sql")` rejects a missing resource at model definition and executes
 the embedded SQL atomically under the same advisory lock as built-in creation during preparation. `SchemaPreparation((services, database, token) => ...)` allows a migration
 library to borrow host logging/configuration; direct preparation can supply `PrepareSchemaAsync(services, database, ct)`. The database-only overload supplies an empty provider. Custom callbacks
-own transactions and multi-host coordination; the embedded-SQL wrapper supplies both. History preparation checks native identity/configuration first, then initializes/validates its schema.
+own transactions and multi-host coordination; the embedded-SQL wrapper supplies both. For `Schema(ValidateOnly)`, product admission runs before any schema writer. History preparation then checks
+native identity/configuration before initializing/validating its schema.
 Product preparation and receipt/outbox admission follow in both single-store and composed preparation.
-A later failure can leave successfully prepared history objects; no cross-phase rollback is implied. Projected schema validation runs before
+Explicit `CreateIfMissing` bootstrap allows absent product tables and retains its create/validate lifecycle.
+A later migration or bootstrap failure can leave earlier prepared objects; no cross-phase rollback is implied. Projected schema validation runs before
 and after a native callback: these are distinct admission checks, each one batched round trip, because the callback
 can change the schema. Without a callback it runs once.
 
@@ -329,7 +331,7 @@ identity and can be supplied explicitly. `PrepareComposedService` returns offlin
 its offline `Preparation`. Only the latter implements the storage-composition contract required by model/DI registration. `MapServicesAsync<T>()` is required
 before host start; forgetting it fails startup before resolving storage rather than serving an empty API.
 
-Internal preparation caching uses the same source-linked WeakPreparationCache/PreparationSlot implementation
-as Core, with isolated internal types. It introduces neither a public generic cache API nor adapter friend access
-to Core. Scalar metadata validates exhaustive ordinal slot coverage at type initialization; no benchmarked speedup
-is claimed for the indexed representation.
+Internal preparation caching reuses Core's WeakPreparationCache/PreparationSlot through the Postgres friend
+assembly. The mechanism stays internal and is compiled once, without adapter-specific namespaces or compiler
+symbols in Core. Schema unit tests check ordinal scalar coverage through the guarded slot lookup; the hot
+catalog has no explicit static constructor. No benchmarked speedup is claimed for the indexed representation.

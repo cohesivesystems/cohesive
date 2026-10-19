@@ -11,6 +11,18 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class ServicePersistenceTests
 {
     [Fact]
+    public void Default_and_explicit_authority_are_pinned_for_native_and_composed_storage()
+    {
+        var model = ModelActivator.Create<FulfillmentApplication>();
+        Assert.Equal("di/orders", model.Storage.RequireComposition<PostgresStorageComposition>().Authority);
+        Assert.Equal("host/explicit", new PostgresStorageComposition(model.Storage.Bindings, model.Endpoints.Plan, "host/explicit").Authority);
+        var mixed = ModelActivator.Create<AspireFirst.PostgresCosmos.PostgresCosmosApplication>();
+        Assert.Equal("di/orders", mixed.Storage.RequireComposition<PostgresComposedStorageComposition>().Authority);
+        Assert.Equal("host/explicit", mixed.Storage.PostgresBindings.ComposeServices(mixed.Endpoints.Plan,
+            [mixed.Storage.Inventory], AspireFirst.PostgresCosmos.PostgresCosmosStorage.Policy, "host/explicit").Authority);
+    }
+
+    [Fact]
     public async Task Wrong_history_data_source_rejects_before_product_or_attachment_preparation()
     {
         var model = ModelActivator.Create<FulfillmentApplication>();

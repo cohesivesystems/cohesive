@@ -90,7 +90,9 @@ not share native artifacts.
 that same evidence as `Preparation`. Offline preparation does not implement the storage composition interface,
 so `StorageModelBuilder.Compose` cannot accept it. No throwing getter selects a mode at runtime.
 
-Shared initialization prepares history (including native identity validation) before product/receipt/outbox DDL.
+Shared initialization first admits validate-only product schemas, then prepares history (including native identity
+validation), followed by product/receipt/outbox preparation. Explicit CreateIfMissing bootstrap permits absent
+product tables.
 A later phase can fail after earlier schemas were prepared; the whole initialization is not one distributed
 transaction. Embedded SQL uses the same locked transaction as built-in creation; custom callbacks own their
 transaction policy. Runtime provenance keeps the `di/<database>` default, with an explicit authority override.

@@ -45,6 +45,15 @@ public sealed class PostgresEntitySchemaTests
     }
 
     [Fact]
+    public void Historical_migration_uses_the_shared_schema_lock_protocol()
+    {
+        using var stream = new StreamReader(typeof(PostgresEntitySchemaTests).Assembly.GetManifestResourceStream("PostgresMigration001.sql")!);
+        var sql = stream.ReadToEnd();
+        Assert.Contains(FormattableString.Invariant($"cohesive_schema_preparation_lock CONSTANT bigint := {PostgresSchemaPreparation.AdvisoryLockKey};"), sql);
+        Assert.Contains("pg_advisory_xact_lock(cohesive_schema_preparation_lock)", sql);
+    }
+
+    [Fact]
     public void Checks_use_mapped_fields_and_capture_values_once()
     {
         var domain = new DomainModelBuilder();
@@ -69,7 +78,10 @@ public sealed class PostgresEntitySchemaTests
     [Fact]
     public void Scalar_metadata_covers_every_type_and_preserves_text_aliases()
     {
-        foreach (var type in Enum.GetValues<PostgresRelationQueryScalarType>())
+        var types = Enum.GetValues<PostgresRelationQueryScalarType>();
+        Assert.Equal(Enumerable.Range(0, types.Length), types.Select(type => (int)type));
+        // SchemaTypeName uses the checked slot lookup, so every enum member must match its array slot.
+        foreach (var type in types)
         {
             Assert.NotEmpty(PostgresRelationQueryScalarCatalog.SchemaTypeName(type));
             Assert.True(Enum.IsDefined(PostgresRelationQueryScalarCatalog.ToValueEncoding(type)));

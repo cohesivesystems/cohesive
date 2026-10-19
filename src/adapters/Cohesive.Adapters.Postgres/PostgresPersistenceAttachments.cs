@@ -10,6 +10,9 @@ public sealed partial class PostgresPersistenceBindings
     PostgresSchemaInitialization schemaInitialization;
     PostgresEntitySchema? productSchema;
 
+    /// <summary>Whether product admission may create missing objects; validation-only by default.</summary>
+    public PostgresSchemaInitialization SchemaInitialization => schemaInitialization;
+
     /// <summary>Projected schema, or null when native schema ownership was selected instead.</summary>
     public PostgresEntitySchema? ProductSchema { get { _ = state.Value; return productSchema; } }
 

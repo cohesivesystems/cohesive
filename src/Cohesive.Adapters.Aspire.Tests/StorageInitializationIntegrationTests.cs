@@ -10,6 +10,61 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed partial class OrderStorageIntegrationTests
 {
+    [PostgresTheory]
+    [InlineData(false, "postgres.schema.tableMissing")]
+    [InlineData(true, "postgres.schema.columnMismatch")]
+    public async Task Validate_only_product_admission_prevents_history_DDL(bool existing, string code)
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var productSchema = "product_admission_" + Guid.NewGuid().ToString("N");
+        var historySchema = "history_admission_" + Guid.NewGuid().ToString("N");
+        PostgresEntityRepositoryMapping Relocate<T>(Cohesive.Transitions.Authoring.DomainEntity<T> entity) where T : notnull
+        {
+            var mapping = Model.Storage.Bindings.Mapping(entity);
+            return new(new Cohesive.Adapters.Sql.SqlQualifiedTable(productSchema, mapping.Table.TableName.Value),
+                mapping.Fields, mapping.IdentityField, mapping.PartitionField, mapping.VersionColumn.Value);
+        }
+        var callbacks = 0;
+        var bindings = PostgresPersistenceBindings.Define(new("orders"), b => b
+            .Entity(Model.Domain.Orders, Relocate(Model.Domain.Orders))
+            .Entity(Model.Domain.Inventory, Relocate(Model.Domain.Inventory))
+            .Entity(Model.Domain.Reservations, Relocate(Model.Domain.Reservations))
+            .Schema()
+            .SchemaPreparation((_, _) => { callbacks++; return Task.CompletedTask; })
+            .History(new MartenEntityHistoryConfiguration(initialization: PostgresSchemaInitialization.CreateIfMissing)));
+        using var store = DocumentStore.For(options =>
+        {
+            options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
+            options.Connection(database);
+            options.DatabaseSchemaName = historySchema;
+            options.UseCohesiveEntityHistory();
+        });
+        await using var provider = new ServiceCollection().AddKeyedSingleton("orders", database)
+            .AddKeyedSingleton<IDocumentStore>("orders", store).BuildServiceProvider();
+        try
+        {
+            await using (var create = database.CreateCommand($"CREATE SCHEMA {productSchema}")) await create.ExecuteNonQueryAsync();
+            if (existing)
+            {
+                await using var create = database.CreateCommand(bindings.ProductSchema!.CreateSql +
+                    $"; ALTER TABLE {productSchema}.cohesive_inventory ALTER COLUMN available TYPE bigint");
+                await create.ExecuteNonQueryAsync();
+            }
+            var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(bindings, Model.Endpoints.Plan);
+            var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => composition.BindAsync(provider).AsTask());
+            Assert.Equal(code, failure.Code);
+            Assert.Equal(0, callbacks);
+            await using var retained = database.CreateCommand("SELECT count(*) FROM pg_namespace WHERE nspname=$1");
+            retained.Parameters.AddWithValue(historySchema);
+            Assert.Equal(0L, await retained.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await using var cleanup = database.CreateCommand($"DROP SCHEMA IF EXISTS {productSchema} CASCADE; DROP SCHEMA IF EXISTS {historySchema} CASCADE;");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
     [PostgresFact]
     public async Task Embedded_schema_serializes_replica_bootstrap_and_rolls_back_failures()
     {

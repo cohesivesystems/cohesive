@@ -12,6 +12,10 @@ internal sealed record PostgresServiceStorageRuntime(PostgresPersistenceRegistra
         IServiceProvider services, string authority, CancellationToken token)
     {
         var database = services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value);
+        // Admission-only product checks precede every schema writer, including native history.
+        // CreateIfMissing is an explicit bootstrap policy and cannot require tables to exist here.
+        if (bindings.SchemaInitialization == PostgresSchemaInitialization.ValidateOnly && bindings.ProductSchema is { } schema)
+            await schema.ValidateAsync(database, token).ConfigureAwait(false);
         var history = bindings.HistoryConfiguration is { } configuration
             ? await configuration.PrepareAsync(services, bindings.Database.Value, database, token).ConfigureAwait(false) : null;
         await bindings.PrepareSchemaAsync(services, database, token).ConfigureAwait(false);
