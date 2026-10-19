@@ -93,6 +93,10 @@ var snapshot = new EntityObservationSnapshot(
 Physical layouts, source placement, relation occurrences, and storage concurrency tokens belong to the interpreting
 block or adapter.
 
+`PortableExecutionValidator` reuses successful checks of immutable inline type declarations.
+Every value and contract modifier is still checked; named types and shapes resolve against each
+call's graph. Reusing a declaration never admits an unchecked value or a different graph.
+
 ## Native operation telemetry
 
 Library instrumentation can compose `OperationTelemetryEmitter` over its own native .NET diagnostic objects. The
