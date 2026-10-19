@@ -21,14 +21,7 @@ public sealed class MartenEntityHistoryStorage : PostgresEntityHistoryStorage
     readonly EntityReconstitutionMode mode;
     readonly int checkpointInterval, maximumReplayActions, maximumActionBytes;
     readonly long maximumReplayBytes;
-    static readonly JsonSerializerOptions Json = CreateJson();
-    static JsonSerializerOptions CreateJson()
-    {
-        var value = EntityStorageJson.CreateOptions();
-        value.MakeReadOnly(populateMissingResolver: true);
-        return value;
-    }
-
+    static JsonSerializerOptions Json => EntityStorageJson.Options;
     /// <summary>Attaches a caller-configured Marten store after validating its schema; performs no migration.</summary>
     /// <param name="dataSource">Exact native source used by the relational repository.</param>
     /// <param name="store">Caller-owned Marten store configured with string stream identities and an installed schema.</param>
@@ -66,11 +59,15 @@ public sealed class MartenEntityHistoryStorage : PostgresEntityHistoryStorage
     {
         if (store.Options.Events.StreamIdentity != StreamIdentity.AsString)
             throw new ArgumentException("Entity history requires Marten string stream identities.", nameof(store));
+        if (!store.Options.Events.AllKnownEventTypes().Any(x => x.EventType == typeof(EntityStateEvent)))
+            throw new ArgumentException("Configure UseCohesiveEntityHistory before building the store.", nameof(store));
         if (!Enum.IsDefined(reconstitution)) throw new ArgumentOutOfRangeException(nameof(reconstitution));
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(checkpointInterval);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumReplayActions);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumActionBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumReplayBytes);
+        if (maximumActionBytes > maximumReplayBytes || reconstitution == EntityReconstitutionMode.CheckpointAndTail && checkpointInterval > maximumReplayActions)
+            throw new ArgumentException("Replay bounds must admit an action and a complete checkpoint interval.");
         this.store = store; mode = reconstitution; this.checkpointInterval = checkpointInterval;
         this.maximumReplayActions = maximumReplayActions; this.maximumActionBytes = maximumActionBytes;
         this.maximumReplayBytes = maximumReplayBytes;
@@ -91,15 +88,19 @@ public sealed class MartenEntityHistoryStorage : PostgresEntityHistoryStorage
         var events = await session.Events.FetchStreamAsync(key, version: end, fromVersion: start, token: cancellationToken).ConfigureAwait(false);
         EntityStateAction? current = null;
         long totalBytes = 0;
+        long? prefixBytes = start == 1 ? 0 : null;
         foreach (var item in events)
         {
             if (item.Data is not EntityStateEvent retained || retained.Authority != Authority
                 || retained.FormatVersion != EntityStorageJson.FormatVersion)
                 throw new InvalidOperationException("Retained event authority or encoding differs; migrate explicitly.");
-            var bytes = retained.Content;
+            var bytes = StrictDocumentJson.GetCanonicalBytes<object>(retained.Content, Json);
             if (bytes is null || bytes.Length == 0 || bytes.Length > maximumActionBytes
-                || (totalBytes += bytes.Length) > maximumReplayBytes || Hash(bytes) != retained.ContentHash)
+                || (totalBytes += bytes.Length) > maximumReplayBytes || EntityStorageJson.Hash(bytes) != retained.ContentHash)
                 throw new InvalidOperationException("State action integrity or size mismatch.");
+            prefixBytes ??= retained.CumulativeBytes - bytes.Length;
+            if (prefixBytes < 0 || retained.CumulativeBytes != checked(prefixBytes.Value + totalBytes))
+                throw new InvalidOperationException("State action replay budget contradicts its retained range.");
             var action = JsonSerializer.Deserialize<EntityStateAction>(bytes, Json) ?? throw new InvalidOperationException("Missing action.");
             if (action.State is null || action.Position != item.Version || action.State.EntityId.Value != id
                 || action.State.Observation.GetField(partitionField).GetRequiredString() != partition)
@@ -124,8 +125,33 @@ public sealed class MartenEntityHistoryStorage : PostgresEntityHistoryStorage
         var bytes = StrictDocumentJson.GetCanonicalBytes(action, Json);
         if (bytes.Length > maximumActionBytes) throw new InvalidOperationException("State action exceeds its byte bound.");
         await using var session = store.LightweightSession(SessionOptions.ForTransaction(transaction, shouldAutoCommit: false));
-        var retained = new EntityStateEvent(Authority, EntityStorageJson.FormatVersion, bytes, Hash(bytes));
         var key = StreamKey(entityType, partition, id);
+        var rangeLength = mode == EntityReconstitutionMode.FullReplay ? action.Position
+            : action.Position < checkpointInterval ? action.Position : action.Position % checkpointInterval + 1;
+        if (rangeLength > maximumReplayActions) throw new InvalidOperationException("Append would exceed the configured replay action bound.");
+        long replayBytes = bytes.Length;
+        if (action.Position > 1)
+        {
+            var previous = await session.Events.FetchStreamAsync(key, version: action.Position - 1,
+                fromVersion: action.Position - 1, token: cancellationToken).ConfigureAwait(false);
+            if (previous.Count != 1 || previous[0].Data is not EntityStateEvent retainedPrevious || retainedPrevious.CumulativeBytes < 1)
+                throw new InvalidOperationException("Previous replay budget is missing.");
+            replayBytes = checked(replayBytes + retainedPrevious.CumulativeBytes);
+        }
+        long prefix = 0;
+        var rangeStart = action.Position - rangeLength + 1;
+        if (rangeStart > 1)
+        {
+            var boundary = await session.Events.FetchStreamAsync(key, version: rangeStart - 1,
+                fromVersion: rangeStart - 1, token: cancellationToken).ConfigureAwait(false);
+            if (boundary.Count != 1 || boundary[0].Data is not EntityStateEvent before || before.CumulativeBytes < 1)
+                throw new InvalidOperationException("Checkpoint replay budget is missing.");
+            prefix = before.CumulativeBytes;
+        }
+        if (prefix > replayBytes || replayBytes - prefix > maximumReplayBytes)
+            throw new InvalidOperationException("Append would exceed the configured replay byte bound.");
+        var retained = new EntityStateEvent(Authority, EntityStorageJson.FormatVersion,
+            JsonSerializer.Deserialize<JsonElement>(bytes), EntityStorageJson.Hash(bytes), replayBytes);
         if (action.Position == 1) session.Events.StartStream<EntityStateEvent>(key, retained);
         else session.Events.Append(key, action.Position, retained);
         // Flush, not commit: a later receipt/outbox failure rolls the event back with the mapped row.
@@ -133,12 +159,12 @@ public sealed class MartenEntityHistoryStorage : PostgresEntityHistoryStorage
     }
 
     static string StreamKey(string entityType, string partition, string id) => JsonSerializer.Serialize(new[] { entityType, partition, id });
-    static string Hash(byte[] bytes) => Convert.ToHexString(SHA256.HashData(bytes));
 }
 
 /// <summary>Versioned Marten envelope around Cohesive's canonical lossless action encoding.</summary>
 /// <param name="Authority">Immutable stream authority.</param>
 /// <param name="FormatVersion">Canonical storage codec version.</param>
-/// <param name="Content">Canonical action bytes.</param>
+/// <param name="Content">Lossless action JSON, stored as an object in native jsonb.</param>
 /// <param name="ContentHash">Integrity hash of the canonical bytes.</param>
-public sealed record EntityStateEvent(EntityStateAuthority Authority, int FormatVersion, byte[] Content, string ContentHash);
+/// <param name="CumulativeBytes">Canonical byte total from the start of the stream; independent of the selected replay mode.</param>
+public sealed record EntityStateEvent(EntityStateAuthority Authority, int FormatVersion, JsonElement Content, string ContentHash, long CumulativeBytes);

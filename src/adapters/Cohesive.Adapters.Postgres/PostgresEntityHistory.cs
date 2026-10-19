@@ -63,7 +63,7 @@ public sealed partial class PostgresEntityRepository
 
     async Task<EntitySnapshot?> ReadHistory(OperationContext context, string id, EntityReadOptions? options)
     {
-        if (options?.PartitionKey is not { } partition)
+        if (options?.PartitionKey is not { } partition || string.IsNullOrWhiteSpace(partition))
             throw new ArgumentException("Event-authoritative reads require an explicit partition.", nameof(options));
         await using var connection = await runtime.DataSource.OpenConnectionAsync(context.CancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(IsolationLevel.RepeatableRead, context.CancellationToken).ConfigureAwait(false);

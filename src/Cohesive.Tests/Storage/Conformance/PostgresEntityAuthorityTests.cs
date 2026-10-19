@@ -12,6 +12,80 @@ namespace Cohesive.Tests.Storage.Conformance;
 
 public sealed partial class PostgresRepositoryConformanceTests
 {
+    [PostgresFact]
+    public Task Replay_byte_budget_rejects_append_and_preserves_readable_state() => WithRepository(async (_, database, schema) =>
+    {
+        using var store = HistoryStore(database, schema);
+        await store.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
+        var entity = RunControlFixture.Write(RunControlFixture.Initial()).Entity;
+        var size = Cohesive.Model.Serialization.StrictDocumentJson.GetCanonicalBytes(new EntityStateAction(1, entity), EntityStorageJson.Options).Length;
+        var history = await MartenEntityHistoryStorage.BindAsync(database, store, EntityStateAuthority.Events,
+            EntityReconstitutionMode.FullReplay, maximumActionBytes: size + 100, maximumReplayBytes: size + 100);
+        var repository = new PostgresEntityRepository(RunControlFixture.Entity, new(new("test"), database, "test"), Mapping(schema), stateHistory: history);
+        var context = OperationContext.Create();
+        var before = await repository.Upsert(context, new(entity));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.Upsert(context,
+            RunControlFixture.Write(RunControlFixture.Initial(), 1, before.ConcurrencyToken)));
+        Assert.Equal(before, await repository.TryGet(context, "run/1", new(partitionKey: "tenant/a")));
+        await Assert.ThrowsAsync<ArgumentException>(() => MartenEntityHistoryStorage.BindAsync(database, store, EntityStateAuthority.Events,
+            checkpointInterval: 3, maximumReplayActions: 2));
+    });
+
+    [PostgresFact]
+    public Task Outbox_byte_limited_pages_advance_without_skipping_a_commit() => WithRepository(async (repository, database, schema) =>
+    {
+        var options = new PostgresEntityOutboxOptions(schema, "outbox");
+        await using (var create = database.CreateCommand(options.SchemaSql)) await create.ExecuteNonQueryAsync();
+        var outbox = new PostgresEntityOutboxRepository(repository, await options.BindAsync(database));
+        var context = OperationContext.Create();
+        var before = await outbox.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial()));
+        var evidence = RunControlFixture.Prepare(before);
+        var candidate = TransitionStateProjector.ApplyToEntity(repository.EntityDefinition, "run/1", evidence.Decision, before.Entity).Snapshot;
+        await outbox.UpsertWithOutbox(context, new(new(candidate, before.ConcurrencyToken),
+            RunControlFixture.Lower(evidence, evidence.Decision, RunControlFixture.Contracts(), direct: true)));
+        // A second valid retained payload provides a deterministic page-size boundary.
+        await using (var duplicate = database.CreateCommand($"INSERT INTO {schema}.outbox_commits(entity_type,content,content_hash,format_version) SELECT entity_type,content,content_hash,format_version FROM {schema}.outbox_commits"))
+            await duplicate.ExecuteNonQueryAsync();
+        int size;
+        await using (var length = database.CreateCommand($"SELECT octet_length(content) FROM {schema}.outbox_commits LIMIT 1"))
+            size = (int)(await length.ExecuteScalarAsync())!;
+        var bounded = new PostgresEntityOutboxRepository(repository, await new PostgresEntityOutboxOptions(schema, "outbox", size).BindAsync(database));
+        var first = Assert.Single(await bounded.ReadOutbox(context));
+        var second = Assert.Single(await bounded.ReadOutbox(context, first.Sequence));
+        Assert.True(second.Sequence > first.Sequence);
+        Assert.Empty(await bounded.ReadOutbox(context, second.Sequence));
+    });
+
+    [PostgresFact]
+    public Task Checkpoint_interval_two_skips_old_actions_but_validates_checkpoint_and_tail() => WithRepository(async (repository, database, schema) =>
+    {
+        var context = OperationContext.Create();
+        var current = await repository.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial()));
+        for (var version = 1; version <= 2; version++)
+            current = await repository.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial(), version, current.ConcurrencyToken));
+        await using (var json = database.CreateCommand($"SELECT jsonb_typeof(data->'Content') FROM {schema}.mt_events LIMIT 1"))
+            Assert.Equal("object", await json.ExecuteScalarAsync());
+        await using (var corrupt = database.CreateCommand($"UPDATE {schema}.mt_events SET data=jsonb_set(data, '{{ContentHash}}', '\"corrupt\"') WHERE version=1"))
+            await corrupt.ExecuteNonQueryAsync();
+        Assert.Equal(current, await repository.TryGet(context, "run/1", new(partitionKey: "tenant/a")));
+        await using (var corrupt = database.CreateCommand($"UPDATE {schema}.mt_events SET data=jsonb_set(data, '{{ContentHash}}', '\"corrupt\"') WHERE version=2"))
+            await corrupt.ExecuteNonQueryAsync();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.TryGet(context, "run/1", new(partitionKey: "tenant/a")));
+    }, authority: EntityStateAuthority.Events, reconstitution: EntityReconstitutionMode.CheckpointAndTail);
+
+    [PostgresFact]
+    public Task Missing_event_registration_is_rejected_before_schema_access() => WithRepository(async (_, database, schema) =>
+    {
+        using var store = DocumentStore.For(options =>
+        {
+            options.Connection(database); options.DatabaseSchemaName = schema;
+            options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
+            options.Events.StreamIdentity = StreamIdentity.AsString;
+        });
+        var failure = await Assert.ThrowsAsync<ArgumentException>(() => MartenEntityHistoryStorage.BindAsync(database, store, EntityStateAuthority.Events));
+        Assert.Contains("UseCohesiveEntityHistory", failure.Message);
+    });
+
     [PostgresTheory]
     [InlineData(EntityStateAuthority.State, EntityReconstitutionMode.FullReplay)]
     [InlineData(EntityStateAuthority.Events, EntityReconstitutionMode.FullReplay)]
@@ -134,16 +208,15 @@ public sealed partial class PostgresRepositoryConformanceTests
         await Assert.ThrowsAsync<InvalidOperationException>(() => changed.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial())));
     }, authority: EntityStateAuthority.Events);
     [PostgresFact]
-    public Task Appending_does_not_replay_the_whole_history() => WithRepository(async (repository, database, schema) =>
+    public Task Full_replay_rejects_append_before_it_can_make_the_stream_unreadable() => WithRepository(async (repository, database, schema) =>
     {
         var context = OperationContext.Create();
         var current = await repository.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial()));
-        for (var version = 1; version <= 20; version++)
-            current = await repository.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial(), version, current.ConcurrencyToken));
-        // A full read exceeds one action, but all twenty appends succeeded with the same one-action acquisition bound.
-        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.TryGet(context, "run/1", new(partitionKey: "tenant/a")));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => repository.Upsert(context,
+            RunControlFixture.Write(RunControlFixture.Initial(), 1, current.ConcurrencyToken)));
+        Assert.Equal(current, await repository.TryGet(context, "run/1", new(partitionKey: "tenant/a")));
         await using var count = database.CreateCommand($"SELECT count(*) FROM {schema}.mt_events");
-        Assert.Equal(21L, await count.ExecuteScalarAsync());
+        Assert.Equal(1L, await count.ExecuteScalarAsync());
     }, authority: EntityStateAuthority.Events, reconstitution: EntityReconstitutionMode.FullReplay, maximumReplayActions: 1);
 
     [PostgresTheory]
@@ -246,8 +319,7 @@ public sealed partial class PostgresRepositoryConformanceTests
     {
         options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
                 options.Connection(database); options.DatabaseSchemaName = schema;
-        options.Events.StreamIdentity = StreamIdentity.AsString;
-        options.Events.AddEventType<EntityStateEvent>();
+        options.UseCohesiveEntityHistory();
     });
 
     [PostgresFact]
