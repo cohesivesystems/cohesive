@@ -759,7 +759,7 @@ public sealed class RelationQueryExpressionEvaluatorTests
                 for (var i = 0; i < 10000; i++) evaluator.Evaluate(input, context);
                 samples[sample] = GC.GetAllocatedBytesForCurrentThread() - before;
             }
-            Array.Sort(samples);
+            System.Array.Sort(samples);
             return samples[3];
         }
         var empty = Expr.Coalesce(Expr.Const(ObservationValue.FromArray([])), Expr.Null());
