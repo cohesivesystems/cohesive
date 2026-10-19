@@ -58,7 +58,9 @@ public static class PortableExecutionDiagnosticCodes
 /// <remarks>
 /// Validation is deliberately fail-closed: an unrecognized subclass is an error even if it can be serialized by a
 /// local runtime. Named types and qualified shapes require a matching <see cref="ShapeGraph"/> so validation never
-/// treats unresolved semantics as compatible by assumption.
+/// treats unresolved semantics as compatible by assumption. Successful graph-independent checks of immutable inline
+/// types may be reused by exact declaration identity; values, contract modifiers, names, and shapes remain checked
+/// for each invocation and supplied graph.
 /// </remarks>
 public static class PortableExecutionValidator
 {
@@ -125,6 +127,10 @@ public static class PortableExecutionValidator
         return context.ToResult();
     }
 
+    // Proofs belong to exact immutable framework TypeRef instances, not contracts or values.
+    // Only graph-independent successes are published; invalid and contextual checks stay fresh.
+    static readonly WeakPreparationCache<TypeRef, bool> PortableInlineTypes = new();
+
     enum Compatibility
     {
         Compatible,
@@ -140,6 +146,7 @@ public static class PortableExecutionValidator
 
         readonly List<DocumentValidationDiagnostic> diagnostics = [];
         readonly HashSet<TypeId> activeTypeDefinitions = [];
+        int namedTypeReferences;
 
         public DocumentValidationResult ToResult() =>
             DocumentValidationResult.FromDiagnostics(diagnostics);
@@ -258,6 +265,11 @@ public static class PortableExecutionValidator
                 return;
             }
 
+            var reusable = type is ObjectTypeRef or ArrayTypeRef or EnumTypeRef;
+            if (reusable && PortableInlineTypes.TryGet(type, out _)) return;
+            var diagnosticStart = diagnostics.Count;
+            var namedStart = namedTypeReferences;
+
             switch (type)
             {
                 case OpaqueRuntimeTypeRef opaque:
@@ -321,6 +333,9 @@ public static class PortableExecutionValidator
                         location);
                     break;
             }
+
+            if (reusable && diagnostics.Count == diagnosticStart && namedTypeReferences == namedStart)
+                PortableInlineTypes.Get(type, static _ => true);
         }
 
         public void ValidateExpression(Expr? expression, Location location)
@@ -567,6 +582,8 @@ public static class PortableExecutionValidator
 
         void ValidateNamedType(NamedTypeRef named, Location location)
         {
+            // Even a successfully resolved name makes every enclosing type graph-dependent.
+            namedTypeReferences++;
             if (string.IsNullOrWhiteSpace(named.TypeId.Value))
             {
                 Error(
