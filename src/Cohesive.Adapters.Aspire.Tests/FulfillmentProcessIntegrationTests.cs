@@ -34,18 +34,22 @@ public sealed class FulfillmentProcessIntegrationTests
         .Operation("fulfill").Run(Model.Process.Definition).ExecuteEphemerally(TimeSpan.FromSeconds(15));
 
     [PostgresTheory]
-    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, 5, 2, "Submitted", 3, false)]
-    [InlineData(EntityStateAuthority.State, OrderStatus.Submitted, 5, 2, "Rejected", 5, false)]
-    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, 1, 2, "Rejected", 1, false)]
-    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, 5, 0, "Rejected", 5, false)]
-    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, 2, 2, "Submitted", 0, true)]
-    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, 5, 2, "Submitted", 3, false)]
-    [InlineData(EntityStateAuthority.Events, OrderStatus.Submitted, 5, 2, "Rejected", 5, false)]
-    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, 1, 2, "Rejected", 1, false)]
-    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, 5, 0, "Rejected", 5, false)]
-    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, 2, 2, "Submitted", 0, true)]
+    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, 5, 2, "Submitted", 3, false, FulfillmentOutcome.ReservedAndSubmitted)]
+    [InlineData(EntityStateAuthority.State, OrderStatus.Submitted, 5, 2, "Rejected", 5, false, FulfillmentOutcome.OrderRejected)]
+    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, 1, 2, "Rejected", 1, false, FulfillmentOutcome.InsufficientStock)]
+    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, 5, 0, "Rejected", 5, false, FulfillmentOutcome.InvalidQuantity)]
+    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, 2, 2, "Submitted", 0, true, FulfillmentOutcome.ReservedAndSubmitted)]
+    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, 5, 2, "Submitted", 3, false, FulfillmentOutcome.ReservedAndSubmitted)]
+    [InlineData(EntityStateAuthority.Events, OrderStatus.Submitted, 5, 2, "Rejected", 5, false, FulfillmentOutcome.OrderRejected)]
+    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, 1, 2, "Rejected", 1, false, FulfillmentOutcome.InsufficientStock)]
+    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, 5, 0, "Rejected", 5, false, FulfillmentOutcome.InvalidQuantity)]
+    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, 2, 2, "Submitted", 0, true, FulfillmentOutcome.ReservedAndSubmitted)]
+    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, -1, 2, "Rejected", -1, false, FulfillmentOutcome.InventoryMissing)]
+    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, -1, 2, "Rejected", -1, false, FulfillmentOutcome.InventoryMissing)]
+    [InlineData(EntityStateAuthority.State, OrderStatus.Draft, 5, 2, "Rejected", 5, false, FulfillmentOutcome.ReservationConflict, true)]
+    [InlineData(EntityStateAuthority.Events, OrderStatus.Draft, 5, 2, "Rejected", 5, false, FulfillmentOutcome.ReservationConflict, true)]
     public async Task Canonical_process_commits_compensates_and_replays(EntityStateAuthority authority, OrderStatus initialStatus, int stock, int quantity,
-        string expectedStatus, int remaining, bool interruptReservation)
+        string expectedStatus, int remaining, bool interruptReservation, FulfillmentOutcome expectedOutcome, bool existingReservation = false)
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")!);
         using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
@@ -58,15 +62,17 @@ public sealed class FulfillmentProcessIntegrationTests
         {
             options.Connection(database); options.DatabaseSchemaName = historySchema;
             options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
-            options.Events.StreamIdentity = StreamIdentity.AsString;
-            options.Events.AddEventType<EntityStateEvent>();
+            options.UseCohesiveEntityHistory();
         });
         await eventStore.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
         var history = await MartenEntityHistoryStorage.BindAsync(database, eventStore, authority);
         var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
-        var orders = persistence.Repository(Model.Domain.Orders, transitionReceipts: receiptStorage, stateHistory: history);
-        var inventory = persistence.Repository(Model.Domain.Inventory, transitionReceipts: receiptStorage, stateHistory: history);
-        var reservations = persistence.Repository(Model.Domain.Reservations, transitionReceipts: receiptStorage, stateHistory: history);
+        var servicePersistence = persistence.ForServices(receiptStorage, history);
+        IEntityRepository<T> Repository<T>(Cohesive.Transitions.Authoring.DomainEntity<T> entity) where T : notnull =>
+            new TypedEntityRepository<T>(servicePersistence.Repository(ValueContract.FromShape(entity.Definition.Shape)));
+        var orders = Repository(Model.Domain.Orders);
+        var inventory = Repository(Model.Domain.Inventory);
+        var reservations = Repository(Model.Domain.Reservations);
         var orderId = Guid.NewGuid().ToString("D");
         var sku = "sku-" + Guid.NewGuid().ToString("N");
         var context = OperationContext.Create().WithIdentityContext(FulfillmentDemoIdentity.Context);
@@ -75,7 +81,9 @@ public sealed class FulfillmentProcessIntegrationTests
             await orders.Upsert(context, new Order(orderId, FulfillmentStoragePolicy.LocalPartition, initialStatus));
             // Same ID in another partition must not confuse the trusted process read binding.
             var foreign = await orders.Upsert(context, new Order(orderId, "other", OrderStatus.Draft));
-            await inventory.Upsert(context, new InventoryItem(sku, FulfillmentStoragePolicy.LocalPartition, stock));
+            if (stock >= 0) await inventory.Upsert(context, new InventoryItem(sku, FulfillmentStoragePolicy.LocalPartition, stock));
+            if (existingReservation) await reservations.Upsert(context,
+                new Reservation(orderId, FulfillmentStoragePolicy.LocalPartition, orderId, sku, 1));
             var binding = TerminalService().Bind(Model.Process.Definition, orders, inventory, reservations)
                 .Build("aspire-first", new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)));
             var identity = new ProcessContinuationIdentity(new("test/" + orderId), new("attempt/1"));
@@ -93,7 +101,7 @@ public sealed class FulfillmentProcessIntegrationTests
                 var interrupted = await Assert.ThrowsAsync<EphemeralProcessExecutionException>(() =>
                     binding.Runtime.ExecuteProcessAsync(context, "fulfill", identity, input).AsTask());
                 Assert.Equal("P0001", Assert.IsType<PostgresException>(interrupted.InnerException).SqlState);
-                Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))!.Available);
+                Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))?.Available ?? -1);
                 Assert.Null(await reservations.TryGet(context, orderId, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)));
                 await using var removeFault = database.CreateCommand($"DROP TRIGGER {historySchema} ON public.cohesive_reservations");
                 await removeFault.ExecuteNonQueryAsync();
@@ -105,12 +113,8 @@ public sealed class FulfillmentProcessIntegrationTests
                 result.Kind + ": " + string.Join("; ", result.Diagnostics.Select(d => d.Code + ": " + d.Message)));
             var output = Assert.IsType<ObservationValue>(result.Outcome!.Decision.State.Terminal.Detail!.Value!.Value);
             Assert.Equal(expectedStatus, output.GetProperty("Status").GetRequiredString());
-            var expectedOutcome = quantity <= 0 ? FulfillmentOutcome.InvalidQuantity
-                : stock < quantity ? FulfillmentOutcome.InsufficientStock
-                : initialStatus == OrderStatus.Submitted ? FulfillmentOutcome.OrderRejected
-                : FulfillmentOutcome.ReservedAndSubmitted;
             Assert.Equal(expectedOutcome.ToString(), output.GetProperty("Outcome").GetRequiredString());
-            Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))!.Available);
+            Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))?.Available ?? -1);
             Assert.Equal(foreign, await orders.TryGet(context, orderId, new(partitionKey: "other")));
             var detailsReader = persistence.Query(Model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
             var details = await detailsReader.ReadAsync(orderId);
@@ -123,6 +127,7 @@ public sealed class FulfillmentProcessIntegrationTests
                 Assert.Equal(quantity, fact.Quantity); Assert.Equal(remaining, fact.AvailableStock);
                 Assert.Equal(orderId, Assert.Single(availability!).ReservationId);
             }
+            else if (existingReservation) Assert.Equal(1, Assert.Single(details!.Reservations).Quantity);
             else Assert.Empty(details!.Reservations);
             var reservationBeforeReplay = await reservations.TryGet(context, orderId, new(partitionKey: FulfillmentStoragePolicy.LocalPartition));
             var beforeReplay = await inventory.TryGet(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition));
@@ -138,7 +143,7 @@ public sealed class FulfillmentProcessIntegrationTests
             Assert.Equal(eventsBeforeReplay, await eventCount.ExecuteScalarAsync());
             await using var reservationCount = database.CreateCommand("SELECT count(*) FROM public.cohesive_reservations WHERE order_id=$1");
             reservationCount.Parameters.AddWithValue(orderId);
-            Assert.Equal(expectedStatus == "Submitted" ? 1L : 0L, await reservationCount.ExecuteScalarAsync());
+            Assert.Equal(expectedStatus == "Submitted" || existingReservation ? 1L : 0L, await reservationCount.ExecuteScalarAsync());
         }
         finally
         {
@@ -204,7 +209,7 @@ public sealed class FulfillmentProcessIntegrationTests
             } while (response.StatusCode == HttpStatusCode.Accepted);
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             Assert.Contains(expectedStatus, await response.Content.ReadAsStringAsync());
-            Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))!.Available);
+            Assert.Equal(remaining, (await inventory.TryGetEntity(context, sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))?.Available ?? -1);
             var details = await client.GetFromJsonAsync<OrderDetails>($"/orders/{orderId}/details");
             Assert.Equal(OrderStatus.Submitted, details!.Status);
             var reservation = Assert.Single(details.Reservations);

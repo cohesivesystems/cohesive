@@ -3206,6 +3206,15 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return StatementFailure(match, "switch requires at least one exact case");
             }
 
+            if (value.Type?.TypeKind == TypeKind.Enum && fallback is null)
+            {
+                var expected = new HashSet<object?>(value.Type.GetMembers().OfType<IFieldSymbol>().Where(x => x.HasConstantValue)
+                    .Select(x => x.ConstantValue));
+                var supplied = new HashSet<object?>(match.Sections.SelectMany(x => x.Labels).OfType<CaseSwitchLabelSyntax>()
+                    .Select(x => semanticModel.GetConstantValue(x.Value).Value));
+                if (!expected.SetEquals(supplied))
+                    return StatementFailure(match, "an enum switch without default must explicitly cover every declared outcome");
+            }
             flow = new(identity, value, [.. arms], fallback, SourceLocation(match), match);
             return true;
         }
@@ -5031,6 +5040,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 loweredArms.Add((arm, armEntry));
             }
 
+            var exhaustive = match.Value.Type?.TypeKind == TypeKind.Enum && match.Fallback is null;
             string? fallbackEntry = successor;
             if (match.Fallback is not null
                 && (!TryLowerBlock(match.Fallback, successor, out fallbackEntry) || fallbackEntry is null))
@@ -5038,7 +5048,7 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 return StatementFailure(match.Syntax, "the switch default requires a reachable continuation");
             }
 
-            if (fallbackEntry is null)
+            if (fallbackEntry is null && !exhaustive)
             {
                 return StatementFailure(match.Syntax, "switch without a following continuation requires a default case");
             }
@@ -5059,11 +5069,17 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 cases.Add(
                     $"__builder.MatchCase(id: {caseVariable}, pattern: {arm.Pattern}, next: __builder.Edge(owner: {caseVariable}, role: \"next\", target: {target}, {SourceArguments(arm.Source, method.Name)}), {SourceArguments(arm.Source, method.Name)})");
             }
+            if (exhaustive)
+                builderStatements.Add(
+                    $"__builder.Match(id: {match.Identity.Variable}, selection: global::Cohesive.Execution.CaseSelection.OrderedFirstMatch, completeness: global::Cohesive.Execution.BranchCompleteness.Exhaustive, value: {value}, cases: [{string.Join(", ", cases)}], {SourceArguments(match.Source, method.Name)});");
+            else
+            {
             var fallbackVariable = $"__match_fallback_{suffix}";
             builderStatements.Add(
                 $"var {fallbackVariable} = global::Cohesive.Processes.Authoring.ProcessAuthoringIdentities.NodeFor(owner: {match.Identity.Variable}, role: \"otherwise\");");
             builderStatements.Add(
                 $"__builder.Match(id: {match.Identity.Variable}, selection: global::Cohesive.Execution.CaseSelection.OrderedFirstMatch, completeness: global::Cohesive.Execution.BranchCompleteness.Fallback, value: {value}, cases: [{string.Join(", ", cases)}], fallback: __builder.Fallback(id: {fallbackVariable}, next: __builder.Edge(owner: {fallbackVariable}, role: \"next\", target: {fallbackEntry}, {SourceArguments(match.Source, method.Name)}), {SourceArguments(match.Source, method.Name)}), {SourceArguments(match.Source, method.Name)});");
+            }
             entry = match.Identity.Variable;
             return true;
         }

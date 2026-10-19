@@ -182,3 +182,12 @@ the worker. `PostgresCosmosStorage` owns the SQL mappings, offline Cosmos contai
 physical preparation. Native account/database/container names are checked when associated; the worker
 gets its connection from the corresponding native Aspire reference. Its `Bind` supplies runtime clients
 to those plans without rediscovering the split or recompiling the physical remainder.
+
+Fulfillment treats an existing reservation with the same order, SKU and quantity as an idempotent completed
+intent only when the order is already submitted. A conflicting reservation returns `ReservationConflict`
+before stock changes. Concurrent competing intents can still race the preflight read; conditional creation
+fails closed as an infrastructure conflict and requires reconciliation, rather than inventing compensation
+for another intent's reservation. This example does not claim cross-entity transactional serialization.
+Stock rejection mapping is an exhaustive typed enum switch: adding a new outcome requires updating the
+process definition. Reservation creation and release cannot reject the positive quantity already admitted
+by Reserve; physical failures remain interruptions resolved by the original receipts.
