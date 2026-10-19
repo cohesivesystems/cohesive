@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using System.Collections.Immutable;
 using System.Text;
 
 namespace Cohesive.Model.Serialization;
@@ -35,5 +36,37 @@ internal static class LengthPrefixedFingerprintEncoding
     {
         output.GetSpan(1)[0] = value ? (byte)1 : (byte)0;
         output.Advance(1);
+    }
+    // Keys are pure projections of immutable input. Reuse canonical ordering directly;
+    // noncanonical input retains the existing ordinal set normalization and wire format.
+    internal static void AppendOrdinalSet<T>(IBufferWriter<byte> output, ImmutableArray<T> values,
+        Func<T, string> key)
+    {
+        var items = values.AsSpan();
+        var canonical = true;
+        if (items.Length > 1)
+        {
+            var previous = key(items[0]);
+            for (var i = 1; i < items.Length; i++)
+            {
+                var current = key(items[i]);
+                if (StringComparer.Ordinal.Compare(previous, current) >= 0)
+                {
+                    canonical = false;
+                    break;
+                }
+                previous = current;
+            }
+        }
+        if (canonical)
+        {
+            Append(output, items.Length);
+            foreach (var item in items) Append(output, key(item));
+            return;
+        }
+
+        var normalized = values.Select(key).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+        Append(output, normalized.Length);
+        foreach (var value in normalized) Append(output, value);
     }
 }

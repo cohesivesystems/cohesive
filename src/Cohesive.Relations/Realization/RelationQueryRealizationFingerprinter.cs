@@ -270,7 +270,7 @@ public static class RelationQueryRealizationFingerprinter
         {
             Append(buffer, evidence.Id.Value);
             AppendCapability(buffer, evidence.Capability);
-            AppendIds(buffer, evidence.OperatingBoundaries.Select(static boundary => boundary.Value));
+            AppendOrdinalSet(buffer, evidence.OperatingBoundaries, static boundary => boundary.Value);
         }
 
         Append(buffer, relevant.Boundaries.Length);
@@ -299,7 +299,7 @@ public static class RelationQueryRealizationFingerprinter
             Append(buffer, rule.Id.Value);
             AppendCapability(buffer, rule.ProvidedCapability);
             AppendCapabilities(buffer, rule.RequiredCapabilities);
-            AppendIds(buffer, rule.RequiredOperatingBoundaries.Select(static boundary => boundary.Value));
+            AppendOrdinalSet(buffer, rule.RequiredOperatingBoundaries, static boundary => boundary.Value);
             AppendGuarantees(buffer, rule.PreservedGuarantees);
         }
 
@@ -316,8 +316,8 @@ public static class RelationQueryRealizationFingerprinter
             Append(buffer, item.Id.Value);
             Append(buffer, item.Requirement.Value);
             AppendCapability(buffer, item.ExpectedCapability);
-            AppendIds(buffer, item.CapabilityEvidence.Select(static evidence => evidence.Value));
-            AppendIds(buffer, item.OperatingBoundaries.Select(static boundary => boundary.Value));
+            AppendOrdinalSet(buffer, item.CapabilityEvidence, static evidence => evidence.Value);
+            AppendOrdinalSet(buffer, item.OperatingBoundaries, static boundary => boundary.Value);
             AppendGuarantees(buffer, item.PreservedGuarantees);
         }
 
@@ -346,23 +346,23 @@ public static class RelationQueryRealizationFingerprinter
             switch (decision)
             {
                 case NativeRelationQueryRealizationDecision native:
-                    AppendIds(buffer, native.CapabilityEvidence.Select(static evidence => evidence.Value));
+                    AppendOrdinalSet(buffer, native.CapabilityEvidence, static evidence => evidence.Value);
                     AppendGuarantees(buffer, native.PreservedGuarantees);
                     break;
                 case ComposedRelationQueryRealizationDecision composed:
-                    AppendIds(buffer, composed.CompositionRules.Select(static rule => rule.Value));
-                    AppendIds(buffer, composed.CapabilityEvidence.Select(static evidence => evidence.Value));
+                    AppendOrdinalSet(buffer, composed.CompositionRules, static rule => rule.Value);
+                    AppendOrdinalSet(buffer, composed.CapabilityEvidence, static evidence => evidence.Value);
                     AppendGuarantees(buffer, composed.PreservedGuarantees);
                     break;
                 case ConstrainedRelationQueryRealizationDecision constrained:
-                    AppendIds(buffer, constrained.CompositionRules.Select(static rule => rule.Value));
-                    AppendIds(buffer, constrained.CapabilityEvidence.Select(static evidence => evidence.Value));
+                    AppendOrdinalSet(buffer, constrained.CompositionRules, static rule => rule.Value);
+                    AppendOrdinalSet(buffer, constrained.CapabilityEvidence, static evidence => evidence.Value);
                     AppendBoundaryValidations(buffer, constrained.BoundaryValidations);
                     AppendGuarantees(buffer, constrained.PreservedGuarantees);
                     break;
                 case OverrideRelationQueryRealizationDecision overridden:
                     Append(buffer, overridden.Override.Value);
-                    AppendIds(buffer, overridden.CapabilityEvidence.Select(static evidence => evidence.Value));
+                    AppendOrdinalSet(buffer, overridden.CapabilityEvidence, static evidence => evidence.Value);
                     AppendBoundaryValidations(buffer, overridden.BoundaryValidations);
                     AppendGuarantees(buffer, overridden.PreservedGuarantees);
                     break;
@@ -615,14 +615,6 @@ public static class RelationQueryRealizationFingerprinter
         Append(buffer, normalized.Length);
         foreach (var guarantee in normalized)
             Append(buffer, (int)guarantee);
-    }
-
-    static void AppendIds(IBufferWriter<byte> buffer, IEnumerable<string> values)
-    {
-        var normalized = values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        Append(buffer, normalized.Length);
-        foreach (var value in normalized)
-            Append(buffer, value);
     }
 
     static void AppendFieldPath(IBufferWriter<byte> buffer, FieldPath path)
