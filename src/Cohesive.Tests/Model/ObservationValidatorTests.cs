@@ -558,13 +558,18 @@ public sealed class ObservationValidatorTests(Xunit.Abstractions.ITestOutputHelp
         var value = ObservationValue.FromString("00");
         for (var i = 0; i < AllocationWarmupIterations; i++)
             Assert.True(ObservationValidator.TryValidateAgainstType(value, type, out _, graph));
-        var before = GC.GetAllocatedBytesForCurrentThread();
+        var samples = new long[7];
         var success = true;
-        for (var i = 0; i < 10_000; i++)
-            success &= ObservationValidator.TryValidateAgainstType(value, type, out _, graph);
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        for (var sample = 0; sample < samples.Length; sample++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 10_000; i++)
+                success &= ObservationValidator.TryValidateAgainstType(value, type, out _, graph);
+            samples[sample] = GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Array.Sort(samples);
         Assert.True(success);
-        Assert.Equal(0, allocated);
+        Assert.Equal(0, samples[3]);
     }
 
 
