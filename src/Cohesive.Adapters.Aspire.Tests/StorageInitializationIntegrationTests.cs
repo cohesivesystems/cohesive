@@ -10,6 +10,42 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed partial class OrderStorageIntegrationTests
 {
+    [PostgresTheory]
+    [InlineData("local", 0)]
+    [InlineData("quote'and\\slash", -1)]
+    public async Task Typed_checks_validate_exact_predicates_and_reject_drift(string partition, int minimum)
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var table = "checks_" + Guid.NewGuid().ToString("N");
+        var source = Model.Storage.Bindings.Mapping(Model.Domain.Inventory);
+        var mapping = new PostgresEntityRepositoryMapping(new Cohesive.Adapters.Sql.SqlQualifiedTable("public", table),
+            source.Fields, source.IdentityField, source.PartitionField, source.VersionColumn.Value);
+        var bindings = PostgresPersistenceBindings.Define(new("isolated"), b => b.Entity(Model.Domain.Inventory, mapping)
+            .Schema(PostgresSchemaInitialization.CreateIfMissing, s => s
+                .Check(Model.Domain.Inventory, x => x.Partition, Cohesive.Adapters.Sql.SqlBinaryOperator.Equal, partition)
+                .Check(Model.Domain.Inventory, x => x.Available, Cohesive.Adapters.Sql.SqlBinaryOperator.GreaterThanOrEqual, minimum)));
+        try
+        {
+            await bindings.PrepareSchemaAsync(database);
+            await using (var insert = database.CreateCommand($"INSERT INTO public.{table} (available, partition_key, sku, observation_version) VALUES ($1, $2, $3, $4)"))
+            {
+                insert.Parameters.AddWithValue(minimum - 1); insert.Parameters.AddWithValue(partition);
+                insert.Parameters.AddWithValue("item"); insert.Parameters.AddWithValue(0L);
+                var failure = await Assert.ThrowsAsync<PostgresException>(() => insert.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.CheckViolation, failure.SqlState);
+            }
+            string constraint;
+            await using (var lookup = database.CreateCommand($"SELECT conname FROM pg_constraint WHERE conrelid='public.{table}'::regclass AND contype='c' AND pg_get_expr(conbin,conrelid) LIKE '%available%'"))
+                constraint = (string)(await lookup.ExecuteScalarAsync())!;
+            await using (var alter = database.CreateCommand($"ALTER TABLE public.{table} DROP CONSTRAINT \"{constraint}\", ADD CONSTRAINT \"{constraint}\" CHECK (available >= -100)"))
+                await alter.ExecuteNonQueryAsync();
+            var drift = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => bindings.ProductSchema!.ValidateAsync(database));
+            Assert.Equal("postgres.schema.checkMismatch", drift.Code);
+            Assert.Equal("available", drift.Column);
+        }
+        finally { await using var drop = database.CreateCommand($"DROP TABLE IF EXISTS public.{table}"); await drop.ExecuteNonQueryAsync(); }
+    }
+
     [PostgresFact]
     public async Task Native_schema_additions_cannot_invalidate_projected_contract_before_admission()
     {
@@ -35,6 +71,7 @@ public sealed partial class OrderStorageIntegrationTests
 
     [PostgresTheory]
     [InlineData("ADD COLUMN unexpected text", "postgres.schema.undeclaredColumns")]
+    [InlineData("DROP COLUMN available", "postgres.schema.columnMismatch")]
     [InlineData("DROP CONSTRAINT {table}_pkey", "postgres.schema.keyMismatch")]
     [InlineData("ALTER COLUMN sku TYPE text COLLATE \"default\"", "postgres.schema.columnMismatch")]
     [InlineData("ALTER COLUMN available TYPE bigint", "postgres.schema.columnMismatch")]
@@ -61,7 +98,25 @@ public sealed partial class OrderStorageIntegrationTests
     [PostgresFact]
     public async Task Projected_schema_validates_without_creation_and_rejects_native_drift()
     {
-        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var batches = 0;
+        var commands = 0;
+        var recording = false;
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == "Npgsql",
+            Sample = (ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _) => System.Diagnostics.ActivitySamplingResult.AllData
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+        var source = new NpgsqlDataSourceBuilder(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        source.ConfigureTracing(tracing => tracing
+            .ConfigureBatchEnrichmentCallback((_, batch) =>
+            {
+                if (!recording) return;
+                Interlocked.Increment(ref batches);
+                Assert.NotEqual(true, batch.EnableErrorBarriers);
+            })
+            .ConfigureCommandEnrichmentCallback((_, _) => { if (recording) Interlocked.Increment(ref commands); }));
+        await using var database = source.Build();
         var schema = "projected_" + Guid.NewGuid().ToString("N");
         await using (var createNamespace = database.CreateCommand($"CREATE SCHEMA {schema}")) await createNamespace.ExecuteNonQueryAsync();
         PostgresEntityRepositoryMapping Relocate<T>(Cohesive.Transitions.Authoring.DomainEntity<T> entity) where T : notnull
@@ -80,14 +135,18 @@ public sealed partial class OrderStorageIntegrationTests
         try
         {
             var missing = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => validate.PrepareSchemaAsync(database));
-            Assert.Equal("postgres.schema.columnMismatch", missing.Code);
+            Assert.Equal("postgres.schema.tableMissing", missing.Code);
             await using (var count = database.CreateCommand("SELECT count(*) FROM information_schema.tables WHERE table_schema=$1"))
             {
                 count.Parameters.AddWithValue(schema);
                 Assert.Equal(0L, await count.ExecuteScalarAsync());
             }
             await create.PrepareSchemaAsync(database);
+            recording = true;
             await validate.PrepareSchemaAsync(database);
+            recording = false;
+            Assert.Equal(1, batches);
+            Assert.Equal(0, commands);
             await using (var change = database.CreateCommand($"ALTER TABLE {schema}.cohesive_inventory ALTER COLUMN available DROP NOT NULL"))
                 await change.ExecuteNonQueryAsync();
             var drift = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => create.PrepareSchemaAsync(database));

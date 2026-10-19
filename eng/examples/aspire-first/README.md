@@ -211,11 +211,17 @@ initial DDL for inspection. Creation contains no ALTER/backfill, and validation 
 Relationship enforcement is selected explicitly with `ForeignKey(domain.ReservationOrder)`; the mixed model
 never declares an inventory FK across PostgreSQL and Cosmos.
 
-The remaining `schema.sql` files contain native additions only: local checks, global identity indexes and
+Local partition and positive/nonnegative quantity rules use typed `schema.Check(...)` declarations, reading
+`FulfillmentStoragePolicy.LocalPartition` rather than repeating it in SQL. Shared order/reservation schema
+configuration lives with `FulfillmentPostgresMappings`; order keys and reservation references both use `C`
+collation. Existing installations using default-collated order keys need a reviewed migration.
+
+The remaining `schema.sql` files contain native additions only: global identity indexes and
 the Draft SQL default. They run through `SchemaPreparation` after generated-schema validation, followed by another contract check. They are
 not inferred from transition rules and are not covered by the generated validator. Their migration and
 verification remain operator/native-SQL responsibilities. The validator covers exact columns/types/nullability,
-explicit collations, immediate non-partial partition/identity uniqueness and validated selected foreign keys.
+explicit collations, immediate non-partial partition/identity uniqueness, validated selected foreign keys and
+the typed checks. Each validation pass uses one metadata batch; the native hook retains before/after validation.
 Existing tables with the old inventory FK or missing status column need a reviewed migration; startup no
 longer silently adds mapped columns. Cyclic foreign-key graphs require native migrations in this first slice.
 Callbacks own transaction policy; failures prevent admission. Coordinate multi-host migrations externally.

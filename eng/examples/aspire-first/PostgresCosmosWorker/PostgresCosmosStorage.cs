@@ -25,11 +25,7 @@ public sealed class PostgresCosmosStorage : StorageModel
     public PostgresCosmosStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints)
     {
         PostgresBindings = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
-            .Schema(PostgresSchemaInitialization.CreateIfMissing, schema => schema
-                .ForeignKey(domain.ReservationOrder)
-                .Collation(domain.Reservations, item => item.Id, "C")
-                .Collation(domain.Reservations, item => item.OrderId, "C")
-                .Collation(domain.Reservations, item => item.Sku, "C"))
+            .Schema(PostgresSchemaInitialization.CreateIfMissing, mappings.ConfigureOrderSchema)
             .SchemaPreparation(async (database, cancellationToken) =>
             {
                 using var schema = new StreamReader(typeof(PostgresCosmosStorage).Assembly.GetManifestResourceStream("Orders.PostgresCosmos.schema.sql")

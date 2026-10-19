@@ -18,6 +18,8 @@ public sealed class PostgresEntitySchemaBuilder
 {
     internal readonly List<RelationshipDefinition> References = [];
     internal readonly Dictionary<(QualifiedShapeId, string), string> Collations = [];
+    internal sealed record CheckDeclaration(QualifiedShapeId Shape, string Field, SqlBinaryOperator Comparison, object Value);
+    internal readonly List<CheckDeclaration> Checks = [];
     bool frozen;
     internal PostgresEntitySchemaBuilder() { }
     internal void Freeze() => frozen = true;
@@ -36,6 +38,33 @@ public sealed class PostgresEntitySchemaBuilder
         RequireMutable();
         ArgumentNullException.ThrowIfNull(relationship);
         References.Add(relationship.Definition);
+        return this;
+    }
+
+    /// <summary>Declares a native CHECK comparing a mapped text or Int32 field with a fixed value.</summary>
+    /// <typeparam name="T">Entity type.</typeparam>
+    /// <typeparam name="TValue">String or Int32 field/value type.</typeparam>
+    /// <param name="entity">Exact mapped entity.</param>
+    /// <param name="field">Direct canonical field selector.</param>
+    /// <param name="comparison">Equality, inequality or ordered comparison.</param>
+    /// <param name="value">Non-null constant captured at definition time; never executed as application code.</param>
+    /// <returns>This builder.</returns>
+    /// <remarks>SQL CHECK permits NULL; semantic field nullability remains separately enforced.
+    /// Other scalar types and compound predicates require an explicit native migration.</remarks>
+    /// <exception cref="ArgumentException">Selector, value type or comparison is unsupported.</exception>
+    /// <exception cref="InvalidOperationException">The builder is frozen.</exception>
+    public PostgresEntitySchemaBuilder Check<T, TValue>(DomainEntity<T> entity, Expression<Func<T, TValue>> field,
+        SqlBinaryOperator comparison, TValue value) where T : notnull
+    {
+        RequireMutable();
+        ArgumentNullException.ThrowIfNull(entity);
+        if (value is not string and not int || comparison is < SqlBinaryOperator.Equal or > SqlBinaryOperator.LessThanOrEqual)
+            throw new ArgumentException("Checks require a text or Int32 value and a scalar comparison.");
+        ArgumentNullException.ThrowIfNull(field);
+        var boxed = Expression.Lambda<Func<T, object?>>(Expression.Convert(field.Body, typeof(object)), field.Parameters);
+        if (!FieldPath.Capture(boxed).TryGetDirectFieldName(out var name)) throw new ArgumentException("A direct field is required.", nameof(field));
+        if (value is string text) _ = new SqlConstant(SqlConstantKind.String, text);
+        Checks.Add(new(entity.Definition.StateShape.QualifiedId, name, comparison, value));
         return this;
     }
 
@@ -60,13 +89,18 @@ public sealed class PostgresEntitySchemaBuilder
 
 /// <summary>Inspectable desired product schema projected from canonical fields and native mappings.</summary>
 /// <remarks>Validates mapped columns, explicit collations, immediate partition/identity uniqueness and selected
-/// foreign keys. Additional native indexes/checks/defaults are outside this contract. Creation never alters
+/// foreign keys and scalar checks. Additional native indexes/defaults are outside this contract. Creation never alters
 /// existing tables; incompatible schemas require a reviewed migration. Cyclic FK graphs require native migration.</remarks>
 public sealed class PostgresEntitySchema
 {
     sealed record Column(string Name, string Type, bool Required, string? Collation);
     sealed record Table(QualifiedShapeId Shape, string Sql, ImmutableArray<Column> Columns, string Partition, string Identity);
     sealed record Reference(Table Source, string Field, Table Target);
+    sealed record Check(Table Table, string Field, string Operator, string Value, bool Text)
+    {
+        public string Literal => Text ? "E'" + Value.Replace("\\", "\\\\").Replace("'", "''") + "'::text" : Value;
+    }
+    readonly ImmutableArray<Check> checks;
     readonly ImmutableArray<Table> tables;
     readonly ImmutableArray<Reference> references;
     internal PostgresEntitySchema(Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> mappings,
@@ -113,9 +147,35 @@ public sealed class PostgresEntitySchema
                 throw new ArgumentException($"Foreign key {relationship.Id.Value} requires a direct text observation-identity reference.");
             if (field.Column.Value == source.Partition)
                 throw new ArgumentException($"Foreign key {relationship.Id.Value} cannot use the partition as its entity reference.");
+            RequireCompatible(source, field.Column.Value, target, target.Identity);
+            RequireCompatible(source, source.Partition, target, target.Partition);
             refs.Add(new(source, field.Column.Value, target));
+            void RequireCompatible(Table from, string fromName, Table to, string toName)
+            {
+                var left = from.Columns.Single(x => x.Name == fromName);
+                var right = to.Columns.Single(x => x.Name == toName);
+                if (left.Type != right.Type || (left.Collation ?? "default") != (right.Collation ?? "default"))
+                    throw new ArgumentException($"Foreign key {relationship.Id.Value}: {from.Sql}.{fromName} and {to.Sql}.{toName} must have matching types and collations.");
+            }
         }
         references = refs.ToImmutable();
+        checks = builder.Checks.Select(check =>
+        {
+            if (!mappings.TryGetValue(check.Shape, out var mapping) || !mapping.Mapping.FieldByName.TryGetValue(check.Field, out var field))
+                throw new ArgumentException($"Check addresses an unmapped entity field: {check.Field}.");
+            if (field.ScalarType != (check.Value is string ? PostgresRelationQueryScalarType.Text : PostgresRelationQueryScalarType.Int32))
+                throw new ArgumentException($"Check value does not match field {check.Field}.");
+            var op = check.Comparison switch
+            {
+                SqlBinaryOperator.Equal => "=", SqlBinaryOperator.NotEqual => "<>",
+                SqlBinaryOperator.GreaterThan => ">", SqlBinaryOperator.GreaterThanOrEqual => ">=",
+                SqlBinaryOperator.LessThan => "<", SqlBinaryOperator.LessThanOrEqual => "<=",
+                _ => throw new ArgumentOutOfRangeException(nameof(check.Comparison))
+            };
+            return new Check(selected[check.Shape], field.Column.Value, op,
+                Convert.ToString(check.Value, System.Globalization.CultureInfo.InvariantCulture)!, check.Value is string);
+        }).Distinct().OrderBy(x => x.Table.Sql, StringComparer.Ordinal).ThenBy(x => x.Field, StringComparer.Ordinal)
+            .ThenBy(x => x.Operator, StringComparer.Ordinal).ThenBy(x => x.Value, StringComparer.Ordinal).ToImmutableArray();
         var ordered = ImmutableArray.CreateBuilder<Table>();
         var visited = new HashSet<QualifiedShapeId>();
         var active = new HashSet<QualifiedShapeId>();
@@ -136,6 +196,8 @@ public sealed class PostgresEntitySchema
             clauses.Add($"PRIMARY KEY ({Quote(table.Partition)}, {Quote(table.Identity)})");
             foreach (var reference in references.Where(x => x.Source == table))
                 clauses.Add($"FOREIGN KEY ({Quote(table.Partition)}, {Quote(reference.Field)}) REFERENCES {reference.Target.Sql} ({Quote(reference.Target.Partition)}, {Quote(reference.Target.Identity)})");
+            foreach (var check in checks.Where(x => x.Table == table))
+                clauses.Add($"CHECK ({Quote(check.Field)} {check.Operator} {check.Literal})");
             ddl.Append("CREATE TABLE IF NOT EXISTS ").Append(table.Sql).Append(" (\n  ").AppendJoin(",\n  ", clauses).AppendLine("\n);");
         }
         CreateSql = ddl.ToString();
@@ -146,48 +208,33 @@ public sealed class PostgresEntitySchema
     /// <summary>Validates the projected contract against native catalog metadata without schema changes.</summary>
     /// <param name="database">Borrowed data source.</param>
     /// <param name="cancellationToken">Cancellation of metadata reads.</param>
-    /// <returns>Completion after all declared tables and references validate.</returns>
-    /// <exception cref="PostgresSchemaValidationException">A table, column, key or foreign key requires migration.</exception>
+    /// <returns>Completion after all declared tables, references and checks validate in one native batch.</returns>
+    /// <exception cref="PostgresSchemaValidationException">A table, column, key, foreign key or declared check requires migration.</exception>
     /// <exception cref="NpgsqlException">Metadata access fails.</exception>
     public async Task ValidateAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(database);
+        await using var batch = database.CreateBatch();
         foreach (var table in tables)
         {
-            await using var columns = database.CreateCommand("""
+            Add("SELECT to_regclass($1) IS NOT NULL", table.Sql);
+            Add("""
                 SELECT a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull,c.collname,n.nspname
                 FROM pg_attribute a LEFT JOIN pg_collation c ON c.oid=a.attcollation
                 LEFT JOIN pg_namespace n ON n.oid=c.collnamespace
                 WHERE a.attrelid=to_regclass($1) AND a.attnum>0 AND NOT a.attisdropped
-                """);
-            columns.Parameters.AddWithValue(table.Sql);
-            var found = new Dictionary<string, (string Type, bool Required, string? Collation, string? Schema)>();
-            await using (var reader = await columns.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
-                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                    found.Add(reader.GetString(0), (reader.GetString(1), reader.GetBoolean(2), reader.IsDBNull(3) ? null : reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4)));
-            foreach (var column in table.Columns)
-                if (!found.TryGetValue(column.Name, out var actual) || actual.Type != column.Type || actual.Required != column.Required
-                    || column.Collation is { } collation && (actual.Collation != collation || actual.Schema != "pg_catalog"))
-                    throw new PostgresSchemaValidationException("postgres.schema.columnMismatch", table.Sql, $"Product schema {table.Sql} column {column.Name} requires migration.", column.Name);
-            if (found.Count != table.Columns.Length) throw new PostgresSchemaValidationException("postgres.schema.undeclaredColumns", table.Sql, $"Product schema {table.Sql} has undeclared columns.");
-            await using var keys = database.CreateCommand("""
+                """, table.Sql);
+            Add("""
                 SELECT array_agg(a.attname::text ORDER BY k.ordinality)
                 FROM pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality)
                 JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum
                 WHERE i.indrelid=to_regclass($1) AND i.indisunique AND i.indisvalid AND i.indisready AND i.indimmediate
                   AND i.indpred IS NULL AND i.indexprs IS NULL AND k.ordinality<=i.indnkeyatts
                 GROUP BY i.indexrelid
-                """);
-            keys.Parameters.AddWithValue(table.Sql);
-            var matched = false;
-            await using (var reader = await keys.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
-                while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                    matched |= reader.GetFieldValue<string[]>(0).ToHashSet(StringComparer.Ordinal).SetEquals([table.Partition, table.Identity]);
-            if (!matched) throw new PostgresSchemaValidationException("postgres.schema.keyMismatch", table.Sql, $"Product schema {table.Sql} requires immediate partition/identity uniqueness.");
+                """, table.Sql);
         }
         foreach (var reference in references)
-        {
-            await using var fk = database.CreateCommand("""
+            Add("""
                 SELECT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.contype='f' AND c.conrelid=to_regclass($1)
                 AND c.confrelid=to_regclass($2) AND c.convalidated AND NOT c.condeferrable
                 AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s'
@@ -195,12 +242,60 @@ public sealed class PostgresEntitySchema
                   JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.id)=$3
                 AND (SELECT array_agg(a.attname::text ORDER BY k.n) FROM unnest(c.confkey) WITH ORDINALITY k(id,n)
                   JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.id)=$4)
-                """);
-            fk.Parameters.AddWithValue(reference.Source.Sql); fk.Parameters.AddWithValue(reference.Target.Sql);
-            fk.Parameters.AddWithValue(new[] { reference.Source.Partition, reference.Field });
-            fk.Parameters.AddWithValue(new[] { reference.Target.Partition, reference.Target.Identity });
-            if (await fk.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+                """, reference.Source.Sql, reference.Target.Sql,
+                new[] { reference.Source.Partition, reference.Field }, new[] { reference.Target.Partition, reference.Target.Identity });
+        foreach (var check in checks)
+            Add("""
+                SELECT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.contype='c'
+                  AND c.conrelid=to_regclass($1) AND c.convalidated AND NOT c.connoinherit
+                  AND pg_get_expr(c.conbin,c.conrelid) = format('(%I %s %s)', $2::text, $3::text,
+                    CASE WHEN $5::boolean THEN chr(39) || replace(
+                      CASE WHEN current_setting('standard_conforming_strings')='on' THEN $4::text
+                        ELSE replace($4::text, chr(92), chr(92)||chr(92)) END, chr(39), chr(39)||chr(39)) || chr(39) || '::text'
+                      WHEN $4::text LIKE '-%' THEN quote_literal($4::text) || '::integer' ELSE $4::text END))
+                """, check.Table.Sql, check.Field, check.Operator, check.Value, check.Text);
+        await using var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var table in tables)
+        {
+            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (!reader.GetBoolean(0))
+                throw new PostgresSchemaValidationException("postgres.schema.tableMissing", table.Sql, $"Product table {table.Sql} is missing; create it or apply a reviewed migration.");
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            var found = new Dictionary<string, (string Type, bool Required, string? Collation, string? Schema)>();
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                found.Add(reader.GetString(0), (reader.GetString(1), reader.GetBoolean(2), reader.IsDBNull(3) ? null : reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4)));
+            foreach (var column in table.Columns)
+                if (!found.TryGetValue(column.Name, out var actual) || actual.Type != column.Type || actual.Required != column.Required
+                    || column.Collation is { } collation && (actual.Collation != collation || actual.Schema != "pg_catalog"))
+                    throw new PostgresSchemaValidationException("postgres.schema.columnMismatch", table.Sql, $"Product schema {table.Sql} column {column.Name} requires migration.", column.Name);
+            if (found.Count != table.Columns.Length) throw new PostgresSchemaValidationException("postgres.schema.undeclaredColumns", table.Sql, $"Product schema {table.Sql} has undeclared columns.");
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+            var matched = false;
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+                matched |= reader.GetFieldValue<string[]>(0).ToHashSet(StringComparer.Ordinal).SetEquals([table.Partition, table.Identity]);
+            if (!matched) throw new PostgresSchemaValidationException("postgres.schema.keyMismatch", table.Sql, $"Product schema {table.Sql} requires immediate partition/identity uniqueness.");
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+        }
+        foreach (var reference in references)
+        {
+            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (!reader.GetBoolean(0))
                 throw new PostgresSchemaValidationException("postgres.schema.referenceMismatch", reference.Source.Sql, $"Product schema {reference.Source.Sql} reference {reference.Field} requires a validated partition-scoped foreign key.", reference.Field);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+        }
+        foreach (var check in checks)
+        {
+            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+            if (!reader.GetBoolean(0))
+                throw new PostgresSchemaValidationException("postgres.schema.checkMismatch", check.Table.Sql,
+                    $"Product schema {check.Table.Sql} check on {check.Field} requires migration.", check.Field);
+            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
+        }
+        void Add(string sql, params object[] parameters)
+        {
+            var command = new NpgsqlBatchCommand(sql);
+            foreach (var value in parameters) command.Parameters.AddWithValue(value);
+            batch.BatchCommands.Add(command);
         }
     }
     static string Quote(string value) => PostgresSqlDialect.Identifier(value).ToSql(PostgresSqlDialect.Instance);

@@ -1,5 +1,6 @@
 using Cohesive.Adapters.Postgres;
 using Cohesive.Storage;
+using Cohesive.Adapters.Sql;
 using Cohesive.Adapters.Marten;
 using Cohesive.Adapters.Postgres.Services;
 
@@ -18,12 +19,14 @@ public sealed class FulfillmentStorage : StorageModel
         Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
             new(FulfillmentStoragePolicy.OrdersDatabaseName), storage =>
             {
-                storage.Schema(PostgresSchemaInitialization.CreateIfMissing, schema => schema
-                    .ForeignKey(domain.ReservationOrder).ForeignKey(domain.ReservationItem)
-                    .Collation(domain.Inventory, item => item.Sku, "C")
-                    .Collation(domain.Reservations, item => item.Id, "C")
-                    .Collation(domain.Reservations, item => item.OrderId, "C")
-                    .Collation(domain.Reservations, item => item.Sku, "C"));
+                storage.Schema(PostgresSchemaInitialization.CreateIfMissing, schema =>
+                {
+                    mappings.ConfigureOrderSchema(schema);
+                    schema.ForeignKey(domain.ReservationItem)
+                        .Collation(domain.Inventory, item => item.Sku, "C")
+                        .Check(domain.Inventory, item => item.Partition, SqlBinaryOperator.Equal, FulfillmentStoragePolicy.LocalPartition)
+                        .Check(domain.Inventory, item => item.Available, SqlBinaryOperator.GreaterThanOrEqual, 0);
+                });
                 storage.SchemaPreparation(async (database, cancellationToken) =>
                 {
                     using var schema = new StreamReader(typeof(FulfillmentStorage).Assembly.GetManifestResourceStream("Orders.schema.sql")
@@ -53,10 +56,12 @@ public sealed class FulfillmentStorage : StorageModel
 /// <summary>Shared native table mappings, independent of which entities a composition places in PostgreSQL.</summary>
 public sealed class FulfillmentPostgresMappings
 {
+    readonly FulfillmentDomain domain;
     /// <summary>Authors each immutable mapping once against the shared domain.</summary>
     /// <param name="domain">Canonical entities owned by this application.</param>
     public FulfillmentPostgresMappings(FulfillmentDomain domain)
     {
+        this.domain = domain;
         Orders = PostgresEntityRepositoryMapping.For(domain.Orders)
             .Table("public", "cohesive_orders").Identity(x => x.Id, "order_id")
             .Partition(x => x.Partition, "partition_key").Column(x => x.Status, "status").Build();
@@ -68,6 +73,17 @@ public sealed class FulfillmentPostgresMappings
             .Table("public", "cohesive_inventory").Identity(x => x.Sku, "sku")
             .Partition(x => x.Partition, "partition_key").Column(x => x.Available, "available").Build();
     }
+    /// <summary>Shared constraints for orders/reservations in either database placement.</summary>
+    /// <param name="schema">Native schema declaration for the mapped entities.</param>
+    public void ConfigureOrderSchema(PostgresEntitySchemaBuilder schema) => schema
+        .ForeignKey(domain.ReservationOrder)
+        .Collation(domain.Orders, item => item.Id, "C")
+        .Collation(domain.Reservations, item => item.Id, "C")
+        .Collation(domain.Reservations, item => item.OrderId, "C")
+        .Collation(domain.Reservations, item => item.Sku, "C")
+        .Check(domain.Reservations, item => item.Partition, SqlBinaryOperator.Equal, FulfillmentStoragePolicy.LocalPartition)
+        .Check(domain.Reservations, item => item.Quantity, SqlBinaryOperator.GreaterThan, 0);
+
     /// <summary>Native order table mapping.</summary>
     public PostgresEntityRepositoryMapping Orders { get; }
     /// <summary>Native reservation table mapping.</summary>

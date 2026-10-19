@@ -275,15 +275,38 @@ creates missing tables in existing schemas. `bindings.ProductSchema.CreateSql` i
 initial DDL, prepared once with the mappings. It does not generate migrations or backfills.
 
 Use `schema.ForeignKey(domain.Reference)` to explicitly enforce a direct observation-identity relationship
-within the same database and partition. Cross-database endpoints and cyclic FK graphs are rejected offline.
+within the same database and partition. Cross-database endpoints, cyclic FK graphs and mismatched source/target
+key types or collations (including partition columns) are rejected offline. Unspecified collation means the
+database default; it is not silently treated as equivalent to an explicit `C` collation.
 Query correlation alone does not select a database constraint. `schema.Collation(entity, x => x.Field, "C")`
 attaches a native collation without repeating physical column names. Scalar type names come from the existing
-PostgreSQL scalar catalog; domain nullability and mapping key selections remain authoritative.
+PostgreSQL scalar catalog; a single metadata row owns each type's semantic kind, native name/OIDs, encoding,
+parameter type and TOAST policy. Domain nullability and mapping key selections remain authoritative.
+
+Declare simple native checks without repeating physical names or policy values:
+
+```csharp
+schema.Check(domain.Inventory, item => item.Partition, SqlBinaryOperator.Equal, StoragePolicy.LocalPartition)
+      .Check(domain.Inventory, item => item.Available, SqlBinaryOperator.GreaterThanOrEqual, 0);
+```
+
+This first slice supports direct text/Int32 field comparisons with fixed, typed values. Values are captured
+once, not evaluated on requests. SQL CHECK permits null; semantic nullability is enforced separately.
+Compound predicates and other scalar types remain native migration concerns. Generated checks are validated
+against PostgreSQL's deparsed predicate, not just the constraint name. Equivalent custom rewrites may fail
+closed; this is deliberately not a general SQL equivalence prover.
 
 Admission checks exact mapped columns/types/nullability, explicit collations, immediate non-partial unique
-partition/identity keys, and validated non-deferrable selected FKs with NO ACTION semantics. Drift raises
+partition/identity keys, validated non-deferrable selected FKs with NO ACTION semantics, and declared checks. Drift raises
 `PostgresSchemaValidationException` with a stable code and native table/column context. Existing objects are
-never altered to force a match. Additional CHECKs, defaults and native indexes remain explicit native SQL,
+never altered to force a match. Missing tables use `postgres.schema.tableMissing`; existing tables with
+incompatible or missing columns use `postgres.schema.columnMismatch`, and check drift uses
+`postgres.schema.checkMismatch`. Additional undeclared CHECKs, defaults and native indexes remain explicit native SQL,
 may be applied in `SchemaPreparation` afterward, and are outside generated validation. Do not interpret a
 successful projected-schema check as full native schema equivalence. Keep external migrations coordinated
 and revalidate after DDL changes; admission evidence does not lock schema against later changes.
+
+Catalog validation submits one Npgsql batch per pass, with error barriers disabled, rather than awaiting
+one network exchange per table/key/reference. A native `SchemaPreparation` hook deliberately keeps admission
+checks both before and after it: do not mutate an incompatible schema, and do not admit a hook that damages
+the contract. Those are two batches, not duplicate preparation accidentally performed per repository.
