@@ -93,9 +93,10 @@ var snapshot = new EntityObservationSnapshot(
 Physical layouts, source placement, relation occurrences, and storage concurrency tokens belong to the interpreting
 block or adapter.
 
-`PortableExecutionValidator` reuses successful checks of immutable inline type declarations.
-Every value and contract modifier is still checked; named types and shapes resolve against each
-call's graph. Reusing a declaration never admits an unchecked value or a different graph.
+`PortableExecutionValidator` reuses successful checks of immutable inline type declarations and
+structural evidence for immutable observation storage. Type compatibility and contract modifiers
+are checked on every call; named types and shapes resolve against that call's graph. Newly decoded
+or changed payloads require fresh structural validation. See the [structural-validation qualification](../../docs/performance/observation-structure-validation/README.md).
 
 ## Native operation telemetry
 

@@ -59,8 +59,9 @@ public static class PortableExecutionDiagnosticCodes
 /// Validation is deliberately fail-closed: an unrecognized subclass is an error even if it can be serialized by a
 /// local runtime. Named types and qualified shapes require a matching <see cref="ShapeGraph"/> so validation never
 /// treats unresolved semantics as compatible by assumption. Successful graph-independent checks of immutable inline
-/// types may be reused by exact declaration identity; values, contract modifiers, names, and shapes remain checked
-/// for each invocation and supplied graph.
+/// types may be reused by exact declaration identity. Successful structural evidence may be reused for immutable
+/// observation storage; contract modifiers, type compatibility, names, and shapes remain checked for each invocation
+/// and supplied graph. Newly decoded storage requires fresh structural validation.
 /// </remarks>
 public static class PortableExecutionValidator
 {
@@ -130,6 +131,18 @@ public static class PortableExecutionValidator
     // Proofs belong to exact immutable framework TypeRef instances, not contracts or values.
     // Only graph-independent successes are published; invalid and contextual checks stay fresh.
     static readonly WeakPreparationCache<TypeRef, bool> PortableInlineTypes = new();
+    static readonly WeakPreparationCache<object, ObservationStructure> ObservationStructures = new();
+
+    // Small one-shot rows should not allocate cache entries. Count saturates at this boundary;
+    // depth and normalization remain exact, including when an unchanged subtree is reparented.
+    const int MinimumPreparedObservationNodes = 32;
+    readonly record struct ObservationStructure(int ContainerDepth, bool RequiresNormalization, int Nodes)
+    {
+        internal ObservationStructure Include(ObservationStructure child) => new(
+            Math.Max(ContainerDepth, child.ContainerDepth + 1),
+            RequiresNormalization || child.RequiresNormalization,
+            Math.Min(MinimumPreparedObservationNodes, Nodes + child.Nodes));
+    }
 
     enum Compatibility
     {
@@ -942,12 +955,18 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateObservation(ObservationValue value, Location location, int depth = 0)
+        ObservationStructure ValidateObservation(ObservationValue value, Location location, int depth = 0)
         {
-            if (jsonDepthLimit > 0 && (value.Kind == ObservationValueKind.Bytes
-                || value.Kind is ObservationValueKind.Array or ObservationValueKind.Object && depth >= jsonDepthLimit
-                || value.Kind == ObservationValueKind.String && RequiresJsonNormalization(value.String)))
-                RequiresJsonRoundTrip = true;
+            var owner = value.CompositeStorage;
+            if (owner is not null && ObservationStructures.TryGet(owner, out var prepared))
+            {
+                ApplyJsonRequirements(prepared, depth);
+                return prepared;
+            }
+            var start = diagnostics.Count;
+            var structure = new ObservationStructure(-1,
+                value.Kind == ObservationValueKind.Bytes
+                || value.Kind == ObservationValueKind.String && RequiresJsonNormalization(value.String), 1);
             switch (value.Kind)
             {
                 case ObservationValueKind.Undefined:
@@ -999,6 +1018,7 @@ public static class PortableExecutionValidator
                     }
                     var visitor = new ObservationFieldValidator(this, location, depth + 1);
                     ObservationFieldTraversal.Visit(value.Fields, ref visitor);
+                    structure = visitor.Structure;
                     break;
                 case ObservationValueKind.Array:
                     if (value.Array.IsDefault)
@@ -1006,8 +1026,9 @@ public static class PortableExecutionValidator
                         MalformedObservation(value.Kind, location);
                         break;
                     }
+                    structure = new(0, false, 1);
                     for (var index = 0; index < value.Array.Length; index++)
-                        ValidateObservation(value.Array[index], Index(location, index), depth + 1);
+                        structure = structure.Include(ValidateObservation(value.Array[index], Index(location, index), depth + 1));
                     break;
                 default:
                     Error(
@@ -1016,26 +1037,40 @@ public static class PortableExecutionValidator
                         location);
                     break;
             }
+            ApplyJsonRequirements(structure, depth);
+            if (owner is not null && structure.Nodes >= MinimumPreparedObservationNodes && diagnostics.Count == start)
+                ObservationStructures.Publish(owner, structure);
+            return structure;
         }
 
-        readonly struct ObservationFieldValidator(ValidationContext context, Location location, int depth) : IObservationFieldVisitor
+        void ApplyJsonRequirements(ObservationStructure structure, int depth)
         {
+            if (jsonDepthLimit > 0 && (structure.RequiresNormalization
+                || structure.ContainerDepth >= 0 && structure.ContainerDepth >= jsonDepthLimit - depth))
+                RequiresJsonRoundTrip = true;
+        }
+
+
+        struct ObservationFieldValidator(ValidationContext context, Location location, int depth) : IObservationFieldVisitor
+        {
+            internal ObservationStructure Structure;
             public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
                 where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
-                => context.ValidateObservationFields(fields, location, canonical, depth);
+                => Structure = context.ValidateObservationFields(fields, location, canonical, depth);
         }
 
-        void ValidateObservationFields<TEnumerator>(TEnumerator fields, Location location, bool canonical, int depth)
+        ObservationStructure ValidateObservationFields<TEnumerator>(TEnumerator fields, Location location, bool canonical, int depth)
             where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
         {
             List<(string Name, int Start, int Count)>? failures = null;
+            var structure = new ObservationStructure(0, false, 1);
             try
             {
                 while (fields.MoveNext())
                 {
                     var field = fields.Current;
                     var start = diagnostics.Count;
-                    ValidateObservationField(field, location, depth);
+                    structure = structure.Include(ValidateObservationField(field, location, depth));
                     if (!canonical && diagnostics.Count != start)
                         (failures ??= []).Add((field.Key, start, diagnostics.Count - start));
                 }
@@ -1043,6 +1078,7 @@ public static class PortableExecutionValidator
                     OrderObservationFailures(failures);
             }
             finally { fields.Dispose(); }
+            return structure;
         }
 
         void OrderObservationFailures(List<(string Name, int Start, int Count)> failures)
@@ -1069,15 +1105,15 @@ public static class PortableExecutionValidator
             }
         }
 
-        void ValidateObservationField(KeyValuePair<string, ObservationValue> field, Location location, int depth)
+        ObservationStructure ValidateObservationField(KeyValuePair<string, ObservationValue> field, Location location, int depth)
         {
             if (string.IsNullOrWhiteSpace(field.Key))
                 Error(
                     PortableExecutionDiagnosticCodes.MalformedObservation,
                     "Object observation property names must be non-empty.",
                     location);
-            if (jsonDepthLimit > 0 && RequiresJsonNormalization(field.Key)) RequiresJsonRoundTrip = true;
-            ValidateObservation(field.Value, Child(location, field.Key), depth);
+            var structure = ValidateObservation(field.Value, Child(location, field.Key), depth);
+            return RequiresJsonNormalization(field.Key) ? structure with { RequiresNormalization = true } : structure;
         }
 
         static bool RequiresJsonNormalization(string? text)
