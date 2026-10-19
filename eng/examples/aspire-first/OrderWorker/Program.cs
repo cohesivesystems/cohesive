@@ -27,8 +27,7 @@ builder.Services.AddKeyedSingleton<IDocumentStore>(FulfillmentStoragePolicy.Orde
     options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
     options.Connection(services.GetRequiredKeyedService<NpgsqlDataSource>(FulfillmentStoragePolicy.OrdersDatabaseName));
     options.DatabaseSchemaName = "cohesive_events";
-    options.Events.StreamIdentity = StreamIdentity.AsString;
-    options.Events.AddEventType<EntityStateEvent>();
+    options.UseCohesiveEntityHistory();
 }));
 builder.Services.AddCohesiveServices(model.Endpoints, model.Storage);
 

@@ -13,8 +13,7 @@ using var store = DocumentStore.For(options =>
     options.Connection(database); // The same caller-owned NpgsqlDataSource as relational storage.
     options.DatabaseSchemaName = "cohesive_events";
     options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
-    options.Events.StreamIdentity = JasperFx.Events.StreamIdentity.AsString;
-    options.Events.AddEventType<EntityStateEvent>();
+    options.UseCohesiveEntityHistory();
 });
 // Explicit development migration; production deployments own their migration lifecycle.
 await store.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
@@ -90,3 +89,16 @@ uses the same OrderApi and transition under both authority modes.
 There is no external delivery, arbitrary domain-event reducer, tombstone, retention policy,
 cross-database atomicity or asynchronous CQRS projection in this slice. Native SQL and direct
 Marten writes bypass the Cohesive protocol. See the [example walkthrough](../../../eng/examples/aspire-first/STATE-AUTHORITY.md).
+
+The envelope stores the canonical action as a JSON object in `jsonb`, not base64; native projections can
+inspect that payload, although this adapter does not configure Marten projections. Binding checks the
+registered event type as well as stream identity and exact data source. This unreleased envelope revision
+requires explicit migration of earlier byte-array events (including uppercase hashes).
+
+Replay limits are write admission limits too: a full-replay stream cannot append past its configured action
+or byte budget. Checkpoint cadence must fit the action budget. Cumulative canonical byte counts are retained
+independently of replay mode; appends acquire the previous event and, when needed, the checkpoint predecessor
+to check the selected range without decoding the entire stream. This adds bounded metadata acquisition;
+no write-throughput improvement is claimed. Read-side integrity and range bounds remain independently checked.
+Outbox byte-limited reads return a partial page with its last included sequence; an individually oversized
+or corrupt commit still fails rather than being silently skipped.

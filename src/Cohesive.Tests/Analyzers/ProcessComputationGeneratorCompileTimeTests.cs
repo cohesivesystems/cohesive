@@ -525,6 +525,39 @@ public sealed class ProcessComputationGeneratorCompileTimeTests
         Assert.Contains("ToUpperInvariant", diagnostic.GetMessage());
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Enum_switch_requires_every_declared_outcome(bool complete)
+    {
+        var source = """
+            using Cohesive.Processes.Authoring;
+            namespace Sample;
+            public enum Outcome { Accepted, Rejected }
+            [GenerateProcessDefinition(nameof(Run))]
+            public static partial class Example
+            {
+                private static async ProcessTask<string> Run(ProcessContext process, Outcome input)
+                {
+                    switch (input)
+                    {
+                        case Outcome.Accepted: return "ok";
+                        REJECTION
+                    }
+                    return process.Unreachable<string>();
+                }
+            }
+            """.Replace("REJECTION", complete ? "case Outcome.Rejected: return \"no\";" : "");
+        var run = RunGenerator(CreateCompilation(source), out var output);
+        if (complete)
+        {
+            Assert.Empty(run.Results.SelectMany(x => x.Diagnostics));
+            Assert.DoesNotContain(output.GetDiagnostics(), x => x.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error);
+            Assert.Contains("BranchCompleteness.Exhaustive", Assert.Single(run.Results.SelectMany(x => x.GeneratedSources)).SourceText.ToString());
+        }
+        else Assert.Contains(run.Results.SelectMany(x => x.Diagnostics), x => x.GetMessage().Contains("every declared outcome"));
+    }
+
     [Fact]
     public void Generator_LowersExactSwitchToCanonicalMatch()
     {

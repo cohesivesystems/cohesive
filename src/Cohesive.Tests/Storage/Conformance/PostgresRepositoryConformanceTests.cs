@@ -56,8 +56,7 @@ public sealed partial class PostgresRepositoryConformanceTests(ITestOutputHelper
                 options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
                 options.Connection(dataSource);
                 options.DatabaseSchemaName = schema;
-                options.Events.StreamIdentity = StreamIdentity.AsString;
-                options.Events.AddEventType<EntityStateEvent>();
+                options.UseCohesiveEntityHistory();
             });
             PostgresEntityHistoryStorage? history = null;
             if (authority is { } selected)

@@ -238,3 +238,12 @@ DI factory registrations own client disposal; registrations of externally suppli
 the caller. Stop the host before disposing it so admitted workers stop before native clients are released.
 Do not build a second service provider, allocate clients in repositories, or put request identity, transactions,
 query iterators or results in singleton state. Direct native binding APIs remain available without DI.
+
+Fulfillment treats an existing reservation with the same order, SKU and quantity as an idempotent completed
+intent only when the order is already submitted. A conflicting reservation returns `ReservationConflict`
+before stock changes. Concurrent competing intents can still race the preflight read; conditional creation
+fails closed as an infrastructure conflict and requires reconciliation, rather than inventing compensation
+for another intent's reservation. This example does not claim cross-entity transactional serialization.
+Stock rejection mapping is an exhaustive typed enum switch: adding a new outcome requires updating the
+process definition. Reservation creation and release cannot reject the positive quantity already admitted
+by Reserve; physical failures remain interruptions resolved by the original receipts.

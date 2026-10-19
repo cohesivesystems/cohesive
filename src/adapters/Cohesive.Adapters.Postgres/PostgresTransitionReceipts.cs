@@ -130,13 +130,7 @@ public sealed partial class PostgresEntityRepository
 {
     readonly PostgresTransitionReceiptOptions? receipts;
     readonly IReadOnlySet<string>? receiptFenceNames;
-    static readonly JsonSerializerOptions ReceiptJson = CreateReceiptJson();
-    static JsonSerializerOptions CreateReceiptJson()
-    {
-        var options = EntityStorageJson.CreateOptions();
-        options.MakeReadOnly(populateMissingResolver: true);
-        return options;
-    }
+    static JsonSerializerOptions ReceiptJson => EntityStorageJson.Options;
     /// <inheritdoc />
     public EntityTransitionOperationCapabilities TransitionOperationCapabilities => receipts is null
         ? EntityTransitionOperationCapabilities.Unsupported : receipts.Capabilities;
@@ -269,7 +263,7 @@ public sealed partial class PostgresEntityRepository
         if (request.Subject.EntityType.Value != EntityType) throw new ArgumentException("Receipt entity authority differs.", nameof(request));
     }
     static string OperationKey(ProcessOperationOccurrence operation) => Hash(StrictDocumentJson.GetCanonicalBytes(operation, ReceiptJson));
-    static string Hash(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
+    static string Hash(byte[] bytes) => EntityStorageJson.Hash(bytes);
     static void Add(NpgsqlCommand command, params object[] values)
     {
         foreach (var value in values) command.Parameters.Add(new NpgsqlParameter { Value = value });
