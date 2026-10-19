@@ -1,0 +1,25 @@
+variant,source,phase,workflow,mean_sampled_bytes,managed_cpu_samples
+control,004010,cold,durable execution,30602379,526
+control,004010,cold,other/unclassified workflow,65725923,1061
+control,004010,cold,preview,50310040,1086
+control,004010,repeated,durable execution,4063829,189
+control,004010,repeated,other/unclassified workflow,5989739,60
+control,004010,repeated,preview,4038371,134
+control,005030,cold,durable execution,31087725,538
+control,005030,cold,other/unclassified workflow,66160677,1055
+control,005030,cold,preview,50820789,1132
+control,005030,repeated,durable execution,4562376,214
+control,005030,repeated,other/unclassified workflow,6182661,69
+control,005030,repeated,preview,4277552,147
+candidate,004010,cold,durable execution,30815861,523
+candidate,004010,cold,other/unclassified workflow,65825544,1066
+candidate,004010,cold,preview,50096008,1085
+candidate,004010,repeated,durable execution,4028296,186
+candidate,004010,repeated,other/unclassified workflow,4633661,47
+candidate,004010,repeated,preview,3494048,111
+candidate,005030,cold,durable execution,31547109,541
+candidate,005030,cold,other/unclassified workflow,66436003,1068
+candidate,005030,cold,preview,50983584,1104
+candidate,005030,repeated,durable execution,4810536,210
+candidate,005030,repeated,other/unclassified workflow,4664829,48
+candidate,005030,repeated,preview,3588723,129
