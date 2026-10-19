@@ -315,14 +315,21 @@ the contract. Those are two batches, not duplicate preparation accidentally perf
 ### Native initialization boundaries
 
 `SchemaPreparation(assembly, "Exact.Resource.sql")` rejects a missing resource at model definition and executes
-the embedded SQL during preparation. `SchemaPreparation((services, database, token) => ...)` allows a migration
-library to borrow host logging/configuration; direct preparation must then supply `services:`. Custom callbacks
-own transactions and multi-host coordination. Native history client identity/configuration is checked before any
-product or attachment DDL in both single-store and composed preparation. Projected schema validation runs before
+the embedded SQL atomically under the same advisory lock as built-in creation during preparation. `SchemaPreparation((services, database, token) => ...)` allows a migration
+library to borrow host logging/configuration; direct preparation can supply `PrepareSchemaAsync(services, database, ct)`. The database-only overload supplies an empty provider. Custom callbacks
+own transactions and multi-host coordination; the embedded-SQL wrapper supplies both. History preparation checks native identity/configuration first, then initializes/validates its schema.
+Product preparation and receipt/outbox admission follow in both single-store and composed preparation.
+A later failure can leave successfully prepared history objects; no cross-phase rollback is implied. Projected schema validation runs before
 and after a native callback: these are distinct admission checks, each one batched round trip, because the callback
 can change the schema. Without a callback it runs once.
 
-Both service compositions use the same attachment lifecycle. Runtime authority defaults to the declared database
-identity and can be supplied explicitly. Native source contributions are immutable at composition; an offline-only
-composed preparation cannot be registered for DI without its concrete sources. `MapServicesAsync<T>()` is required
+Both service compositions use the same attachment lifecycle. Runtime authority defaults to `di/` followed by the declared database
+identity and can be supplied explicitly. `PrepareComposedService` returns offline `PostgresComposedServicePreparation` for evidence and explicit binding.
+`ComposeServices` returns `PostgresComposedStorageComposition` with immutable native source contributions and
+its offline `Preparation`. Only the latter implements the storage-composition contract required by model/DI registration. `MapServicesAsync<T>()` is required
 before host start; forgetting it fails startup before resolving storage rather than serving an empty API.
+
+Internal preparation caching uses the same source-linked WeakPreparationCache/PreparationSlot implementation
+as Core, with isolated internal types. It introduces neither a public generic cache API nor adapter friend access
+to Core. Scalar metadata validates exhaustive ordinal slot coverage at type initialization; no benchmarked speedup
+is claimed for the indexed representation.

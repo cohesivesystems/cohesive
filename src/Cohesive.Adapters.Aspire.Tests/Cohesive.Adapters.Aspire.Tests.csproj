@@ -14,6 +14,8 @@
   </ItemGroup>
   <ItemGroup>
     <Using Include="Xunit" />
+    <EmbeddedResource Include="Fixtures/ConcurrentSchema.sql" LogicalName="ConcurrentSchema.sql" />
+    <EmbeddedResource Include="Fixtures/FailingSchema.sql" LogicalName="FailingSchema.sql" />
     <EmbeddedResource Include="../../eng/examples/aspire-first/migrations/001-explicit-collations.sql" LogicalName="Migration001.sql" />
   </ItemGroup>
   <ItemGroup>

@@ -30,10 +30,6 @@ public sealed class MartenEntityHistoryConfiguration : IPostgresEntityHistoryCon
     /// <summary>Schema admission policy.</summary>
     public PostgresSchemaInitialization Initialization { get; }
     /// <inheritdoc />
-    public void ValidateNativeResources(IServiceProvider services, string database, NpgsqlDataSource dataSource) =>
-        MartenEntityHistoryStorage.RequireNativeStore(dataSource, services.GetRequiredKeyedService<IDocumentStore>(database));
-
-    /// <inheritdoc />
     /// <remarks>Uses the store keyed by the existing database resource identity. Native schema creation covers
     /// all objects configured on that store; use a dedicated history store when isolating schema ownership.
     /// CreateOnly never updates existing objects. Failed preparation is not retried; already-created objects
@@ -50,13 +46,7 @@ public sealed class MartenEntityHistoryConfiguration : IPostgresEntityHistoryCon
         ArgumentNullException.ThrowIfNull(services);
         cancellationToken.ThrowIfCancellationRequested();
         var store = services.GetRequiredKeyedService<IDocumentStore>(database);
-        // Validate transaction ownership before any schema operation.
-        MartenEntityHistoryStorage.RequireNativeStore(dataSource, store);
-        if (Initialization == PostgresSchemaInitialization.CreateIfMissing)
-            await store.Storage.Database.ApplyAllConfiguredChangesToDatabaseAsync(JasperFx.AutoCreate.CreateOnly,
-                new Weasel.Core.Migrations.ReconnectionOptions(MaxReconnectionCount: 0), cancellationToken).ConfigureAwait(false);
-        cancellationToken.ThrowIfCancellationRequested();
-        return await MartenEntityHistoryStorage.BindAsync(dataSource, store, Authority, Reconstitution,
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        return await MartenEntityHistoryStorage.PrepareAsync(dataSource, store, Authority, Reconstitution,
+            Initialization, cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 }

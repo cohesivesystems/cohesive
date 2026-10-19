@@ -262,5 +262,5 @@ schemas need their own reviewed migration. Marten history format migrations rema
 `FulfillmentStorage` and the environment-only `FulfillmentHistoryPolicy` now live with the PostgreSQL worker.
 `Orders.Model` owns only shared mappings/policy and no longer references Marten, so the Cosmos worker does not
 inherit that backend. Native clients remain DI-owned. The embedded native additions run through the model's
-`SchemaPreparation` declaration, including in integration tests. Built-in creation serializes competing host
+`SchemaPreparation` declaration in one transaction under the schema advisory lock, including in integration tests. Built-in creation serializes competing host
 bootstraps with a transaction advisory lock; custom migration callbacks still own their coordination.

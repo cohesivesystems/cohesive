@@ -42,9 +42,25 @@ public sealed class MartenEntityHistoryStorage : PostgresEntityHistoryStorage
         int checkpointInterval = 100, int maximumReplayActions = 10_000, int maximumActionBytes = 1_048_576,
         long maximumReplayBytes = 16_777_216, CancellationToken cancellationToken = default)
     {
+        return await PrepareAsync(dataSource, store, authority, reconstitution,
+            PostgresSchemaInitialization.ValidateOnly, checkpointInterval, maximumReplayActions,
+            maximumActionBytes, maximumReplayBytes, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal static async Task<MartenEntityHistoryStorage> PrepareAsync(NpgsqlDataSource dataSource,
+        IDocumentStore store, EntityStateAuthority authority, EntityReconstitutionMode reconstitution,
+        PostgresSchemaInitialization initialization, int checkpointInterval = 100,
+        int maximumReplayActions = 10_000, int maximumActionBytes = 1_048_576,
+        long maximumReplayBytes = 16_777_216, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         var storage = new MartenEntityHistoryStorage(dataSource, store, authority, reconstitution,
             checkpointInterval, maximumReplayActions, maximumActionBytes, maximumReplayBytes);
         RequireNativeStore(dataSource, store);
+        if (initialization == PostgresSchemaInitialization.CreateIfMissing)
+            await store.Storage.Database.ApplyAllConfiguredChangesToDatabaseAsync(JasperFx.AutoCreate.CreateOnly,
+                new Weasel.Core.Migrations.ReconnectionOptions(MaxReconnectionCount: 0), cancellationToken).ConfigureAwait(false);
+        cancellationToken.ThrowIfCancellationRequested();
         await store.Storage.Database.AssertDatabaseMatchesConfigurationAsync(cancellationToken).ConfigureAwait(false);
         return storage;
     }

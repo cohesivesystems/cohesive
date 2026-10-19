@@ -60,7 +60,7 @@ public sealed class ServicePersistenceTests
         Assert.Equal(0, calls);
         await Assert.ThrowsAsync<InvalidOperationException>(() => bindings.PrepareSchemaAsync(database));
         Assert.Equal(0, calls);
-        await bindings.PrepareSchemaAsync(database, services: provider);
+        await bindings.PrepareSchemaAsync(provider, database);
         Assert.Equal(1, calls);
     }
 

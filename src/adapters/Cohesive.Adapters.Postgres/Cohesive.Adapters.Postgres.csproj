@@ -4,6 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <DefineConstants>$(DefineConstants);COHESIVE_POSTGRES_INTERNAL_PREPARATION</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
@@ -15,4 +16,9 @@
     <ProjectReference Include="..\..\Cohesive.Storage\Cohesive.Storage.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Reuse the canonical internal preparation implementation without widening Core's API or friend access. -->
+    <Compile Include="../../Cohesive/Model/WeakPreparationCache.cs" Link="Internal/WeakPreparationCache.cs" />
+    <Compile Include="../../Cohesive/Model/PreparationSlot.cs" Link="Internal/PreparationSlot.cs" />
+  </ItemGroup>
 </Project>

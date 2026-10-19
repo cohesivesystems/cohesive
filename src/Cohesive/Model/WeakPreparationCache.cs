@@ -1,6 +1,11 @@
 using System.Runtime.CompilerServices;
 
+// Source-linked adapters isolate internal types without changing the preparation algorithm.
+#if COHESIVE_POSTGRES_INTERNAL_PREPARATION
+namespace Cohesive.Adapters.Postgres.Internal;
+#else
 namespace Cohesive.Model;
+#endif
 
 // A key-owned preparation slot publishes successes only. Failed factories leave the same slot
 // retryable, so an older failure can never remove a newer successful preparation.
@@ -8,13 +13,13 @@ namespace Cohesive.Model;
 /// <typeparam name="TKey">Identity key, weakly retained.</typeparam><typeparam name="TValue">Prepared value.</typeparam>
 /// <remarks>Keys use reference identity. Concurrent factories share one slot. Failures are not cached;
 /// later calls retry without removing a slot that may already contain a successful value.</remarks>
-public sealed class WeakPreparationCache<TKey, TValue> where TKey : class
+internal sealed class WeakPreparationCache<TKey, TValue> where TKey : class
 {
     readonly ConditionalWeakTable<TKey, PreparationSlot<TValue>> slots = new();
 
     /// <summary>Reads an already prepared value without running a factory.</summary>
     /// <param name="key">Identity key.</param><param name="value">Prepared value when found.</param><returns>Whether preparation succeeded earlier.</returns>
-    public bool TryGet(TKey key, out TValue value)
+    internal bool TryGet(TKey key, out TValue value)
     {
         if (slots.TryGetValue(key, out var slot) && slot.TryGet(out value)) return true;
         value = default!;
@@ -23,6 +28,6 @@ public sealed class WeakPreparationCache<TKey, TValue> where TKey : class
 
     /// <summary>Prepares once under the key's shared slot and returns the published value.</summary>
     /// <param name="key">Weak identity key.</param><param name="factory">Factory; an exception leaves the slot retryable.</param><returns>Prepared value.</returns>
-    public TValue Get(TKey key, Func<TKey, TValue> factory) =>
+    internal TValue Get(TKey key, Func<TKey, TValue> factory) =>
         slots.GetValue(key, static _ => new()).Get(key, factory);
 }

@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Postgres.Internal;
 using System.Runtime.ExceptionServices;
 using Npgsql;
 using Cohesive.Prelude;

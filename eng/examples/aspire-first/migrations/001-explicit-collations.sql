@@ -2,7 +2,8 @@
 -- Historical snapshot, not the authority for fresh installation (the storage model is).
 -- Run offline, after backup, before starting the updated host. Existing invalid rows abort.
 BEGIN;
-SELECT pg_advisory_xact_lock(71261591088300481);
+DO $$ DECLARE cohesive_schema_preparation_lock CONSTANT bigint := 71261591088300481;
+BEGIN PERFORM pg_advisory_xact_lock(cohesive_schema_preparation_lock); END $$;
 LOCK TABLE public.cohesive_orders, public.cohesive_reservations IN ACCESS EXCLUSIVE MODE;
 -- Save and restore the existing native FKs around the collation changes.
 CREATE TEMP TABLE cohesive_saved_fks ON COMMIT DROP AS

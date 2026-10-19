@@ -393,6 +393,12 @@ internal static class PostgresRelationQueryScalarCatalog
             new(PostgresRelationQueryScalarType.TimestampWithTimeZone, ScalarTypeKind.Instant, "timestamp with time zone", PostgresRelationQueryValueEncoding.TimestampWithTimeZone, NpgsqlDbType.TimestampTz, false, [1184]),
             new(PostgresRelationQueryScalarType.Bytea, ScalarTypeKind.Bytes, "bytea", PostgresRelationQueryValueEncoding.Bytea, NpgsqlDbType.Bytea, true, [17]),
         ];
+    static PostgresRelationQueryScalarCatalog()
+    {
+        var types = Enum.GetValues<PostgresRelationQueryScalarType>();
+        if (types.Length != Metadata.Length || Metadata.Where((slot, index) => (int)slot.Type != index).Any())
+            throw new InvalidOperationException("PostgreSQL scalar metadata must cover every enum slot in ordinal order.");
+    }
     static readonly IReadOnlyDictionary<ScalarTypeKind, PostgresRelationQueryScalarType> SemanticTypes =
         Metadata.ToDictionary(x => x.SemanticKind, x => x.Type);
     static ScalarMetadata Get(PostgresRelationQueryScalarType type) => (uint)type < Metadata.Length && Metadata[(int)type].Type == type

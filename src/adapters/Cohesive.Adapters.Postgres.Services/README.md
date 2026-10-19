@@ -76,7 +76,7 @@ registered under `Bindings.Database.Value`. `ComposeServices(plan, nativeSources
 mixed-source preparation and exposes the same infrastructure evidence. Both implement `IServiceStorageComposition`.
 
 Native Npgsql and Cosmos clients remain owned by their DI registrations or external callers. Schema creation is
-explicit; composition binding never migrates a database. Optional Marten history and direct outbox attachments
+explicit; composition binding runs only the model-selected schema policies and native callbacks. Optional Marten history and direct outbox attachments
 remain separate from receipt policy and must use the same data source. Existing explicit `Bind`/`ForServices`
 paths remain available for adoption without a storage model or DI.
 
@@ -84,3 +84,13 @@ Native compilation is shared by offline evidence and runtime readers through an 
 slot on the exact immutable mapping instance and compilation request. Successful artifacts are reused; failed
 preparation is not published. Parameters, reads and results are never cached. Different mapping instances do
 not share native artifacts.
+
+`PrepareComposedService` produces offline query evidence and explicit native binding only. DI hosts instead use
+`ComposeServices`, whose `PostgresComposedStorageComposition` owns all native source declarations and exposes
+that same evidence as `Preparation`. Offline preparation does not implement the storage composition interface,
+so `StorageModelBuilder.Compose` cannot accept it. No throwing getter selects a mode at runtime.
+
+Shared initialization prepares history (including native identity validation) before product/receipt/outbox DDL.
+A later phase can fail after earlier schemas were prepared; the whole initialization is not one distributed
+transaction. Embedded SQL uses the same locked transaction as built-in creation; custom callbacks own their
+transaction policy. Runtime provenance keeps the `di/<database>` default, with an explicit authority override.

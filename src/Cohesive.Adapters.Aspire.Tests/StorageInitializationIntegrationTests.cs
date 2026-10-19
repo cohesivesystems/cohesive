@@ -11,6 +11,30 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed partial class OrderStorageIntegrationTests
 {
     [PostgresFact]
+    public async Task Embedded_schema_serializes_replica_bootstrap_and_rolls_back_failures()
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        PostgresPersistenceBindings Define(string resource) => PostgresPersistenceBindings.Define(new("embedded"),
+            b => b.SchemaPreparation(typeof(OrderStorageIntegrationTests).Assembly, resource));
+        try
+        {
+            await Task.WhenAll(Define("ConcurrentSchema.sql").PrepareSchemaAsync(database),
+                Define("ConcurrentSchema.sql").PrepareSchemaAsync(database));
+            await using (var exists = database.CreateCommand("SELECT to_regclass('public.cohesive_embedded_bootstrap') IS NOT NULL"))
+                Assert.Equal(true, await exists.ExecuteScalarAsync());
+            var error = await Assert.ThrowsAsync<PostgresException>(() => Define("FailingSchema.sql").PrepareSchemaAsync(database));
+            Assert.Equal(PostgresErrorCodes.DivisionByZero, error.SqlState);
+            await using var missing = database.CreateCommand("SELECT to_regclass('public.cohesive_failed_embedded_bootstrap') IS NULL");
+            Assert.Equal(true, await missing.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await using var cleanup = database.CreateCommand("DROP TABLE IF EXISTS public.cohesive_embedded_bootstrap; DROP TABLE IF EXISTS public.cohesive_failed_embedded_bootstrap;");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
     public async Task Reviewed_legacy_migration_preserves_rows_and_satisfies_projected_schema()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);

@@ -17,11 +17,11 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
     /// <summary>Prepares native evidence from exact endpoint selections without opening a connection.</summary>
     /// <param name="bindings">Declared mappings, receipt, history and outbox policy.</param>
     /// <param name="plan">Canonical endpoint query requirements.</param>
-    /// <param name="authority">Native runtime authority; defaults to the declared database resource identity.</param>
+    /// <param name="authority">Native runtime authority; defaults to di/ followed by the declared database identity.</param>
     public PostgresStorageComposition(PostgresPersistenceBindings bindings, ServiceImplementationPlan plan, string? authority = null)
     {
         this.bindings = bindings ?? throw new ArgumentNullException(nameof(bindings));
-        this.authority = authority ?? bindings.Database.Value;
+        this.authority = authority ?? "di/" + bindings.Database.Value;
         ArgumentException.ThrowIfNullOrWhiteSpace(this.authority);
         Evidence = bindings.PrepareService(plan, new InfrastructureTargetFacilityId("postgres/" + bindings.Database.Value + "/implementation"));
     }

@@ -4,9 +4,8 @@ namespace Cohesive.Adapters.Postgres;
 
 public sealed partial class PostgresPersistenceBindings
 {
-    Func<IServiceProvider?, NpgsqlDataSource, CancellationToken, Task>? prepareSchema;
+    Func<IServiceProvider, NpgsqlDataSource, CancellationToken, Task>? prepareSchema;
     bool schemaSelected;
-    bool schemaNeedsServices;
     Action<PostgresEntitySchemaBuilder>? configureSchema;
     PostgresSchemaInitialization schemaInitialization;
     PostgresEntitySchema? productSchema;
@@ -46,12 +45,7 @@ public sealed partial class PostgresPersistenceBindings
     public PostgresPersistenceBindings SchemaPreparation(Func<NpgsqlDataSource, CancellationToken, Task> prepare)
     {
         ArgumentNullException.ThrowIfNull(prepare);
-        return state.Edit(() =>
-        {
-            if (prepareSchema is not null) throw new InvalidOperationException("Product schema preparation is already declared.");
-            prepareSchema = (_, database, token) => prepare(database, token);
-            return this;
-        });
+        return SchemaPreparation((_, database, token) => prepare(database, token));
     }
 
     /// <summary>Registers a native migration callback borrowing host services such as logging or configuration.</summary>
@@ -63,15 +57,16 @@ public sealed partial class PostgresPersistenceBindings
         return state.Edit(() =>
         {
             if (prepareSchema is not null) throw new InvalidOperationException("Product schema preparation is already declared.");
-            schemaNeedsServices = true;
-            prepareSchema = (services, database, token) => prepare(services!, database, token);
+            prepareSchema = prepare;
             return this;
         });
     }
 
-    /// <summary>Declares an embedded native SQL migration; verifies the resource exists during definition.</summary>
+    /// <summary>Declares atomic embedded SQL under the shared schema advisory lock; verifies the resource at definition.</summary>
     /// <param name="assembly">Assembly owning the SQL resource.</param><param name="resourceName">Exact manifest resource name.</param>
     /// <returns>This declaration.</returns>
+    /// <remarks>SQL must participate in the supplied transaction (no explicit transaction control or
+    /// nontransactional operations). Use the callback overload for custom migration protocols.</remarks>
     /// <exception cref="ArgumentException">Resource is missing.</exception>
     public PostgresPersistenceBindings SchemaPreparation(System.Reflection.Assembly assembly, string resourceName)
     {
@@ -82,9 +77,22 @@ public sealed partial class PostgresPersistenceBindings
         return SchemaPreparation(async (database, token) =>
         {
             using var stream = new StreamReader(assembly.GetManifestResourceStream(resourceName)!);
-            await using var command = database.CreateCommand(await stream.ReadToEndAsync(token).ConfigureAwait(false));
-            await command.ExecuteNonQueryAsync(token).ConfigureAwait(false);
+            await PostgresSchemaPreparation.CreateAsync(database,
+                await stream.ReadToEndAsync(token).ConfigureAwait(false), token).ConfigureAwait(false);
         });
+    }
+
+    /// <summary>Prepares without host services, using the same callback lifecycle and an empty provider.</summary>
+    /// <param name="database">Borrowed native source.</param><param name="cancellationToken">Preparation cancellation.</param>
+    /// <returns>Completion after schema admission.</returns>
+    /// <remarks>Callbacks requiring services should use the provider-taking overload.</remarks>
+    public Task PrepareSchemaAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default) =>
+        PrepareSchemaAsync(EmptyServices.Instance, database, cancellationToken);
+
+    sealed class EmptyServices : IServiceProvider
+    {
+        internal static readonly EmptyServices Instance = new();
+        public object? GetService(Type serviceType) => null;
     }
 
     /// <summary>Creates/validates the projected schema, then runs explicit native preparation and revalidates.</summary>
@@ -95,14 +103,14 @@ public sealed partial class PostgresPersistenceBindings
     /// <remarks>Callback exceptions propagate unchanged. Partial migration effects are governed by the native
     /// callback's transaction policy; no retry or rollback emulation is inferred. A selected projection is
     /// validated again after native additions so they cannot invalidate its contract.</remarks>
-    /// <exception cref="ArgumentNullException">Database is null.</exception>
+    /// <exception cref="ArgumentNullException">Database or services is null.</exception>
     /// <exception cref="OperationCanceledException">Preparation is canceled.</exception>
-    public async Task PrepareSchemaAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default, IServiceProvider? services = null)
+    public async Task PrepareSchemaAsync(IServiceProvider services, NpgsqlDataSource database, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(database);
         cancellationToken.ThrowIfCancellationRequested();
         _ = state.Value;
-        if (schemaNeedsServices && services is null) throw new InvalidOperationException("This schema callback requires the host IServiceProvider.");
+        ArgumentNullException.ThrowIfNull(services);
         if (productSchema is { } schema)
         {
             if (schemaInitialization == PostgresSchemaInitialization.CreateIfMissing)
@@ -166,7 +174,7 @@ public sealed partial class PostgresPersistenceBindings
     /// <param name="database">Borrowed native relational source.</param>
     /// <param name="cancellationToken">Cancellation of DDL and validation.</param>
     /// <returns>Validated attachment, or null when undeclared.</returns>
-    /// <exception cref="ArgumentNullException">Database is null.</exception>
+    /// <exception cref="ArgumentNullException">Database or services is null.</exception>
     /// <exception cref="InvalidOperationException">Schema requires explicit migration.</exception>
     /// <exception cref="NpgsqlException">Native initialization or validation fails.</exception>
     public async Task<PostgresEntityOutboxStorage?> PrepareOutboxAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
