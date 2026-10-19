@@ -154,6 +154,23 @@ public sealed partial class PostgresRepositoryConformanceTests(ITestOutputHelper
     });
 
     [PostgresFact]
+    public Task Receipt_conflicts_include_redundant_unique_fences_but_admission_still_requires_primary_key() => WithRepository(async (_, database, schema) =>
+    {
+        await using (var add = database.CreateCommand($"ALTER TABLE {schema}.receipts ADD CONSTRAINT duplicate_operation_fence UNIQUE(entity_type,partition_key,operation_id)"))
+            await add.ExecuteNonQueryAsync();
+        var options = new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a");
+        var storage = await options.BindAsync(database);
+        Assert.Contains("duplicate_operation_fence", storage.FenceNames);
+        Assert.Contains("receipts_pkey", storage.FenceNames);
+        await using (var drop = database.CreateCommand($"ALTER TABLE {schema}.receipts DROP CONSTRAINT receipts_pkey"))
+            await drop.ExecuteNonQueryAsync();
+        var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => options.BindAsync(database));
+        Assert.Equal("postgres.schema.keyMismatch", failure.Code);
+        Assert.Contains("immediate primary/unique key", failure.Message);
+        Assert.IsAssignableFrom<InvalidOperationException>(failure);
+    });
+
+    [PostgresFact]
     public Task Receipt_schema_requires_both_uniqueness_fences() => WithRepository(async (_, database, schema) =>
     {
         await using var change = database.CreateCommand($"ALTER TABLE {schema}.receipts DROP CONSTRAINT receipts_entity_type_partition_key_creation_subject_key");

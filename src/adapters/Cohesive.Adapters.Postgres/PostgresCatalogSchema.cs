@@ -6,9 +6,12 @@ namespace Cohesive.Adapters.Postgres;
 // Native catalog requirements shared by product projection and storage-owned attachments.
 internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema.Table> tables)
 {
+    internal const string PrimaryKey = "p";
+    internal const string UniqueConstraint = "u";
+
     internal sealed record Column(string Name, string Type, bool Required, string? Collation = null, string? Identity = null);
     internal sealed record Key(ImmutableArray<string> Columns, string Kind = "", bool NullsDistinct = false);
-    internal sealed record Reference(ImmutableArray<string> Columns, string Target, ImmutableArray<string> TargetColumns);
+    internal sealed record Reference(ImmutableArray<string> Columns, string Target, ImmutableArray<string> TargetColumns, string DiagnosticColumn);
     internal sealed record Check(string Field, string Operator, string Literal);
     internal sealed record Table(string Sql, ImmutableArray<Column> Columns, ImmutableArray<Key> Keys,
         ImmutableArray<Reference> References = default, ImmutableArray<Check> Checks = default);
@@ -19,8 +22,11 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
         ArgumentNullException.ThrowIfNull(database);
         await using var batch = database.CreateBatch();
         Add("SELECT set_config('standard_conforming_strings','on',true)");
+        var resultCounts = new int[tables.Length];
+        var tableIndex = 0;
         foreach (var table in tables)
         {
+            var start = batch.BatchCommands.Count;
             Add("SELECT to_regclass($1) IS NOT NULL", table.Sql);
             Add("""
                 SELECT a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull,c.collname,n.nspname,a.attidentity::text
@@ -28,12 +34,12 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
                 LEFT JOIN pg_namespace n ON n.oid=c.collnamespace
                 WHERE a.attrelid=to_regclass($1) AND a.attnum>0 AND NOT a.attisdropped
                 """, table.Sql);
-            Add("""
+            Add($"""
                 SELECT array_agg(a.attname::text ORDER BY k.ordinality),coalesce(c.contype::text,''),c.conname,
                     NOT COALESCE((to_jsonb(i)->>'indnullsnotdistinct')::boolean,false)
                 FROM pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality)
                 JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum
-                LEFT JOIN pg_constraint c ON c.conindid=i.indexrelid AND c.contype IN ('p','u')
+                LEFT JOIN pg_constraint c ON c.conindid=i.indexrelid AND c.contype IN ('{PrimaryKey}','{UniqueConstraint}')
                 WHERE i.indrelid=to_regclass($1) AND i.indisunique AND i.indisvalid AND i.indisready AND i.indimmediate
                   AND i.indpred IS NULL AND i.indexprs IS NULL AND k.ordinality<=i.indnkeyatts
                 GROUP BY i.indexrelid,c.contype,c.conname,NOT COALESCE((to_jsonb(i)->>'indnullsnotdistinct')::boolean,false)
@@ -56,21 +62,23 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
                           AND c.conrelid=to_regclass($1) AND c.convalidated AND NOT c.connoinherit
                           AND pg_get_expr(c.conbin,c.conrelid) = format('(%I %s %s)', $2::text, $3::text, $4::text))
                         """, table.Sql, check.Field, check.Operator, check.Literal);
+            resultCounts[tableIndex++] = batch.BatchCommands.Count - start;
         }
         await using var reader = await batch.ExecuteReaderAsync(token).ConfigureAwait(false);
         await reader.NextResultAsync(token).ConfigureAwait(false);
         var missing = 0;
         var fences = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        tableIndex = 0;
         foreach (var table in tables)
         {
+            var resultCount = resultCounts[tableIndex++];
             await reader.ReadAsync(token).ConfigureAwait(false);
             var exists = reader.GetBoolean(0);
             if (!exists)
             {
                 if (policy == PostgresSchemaInitialization.ValidateOnly) throw Failure("tableMissing", table.Sql);
                 missing++;
-                var results = 3 + (table.References.IsDefault ? 0 : table.References.Length) + (table.Checks.IsDefault ? 0 : table.Checks.Length);
-                for (var i = 0; i < results; i++) await reader.NextResultAsync(token).ConfigureAwait(false);
+                for (var i = 0; i < resultCount; i++) await reader.NextResultAsync(token).ConfigureAwait(false);
                 continue;
             }
             await reader.NextResultAsync(token).ConfigureAwait(false);
@@ -95,8 +103,10 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
                 {
                     var key = table.Keys[i];
                     if (columns.Length != key.Columns.Length || !key.Columns.All(columns.Contains)
-                        || key.Kind.Length > 0 && key.Kind != reader.GetString(1) || key.NullsDistinct && !reader.GetBoolean(3)) continue;
-                    matched[i] = true;
+                        || key.NullsDistinct && !reader.GetBoolean(3)) continue;
+                    // Admission requires the declared constraint kind. Conflict recognition also includes
+                    // redundant immediate constraints over exactly the same columns/null semantics.
+                    matched[i] |= key.Kind.Length == 0 || key.Kind == reader.GetString(1);
                     if (!reader.IsDBNull(2)) names.Add(reader.GetString(2));
                 }
             }
@@ -107,7 +117,7 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
                 foreach (var reference in table.References)
                 {
                     await reader.ReadAsync(token).ConfigureAwait(false);
-                    if (!reader.GetBoolean(0)) throw Failure("referenceMismatch", table.Sql, reference.Columns[^1]);
+                    if (!reader.GetBoolean(0)) throw Failure("referenceMismatch", table.Sql, reference.DiagnosticColumn);
                     await reader.NextResultAsync(token).ConfigureAwait(false);
                 }
             if (!table.Checks.IsDefaultOrEmpty)
@@ -127,6 +137,20 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
             batch.BatchCommands.Add(command);
         }
     }
-    static PostgresSchemaValidationException Failure(string code, string table, string? column = null) =>
-        new("postgres.schema." + code, table, $"Schema {table}{(column is null ? "" : " column " + column)} requires an explicit migration ({code}).", column);
+    static PostgresSchemaValidationException Failure(string code, string table, string? column = null)
+    {
+        var remedy = code switch
+        {
+            "tableMissing" => "Create the table with a reviewed migration or explicitly select CreateIfMissing for initial bootstrap.",
+            "columnMismatch" => "Migrate the column to its declared type, nullability and collation; creation does not repair existing columns.",
+            "undeclaredColumns" => "Reconcile extra columns with the declared mapping using a reviewed migration.",
+            "keyMismatch" => "Restore the declared immediate primary/unique key and required NULL semantics; partial or deferred keys do not qualify.",
+            "identityMismatch" => "Restore the declared generated-always identity column using a reviewed migration.",
+            "referenceMismatch" => "Restore the validated, non-deferrable foreign key with the declared target columns and NO ACTION behavior.",
+            "checkMismatch" => "Restore and validate the declared CHECK predicate using a reviewed migration.",
+            _ => throw new ArgumentOutOfRangeException(nameof(code), code, "Unknown schema diagnostic.")
+        };
+        return new("postgres.schema." + code, table,
+            $"Schema {table}{(column is null ? "" : " column " + column)} does not match the declaration ({code}). {remedy}", column);
+    }
 }

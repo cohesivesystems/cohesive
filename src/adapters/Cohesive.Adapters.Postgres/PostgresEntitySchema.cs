@@ -204,7 +204,7 @@ public sealed class PostgresEntitySchema
             [.. table.Columns.Select(column => new PostgresCatalogSchema.Column(column.Name, column.Type, column.Required, column.Collation))],
             [new([table.Partition, table.Identity])],
             [.. references.Where(reference => reference.Source == table).Select(reference => new PostgresCatalogSchema.Reference(
-                [table.Partition, reference.Field], reference.Target.Sql, [reference.Target.Partition, reference.Target.Identity]))],
+                [table.Partition, reference.Field], reference.Target.Sql, [reference.Target.Partition, reference.Target.Identity], reference.Field))],
             [.. checks.Where(check => check.Table == table).Select(check => new PostgresCatalogSchema.Check(check.Field, check.Operator, check.DeparsedLiteral))]))]);
     }
     /// <summary>Deterministic native initial DDL; contains no ALTER, backfill or destructive migration.</summary>

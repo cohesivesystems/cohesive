@@ -26,9 +26,9 @@ public sealed class PostgresEntityOutboxOptions
         Commits = Name("_commits"); Emissions = Name("_emissions");
         catalog = new([
             new(Commits, [new("sequence", "bigint", true, Identity: "a"), new("entity_type", "text", true),
-                new("content", "bytea", true), new("content_hash", "text", true), new("format_version", "integer", true)], [new(["sequence"], "p")]),
-            new(Emissions, [new("emission_id", "text", true), new("sequence", "bigint", true)], [new(["emission_id"], "p")],
-                [new(["sequence"], Commits, ["sequence"])])]);
+                new("content", "bytea", true), new("content_hash", "text", true), new("format_version", "integer", true)], [new(["sequence"], PostgresCatalogSchema.PrimaryKey)]),
+            new(Emissions, [new("emission_id", "text", true), new("sequence", "bigint", true)], [new(["emission_id"], PostgresCatalogSchema.PrimaryKey)],
+                [new(["sequence"], Commits, ["sequence"], DiagnosticColumn: "sequence")])]);
         var commit = new SqlInsertBuilder(new SqlQualifiedTable(schema, prefix + "_commits"));
         foreach (var column in new[] { "entity_type", "content", "content_hash", "format_version" })
             commit.Value(column, SqlExpression.RuntimeParameter(column));

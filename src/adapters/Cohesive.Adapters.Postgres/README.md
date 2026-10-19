@@ -370,3 +370,10 @@ This does not combine product, receipt and outbox admission into a single global
 
 The Services adapter supplies `bindings.PrepareAsync(services, authority)` to resolve the native data source
 once using the declared database identity. Explicit native-source preparation remains available without DI.
+
+`PostgresSchemaValidationException` remains an `InvalidOperationException`: existing catch blocks still
+work. The move to structured attachment diagnostics changes exact-type assertions, not that catch contract.
+Each diagnostic includes a remedy; missing tables mention reviewed creation or explicit `CreateIfMissing`.
+Receipt admission still requires the declared primary and unique constraint kinds. Conflict recognition also
+retains redundant immediate unique constraints over the same columns and NULL semantics, since PostgreSQL
+may report either constraint. A redundant unique constraint cannot replace the required primary key.

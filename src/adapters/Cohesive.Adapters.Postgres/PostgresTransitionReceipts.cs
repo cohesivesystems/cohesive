@@ -37,8 +37,8 @@ public sealed class PostgresTransitionReceiptOptions
         Capabilities = new(true, partitionKey);
         catalog = new([new(Table,
             [.. Columns.Select(column => new PostgresCatalogSchema.Column(column.Name, column.Type, column.Required))],
-            [new(["entity_type", "partition_key", "operation_id"], "p", NullsDistinct: true),
-             new(["entity_type", "partition_key", "creation_subject"], "u", NullsDistinct: true)])]);
+            [new(["entity_type", "partition_key", "operation_id"], PostgresCatalogSchema.PrimaryKey, NullsDistinct: true),
+             new(["entity_type", "partition_key", "creation_subject"], PostgresCatalogSchema.UniqueConstraint, NullsDistinct: true)])]);
     }
     readonly PostgresCatalogSchema catalog;
     static readonly (string Name, string Type, bool Required)[] Columns =

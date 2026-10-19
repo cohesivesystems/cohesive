@@ -61,6 +61,14 @@ public sealed partial class OrderStorageIntegrationTests
             await using (var change = database.CreateCommand($"ALTER TABLE {schema}.{mutation}")) await change.ExecuteNonQueryAsync();
             var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(Prepare);
             Assert.Equal(code, failure.Code);
+            var remedy = code switch
+            {
+                "postgres.schema.keyMismatch" => "immediate primary/unique key",
+                "postgres.schema.identityMismatch" => "generated-always identity",
+                "postgres.schema.referenceMismatch" => "non-deferrable foreign key",
+                _ => throw new InvalidOperationException("Add the expected remedy for this test case.")
+            };
+            Assert.Contains(remedy, failure.Message);
             Assert.Contains(schema, failure.Table, StringComparison.Ordinal);
         }
         finally
@@ -519,6 +527,7 @@ public sealed partial class OrderStorageIntegrationTests
         var create = PostgresPersistenceBindings.Define(new("orders"), b => b.Outbox(options, PostgresSchemaInitialization.CreateIfMissing));
         var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => validate.PrepareOutboxAsync(database));
         Assert.Equal("postgres.schema.tableMissing", failure.Code);
+        Assert.Contains("CreateIfMissing", failure.Message);
         await using (var missing = database.CreateCommand("SELECT to_regclass($1) IS NULL"))
         {
             missing.Parameters.AddWithValue("public." + prefix + "_commits");
