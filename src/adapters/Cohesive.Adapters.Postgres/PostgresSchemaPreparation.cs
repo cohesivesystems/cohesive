@@ -21,18 +21,6 @@ internal static class PostgresSchemaPreparation
         return await admit(options, database, PostgresSchemaInitialization.ValidateOnly, token).ConfigureAwait(false);
     }
 
-    internal static async Task<bool> TableExistsAsync(NpgsqlDataSource database, string table,
-        PostgresSchemaInitialization policy, CancellationToken token)
-    {
-        await using var command = database.CreateCommand("SELECT to_regclass($1) IS NOT NULL");
-        command.Parameters.AddWithValue(table);
-        var exists = (bool)(await command.ExecuteScalarAsync(token).ConfigureAwait(false))!;
-        if (!exists && policy == PostgresSchemaInitialization.ValidateOnly)
-            throw new PostgresSchemaValidationException("postgres.schema.tableMissing", table,
-                $"Storage table {table} is missing; create it or apply a reviewed migration.");
-        return exists;
-    }
-
     internal static async Task CreateAsync(NpgsqlDataSource database, string sql, CancellationToken token)
     {
         // A database-scoped bootstrap lock covers overlapping product/receipt/outbox declarations.

@@ -50,7 +50,8 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.NotNull(await bindings.PrepareReceiptsAsync(database));
             await using (var alter = database.CreateCommand($"ALTER TABLE public.{table} DROP COLUMN content_hash"))
                 await alter.ExecuteNonQueryAsync();
-            await Assert.ThrowsAsync<InvalidOperationException>(() => bindings.PrepareReceiptsAsync(database));
+            var failure = await Assert.ThrowsAsync<Cohesive.Adapters.Postgres.PostgresSchemaValidationException>(() => bindings.PrepareReceiptsAsync(database));
+            Assert.Equal("postgres.schema.columnMismatch", failure.Code);
             await using var column = database.CreateCommand("SELECT count(*) FROM information_schema.columns WHERE table_name=$1 AND column_name='content_hash'");
             column.Parameters.AddWithValue(table);
             Assert.Equal(0L, await column.ExecuteScalarAsync());

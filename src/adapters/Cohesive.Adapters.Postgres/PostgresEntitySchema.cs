@@ -104,6 +104,7 @@ public sealed class PostgresEntitySchema
         static string QuoteLiteral(string value, bool escape) => (escape ? "E'" : "'")
             + (escape ? value.Replace("\\", "\\\\", StringComparison.Ordinal) : value).Replace("'", "''", StringComparison.Ordinal) + "'";
     }
+    readonly PostgresCatalogSchema catalog;
     readonly ImmutableArray<Check> checks;
     readonly ImmutableArray<Table> tables;
     readonly ImmutableArray<Reference> references;
@@ -199,6 +200,12 @@ public sealed class PostgresEntitySchema
             ddl.Append("CREATE TABLE IF NOT EXISTS ").Append(table.Sql).Append(" (\n  ").AppendJoin(",\n  ", clauses).AppendLine("\n);");
         }
         CreateSql = ddl.ToString();
+        catalog = new([.. tables.Select(table => new PostgresCatalogSchema.Table(table.Sql,
+            [.. table.Columns.Select(column => new PostgresCatalogSchema.Column(column.Name, column.Type, column.Required, column.Collation))],
+            [new([table.Partition, table.Identity])],
+            [.. references.Where(reference => reference.Source == table).Select(reference => new PostgresCatalogSchema.Reference(
+                [table.Partition, reference.Field], reference.Target.Sql, [reference.Target.Partition, reference.Target.Identity]))],
+            [.. checks.Where(check => check.Table == table).Select(check => new PostgresCatalogSchema.Check(check.Field, check.Operator, check.DeparsedLiteral))]))]);
     }
     /// <summary>Deterministic native initial DDL; contains no ALTER, backfill or destructive migration.</summary>
     public string CreateSql { get; }
@@ -212,104 +219,8 @@ public sealed class PostgresEntitySchema
     public Task ValidateAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default) =>
         ValidateAsync(database, PostgresSchemaInitialization.ValidateOnly, cancellationToken);
 
-    internal async Task<int> ValidateAsync(NpgsqlDataSource database, PostgresSchemaInitialization initialization, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(database);
-        await using var batch = database.CreateBatch();
-        // Normalize deparsing locally to this implicit batch transaction, never the pooled session.
-        batch.BatchCommands.Add(new("SELECT set_config('standard_conforming_strings','on',true)"));
-        foreach (var table in tables)
-        {
-            Add("SELECT to_regclass($1) IS NOT NULL", table.Sql);
-            Add("""
-                SELECT a.attname,format_type(a.atttypid,a.atttypmod),a.attnotnull,c.collname,n.nspname
-                FROM pg_attribute a LEFT JOIN pg_collation c ON c.oid=a.attcollation
-                LEFT JOIN pg_namespace n ON n.oid=c.collnamespace
-                WHERE a.attrelid=to_regclass($1) AND a.attnum>0 AND NOT a.attisdropped
-                """, table.Sql);
-            Add("""
-                SELECT array_agg(a.attname::text ORDER BY k.ordinality)
-                FROM pg_index i CROSS JOIN LATERAL unnest(i.indkey) WITH ORDINALITY k(attnum,ordinality)
-                JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.attnum
-                WHERE i.indrelid=to_regclass($1) AND i.indisunique AND i.indisvalid AND i.indisready AND i.indimmediate
-                  AND i.indpred IS NULL AND i.indexprs IS NULL AND k.ordinality<=i.indnkeyatts
-                GROUP BY i.indexrelid
-                """, table.Sql);
-        }
-        foreach (var reference in references)
-            Add("""
-                SELECT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.contype='f' AND c.conrelid=to_regclass($1)
-                AND c.confrelid=to_regclass($2) AND c.convalidated AND NOT c.condeferrable
-                AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s'
-                AND (SELECT array_agg(a.attname::text ORDER BY k.n) FROM unnest(c.conkey) WITH ORDINALITY k(id,n)
-                  JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.id)=$3
-                AND (SELECT array_agg(a.attname::text ORDER BY k.n) FROM unnest(c.confkey) WITH ORDINALITY k(id,n)
-                  JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.id)=$4)
-                """, reference.Source.Sql, reference.Target.Sql,
-                new[] { reference.Source.Partition, reference.Field }, new[] { reference.Target.Partition, reference.Target.Identity });
-        foreach (var check in checks)
-            Add("""
-                SELECT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.contype='c'
-                  AND c.conrelid=to_regclass($1) AND c.convalidated AND NOT c.connoinherit
-                  AND pg_get_expr(c.conbin,c.conrelid) = format('(%I %s %s)', $2::text, $3::text,
-                    $4::text))
-                """, check.Table.Sql, check.Field, check.Operator, check.DeparsedLiteral);
-        await using var reader = await batch.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-        var missing = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var table in tables)
-        {
-            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (!reader.GetBoolean(0))
-            {
-                if (initialization == PostgresSchemaInitialization.ValidateOnly)
-                    throw new PostgresSchemaValidationException("postgres.schema.tableMissing", table.Sql, $"Product table {table.Sql} is missing; create it or apply a reviewed migration.");
-                missing.Add(table.Sql);
-                // Consume this absent table's column and key results, then continue checking existing tables.
-                await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-                await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-                await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-                continue;
-            }
-            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-            var found = new Dictionary<string, (string Type, bool Required, string? Collation, string? Schema)>();
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                found.Add(reader.GetString(0), (reader.GetString(1), reader.GetBoolean(2), reader.IsDBNull(3) ? null : reader.GetString(3), reader.IsDBNull(4) ? null : reader.GetString(4)));
-            foreach (var column in table.Columns)
-                if (!found.TryGetValue(column.Name, out var actual) || actual.Type != column.Type || actual.Required != column.Required
-                    || column.Collation is { } collation && (actual.Collation != collation || actual.Schema != "pg_catalog"))
-                    throw new PostgresSchemaValidationException("postgres.schema.columnMismatch", table.Sql, $"Product schema {table.Sql} column {column.Name} requires migration.", column.Name);
-            if (found.Count != table.Columns.Length) throw new PostgresSchemaValidationException("postgres.schema.undeclaredColumns", table.Sql, $"Product schema {table.Sql} has undeclared columns.");
-            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-            var matched = false;
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                matched |= reader.GetFieldValue<string[]>(0).ToHashSet(StringComparer.Ordinal).SetEquals([table.Partition, table.Identity]);
-            if (!matched) throw new PostgresSchemaValidationException("postgres.schema.keyMismatch", table.Sql, $"Product schema {table.Sql} requires immediate partition/identity uniqueness.");
-            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-        }
-        foreach (var reference in references)
-        {
-            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (!reader.GetBoolean(0) && !missing.Contains(reference.Source.Sql))
-                throw new PostgresSchemaValidationException("postgres.schema.referenceMismatch", reference.Source.Sql, $"Product schema {reference.Source.Sql} reference {reference.Field} requires a validated partition-scoped foreign key.", reference.Field);
-            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-        }
-        foreach (var check in checks)
-        {
-            await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (!reader.GetBoolean(0) && !missing.Contains(check.Table.Sql))
-                throw new PostgresSchemaValidationException("postgres.schema.checkMismatch", check.Table.Sql,
-                    $"Product schema {check.Table.Sql} check on {check.Field} requires migration.", check.Field);
-            await reader.NextResultAsync(cancellationToken).ConfigureAwait(false);
-        }
-        return missing.Count;
+    internal async Task<int> ValidateAsync(NpgsqlDataSource database, PostgresSchemaInitialization initialization, CancellationToken cancellationToken) =>
+        (await catalog.ValidateAsync(database, initialization, cancellationToken).ConfigureAwait(false)).MissingCount;
 
-        void Add(string sql, params object[] parameters)
-        {
-            var command = new NpgsqlBatchCommand(sql);
-            foreach (var value in parameters) command.Parameters.AddWithValue(value);
-            batch.BatchCommands.Add(command);
-        }
-    }
     static string Quote(string value) => PostgresSqlDialect.Identifier(value).ToSql(PostgresSqlDialect.Instance);
 }

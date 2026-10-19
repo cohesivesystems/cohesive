@@ -148,7 +148,9 @@ public sealed partial class PostgresRepositoryConformanceTests(ITestOutputHelper
         await EntityTransitionReceiptConformance.ConcurrentReplay(repository);
         await using (var change = database.CreateCommand($"ALTER TABLE {schema}.receipts ALTER COLUMN format_version TYPE bigint"))
             await change.ExecuteNonQueryAsync();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => options.BindAsync(database));
+        var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => options.BindAsync(database));
+        Assert.Equal("postgres.schema.columnMismatch", failure.Code);
+        Assert.Equal("format_version", failure.Column);
     });
 
     [PostgresFact]
@@ -156,7 +158,8 @@ public sealed partial class PostgresRepositoryConformanceTests(ITestOutputHelper
     {
         await using var change = database.CreateCommand($"ALTER TABLE {schema}.receipts DROP CONSTRAINT receipts_entity_type_partition_key_creation_subject_key");
         await change.ExecuteNonQueryAsync();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a").BindAsync(database));
+        var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a").BindAsync(database));
+        Assert.Equal("postgres.schema.keyMismatch", failure.Code);
     });
 
     [PostgresFact]

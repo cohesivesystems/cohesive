@@ -22,9 +22,46 @@ public sealed partial class OrderStorageIntegrationTests
             await using (var create = database.CreateCommand($"CREATE SCHEMA {schema}")) await create.ExecuteNonQueryAsync();
             await bindings.PrepareOutboxAsync(database);
             await using (var drop = database.CreateCommand($"DROP TABLE {schema}.outbox_commits CASCADE")) await drop.ExecuteNonQueryAsync();
-            await Assert.ThrowsAsync<InvalidOperationException>(() => bindings.PrepareOutboxAsync(database));
+            var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => bindings.PrepareOutboxAsync(database));
+            Assert.Equal("postgres.schema.referenceMismatch", failure.Code);
             await using var missing = database.CreateCommand($"SELECT to_regclass('{schema}.outbox_commits') IS NULL");
             Assert.Equal(true, await missing.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await using var cleanup = database.CreateCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresTheory]
+    [InlineData(true, "receipts DROP CONSTRAINT receipts_pkey", "postgres.schema.keyMismatch")]
+    [InlineData(true, "receipts DROP CONSTRAINT receipts_entity_type_partition_key_creation_subject_key", "postgres.schema.keyMismatch")]
+    [InlineData(false, "outbox_commits DROP CONSTRAINT outbox_commits_pkey CASCADE", "postgres.schema.keyMismatch")]
+    [InlineData(false, "outbox_commits ALTER COLUMN sequence DROP IDENTITY", "postgres.schema.identityMismatch")]
+    [InlineData(false, "outbox_emissions DROP CONSTRAINT outbox_emissions_sequence_fkey", "postgres.schema.referenceMismatch")]
+    public async Task Attachment_drift_reports_precise_diagnostics(bool receipts, string mutation, string code)
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var schema = "attachment_drift_" + Guid.NewGuid().ToString("N");
+        var bindings = PostgresPersistenceBindings.Define(new("attachments"), b =>
+        {
+            if (receipts) b.TransitionReceipts(new(schema, "receipts", "local"), PostgresSchemaInitialization.CreateIfMissing);
+            else b.Outbox(new(schema, "outbox"), PostgresSchemaInitialization.CreateIfMissing);
+        });
+        async Task Prepare()
+        {
+            if (receipts) await bindings.PrepareReceiptsAsync(database);
+            else await bindings.PrepareOutboxAsync(database);
+        }
+        try
+        {
+            await using (var create = database.CreateCommand($"CREATE SCHEMA {schema}")) await create.ExecuteNonQueryAsync();
+            await Prepare();
+            await using (var change = database.CreateCommand($"ALTER TABLE {schema}.{mutation}")) await change.ExecuteNonQueryAsync();
+            var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(Prepare);
+            Assert.Equal(code, failure.Code);
+            Assert.Contains(schema, failure.Table, StringComparison.Ordinal);
         }
         finally
         {
@@ -39,6 +76,8 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Attachment_admission_skips_unchanged_DDL_and_rejects_existing_drift(bool receipts)
     {
         var writes = 0;
+        var batches = 0;
+        var commands = 0;
         var recording = false;
         using var listener = new System.Diagnostics.ActivityListener
         {
@@ -47,8 +86,11 @@ public sealed partial class OrderStorageIntegrationTests
         };
         System.Diagnostics.ActivitySource.AddActivityListener(listener);
         var builder = new NpgsqlDataSourceBuilder(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        builder.ConfigureTracing(tracing => tracing.ConfigureCommandEnrichmentCallback((_, command) =>
+        builder.ConfigureTracing(tracing => tracing
+            .ConfigureBatchEnrichmentCallback((_, _) => { if (recording) Interlocked.Increment(ref batches); })
+            .ConfigureCommandEnrichmentCallback((_, command) =>
         {
+            if (recording) Interlocked.Increment(ref commands);
             if (recording && (command.CommandText.Contains("pg_advisory_xact_lock", StringComparison.Ordinal)
                 || command.CommandText.Contains("CREATE TABLE", StringComparison.OrdinalIgnoreCase)))
                 Interlocked.Increment(ref writes);
@@ -73,6 +115,8 @@ public sealed partial class OrderStorageIntegrationTests
             await Prepare();
             recording = false;
             Assert.Equal(0, writes);
+            Assert.Equal(1, batches);
+            Assert.Equal(0, commands);
             if (!receipts)
             {
                 await using (var remove = database.CreateCommand($"DROP TABLE {schema}.outbox_emissions")) await remove.ExecuteNonQueryAsync();
@@ -83,7 +127,8 @@ public sealed partial class OrderStorageIntegrationTests
             await using (var alter = database.CreateCommand($"ALTER TABLE {schema}.{table} ALTER COLUMN content TYPE text USING content::text"))
                 await alter.ExecuteNonQueryAsync();
             recording = true;
-            await Assert.ThrowsAsync<InvalidOperationException>(Prepare);
+            var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(Prepare);
+            Assert.Equal("postgres.schema.columnMismatch", failure.Code);
             recording = false;
             Assert.Equal(0, writes);
             if (!receipts)
@@ -485,7 +530,8 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.NotNull(await validate.PrepareOutboxAsync(database));
             await using (var alter = database.CreateCommand($"ALTER TABLE public.{prefix}_commits DROP COLUMN content_hash"))
                 await alter.ExecuteNonQueryAsync();
-            await Assert.ThrowsAsync<InvalidOperationException>(() => create.PrepareOutboxAsync(database));
+            var drift = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => create.PrepareOutboxAsync(database));
+            Assert.Equal("postgres.schema.columnMismatch", drift.Code);
         }
         finally
         {

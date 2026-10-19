@@ -35,7 +35,12 @@ public sealed class PostgresTransitionReceiptOptions
         PartitionKey = partitionKey;
         MaximumReceiptBytes = maximumReceiptBytes;
         Capabilities = new(true, partitionKey);
+        catalog = new([new(Table,
+            [.. Columns.Select(column => new PostgresCatalogSchema.Column(column.Name, column.Type, column.Required))],
+            [new(["entity_type", "partition_key", "operation_id"], "p", NullsDistinct: true),
+             new(["entity_type", "partition_key", "creation_subject"], "u", NullsDistinct: true)])]);
     }
+    readonly PostgresCatalogSchema catalog;
     static readonly (string Name, string Type, bool Required)[] Columns =
     [
         ("entity_type", "text", true), ("partition_key", "text", true), ("operation_id", "text", true),
@@ -64,54 +69,19 @@ public sealed class PostgresTransitionReceiptOptions
     /// <param name="dataSource">Native database authority; no schema changes are made.</param>
     /// <param name="cancellationToken">Cancellation of metadata reads.</param>
     /// <returns>Validated receipt storage bound to this exact native data source; required by repository registration.</returns>
-    /// <exception cref="InvalidOperationException">Schema needs an explicit migration.</exception>
+    /// <exception cref="PostgresSchemaValidationException">A table, column or uniqueness fence needs an explicit migration.</exception>
     /// <exception cref="NpgsqlException">The metadata query fails.</exception>
     public async Task<PostgresTransitionReceiptStorage> BindAsync(NpgsqlDataSource dataSource, CancellationToken cancellationToken = default)
-        => (await AdmitAsync(dataSource, PostgresSchemaInitialization.ValidateOnly, cancellationToken).ConfigureAwait(false))!;
+    {
+        var admission = await catalog.ValidateAsync(dataSource, PostgresSchemaInitialization.ValidateOnly, cancellationToken).ConfigureAwait(false);
+        return new(this, dataSource, admission.FenceNames[Table]);
+    }
 
     internal async Task<PostgresTransitionReceiptStorage?> AdmitAsync(NpgsqlDataSource dataSource,
         PostgresSchemaInitialization policy, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(dataSource);
-        if (!await PostgresSchemaPreparation.TableExistsAsync(dataSource, Table, policy, cancellationToken).ConfigureAwait(false))
-            return null;
-        await using var columns = dataSource.CreateCommand("""
-            SELECT attname, format_type(atttypid, atttypmod), attnotnull
-            FROM pg_attribute WHERE attrelid=to_regclass($1) AND attnum>0 AND NOT attisdropped
-            """);
-        columns.Parameters.AddWithValue(Table);
-        await using (var reader = await columns.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
-        {
-            var actual = new Dictionary<string, (string, bool)>(StringComparer.Ordinal);
-            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
-                actual.Add(reader.GetString(0), (reader.GetString(1), reader.GetBoolean(2)));
-            if (actual.Count != Columns.Length || Columns.Any(column => !actual.TryGetValue(column.Name, out var found)
-                || found != (column.Type, column.Required)))
-                throw new InvalidOperationException("Receipt columns require an explicit schema migration.");
-        }
-        await using var keys = dataSource.CreateCommand("""
-            SELECT c.contype::text, array_agg(a.attname::text ORDER BY k.ordinality), c.conname
-            FROM pg_constraint c CROSS JOIN LATERAL unnest(c.conkey) WITH ORDINALITY k(attnum, ordinality)
-            JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum
-            WHERE c.conrelid=to_regclass($1) AND c.contype IN ('p','u') AND NOT c.condeferrable
-                AND EXISTS (SELECT 1 FROM pg_index i WHERE i.indexrelid=c.conindid AND NOT COALESCE((to_jsonb(i)->>'indnullsnotdistinct')::boolean, false))
-            GROUP BY c.oid, c.contype
-            """);
-        keys.Parameters.AddWithValue(Table);
-        await using var keyReader = await keys.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        bool primary = false, creation = false;
-        var fenceNames = new HashSet<string>(StringComparer.Ordinal);
-        while (await keyReader.ReadAsync(cancellationToken).ConfigureAwait(false))
-        {
-            var names = keyReader.GetFieldValue<string[]>(1);
-            if (names.Length == 3 && (names.ToHashSet(StringComparer.Ordinal).SetEquals(["entity_type", "partition_key", "operation_id"])
-                || names.ToHashSet(StringComparer.Ordinal).SetEquals(["entity_type", "partition_key", "creation_subject"])))
-                fenceNames.Add(keyReader.GetString(2));
-            primary |= keyReader.GetString(0) == "p" && names.Length == 3 && names.ToHashSet(StringComparer.Ordinal).SetEquals(["entity_type", "partition_key", "operation_id"]);
-            creation |= keyReader.GetString(0) == "u" && names.Length == 3 && names.ToHashSet(StringComparer.Ordinal).SetEquals(["entity_type", "partition_key", "creation_subject"]);
-        }
-        if (!primary || !creation) throw new InvalidOperationException("Receipt uniqueness fences require an explicit schema migration.");
-        return new(this, dataSource, fenceNames);
+        var admission = await catalog.ValidateAsync(dataSource, policy, cancellationToken).ConfigureAwait(false);
+        return admission.MissingCount == 0 ? new(this, dataSource, admission.FenceNames[Table]) : null;
     }
 
 }

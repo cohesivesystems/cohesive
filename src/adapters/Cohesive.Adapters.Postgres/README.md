@@ -362,8 +362,11 @@ valid attachment returns its validated binding without a creation lock or DDL. M
 creation and a complete validation pass; incompatible existing tables fail before creation. A valid commits
 table with absent emissions is supported, but an existing emissions table without its required commit foreign
 key needs migration. Missing attachment tables in ValidateOnly report `postgres.schema.tableMissing`.
-These attachments still use their native catalog validators (several reads), not the product validator's
-single batch; the fast path eliminates mutation and duplicate validation, not all metadata reads.
+Product and attachment requirements use one catalog validator and one Npgsql batch per admission pass.
+An unchanged receipt or outbox startup uses one batch and zero standalone commands, verified by tracing.
+Columns, immediate keys, generated identity, foreign keys and checks report structured `postgres.schema.*`
+diagnostics with table/column context. Receipt fences retain their exact constraint names for conflict handling.
+This does not combine product, receipt and outbox admission into a single global batch or transaction.
 
 The Services adapter supplies `bindings.PrepareAsync(services, authority)` to resolve the native data source
 once using the declared database identity. Explicit native-source preparation remains available without DI.
