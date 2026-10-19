@@ -204,8 +204,9 @@ metadata. First decoding continues to run constructors. Changed and independentl
 have independent admission; contract, depth, normalization and contextual checks remain fresh.
 
 Supported declared object contracts project into Core's compact field vectors using frozen JSON metadata.
-Actual wrapper converters supply their existing string getters. Opaque converters and contextual member
-policies retain serialization. Mutable envelopes are not cached. Eligibility requires the existing explicit
+Actual wrapper converters supply their existing string getters. Opaque converters retain serialization
+for first projection; marked immutable owners may then share the verified observation. Contextual member
+policies retain their owning serializer. Mutable envelopes are not cached. Eligibility requires the existing explicit
 deep-immutability contract; framework graphs participate in its reflection audit.
 
 A successful typed read supplies an encoding **candidate**, not evidence of canonical output. Reprojection
@@ -400,3 +401,99 @@ three warmups, five 250 ms iterations, one launch, Apple M5 Max arm64, .NET 10.0
 All **4,931 Core tests pass**, with 41 existing integration skips. Tests cover custom key and value
 comparers independently, structural equality, input independence and concurrent overlays. A median-of-seven
 4 KiB allocation ceiling on a 1,024-entry root plus one addition rejects rebuilding the whole root.
+
+## Immutable converter-backed observations
+
+Ari's warm X12 trace after merged #239 still rebuilt opaque JSON observations when the same deeply
+immutable protocol token appeared inside different DTOs. `PreparedDeclaredObservationProjection`
+excluded `JsonTypeInfoKind.None` converter values from its existing owner/type preparation. This
+repeated JSON writing, parsing, field-name allocation and tree construction, then supplied fresh
+storage to downstream typed interpretation caches.
+
+The existing deep-immutability promise explicitly includes deterministic converters. Preparation now
+covers those immutable reference-type leaves under the same fixed profile and exact declared type.
+An opaque object read may also propose its original observation storage; first reprojection still runs
+the converter and verifies representation equality. Normalized or otherwise changed encoding receives
+independent storage. No public API, parallel codec, fingerprint authority or additional cache is added.
+Contextual and external admission remain fresh. Retention is one prepared observation per live owner/
+declared type; failures retry, nested depth remains checked, and discarded read/projection cycles collect.
+
+### Component qualification
+
+Run the opt-in benchmark with:
+
+```sh
+dotnet run --project eng/runtime-performance/value-conversion/ValueConversion.csproj -c Release -- \
+  --filter '*ImmutableConverterProjectionBenchmarks*' --job short
+```
+
+On macOS 27.0.1 / Apple M5 Max arm64, SDK 10.0.402 / runtime 10.0.13, the short BenchmarkDotNet run
+separates an independent uncached serializer reference, a new owner per call, and a warmed shared owner.
+The reference is not a same-binary measurement of the old implementation; cold preparation includes
+weak preparation state and depth checks in addition to the serializer reference's work.
+
+For 128 nested items, the uncached serializer reference allocates 46,568 bytes and averages 39.44 μs;
+a new prepared owner allocates about 48,206 bytes and averages 50.06 μs. Reusing the prepared owner
+allocates zero measured bytes and averages 17.60 ns. For one item, the corresponding allocations are
+816 /2,448 /0 bytes. These are short component samples, not application latency claims. The fixed
+cold state and retained result are justified only when immutable owners are reused.
+[Full BenchmarkDotNet report](evidence/immutable-converter-projections/benchmarkdotnet.md).
+
+### Original X12 qualification
+
+Both frozen runtimes use the same original X12 test assembly, harness and incubating/application DLLs
+from merged Ari #239. Control uses the previously verified public alpha.149 Core. Candidate changes
+only `Cohesive.dll`, built from publisher `c262a431` plus this source change. This is unpublished source
+qualification, with no mutation of the NuGet cache or source-generator override. No compatibility bridge
+is committed to Ari; publication and normal package adoption are subsequent deliverables.
+
+Thirty-two alternating fresh processes execute 832 successful original cases: five default pairs/source
+at 32 invocations/process, plus three separate no-tiering diagnostic pairs/source at 16. Each reported
+number is a median of independent process medians over fixed windows. Tests, builds, benchmarks and
+traces do not overlap the untraced measurement. JIT/GC overlap process CPU and are not subtracted.
+
+| Window | X12 | Allocation before → after | Process CPU before → after |
+| --- | --- | --- | --- |
+| Second invocation, default | 004010 | 14.015 → 12.124 MB | 197.3 → 180.7 ms |
+| Second invocation, default | 005030 | 15.000 → 12.685 MB | 227.1 → 206.5 ms |
+| Default invocations 17–32 | 004010 | 13.936 → 12.029 MB | 139.0 → 93.7 ms |
+| Default invocations 17–32 | 005030 | 14.714 → 12.608 MB | 128.0 → 122.1 ms |
+| No-tiering diagnostic, 9–16 | 004010 | 13.907 → 11.952 MB | 101.9 → 87.5 ms |
+| No-tiering diagnostic, 9–16 | 005030 | 14.765 → 12.550 MB | 109.2 → 94.6 ms |
+
+Default second allocations fall 13.5% /15.4% (1.892 /2.315 MB), with process CPU 8.4% /9.1% lower.
+Cold allocations remain approximately flat: 146.703 →146.847 MB /147.950 →147.645 MB. Later default
+CPU is lower in both cases, but 005030 elapsed time is higher (100.9 →113.5 ms); tiered JIT remains
+active and CPU/elapsed results must not be collapsed into a universal speedup. Separate no-tiering
+CPU is about 14% /13% lower and is diagnostic, not a deployment recommendation. Some processes still
+show different allocation levels; raw process/window summaries are retained instead of selecting
+favorable samples.
+
+Twelve matched traces lose zero events and have zero missing allocation or managed CPU stacks.
+Sampled declared projection falls 2.736 →1.386 MB /3.298 →2.061 MB, and hosted typed decoding falls
+1.054 →0.580 MB /1.373 →0.687 MB per second invocation. Those classifications overlap stack ancestry
+and are not additive to workflow budgets or exact process counters.
+
+Disjoint workflow estimates (mean sampled MB across three traces per source/variant) are:
+
+| X12 | Preview before → after | Durable execution before → after | Other workflow before → after |
+| --- | --- | --- | --- |
+| 004010 | 4.038 →3.494 | 4.064 →4.028 | 5.990 →4.634 |
+| 005030 | 4.278 →3.589 | 4.562 →4.811 | 6.183 →4.665 |
+
+The main benefit is seeding/control workflow plus preview decoding; durable execution does not show
+an allocation reduction in these samples. Its pinned source handler still returns a typed snapshot,
+which reprojects an opaque payload from a fresh read. Keeping the admitted source observation through
+that handler is the next Ari-specific boundary to examine, using the existing observation Query view
+and source projection rather than another cache. Fixture plan construction and repeated contract/type
+validation also remain; the total is not solely codec cost.
+
+The full Core Release suite passes 4,946 tests with 41 existing skips. An isolated full Ari engine run
+using the source Core DLL passes 996 tests with 18 existing skips. Fifteen focused cases preserve first
+converter behavior, object/array/scalar output, mutable freshness, duplicate/malformed rejection,
+normalization, retry, concurrent use, depth, weak ownership and discarded read/projection cycles.
+A median-of-seven allocation guard allows at most 512 bytes across 128 warmed large-payload calls.
+Both pinned X12 graph digests remain unchanged. Cumulative allocated bytes are not retained heap, and
+short microbenchmarks or process CPU counters do not establish universal deployment latency gains.
+Compact counters, trace quality and module/source hashes are in
+[evidence/immutable-converter-projections](evidence/immutable-converter-projections/manifest.json).

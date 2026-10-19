@@ -1,0 +1,83 @@
+variant,source,phase,category,mean_sampled_bytes
+control,004010,cold,Catalog authoring,6845883
+control,004010,cold,Catalog/context,1617427
+control,004010,cold,Commit/checkpoint hash,177667
+control,004010,cold,EDI provenance,35533
+control,004010,cold,Hosted decode,14116875
+control,004010,cold,Observation projection,8456739
+control,004010,cold,Other,78995325
+control,004010,cold,Other EDI compilation,10119251
+control,004010,cold,Protocol JSON,14798307
+control,004010,cold,Protocol hashes,143267
+control,004010,cold,Query physical planning,1350493
+control,004010,cold,Query realization hashes,2731520
+control,004010,cold,Storage content hashes,7250056
+control,004010,repeated,Catalog authoring,1102573
+control,004010,repeated,Catalog/context,680315
+control,004010,repeated,Hosted decode,1231696
+control,004010,repeated,Observation projection,3197659
+control,004010,repeated,Other,6636659
+control,004010,repeated,Query physical planning,638971
+control,004010,repeated,Query realization hashes,497467
+control,004010,repeated,Storage content hashes,106600
+control,005030,cold,Catalog authoring,6949307
+control,005030,cold,Catalog/context,1617408
+control,005030,cold,Commit/checkpoint hash,177667
+control,005030,cold,EDI provenance,71067
+control,005030,cold,Hosted decode,14341024
+control,005030,cold,Observation projection,8910872
+control,005030,cold,Other,79154843
+control,005030,cold,Other EDI compilation,11243613
+control,005030,cold,Protocol JSON,13853581
+control,005030,cold,Protocol hashes,35533
+control,005030,cold,Query physical planning,1348917
+control,005030,cold,Query realization hashes,2770048
+control,005030,cold,Storage content hashes,7595312
+control,005030,repeated,Catalog authoring,1197616
+control,005030,repeated,Catalog/context,653216
+control,005030,repeated,Hosted decode,1409501
+control,005030,repeated,Observation projection,3794557
+control,005030,repeated,Other,6443211
+control,005030,repeated,Query physical planning,850069
+control,005030,repeated,Query realization hashes,460659
+control,005030,repeated,Storage content hashes,213760
+candidate,004010,cold,Catalog authoring,6763309
+candidate,004010,cold,Catalog/context,1617584
+candidate,004010,cold,Commit/checkpoint hash,213200
+candidate,004010,cold,Hosted decode,14264048
+candidate,004010,cold,Observation projection,8312197
+candidate,004010,cold,Other,79252840
+candidate,004010,cold,Other EDI compilation,9924861
+candidate,004010,cold,Protocol JSON,14767539
+candidate,004010,cold,Protocol hashes,36101
+candidate,004010,cold,Query physical planning,1277035
+candidate,004010,cold,Query realization hashes,2804301
+candidate,004010,cold,Storage content hashes,7504397
+candidate,004010,repeated,Catalog authoring,1256757
+candidate,004010,repeated,Catalog/context,647597
+candidate,004010,repeated,Hosted decode,615848
+candidate,004010,repeated,Observation projection,1954333
+candidate,004010,repeated,Other,6402269
+candidate,004010,repeated,Protocol JSON,71067
+candidate,004010,repeated,Query physical planning,710667
+candidate,004010,repeated,Query realization hashes,426400
+candidate,004010,repeated,Storage content hashes,71067
+candidate,005030,cold,Catalog authoring,6846213
+candidate,005030,cold,Catalog/context,1616219
+candidate,005030,cold,Commit/checkpoint hash,212859
+candidate,005030,cold,Hosted decode,14477339
+candidate,005030,cold,Observation projection,9597704
+candidate,005030,cold,Other,79498235
+candidate,005030,cold,Other EDI compilation,10944131
+candidate,005030,cold,Protocol JSON,14099283
+candidate,005030,cold,Query physical planning,1316261
+candidate,005030,cold,Query realization hashes,2804029
+candidate,005030,cold,Storage content hashes,7554424
+candidate,005030,repeated,Catalog authoring,1212803
+candidate,005030,repeated,Catalog/context,650027
+candidate,005030,repeated,Hosted decode,686880
+candidate,005030,repeated,Observation projection,2521160
+candidate,005030,repeated,Other,6611856
+candidate,005030,repeated,Query physical planning,814195
+candidate,005030,repeated,Query realization hashes,425035
+candidate,005030,repeated,Storage content hashes,142133
