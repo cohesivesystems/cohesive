@@ -146,9 +146,9 @@ public sealed class PreparedJsonProfileTests
             Compare<string>(value, options);
             Assert.Equal(value.Deserialize<string>(), ordinary(value));
             var expectedValid = !suffix.Contains('\uD800') && !suffix.Contains('\uDC00');
-            for (var warm = 0; warm < 3; warm++) _ = StringExtensions.IsWellFormedUtf16(text.AsSpan());
+            for (var warm = 0; warm < 3; warm++) _ = JsonText.IsWellFormed(text.AsSpan());
             var before = GC.GetAllocatedBytesForCurrentThread();
-            var valid = StringExtensions.IsWellFormedUtf16(text.AsSpan());
+            var valid = JsonText.IsWellFormed(text.AsSpan());
             var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
             Assert.Equal(expectedValid, valid);
             Assert.Equal(0, allocated);
