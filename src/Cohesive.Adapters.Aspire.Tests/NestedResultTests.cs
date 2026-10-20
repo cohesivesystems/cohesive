@@ -14,7 +14,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class NestedResultTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = TestModels.Fulfillment();
 
     static NestedQueryResultAssembly Assembly => ((QueryDefinition)Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.Definition).Assembly!;
 

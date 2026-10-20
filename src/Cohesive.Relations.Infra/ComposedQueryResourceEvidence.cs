@@ -15,7 +15,7 @@ public sealed class ComposedQueryResourceEvidence : IInfrastructureResourcePrepa
     /// <param name="evidence">Evidence produced by query preparation.</param>
     /// <exception cref="ArgumentException">An identity or kind is empty.</exception>
     /// <exception cref="ArgumentNullException">Evidence is null.</exception>
-    public ComposedQueryResourceEvidence(string identity, string kind, IEnumerable<InfrastructureCapabilityEvidence> evidence)
+    internal ComposedQueryResourceEvidence(string identity, string kind, IEnumerable<InfrastructureCapabilityEvidence> evidence)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identity);
         ArgumentException.ThrowIfNullOrWhiteSpace(kind);

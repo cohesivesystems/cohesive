@@ -10,7 +10,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class SubplanTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = TestModels.Fulfillment();
 
     internal static QueryNodeId DemandProjection(FulfillmentQueries queries) =>
         ((QueryDefinition)queries.ReservationAvailability.CompilationRequest.DefinitionDocument.Definition)

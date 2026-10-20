@@ -68,7 +68,7 @@ public sealed class RealizationCoherenceTests
             ModelActivator.Create<FulfillmentApplication>()).Message);
         Assert.Contains(nameof(FulfillmentHistoryPolicy), Assert.Throws<InvalidOperationException>(() =>
             ModelActivator.Create<FulfillmentInfrastructure>()).Message);
-        Assert.NotNull(ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy())));
+        Assert.NotNull(TestModels.Fulfillment());
     }
 
     [Theory]

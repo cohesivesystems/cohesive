@@ -24,7 +24,7 @@ public sealed class PostgresCosmosCompositionTests
     [Fact]
     public void Both_compositions_share_semantic_contracts_but_only_one_places_inventory_in_Postgres()
     {
-        var single = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var single = TestModels.Fulfillment();
         var mixed = ModelActivator.Create<PostgresCosmosApplication>();
         Assert.Equal(single.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint,
             mixed.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
@@ -194,7 +194,7 @@ public sealed class PostgresCosmosCompositionTests
     [Fact]
     public void Explicit_service_query_selection_is_cached_and_frozen()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var model = TestModels.Fulfillment();
         using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=orders;Username=test");
         var postgres = model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var calls = 0;

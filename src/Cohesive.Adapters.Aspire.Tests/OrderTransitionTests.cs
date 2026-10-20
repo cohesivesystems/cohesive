@@ -10,7 +10,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class OrderTransitionTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = TestModels.Fulfillment();
 
     [Theory]
     [InlineData(OrderStatus.Draft, TransitionDecisionKind.Applied, SubmissionOutcome.Submitted)]

@@ -15,5 +15,7 @@ implements it only for complete, unpaged native statement queries.
 
 `ComposedQueryResourceEvidence` owns source-qualified acquisition evidence shared by provider
 associations. It now lives here rather than in Postgres.Services, so Cosmos associations do not
-depend on PostgreSQL. `ForSource` rejects evidence from a different prepared source; native
+depend on PostgreSQL. Construction is internal and granted only to Postgres.Services, which
+derives evidence during storage preparation; callers cannot supply arbitrary evidence through
+this type. `ForSource` rejects evidence from a different prepared source; native
 resource affinity remains an adapter responsibility. This does not imply a cross-store snapshot.

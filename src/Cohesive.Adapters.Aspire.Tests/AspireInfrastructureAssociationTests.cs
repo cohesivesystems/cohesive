@@ -18,7 +18,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class AspireInfrastructureAssociationTests
 {
-    static readonly FulfillmentInfrastructure ExampleApp = ModelActivator.Create<FulfillmentInfrastructure>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+    static readonly FulfillmentInfrastructure ExampleApp = TestModels.Infrastructure();
 
     static readonly SourceReference Source = SourceReference.Create("test", "aspire-first");
     static InfrastructureTargetImplementation Storage => ResourceImplementation(new("test/storage"),
@@ -39,7 +39,7 @@ public sealed class AspireInfrastructureAssociationTests
     [Fact]
     public void Inferred_preparation_matches_explicit_requirements_and_is_reused_for_association()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var model = TestModels.Fulfillment();
         var inferred = Infrastructure.Define(new("test/prepared"), new("1"), new("test/prepared/bindings"),
             infra => infra.Resource(FulfillmentInfrastructure.Store).Persistent()
                 .Postgres(model.Storage.Bindings, model.Endpoints.Plan));
@@ -100,7 +100,7 @@ public sealed class AspireInfrastructureAssociationTests
     public void Project_inference_requires_native_metadata_and_does_not_claim_durable_execution()
     {
         var builder = Builder();
-        var configured = ModelActivator.Create<FulfillmentInfrastructure>(services => services.AddSingleton(new FulfillmentHistoryPolicy())).Configure(builder);
+        var configured = TestModels.Infrastructure().Configure(builder);
         var project = builder.CreateResourceBuilder((ProjectResource)configured.Resources[FulfillmentInfrastructure.Worker]);
         var definition = Infrastructure.Define(new("test/project"), new("1"), new("test/project/bindings"), infra =>
             infra.Workload(FulfillmentInfrastructure.Worker).Requires(AspireInfrastructure.DotNetProjectExecution)
@@ -152,7 +152,7 @@ public sealed class AspireInfrastructureAssociationTests
     public void Runnable_example_uses_generated_project_metadata_and_existing_native_database()
     {
         var builder = Builder();
-        var association = ModelActivator.Create<FulfillmentInfrastructure>(services => services.AddSingleton(new FulfillmentHistoryPolicy())).Configure(builder);
+        var association = TestModels.Infrastructure().Configure(builder);
         Assert.True(association.Deployment.IsComplete,
             string.Join(Environment.NewLine, association.Deployment.Diagnostics.Select(d => d.Message)));
         Assert.Equal(2, association.Resources.Count);

@@ -12,7 +12,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class FulfillmentHostSetupTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = TestModels.Fulfillment();
 
     [Fact]
     public void Hosting_requires_receipt_capability_before_build_or_io()

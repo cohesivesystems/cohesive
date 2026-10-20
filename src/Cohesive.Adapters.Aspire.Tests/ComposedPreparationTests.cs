@@ -9,7 +9,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class ComposedPreparationTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = TestModels.Fulfillment();
 
     [Fact]
     public void Native_prefix_recipe_rejects_queries_without_a_supported_closed_row_boundary()
