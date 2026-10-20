@@ -4,7 +4,7 @@
 
 # From implied creation to a multi-entity process
 
-`FulfillmentDomain` remains the state authority. Native Aspire owns resources; native PostgreSQL mappings
+`FulfillmentDomain` remains the semantic authority for entities and transitions. Native Aspire owns resources; native PostgreSQL mappings
 attach to the same domain definitions. `FulfillmentProcess.Execute` is authoring syntax compiled into canonical
 Process IR, not an async application coordinator. Its class-level `[Process]` declaration generates an instance-owned, cached definition that can be inspected and fingerprinted.
 `FulfillmentApplication` supplies shared instances of the domain, queries, transitions and process.
@@ -22,27 +22,32 @@ applications bind domain operations to repositories without recreating adapters 
 - The hosted stock query is an explicit native point read. It is advisory; the guarded reserve transition
   checks current stock and its storage token. The joined reservation-availability relation is separately
   exposed by the running program through its existing prepared native reader.
-- A Process sequences stock query → reserve → submit. Domain rejection by submission leads to a release
+- A Process sequences stock query → reserve → submit → create reservation. Domain rejection by submission leads to a release
   transition. Ordering comes from the Process graph, not duplicated endpoint control flow.
 - Each accepted entity operation commits state and its immutable process receipt in one PostgreSQL transaction.
   The receipt includes the canonical request, decision evidence and original result. It is not an authoritative
   event stream, an audit-retention policy, or an outbox publisher.
 - Repeating an exact entity operation occurrence replays its original result. Tests reconstruct the runtime and repeat
-  an invocation, proving stock is neither decremented nor released twice. Changed input cannot reuse that receipt.
+  an invocation, proving stock is neither decremented nor released twice, and reservation creation is not repeated. Changed input cannot reuse that receipt.
 
 ## Concrete example
 
-A Draft order requests two items from stock of five. Stock becomes three and the order becomes Submitted.
-Re-executing the same invocation identity returns the retained results and keeps stock at three.
-If the order is already Submitted, reservation is compensated and stock returns to five. If stock is one,
-the guarded reservation rejects; the order is not submitted.
+A Draft order requests two items from stock of five. Stock becomes three, the order becomes Submitted,
+and a declared creation transition inserts a reservation. `OrderDetails` and `ReservationAvailability`
+now read that fact rather than depending on fixture-only demand. This one-item workflow uses the order ID
+as its reservation ID, scoped to the repository's trusted partition.
 
-These scenarios are tested against a disposable native PostgreSQL database. The actual application startup,
-create/read/submit routes and query preparation are also exercised. No cloud deployment is part of these tests.
+`FulfillmentResult` reports closed `FulfillmentStatus` and `FulfillmentOutcome` values; stock operations
+accept only `StockQuantity` and return a closed `StockOutcome`. The process binding selects the SKU.
+If the order is already Submitted, stock is released and the result is `Rejected / OrderRejected`.
+Invalid quantities and insufficient stock reject without creating a reservation.
 
-The Process does not insert a `Reservation` row: this slice demonstrates stock mutation plus order submission.
-The existing `Reservation` relation demonstrates joined demand using separately supplied fixture rows. Adding
-an authoritative reservation lifecycle should be a declared transition, not an implicit extra SQL write.
+Tests run the same sequence under both state and event authority using the optional Marten attachment.
+They also fail reservation insertion after stock and order have committed, remove the injected fault,
+and reconstruct the process host before replaying the exact occurrence. With stock of two and a request
+for two, replay completes the missing reservation while stock stays zero. Replaying completed success
+or compensation leaves the entity snapshots unchanged. Both joined queries consume the created reservation.
+These are disposable PostgreSQL tests, not cloud deployment evidence.
 
 ## Local walkthrough
 
@@ -89,10 +94,13 @@ PostgreSQL transition receipt before deciding how to recover; do not blindly rep
 
 Receipts are retained indefinitely in this demo. Schema bootstrap is explicit, caller-owned and idempotent; it
 is not a migration engine. Production must choose schema migration, receipt retention, reconciliation and
-client identity policies before claiming recovery guarantees. No global transaction spans order and inventory.
+client identity policies before claiming recovery guarantees. No global transaction spans order, inventory and reservation. A failed reservation insert can leave a
+Submitted order with reserved stock but no reservation until the exact occurrence is recovered. A new
+command identity is not a retry. The tests demonstrate receipt-backed replay, not automatic process recovery.
 
-Next composition: a durable execution binding and then independently selectable authoritative event history,
-reconstitution, state checkpoints and read projections. Those are not inferred from these receipts.
+State/event authority and reconstitution are independently selectable through the existing
+[Marten attachment](STATE-AUTHORITY.md). Next composition: durable process recovery and explicit read-projection
+lifecycles. Neither follows merely from storing transition receipts.
 
 ### Operator failure details
 
@@ -112,7 +120,7 @@ uses the repository's fixed partition. Authorization remains explicit when the h
 Separately authored services use the same preparation path:
 
 ```csharp
-var hosted = Service.Bind(serviceDocument, process, dependencies, orders, inventory)
+var hosted = Service.Bind(serviceDocument, process, dependencies, orders, inventory, reservations)
     .Build(authority: "example", authorization: authorization);
 ```
 

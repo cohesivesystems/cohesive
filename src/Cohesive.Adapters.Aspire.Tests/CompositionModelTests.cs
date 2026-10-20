@@ -19,7 +19,8 @@ public sealed class CompositionModelTests
         {
             Cohesive.Processes.Authoring.ProcessDependency.Transition(model.Domain.OrderTransitions.Submit),
             Cohesive.Processes.Authoring.ProcessDependency.Transition(model.Domain.InventoryTransitions.Reserve),
-            Cohesive.Processes.Authoring.ProcessDependency.Transition(model.Domain.InventoryTransitions.Release)
+            Cohesive.Processes.Authoring.ProcessDependency.Transition(model.Domain.InventoryTransitions.Release),
+            Cohesive.Processes.Authoring.ProcessDependency.Transition(model.Domain.ReservationTransitions.Create)
         };
         foreach (var transition in expected)
         {
@@ -39,7 +40,7 @@ public sealed class CompositionModelTests
     {
         var model = ModelActivator.Create<FulfillmentApplication>();
         var process = model.Process;
-        var separate = Service.Define(new("fulfillment"), new("2"), process.Provenance)
+        var separate = Service.Define(new("fulfillment"), new("3"), process.Provenance)
             .Use(new ServiceDependencies().Process(process))
             .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
             .ReturnAfterAdmission(ProcessExecutionLifetime.Host)

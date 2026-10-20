@@ -1318,6 +1318,18 @@ public static class ProcessDefinitionValidator
             if (match.Completeness != BranchCompleteness.Exhaustive || match.Cases.IsDefaultOrEmpty)
                 return;
 
+            if (match.Contract is { Type: EnumTypeRef enumeration, Cardinality: FieldCardinality.Single,
+                    Presence: FieldPresence.Required, Nullability: FieldNullability.NonNullable })
+            {
+                var missing = enumeration.Members.Where(member => !match.Cases.Any(candidate => candidate is not null
+                    && PatternMatches(candidate.Pattern, ObservationValue.FromObject(member)))).ToArray();
+                if (missing.Length != 0)
+                    Error(ProcessDefinitionDiagnosticCodes.ExhaustivenessDisproven,
+                        "Enum Match omits declared outcomes: " + string.Join(", ", missing),
+                        Child(location, "completeness"), subject: match.Id.Value);
+                return;
+            }
+
             if (!TryGetConstant(match.Value, out var value))
             {
                 Error(
