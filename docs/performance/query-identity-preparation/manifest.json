@@ -1,0 +1,46 @@
+{
+  "baseline_source_commit": "4f948efbc7ce54ee9e9dae999753a78a2b4580dd",
+  "published_dependencies": {
+    "run": 39319195505,
+    "commit": "8f7087a87ca41ab95749f0a9c90a757ec1868469",
+    "version": "0.1.0-alpha.152"
+  },
+  "application_source": "Ari 1c2b78c6 with alpha.152 pins, generated dependency-pin evidence only; application code unchanged",
+  "qualification": "Frozen public alpha.152 runtime; replace only local Core and Relations modules in both variants. Baseline source precedes release-gate test/script-only fixes; runtime source is identical. Package cache unmodified. Source qualification, not publication of this optimization.",
+  "module_count": 125,
+  "module_sha256": {
+    "control": {
+      "Cohesive.dll": "00394cb80ab57b22f45f3288a9ec1b54a0f173adb4a7e3bd1aca66399980e872",
+      "Cohesive.Relations.dll": "0e9b041ee84a579f8ce4e3c8997ac2f22e1f68871b3cdaaa25a8874bab4fc312"
+    },
+    "candidate": {
+      "Cohesive.dll": "1ce47e3d35e359f01d2e453ff9cda7cc6f0d30b3f0551f7e1d04385ae148e92c",
+      "Cohesive.Relations.dll": "38fd24067e66e249d95285783e4f9852aed97815cb5d377afec2e04fb5f6bc3c"
+    }
+  },
+  "module_manifest_sha256": "3d52d6c8cdbe2083e891c8e2d34a4ba09f4a72c5e7f28d9839db6739baf69616",
+  "candidate_source_sha256": {
+    "src/Cohesive/Model/Serialization/LengthPrefixedFingerprintEncoding.cs": "3a4ff822061493f5a18e79843968acbeab8dba79ab423c34aeeeeaab647ab721",
+    "src/Cohesive.Relations/Physical/RelationQueryPhysicalPlan.cs": "8d9bb6f71d1ac30c1c190b74be96cfd0171387c39ced18fde3ed4e74429c9982",
+    "src/Cohesive.Relations/Physical/RelationQueryPhysicalFingerprinters.cs": "4f8d4d17846888ff9fe69248ea103ed84dba970c5392293e2dd56424adead76f",
+    "src/Cohesive.Relations/Realization/RelationQueryRealizationFingerprinter.cs": "f1fd294b67ec297dea6218c9688821cf68204abe994b7dd7fb15590f4cabfa7d",
+    "src/Cohesive.Tests/Model/OrdinalFingerprintSetTests.cs": "3dbb380f57dd579c882c96078a82a2fe2a55625d536e3ba1c4997f8d7ba21123",
+    "src/Cohesive.Relations.Tests/QueryIdentityPreparationTests.cs": "71de7a546d094ed74601ae8a0dde4ef3c0e5c51c3ed5ab152026e5f03624c7ba",
+    "src/Cohesive.Relations.Benchmarks/QueryIdentityPreparationBenchmarks.cs": "ef07d361931ae6c2b34189673261735de203478f5cec37b9a430adf4d67da36c"
+  },
+  "environment": {
+    "machine": "Apple M5 Max arm64",
+    "os": "macOS 27.0.1",
+    "sdk": "10.0.402",
+    "runtime": "10.0.13",
+    "build": "Release"
+  },
+  "successful_x12_cases": 512,
+  "aggregation": "Per-process median for cold, second, cases 9-16; then median across 5 alternating process pairs/source default and 3 pairs/source no-tiering. CPU includes GC and JIT; allocated bytes cumulative, not retained heap.",
+  "overlap": "No builds, tests, tracing or BDN overlap untraced workflow measurements.",
+  "bdn": "0.15.8 ShortRun InProcess; 3 warmups/3 measured iterations; 250ms target; same frozen baseline and final candidate",
+  "raw_counters_sha256": {
+    "default": "92bc2d87f0a263c86f82c4af5ae64b6929b6384b8d9091c10a20b3a76fc0863d",
+    "no-tiering": "56c9abc65abf087f0e1bd1ae37a8e41f293462fcc3036f728c6a285225731c76"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "cohesiveControl": "4f948efbc7ce54ee9e9dae999753a78a2b4580dd",
+  "cohesiveCandidate": "1baafb3be714faac997c6e3aa567602f85b27ec8",
+  "runtime": "10.0.13",
+  "sdk": "10.0.402",
+  "architecture": "arm64",
+  "platform": "macOS 27.0.1 Apple M5 Max",
+  "changedModules": {
+    "Cohesive.dll": {
+      "control": "00394cb80ab57b22f45f3288a9ec1b54a0f173adb4a7e3bd1aca66399980e872",
+      "candidate": "1ce47e3d35e359f01d2e453ff9cda7cc6f0d30b3f0551f7e1d04385ae148e92c"
+    },
+    "Cohesive.Relations.dll": {
+      "control": "0e9b041ee84a579f8ce4e3c8997ac2f22e1f68871b3cdaaa25a8874bab4fc312",
+      "candidate": "38fd24067e66e249d95285783e4f9852aed97815cb5d377afec2e04fb5f6bc3c"
+    }
+  },
+  "methods": "Fresh processes, alternating variant order. No builds/tests/traces overlap untraced runs. CPU includes JIT and GC; medians are per-process window then across processes. Raw traces kept locally, compact counts retained.",
+  "harnessChange": "Only the iteration cap is raised to 512 in the extended copy; same measurement loop, same original test. Both long variants use the same harness bytes. Production runtime/official NuGet package cache remain untouched.",
+  "rawCounterFiles": {
+    "default-64": {
+      "sha256": "11db154bbd1a1f591e74758d0930db8cc315bf03d5c2ef87da804bd3bb0167a9",
+      "cases": 1280,
+      "iterationsPerProcess": 64,
+      "pairsPerSource": 5
+    },
+    "pgo-off-64": {
+      "sha256": "6874f88bfc686fc958bdd5e8a5067fa4161c6b32af300a0df97f0abe6e7f0796",
+      "cases": 768,
+      "iterationsPerProcess": 64,
+      "pairsPerSource": 3
+    },
+    "default-512": {
+      "sha256": "4711289ecbbd5192b1c95ed7364fc4a279823f3fbef7df74512a3ae337390811",
+      "cases": 6144,
+      "iterationsPerProcess": 512,
+      "pairsPerSource": 3
+    },
+    "default-2048-candidate-first": {
+      "sha256": "242121d16e5ccf1a4ec11820d48d4577dd335e19e406533d349800009253f2bc",
+      "cases": 4096,
+      "iterationsPerProcess": 2048,
+      "pairsPerSource": 1
+    },
+    "default-2048-control-first": {
+      "sha256": "3104126b96ed5b3052e869a46c8d1f6aa710d00d039cec18c523593985f530fa",
+      "cases": 4096,
+      "iterationsPerProcess": 2048,
+      "pairsPerSource": 1
+    }
+  },
+  "successfulUntracedCases": 16384,
+  "cpuTraces": {
+    "traces": 8,
+    "casesPerTrace": 64,
+    "pairsPerSource": 2,
+    "lostEvents": 0,
+    "missingManagedCpuStacks": 0,
+    "profile": "dotnet-sampled-thread-time; CLR JIT keyword 0x10; Ari phase markers",
+    "interpretation": "Sample counts are diagnostic, not milliseconds or counterfactual CPU attribution. External samples excluded."
+  },
+  "rawCountersLocation": "/tmp/query-id-cpu-investigation (local evidence; rerun cpu_compare.py with qualified frozen runtimes)",
+  "qualification": "Runtime code unchanged from #460 1baafb3b; original 64-case harness or identical extended harness per matched pair. Only local Core/Relations module bytes differ between variants; all other modules verified. Long runs still use the original Ari test; test itself unmodified. No builds, tests, tracing or benchmarks overlap untraced measurements.",
+  "harnessSha256": {
+    "original64": "4397990a3f6ea57f806d75b05765c1efbf993fe23f6a352a65c73742ff5e9ac4",
+    "extended512": "58637ed8f1a1a8384b04591461f755a4302e4808b3f5ff375e167a6061a60678",
+    "extended2048CandidateFirst": "4abae6be684c3c87f774379733c85d6e47fd63eeff9ba6edf2b6451fb47bce8f",
+    "extended2048ControlFirst": "b1ec10dc900bfc70a78ee8cd17f6f87bbe63883c41f1683d34d83c3046471f80"
+  },
+  "extendedHarnessSourceSha256": "46c0cb948a566a812e57dba061964c6175996af148127a0858800cf80c35e1e7"
+}

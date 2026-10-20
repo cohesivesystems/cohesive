@@ -1,6 +1,7 @@
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using System.Buffers;
+using System.Collections.Immutable;
 using System.Buffers.Binary;
 using System.Globalization;
 using System.Security.Cryptography;
@@ -163,15 +164,15 @@ public static class RelationQueryPhysicalPlanFingerprinter
     {
         writer.Append(stage.Id.Value);
         writer.Append((int)stage.Kind);
-        writer.AppendIds(stage.Dependencies.Select(static dependency => dependency.Value));
+        writer.AppendIds(stage.Dependencies, static dependency => dependency.Value);
         writer.AppendOptional(stage.PlacementBinding?.Value);
-        writer.AppendIds(stage.SemanticInputs.Select(static input => input.Value));
-        writer.AppendIds(stage.RequestedFields.Select(static input => input.Value));
+        writer.AppendIds(stage.SemanticInputs, static input => input.Value);
+        writer.AppendIds(stage.RequestedFields, static input => input.Value);
         writer.AppendNullable(stage.BatchSize);
         var provenance = stage.Provenance;
-        writer.AppendIds(provenance.Nodes.Select(static node => node.Value));
-        writer.AppendIds(provenance.Inputs.Select(static input => input.Value));
-        writer.AppendIds(provenance.Requirements.Select(static requirement => requirement.Value));
+        writer.AppendIds(provenance.Nodes, static node => node.Value);
+        writer.AppendIds(provenance.Inputs, static input => input.Value);
+        writer.AppendIds(provenance.Requirements, static requirement => requirement.Value);
         writer.Append(provenance.CapabilityEvidence.Length);
         foreach (var evidence in provenance.CapabilityEvidence)
         {
@@ -180,11 +181,11 @@ public static class RelationQueryPhysicalPlanFingerprinter
             writer.Append(evidence.Profile.Value);
             writer.Append(evidence.Evidence.Value);
         }
-        writer.AppendIds(provenance.CompositionRules.Select(static rule => rule.Value));
-        writer.AppendIds(provenance.OperatingBoundaries.Select(static boundary => boundary.Value));
-        writer.AppendIds(provenance.PlacementBindings.Select(static binding => binding.Value));
+        writer.AppendIds(provenance.CompositionRules, static rule => rule.Value);
+        writer.AppendIds(provenance.OperatingBoundaries, static boundary => boundary.Value);
+        writer.AppendIds(provenance.PlacementBindings, static binding => binding.Value);
         writer.AppendOptional(provenance.LoweringRule?.Value);
-        writer.AppendIds(provenance.PolicyDecisions.Select(static decision => decision.Value));
+        writer.AppendIds(provenance.PolicyDecisions, static decision => decision.Value);
     }
 }
 
@@ -221,15 +222,10 @@ sealed class PhysicalFingerprintWriter : IDisposable
         }
     }
 
-    public void AppendIds(IEnumerable<string> values)
-    {
-        var normalized = values.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
-        Append(normalized.Length);
-        foreach (var value in normalized)
-        {
-            Append(value);
-        }
-    }
+    public void AppendIds<T>(ImmutableArray<T> values, Func<T, string> key) =>
+        LengthPrefixedFingerprintEncoding.AppendOrdinalSet(buffer, values, key);
+
+    public void AppendIds(ImmutableArray<string> values) => AppendIds(values, static value => value);
 
     public void AppendShape(QualifiedShapeId shape)
     {
@@ -267,7 +263,7 @@ sealed class PhysicalFingerprintWriter : IDisposable
         Append(plan.DemandFingerprint.Algorithm);
         Append(plan.DemandFingerprint.Canonicalization);
         Append(plan.DemandFingerprint.Value);
-        AppendIds(plan.Inputs.Select(static input => input.Value));
+        AppendIds(plan.Inputs, static input => input.Value);
     }
 
     public void AppendProfile(RelationQueryTargetCapabilityProfile profile)
@@ -283,7 +279,7 @@ sealed class PhysicalFingerprintWriter : IDisposable
         {
             Append(evidence.Id.Value);
             AppendCapability(evidence.Capability);
-            AppendIds(evidence.OperatingBoundaries.Select(static boundary => boundary.Value));
+            AppendIds(evidence.OperatingBoundaries, static boundary => boundary.Value);
         }
         Append(profile.OperatingBoundaries.Length);
         foreach (var boundary in profile.OperatingBoundaries

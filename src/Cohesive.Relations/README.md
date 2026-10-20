@@ -53,7 +53,8 @@ without CLR materialization. This does not turn a partial datasource projection 
 See [schema-bound observation handlers](../../docs/performance/schema-bound-observation-handlers.md).
 
 Relation and realization fingerprints retain their existing binary profiles while streaming temporary output.
-See [performance qualification](../../docs/performance/realization-fingerprints.md).
+See [performance qualification](../../docs/performance/realization-fingerprints.md). Canonical immutable identity sets are reused during
+query metadata construction and fingerprint encoding; see [qualification](../../docs/performance/query-identity-preparation/README.md).
 
 ## Install
 

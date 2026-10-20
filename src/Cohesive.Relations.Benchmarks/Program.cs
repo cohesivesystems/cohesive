@@ -14,6 +14,19 @@ if (args is ["--field-assignment-allocations", .. var assignmentArgs])
 if (args is ["--strict-read-allocations", .. var strictArgs])
     return Cohesive.Relations.Benchmarks.StrictReadAllocationBenchmark.Run(strictArgs);
 
+if (args is ["--query-identity-digests"])
+{
+    Console.WriteLine("maximum_local_rows,realization,placement,physical");
+    foreach (var rows in new[] { 32, 1024 })
+    {
+        var benchmark = new Cohesive.Relations.Benchmarks.RelationQueryPhysicalPlanningBenchmarks { MaximumLocalRows = rows };
+        benchmark.Setup();
+        var plan = benchmark.PhysicalPlanning().Plan ?? throw new InvalidOperationException("Invalid fixture.");
+        Console.WriteLine($"{rows},{plan.Realization.Value},{plan.Placement.Fingerprint.Value},{plan.Fingerprint.Value}");
+    }
+    return 0;
+}
+
 var summaries = BenchmarkSwitcher.FromAssembly(typeof(Program).Assembly).Run(args);
 var discovered = false;
 foreach (var summary in summaries)

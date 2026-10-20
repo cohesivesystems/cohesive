@@ -1,0 +1,29 @@
+source,variant,group,samples,total_managed_samples
+004010,control,canonical JSON,765,3821
+004010,control,other,1258,3821
+004010,control,observation writing,646,3821
+004010,control,protocol/EDI,556,3821
+004010,control,query fingerprinting remainder,170,3821
+004010,control,validation,233,3821
+004010,control,changed ID handling,193,3821
+004010,candidate,canonical JSON,882,4049
+004010,candidate,other,1384,4049
+004010,candidate,observation writing,639,4049
+004010,candidate,validation,252,4049
+004010,candidate,query fingerprinting remainder,202,4049
+004010,candidate,changed ID handling,65,4049
+004010,candidate,protocol/EDI,625,4049
+005030,control,canonical JSON,1102,4496
+005030,control,other,1392,4496
+005030,control,observation writing,698,4496
+005030,control,protocol/EDI,646,4496
+005030,control,changed ID handling,203,4496
+005030,control,validation,290,4496
+005030,control,query fingerprinting remainder,165,4496
+005030,candidate,canonical JSON,945,4302
+005030,candidate,observation writing,726,4302
+005030,candidate,other,1438,4302
+005030,candidate,validation,268,4302
+005030,candidate,query fingerprinting remainder,192,4302
+005030,candidate,protocol/EDI,654,4302
+005030,candidate,changed ID handling,79,4302

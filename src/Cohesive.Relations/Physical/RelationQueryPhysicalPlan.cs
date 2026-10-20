@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json.Serialization;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
@@ -272,12 +273,31 @@ public sealed record RelationQueryPhysicalStageProvenance
     static ImmutableArray<T> Normalize<T>(ImmutableArray<T> values, Func<T, string> key, string parameterName)
     {
         var normalized = values.IsDefault ? [] : values;
-        if (normalized.Any(value => value is null || string.IsNullOrWhiteSpace(key(value))))
-            throw new ArgumentException("Provenance collections cannot contain null or default entries.", parameterName);
-        var keyed = normalized.Select(value => (Value: value, Key: key(value))).ToArray();
-        if (keyed.GroupBy(static item => item.Key, StringComparer.Ordinal).Any(static group => group.Count() > 1))
-            throw new ArgumentException("Provenance collections cannot contain duplicate identities.", parameterName);
-        return [.. keyed.OrderBy(static item => item.Key, StringComparer.Ordinal).Select(static item => item.Value)];
+        var canonical = true;
+        string? previous = null;
+        for (var i = 0; i < normalized.Length; i++)
+        {
+            var value = normalized[i];
+            if (value is null)
+                throw new ArgumentException("Provenance collections cannot contain null or default entries.", parameterName);
+            var identity = key(value);
+            if (string.IsNullOrWhiteSpace(identity))
+                throw new ArgumentException("Provenance collections cannot contain null or default entries.", parameterName);
+            if (i > 0 && StringComparer.Ordinal.Compare(previous, identity) >= 0) canonical = false;
+            previous = identity;
+        }
+        // Strict ordinal order proves uniqueness, after every entry has passed validation.
+        // Noncanonical inputs keep duplicate rejection and invalid-entry error precedence.
+        if (canonical) return normalized;
+        var ordered = normalized.ToArray();
+        var keys = new string[ordered.Length];
+        for (var i = 0; i < ordered.Length; i++) keys[i] = key(ordered[i]);
+        Array.Sort(keys, ordered, StringComparer.Ordinal);
+        for (var i = 1; i < keys.Length; i++)
+            if (StringComparer.Ordinal.Equals(keys[i - 1], keys[i]))
+                throw new ArgumentException("Provenance collections cannot contain duplicate identities.", parameterName);
+        // This new vector has no surviving mutable alias.
+        return ImmutableCollectionsMarshal.AsImmutableArray(ordered);
     }
 }
 
