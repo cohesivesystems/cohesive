@@ -53,6 +53,13 @@ Relations tests passed. One earlier full run hit the existing single-sample name
 guard; its isolated and complete reruns passed without widening its zero-byte limit. The separate
 release-reliability change applies the repository's seven-sample pattern to that guard.
 
+## CPU follow-up
+
+The [CPU investigation](cpu-investigation.md) adds 16,384 untraced cases and eight CPU traces.
+The original 16-case window was still warming up. Two long 004010 pairs, with opposite orders,
+show no persistent penalty after compilation settles; early unfavorable runs remain recorded.
+This does not establish a general CPU-speed claim. Runtime code and production settings are unchanged.
+
 ## Results
 
 All **512 original X12 cases passed**, as did all **999 Ari engine tests / 18 existing emulator
