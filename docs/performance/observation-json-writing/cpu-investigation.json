@@ -1,0 +1,66 @@
+{
+  "reviewedHead": "a111e789905652558d1b125a1fcf8a2118d64302",
+  "baselineCommit": "39c490ed9e846f23a88849b915974983229e582a",
+  "source": "x12-005030-204",
+  "successfulUntracedCases": 16384,
+  "processPairs": 4,
+  "casesPerProcess": 2048,
+  "reportedWindow": [
+    1537,
+    2048
+  ],
+  "order": "candidate/control, control/candidate, candidate/control, control/candidate",
+  "runtime": "Default .NET 10.0.13 arm64, same frozen alpha.153 runtimes and extended harness as the original comparison. No source or runtime tuning changes. No owned builds, tests, traces or other benchmarks overlap untraced comparisons. CPU includes JIT and GC.",
+  "aggregation": "Median within each process window, then median across four processes per variant. Independent process is the replication unit; 512 cases are not 512 independent replicas.",
+  "counterSha256": "e8b12f07a6da3baf0e1d43ab4ec1286dca0a40ae6f04283bd16afcd2d94a2d64",
+  "rawDataLocal": "/tmp/obs462-cpu-investigation",
+  "modules": {
+    "control": {
+      "Cohesive.dll": "e71b33670308aae6e19a7153dfef1d7870166804b5fde430819c50908a24f7f7",
+      "ProtocolPreparation.dll": "80c5cef5dc87cb416a6ebbb83164835ba720c4090d2be01fcfde1e4bc136d41a",
+      "Ari.Engine.Tests.dll": "7b2a02289233f1f5a0c8f57f04053b1c65bd4c00798fa3dbe3ccacbb28b0b091"
+    },
+    "candidate": {
+      "Cohesive.dll": "33e5caa6b0e9c2137a3965832e1d534391a366d2d3e9e0bffa0f321c9e78c553",
+      "ProtocolPreparation.dll": "80c5cef5dc87cb416a6ebbb83164835ba720c4090d2be01fcfde1e4bc136d41a",
+      "Ari.Engine.Tests.dll": "7b2a02289233f1f5a0c8f57f04053b1c65bd4c00798fa3dbe3ccacbb28b0b091"
+    }
+  },
+  "trace": {
+    "control": {
+      "lostEvents": 0,
+      "lateManagedSamples": 6302,
+      "writerInclusiveSamples": 189,
+      "writerExclusiveSamples": 83,
+      "writerInclusivePercent": 2.999,
+      "lateMissingManagedStacks": 0,
+      "lateExternalSamplesExcluded": 25234,
+      "cpuStacksSha256": "dee6a83092c2e8170b537736d47b574fe68ff46d37ca4645976fc88896da8c18",
+      "qualitySha256": "e0fd17511e332486c71fd5de0f84d86bc7594a4d538e919f25fcf4099e37b142"
+    },
+    "candidate": {
+      "lostEvents": 0,
+      "lateManagedSamples": 6269,
+      "writerInclusiveSamples": 164,
+      "writerExclusiveSamples": 54,
+      "writerInclusivePercent": 2.616,
+      "lateMissingManagedStacks": 0,
+      "lateExternalSamplesExcluded": 25102,
+      "cpuStacksSha256": "be578cf822fb2cedb928c4bd1a69376b66c0c292c37809251620e49843182f57",
+      "qualitySha256": "cc92b47d9ced1b23abd60e0376a227be87a29a5efe960256380a63d524564bed"
+    }
+  },
+  "codeGenerationDiagnostic": {
+    "control": {
+      "tier1CodeBytes": 5048,
+      "primaryFrameBytes": 448,
+      "disassemblySha256": "d5a916c255b4a119dfb26201385d5826b4402bb97c5cb8ef6311ea6d26c399f7"
+    },
+    "candidate": {
+      "tier1CodeBytes": 5156,
+      "primaryFrameBytes": 496,
+      "disassemblySha256": "57df0795e33940fb9aa5fa7228c3e42abca814423657378003c9ba101ecc7a54"
+    }
+  },
+  "conclusion": "Initial +3.3% median CPU result did not reproduce consistently. Four additional pairs: median CPU 17.342 -> 17.012 ms (-1.9%), mean CPU 17.374 -> 17.322 ms (-0.3%); per-pair median changes -2.6% to +3.7%. Evidence supports the allocation reduction, not a general CPU speedup or proof of equivalence. No causal attribution to JIT warm-up or the writer is established."
+}

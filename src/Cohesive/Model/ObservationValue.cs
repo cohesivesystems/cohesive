@@ -1732,13 +1732,36 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
 
                 case ObservationValueKind.Object:
                     writer.WriteStartObject();
-                    if (value.Fields is not null)
+                    var fields = value.Fields;
+                    if (fields is not null)
                     {
-                        foreach (var (key, childValue) in value.Fields)
-                        {
-                            writer.WritePropertyName(key);
-                            WriteValue(writer, childValue, bytesEncoding);
-                        }
+                        // These built-in stores expose resource-free struct enumerators. Keep the
+                        // recursive writer's call shape; callback helpers add overhead per object.
+                        // Other stores retain the interface enumerator's normal disposal contract.
+                        if (fields is SmallObservationFields small)
+                            foreach (var (key, childValue) in small)
+                            {
+                                writer.WritePropertyName(key);
+                                WriteValue(writer, childValue, bytesEncoding);
+                            }
+                        else if (fields is OwnedObservationFields owned)
+                            foreach (var (key, childValue) in owned)
+                            {
+                                writer.WritePropertyName(key);
+                                WriteValue(writer, childValue, bytesEncoding);
+                            }
+                        else if (fields is OrdinalObservationFields ordinal)
+                            foreach (var (key, childValue) in ordinal)
+                            {
+                                writer.WritePropertyName(key);
+                                WriteValue(writer, childValue, bytesEncoding);
+                            }
+                        else
+                            foreach (var (key, childValue) in fields)
+                            {
+                                writer.WritePropertyName(key);
+                                WriteValue(writer, childValue, bytesEncoding);
+                            }
                     }
 
                     writer.WriteEndObject();
