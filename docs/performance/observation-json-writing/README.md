@@ -45,6 +45,46 @@ pairs are qualification evidence, not a general latency guarantee. [All process 
 retain cold, second, early repeated and late results, including JIT totals and unfavorable runs.
 Do not treat early repetitions as steady state or extrapolate the microbenchmarks to suite speed.
 
+## 005030 CPU investigation before merge
+
+The initial +3.3% median CPU result did **not reproduce consistently** with unchanged binaries.
+Four additional alternating process pairs passed all **16,384** original 005030 cases, using the
+same 2,048-case process length and late window. CPU includes GC/JIT. No owned builds, tests,
+traces or other benchmarks overlapped these untraced runs.
+
+| Pair | Baseline median CPU | Candidate median CPU | Change |
+| --- | --- | --- | --- |
+| 1 (candidate first) | 17.450 ms | 17.394 ms | -0.3% |
+| 2 (control first) | 17.283 ms | 16.933 ms | -2.0% |
+| 3 (candidate first) | 16.477 ms | 17.079 ms | +3.7% |
+| 4 (control first) | 17.401 ms | 16.946 ms | -2.6% |
+
+Across processes, median CPU is **17.342 → 17.012 ms (-1.9%)**, and mean CPU is
+**17.374 → 17.322 ms (-0.3%)**. Allocation remains **4.591 → 4.399 MB (-4.2%)**.
+Treat the independent process as the replica, not each of its 512 late cases. The small,
+mixed CPU differences do not establish equivalence or a general speedup; a small regression
+cannot be excluded. Original unfavorable results above remain part of the evidence.
+[All new windows](cpu-investigation-windows.csv) retain sparse late JIT work (0–6.1 ms total
+per process window), which is included in the CPU measurements.
+
+A separate matched 2,048-case trace pair lost no events or late managed stacks. The changed
+writer's inclusive share of late managed samples is **189/6,302 (3.00%) → 164/6,269 (2.62%)**;
+its exclusive samples are 83 → 54. External samples are excluded. These diagnostic samples
+are not CPU milliseconds and are not a precise timing comparison. They provide no evidence
+that the writer caused the earlier full-case slowdown.
+
+A separate default-runtime JIT capture reaches Tier1 in both variants. The writer's code size
+is 5,048 → 5,156 bytes and primary stack frame 448 → 496 bytes. The additional concrete loops
+do enlarge the method, but the capture does not establish that this causes an end-to-end CPU
+regression. No source tuning was applied to chase these mixed point estimates. Existing slower
+tiny flat microbenchmark cases remain documented below.
+
+[Investigation identities and trace counts](cpu-investigation.json) identify the unchanged source,
+frozen modules, harness, raw counter hash and disassembly hashes. Reproduce the untraced check
+with the comparator below, adding `--sources x12-005030-204 --runs 4 --candidate-first` (replace
+the existing `--runs 2`). Source and qualification tests are unchanged; the new evidence is
+additional original-test execution and diagnostics. Keep the PR unmerged for review.
+
 ## Mechanism qualification
 
 [Before](before-benchmark.md) and [after](after-benchmark.md) BenchmarkDotNet reports retain all
