@@ -1,0 +1,55 @@
+{
+  "reviewedHead": "5e2bfbf52c0755a017cdab6a1a0cf88feb1a66fe",
+  "source": "x12-004010-204",
+  "successfulUntracedCases": 16384,
+  "processPairs": 4,
+  "iterationsPerProcess": 2048,
+  "reportedWindow": [
+    1537,
+    2048
+  ],
+  "order": "candidate/control, control/candidate, candidate/control, control/candidate",
+  "runtime": "Default .NET10.0.13 arm64, SDK10.0.402, Apple M5 Max; unchanged frozen alpha.154 runtimes and harness. No runtime tuning or production source changes. No owned builds/tests/traces/other benchmarks overlap untraced comparisons. CPU includes JIT and GC.",
+  "aggregation": "Median within each late process window, then median across four independent processes per variant. Processes are the replication unit, not the512 cases within each window.",
+  "counterSha256": "baa33567365ce78308d4eb50e8bc8db211d5535bb5433900d5b788a9ac188636",
+  "rawDataLocal": "/tmp/obs-metadata-cpu-investigation",
+  "modules": {
+    "control": {
+      "Cohesive.dll": "2ae6da7c9bce19cc4c7274df0672dedd1f45403c116ebe217cd84781d78d023c",
+      "ProtocolPreparation.dll": "9491917c4fa629b025072f9e2ae3b589593c2ad5e1e2f517a1206076600f04c5",
+      "Ari.Engine.Tests.dll": "c8c91e03e90cfb9966756f363433f1d50f3b67dce77ce73b849e14da2cedd989"
+    },
+    "candidate": {
+      "Cohesive.dll": "f38656a63b265cd4808c59e003461006ad814d850d69477c612d57bd1b34785f",
+      "ProtocolPreparation.dll": "9491917c4fa629b025072f9e2ae3b589593c2ad5e1e2f517a1206076600f04c5",
+      "Ari.Engine.Tests.dll": "c8c91e03e90cfb9966756f363433f1d50f3b67dce77ce73b849e14da2cedd989"
+    }
+  },
+  "trace": {
+    "control": {
+      "lostEvents": 0,
+      "lateManagedSamples": 4817,
+      "projectionInclusiveSamples": 224,
+      "projectionInclusivePercent": 4.65,
+      "projectionCustomAttributeSamples": 100,
+      "projectionUnresolvedLeafSamples": 70,
+      "lateMissingManagedCallStackRecords": 0,
+      "lateExternalSamplesExcluded": 18605,
+      "cpuStacksSha256": "ae8f6d1099a7a53ddcd2afd99c5e84a8dc43c07134db9b652e791ad3e9776f33",
+      "qualitySha256": "b89c1c625175289ff85428957a34bbde7ff14db4e0aeae202c26e09cc89e1c05"
+    },
+    "candidate": {
+      "lostEvents": 0,
+      "lateManagedSamples": 5002,
+      "projectionInclusiveSamples": 119,
+      "projectionInclusivePercent": 2.379,
+      "projectionCustomAttributeSamples": 42,
+      "projectionUnresolvedLeafSamples": 33,
+      "lateMissingManagedCallStackRecords": 0,
+      "lateExternalSamplesExcluded": 19054,
+      "cpuStacksSha256": "b548b5a8967879562f6085ff79f8505bf9a6bee2c30454c324aa98ce162edf5f",
+      "qualitySha256": "cd41014f4a6b21b6e7b8f2e86750e1d973c96ddb4e088c8071c49b7d961938d6"
+    }
+  },
+  "conclusion": "Original +2.2% median CPU slowdown did not reproduce: all four new pairs favor the unchanged candidate. Median CPU14.953 ->14.520ms and meanCPU15.630 ->15.174ms, both about-2.9%. These limited process measurements establish neither equivalence nor universal speedup; the cause of the original positive point estimate is not established. No production code changes warranted by the investigation."
+}

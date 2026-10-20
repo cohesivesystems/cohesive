@@ -1,0 +1,50 @@
+{
+  "baseline": "Merged #462 production code, verified official alpha.154 dependencies; source qualification only, not publication of this prototype.",
+  "release": {
+    "run": 39462969392,
+    "commit": "4b44f53e146d1c4556aa90e394df71d55ac86b88",
+    "version": "0.1.0-alpha.154"
+  },
+  "sourceSha256": {
+    "src/Cohesive/Model/ObservationValue.cs": "8059ea3327ee52ad02e32e1feef30ac3f42f4f1c5ec5faf6d40c7f30fc2504db",
+    "src/Cohesive.Tests/Model/ObservationProjectionPreparationTests.cs": "fde5e8573d1fd7580bd5010565b005695d0aa9a4b6ded2ec85a2255c7276cfd8",
+    "eng/runtime-performance/value-conversion/ClrProjectionMetadataBenchmarks.cs": "107ce85a7b55ea0e37676ff633481d7d3df79586b56730caac669a29df86429f"
+  },
+  "run": {
+    "iterations": 2048,
+    "runs": 2,
+    "mode": "default",
+    "sources": [
+      "x12-004010-204",
+      "x12-005030-204"
+    ],
+    "candidateFirst": false,
+    "harnessSha256": {
+      "control": "9491917c4fa629b025072f9e2ae3b589593c2ad5e1e2f517a1206076600f04c5",
+      "candidate": "9491917c4fa629b025072f9e2ae3b589593c2ad5e1e2f517a1206076600f04c5"
+    }
+  },
+  "counterSha256": "364609763205f49b82af86f0b944b73ad0f112e1e1076ec8c007a8aa7ad96cba",
+  "originalX12Cases": 16384,
+  "graphFingerprintsUnchanged": true,
+  "rawDataLocal": "/tmp/obs-metadata-x12",
+  "allocationGuard": "Median7, warmed8; 1024 B/row +4096 B ceiling including retained output. Old implementation fails both128/1024-row guards.",
+  "benchmark": "BenchmarkDotNet0.15.8 ShortRun in-process;1/128/1024 rows; all retained output included. No builds/tests/traces/other benchmarks overlap timing runs.",
+  "moduleManifestSha256": "6b38fb83563403860ed5b5ce2271877f51757216cdb6ac81a3e69d1852e329d2",
+  "changedModules": {
+    "control": "2ae6da7c9bce19cc4c7274df0672dedd1f45403c116ebe217cd84781d78d023c",
+    "candidate": "f38656a63b265cd4808c59e003461006ad814d850d69477c612d57bd1b34785f"
+  },
+  "sourceBuildBaseCommit": "e45df6445489fc0fb27f5e7ca3a26f461ede6850",
+  "baseTreeMatchesMergedRelease": true,
+  "validation": {
+    "corePassed": 5015,
+    "coreGatedSkips": 60,
+    "relationsPassed": 1137,
+    "ariEnginePassed": 999,
+    "ariEngineGatedSkips": 18,
+    "originalX12Cases": 16384,
+    "baselineAllocationGuardFailures": 2
+  },
+  "sourceQualification": "Core compiled locally in both variants. Production baseline tree is byte-identical to merged #462; both variants use the same public alpha.154 dependencies. This prototype is not published."
+}
