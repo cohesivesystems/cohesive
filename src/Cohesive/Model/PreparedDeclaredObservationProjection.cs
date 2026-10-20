@@ -47,7 +47,7 @@ internal static class PreparedDeclaredObservationProjection
     // the declared representation before reusing storage; normalization and custom profiles can differ.
     internal static void RememberRead(IImmutableObservationProjection value, Type type, ObservationValue observation, bool retainSource)
     {
-        if (type.IsValueType || !Contracts.TryGet(type, out var contract) || contract.Info.Kind != JsonTypeInfoKind.Object) return;
+        if (type.IsValueType || !Contracts.TryGet(type, out _)) return;
         var state = Owners.Get(value, static _ => new()).Types.GetOrAdd(type, static _ => new());
         if (state.Prepared.IsPrepared) return;
         lock (state)
@@ -65,10 +65,9 @@ internal static class PreparedDeclaredObservationProjection
     static ObservationValue ProjectValue(object? value, Type declaredType, JsonSerializerOptions options, int depth, HashSet<(object Owner, Type Type)>? active = null, ObservationValue? candidate = null)
     {
         if (value is null) return ObservationValue.Null;
-        // Opaque converter tokens often get fresh owners at each read. Keep those on their
-        // serializer path instead of retaining a second tree which cannot be reused by identity.
-        if (value is IImmutableObservationProjection && !value.GetType().IsValueType
-            && Contracts.Get(declaredType, static type => new(type, ObservationValue.DeclaredJsonProfile)).Info.Kind == JsonTypeInfoKind.Object)
+        // The deep-immutability contract also covers deterministic converter output. Prepare
+        // opaque leaves by the same owner/type identity instead of rebuilding their tree per envelope.
+        if (value is IImmutableObservationProjection && !value.GetType().IsValueType)
         {
             // The declared type is significant: a polymorphic base emits metadata which a concrete
             // interpretation may omit. No ID, content hash or equality override identifies the owner.
@@ -325,21 +324,7 @@ internal static class PreparedDeclaredObservationProjection
 
     static ObservationValue ProjectString(string text, JsonSerializerOptions options, int depth)
     {
-        // The serializer replaces malformed UTF-16. Native strings must preserve that behavior.
-        var offset = -1;
-        // The generic range helper boxes chars on short ARM64 inputs; this loop does not.
-        for (var i = 0; i < text.Length; i++)
-            if (char.IsSurrogate(text[i])) { offset = i; break; }
-        if (offset >= 0)
-        {
-            var remaining = text.AsSpan(offset);
-            while (!remaining.IsEmpty)
-            {
-                if (System.Text.Rune.DecodeFromUtf16(remaining, out _, out var consumed) != System.Buffers.OperationStatus.Done)
-                    return Serialize(text, typeof(string), options, depth);
-                remaining = remaining[consumed..];
-            }
-        }
+        if (!JsonText.IsWellFormed(text)) return Serialize(text, typeof(string), options, depth);
         return ObservationValue.FromString(text);
     }
 

@@ -192,7 +192,7 @@ still rejects an already-published selected version; it does not overwrite or si
 
 - NuGet packages publish with NuGet trusted publishing through `NuGet/login`.
 - npm packages are packed with pnpm, then published to npmjs.org with npm trusted publishing.
-- Release runs are serialized and verify every requested NuGet and npm coordinate before publishing. If any coordinate already exists or registry availability cannot be established, the run fails before publishing begins.
+- Release runs are serialized and verify every requested NuGet and npm coordinate before publishing. Transport failures and transient HTTP 429/5xx responses receive at most three attempts, with 500 ms and 1 s delays. HTTP 200/404 and permanent errors are not retried. If any coordinate already exists or availability remains unverified, the run fails before publishing begins.
 - Public versions are immutable coherent release sets. Do not retry a partially published version; select a new repo-wide version so a successful workflow cannot silently combine artifacts from different commits.
 - npm prerelease dist-tags map as follows: `alpha.*` to `alpha`, `preview.*` to `preview`, `rc.*` to `rc`, and other prereleases to `next`.
 - Stable npm versions publish with the `latest` dist-tag.

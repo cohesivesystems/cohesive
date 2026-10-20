@@ -204,8 +204,9 @@ metadata. First decoding continues to run constructors. Changed and independentl
 have independent admission; contract, depth, normalization and contextual checks remain fresh.
 
 Supported declared object contracts project into Core's compact field vectors using frozen JSON metadata.
-Actual wrapper converters supply their existing string getters. Opaque converters and contextual member
-policies retain serialization. Mutable envelopes are not cached. Eligibility requires the existing explicit
+Actual wrapper converters supply their existing string getters. Opaque converters retain serialization
+for first projection; marked immutable owners may then share the verified observation. Contextual member
+policies retain their owning serializer. Mutable envelopes are not cached. Eligibility requires the existing explicit
 deep-immutability contract; framework graphs participate in its reflection audit.
 
 A successful typed read supplies an encoding **candidate**, not evidence of canonical output. Reprojection
@@ -295,3 +296,204 @@ that the new annotation dictionary projection had retained source hash enumerati
 uses the existing token-reader ordering helper. A constant-hash comparer regression fails before
 this correction and passes after it. The source measurements above precede this small ordering
 correction; they remain identified by the checked-in runtime manifest.
+
+## Scalar wrapper decoding
+
+The next retained change targets first decoding of string-backed values such as `ShapeId`.
+Previously the prepared reader serialized each observation string to pooled UTF-8 and invoked the
+JSON reader merely to call the wrapper constructor. The selected `SingleValueWrapperJsonConverter`
+now supplies that native read itself. This extends the existing converter preparation used by hosted
+CLR reads, plain JSON preparation and default shape materialization; it adds no decoding API, result
+cache or parallel wrapper catalog. Constructors run on every read. Customized underlying string
+readers, legacy objects, nulls, other value kinds and malformed UTF-16 retain the actual serializer
+path. The native guard is shared with declared projection and native string annotations.
+
+A proposed observation-backed structured annotation representation was also implemented and tested,
+then discarded. Its extra full-case allocation saving was small, while retaining an observation
+subtree alongside a requested JSON view introduced another lifetime and encoding-order obligation.
+Annotations keep their existing backing. The remaining decode category also includes retained model,
+collection and validation work; it must not be treated as entirely removable JSON overhead.
+
+### Qualification
+
+Public **alpha.146** is the baseline. Candidate replaces only `Cohesive.dll` in an otherwise identical
+frozen Ari runtime; this is not a published package upgrade. All 27 baseline packaged runtime DLLs
+match official archives and their merged publisher commit, and the other 26 candidate packaged DLLs
+are identical. The three Ari-owned protocol incubators remain source projects.
+
+Matched BenchmarkDotNet workloads, Apple M5 Max arm64, macOS 27.0.1, SDK 10.0.402 / runtime 10.0.13,
+Release, separate processes per variant, in-process emit, one launch, three warmups, five 250 ms
+iterations. Means are elapsed time per operation, not per-method CPU measurements.
+
+| Workload | Baseline time | Candidate time | Baseline allocation | Candidate allocation |
+| --- | ---: | ---: | ---: | ---: |
+| Decode 128 string wrappers | 15.54 μs | 1.66 μs | 28,013 B | 1,384 B |
+| First decode, 128-field graph | 121.08 μs | 103.68 μs | 184.50 KiB | 158.08 KiB |
+| First decode, 1,024-field graph | 1,150.59 μs | 968.21 μs | 1,409.62 KiB | 1,201.18 KiB |
+
+The wrapper workload includes fresh typed results and hosted contract validation. Fresh graph storage
+is asserted by its existing setup; a shared decoded graph cannot make this a warm result-cache hit.
+[All sizes, errors, deviations and settings](evidence/scalar-wrapper-decoding/benchmarks.csv).
+Fixed allocation ceilings cover 128 wrapped fields through the hosted-profile reader, public prepared
+JSON reader and default shape materializer, using medians of seven samples after preparation.
+
+Five alternating fresh-process pairs per source run the original X12 case twice, with fresh repositories
+and fixtures on each invocation. No local builds, tests, benchmarks or traces overlap measurements.
+Second invocation is not established steady state. Whole-process CPU includes GC, JIT and native work.
+
+| Case, second invocation | Baseline MB | Candidate MB | Baseline CPU ms | Candidate CPU ms |
+| --- | ---: | ---: | ---: | ---: |
+| 004010 | 25.714 | 25.690 | 304.4 | 276.9 |
+| 005030 | 28.552 | 28.257 | 307.2 | 324.2 |
+
+These whole-case differences are small relative to process-to-process allocation variation, including
+roughly 1.6–2 MB excursions in some samples. Median paired allocation differences are 0.219 / 0.149 MB;
+they are not guaranteed per-case savings. Cold allocation medians are 154.995 → 154.685 MB and
+157.265 → 156.915 MB. There is **no established end-to-end CPU or latency improvement**: the two
+sources' CPU medians move in opposite directions. Exploratory longer runs continued to change with
+runtime warmup; disabling tiered compilation was a separate diagnostic, not a deployment-performance
+claim. Keep the small shared converter fix on its component evidence, rather than claim a large X12 win.
+[All 40 counters](evidence/scalar-wrapper-decoding/x12-counters.csv),
+[exact source/runtime identity](evidence/scalar-wrapper-decoding/runtime-manifest.json), and
+[unchanged graph hashes](evidence/scalar-wrapper-decoding/graph-hashes.csv).
+
+Three new traces per variant and source have no lost events or missing allocation/managed CPU stacks.
+Candidate second-use sampled allocation remains about **5.5–6.1 MB in EDI construction**, **5.4–6.5 MB
+in observation projection**, **3.4–3.9 MB in hosted decoding/admission**, and **6.5–7.0 MB in Other**.
+These are disjoint category estimates, not predicted savings; inclusive call-site totals must not be
+added to them. The next larger target is annotation/map and graph construction, rather than more
+wrapper-level caching. [Allocation budgets](evidence/scalar-wrapper-decoding/allocation-budget.csv),
+[managed CPU shares](evidence/scalar-wrapper-decoding/cpu-budget.csv),
+[quality](evidence/scalar-wrapper-decoding/trace-quality.csv).
+
+Validation: **4,818 Core tests, 233 SQLite tests, 963 Ari engine tests and three comparison-driver tests
+pass**, with the existing integration/emulator skips. Coverage includes constructor normalization,
+nulls, malformed Unicode, strict/legacy objects, custom wrapper/string readers, mutable result
+independence and fixed allocation bounds. Both X12 graph hashes remain unchanged.
+
+Reproduce after building isolated runtime/benchmark variants:
+
+```sh
+python3 eng/runtime-performance/durable-bookkeeping/compare-ari.py --baseline /absolute/baseline/ProtocolPreparation.dll --candidate /absolute/candidate/ProtocolPreparation.dll --output /absolute/results/counters.csv --runs 5
+dotnet /absolute/variant/ValueConversion.dll --filter '*ScalarWrapperDecodeBenchmarks*' '*CompiledGraphProjectionBenchmarks.DecodeNewGraphStorage*' --inProcess --warmupCount 3 --iterationCount 5 --iterationTime 250 --launchCount 1 --artifacts /absolute/results/benchmark
+```
+
+For longer diagnostic runs, the comparison driver accepts `--iterations 2..64` with Ari's updated
+harness. Default two-phase comparisons remain compatible with the original harness; stale harnesses
+cannot silently supply fewer phases than requested. A fixed invocation count alone does not establish
+steady state.
+
+## Immutable annotation-map overlays
+
+`AnnotationMap.Merge` now shares the first compatible immutable map instead of rebuilding it before
+applying overlays. It still uses default key/value equality, preserves later unequal values and leaves
+inputs unchanged. Custom input comparers never become the result's policy; a single default map can
+retain its root unchanged. This extends the existing collection operation and introduces no cache,
+new annotation representation or retention authority.
+
+A synthetic 128-entry map plus one new annotation falls from **8,296 B / 5.968 µs** to
+**608 B / 0.152 µs**. Small balanced maps benefit less; the benchmark covers 8, 128 and 1,024 retained
+entries with one/eight additions. These are isolated merge results, not X12 or service CPU claims.
+The [compact benchmark](evidence/annotation-map-merge/benchmarks.csv) retains error/stddev and settings;
+[identity/environment](evidence/annotation-map-merge/manifest.json). BenchmarkDotNet InProcessEmit,
+three warmups, five 250 ms iterations, one launch, Apple M5 Max arm64, .NET 10.0.13, Release.
+
+All **4,931 Core tests pass**, with 41 existing integration skips. Tests cover custom key and value
+comparers independently, structural equality, input independence and concurrent overlays. A median-of-seven
+4 KiB allocation ceiling on a 1,024-entry root plus one addition rejects rebuilding the whole root.
+
+## Immutable converter-backed observations
+
+Ari's warm X12 trace after merged #239 still rebuilt opaque JSON observations when the same deeply
+immutable protocol token appeared inside different DTOs. `PreparedDeclaredObservationProjection`
+excluded `JsonTypeInfoKind.None` converter values from its existing owner/type preparation. This
+repeated JSON writing, parsing, field-name allocation and tree construction, then supplied fresh
+storage to downstream typed interpretation caches.
+
+The existing deep-immutability promise explicitly includes deterministic converters. Preparation now
+covers those immutable reference-type leaves under the same fixed profile and exact declared type.
+An opaque object read may also propose its original observation storage; first reprojection still runs
+the converter and verifies representation equality. Normalized or otherwise changed encoding receives
+independent storage. No public API, parallel codec, fingerprint authority or additional cache is added.
+Contextual and external admission remain fresh. Retention is one prepared observation per live owner/
+declared type; failures retry, nested depth remains checked, and discarded read/projection cycles collect.
+
+### Component qualification
+
+Run the opt-in benchmark with:
+
+```sh
+dotnet run --project eng/runtime-performance/value-conversion/ValueConversion.csproj -c Release -- \
+  --filter '*ImmutableConverterProjectionBenchmarks*' --job short
+```
+
+On macOS 27.0.1 / Apple M5 Max arm64, SDK 10.0.402 / runtime 10.0.13, the short BenchmarkDotNet run
+separates an independent uncached serializer reference, a new owner per call, and a warmed shared owner.
+The reference is not a same-binary measurement of the old implementation; cold preparation includes
+weak preparation state and depth checks in addition to the serializer reference's work.
+
+For 128 nested items, the uncached serializer reference allocates 46,568 bytes and averages 39.44 μs;
+a new prepared owner allocates about 48,206 bytes and averages 50.06 μs. Reusing the prepared owner
+allocates zero measured bytes and averages 17.60 ns. For one item, the corresponding allocations are
+816 /2,448 /0 bytes. These are short component samples, not application latency claims. The fixed
+cold state and retained result are justified only when immutable owners are reused.
+[Full BenchmarkDotNet report](evidence/immutable-converter-projections/benchmarkdotnet.md).
+
+### Original X12 qualification
+
+Both frozen runtimes use the same original X12 test assembly, harness and incubating/application DLLs
+from merged Ari #239. Control uses the previously verified public alpha.149 Core. Candidate changes
+only `Cohesive.dll`, built from publisher `c262a431` plus this source change. This is unpublished source
+qualification, with no mutation of the NuGet cache or source-generator override. No compatibility bridge
+is committed to Ari; publication and normal package adoption are subsequent deliverables.
+
+Thirty-two alternating fresh processes execute 832 successful original cases: five default pairs/source
+at 32 invocations/process, plus three separate no-tiering diagnostic pairs/source at 16. Each reported
+number is a median of independent process medians over fixed windows. Tests, builds, benchmarks and
+traces do not overlap the untraced measurement. JIT/GC overlap process CPU and are not subtracted.
+
+| Window | X12 | Allocation before → after | Process CPU before → after |
+| --- | --- | --- | --- |
+| Second invocation, default | 004010 | 14.015 → 12.124 MB | 197.3 → 180.7 ms |
+| Second invocation, default | 005030 | 15.000 → 12.685 MB | 227.1 → 206.5 ms |
+| Default invocations 17–32 | 004010 | 13.936 → 12.029 MB | 139.0 → 93.7 ms |
+| Default invocations 17–32 | 005030 | 14.714 → 12.608 MB | 128.0 → 122.1 ms |
+| No-tiering diagnostic, 9–16 | 004010 | 13.907 → 11.952 MB | 101.9 → 87.5 ms |
+| No-tiering diagnostic, 9–16 | 005030 | 14.765 → 12.550 MB | 109.2 → 94.6 ms |
+
+Default second allocations fall 13.5% /15.4% (1.892 /2.315 MB), with process CPU 8.4% /9.1% lower.
+Cold allocations remain approximately flat: 146.703 →146.847 MB /147.950 →147.645 MB. Later default
+CPU is lower in both cases, but 005030 elapsed time is higher (100.9 →113.5 ms); tiered JIT remains
+active and CPU/elapsed results must not be collapsed into a universal speedup. Separate no-tiering
+CPU is about 14% /13% lower and is diagnostic, not a deployment recommendation. Some processes still
+show different allocation levels; raw process/window summaries are retained instead of selecting
+favorable samples.
+
+Twelve matched traces lose zero events and have zero missing allocation or managed CPU stacks.
+Sampled declared projection falls 2.736 →1.386 MB /3.298 →2.061 MB, and hosted typed decoding falls
+1.054 →0.580 MB /1.373 →0.687 MB per second invocation. Those classifications overlap stack ancestry
+and are not additive to workflow budgets or exact process counters.
+
+Disjoint workflow estimates (mean sampled MB across three traces per source/variant) are:
+
+| X12 | Preview before → after | Durable execution before → after | Other workflow before → after |
+| --- | --- | --- | --- |
+| 004010 | 4.038 →3.494 | 4.064 →4.028 | 5.990 →4.634 |
+| 005030 | 4.278 →3.589 | 4.562 →4.811 | 6.183 →4.665 |
+
+The main benefit is seeding/control workflow plus preview decoding; durable execution does not show
+an allocation reduction in these samples. Its pinned source handler still returns a typed snapshot,
+which reprojects an opaque payload from a fresh read. Keeping the admitted source observation through
+that handler is the next Ari-specific boundary to examine, using the existing observation Query view
+and source projection rather than another cache. Fixture plan construction and repeated contract/type
+validation also remain; the total is not solely codec cost.
+
+The full Core Release suite passes 4,946 tests with 41 existing skips. An isolated full Ari engine run
+using the source Core DLL passes 996 tests with 18 existing skips. Fifteen focused cases preserve first
+converter behavior, object/array/scalar output, mutable freshness, duplicate/malformed rejection,
+normalization, retry, concurrent use, depth, weak ownership and discarded read/projection cycles.
+A median-of-seven allocation guard allows at most 512 bytes across 128 warmed large-payload calls.
+Both pinned X12 graph digests remain unchanged. Cumulative allocated bytes are not retained heap, and
+short microbenchmarks or process CPU counters do not establish universal deployment latency gains.
+Compact counters, trace quality and module/source hashes are in
+[evidence/immutable-converter-projections](evidence/immutable-converter-projections/manifest.json).

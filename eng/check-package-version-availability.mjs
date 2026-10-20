@@ -3,6 +3,7 @@ import { readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 
 const execFileAsync = promisify(execFile);
 
@@ -131,6 +132,22 @@ async function fetchStatus(url, method) {
   return response.status;
 }
 
+// Availability remains fail-closed. Retry transport errors and transient HTTP responses only;
+// 200/404 and permanent failures are authoritative on their first response.
+async function requestStatusWithRetry(packageEntry, requestStatus) {
+  const attempts = 3;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const status = await requestStatus(packageEntry.url, packageEntry.method);
+      const transient = status === 429 || (status >= 500 && status <= 599);
+      if (!transient || attempt === attempts - 1) return status;
+    } catch (error) {
+      if (attempt === attempts - 1) throw error;
+    }
+    await delay(500 * (2 ** attempt));
+  }
+}
+
 export async function checkPackageVersionAvailability({
   version,
   nuGetDirectory,
@@ -189,7 +206,7 @@ export async function checkPackageVersionAvailability({
     packages.map(async (packageEntry) => {
       let status;
       try {
-        status = await requestStatus(packageEntry.url, packageEntry.method);
+        status = await requestStatusWithRetry(packageEntry, requestStatus);
       } catch (error) {
         throw new Error(
           `Could not verify whether ${packageEntry.coordinate} is published: ${error.message}`,

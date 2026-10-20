@@ -1,0 +1,93 @@
+variant,source,phase,category,managed_samples,share_of_managed_samples_pct
+baseline,004010,cold,Catalog authoring,147,5.32
+baseline,004010,cold,Catalog/context,17,0.62
+baseline,004010,cold,Commit/checkpoint hash,10,0.36
+baseline,004010,cold,Hosted decode,267,9.66
+baseline,004010,cold,Observation projection,138,4.99
+baseline,004010,cold,Other,1612,58.34
+baseline,004010,cold,Other EDI compilation,67,2.42
+baseline,004010,cold,Protocol JSON,185,6.7
+baseline,004010,cold,Protocol hashes,57,2.06
+baseline,004010,cold,Query physical planning,68,2.46
+baseline,004010,cold,Query realization hashes,23,0.83
+baseline,004010,cold,Storage content hashes,172,6.23
+baseline,004010,repeated,Catalog authoring,9,1.75
+baseline,004010,repeated,Catalog/context,5,0.97
+baseline,004010,repeated,Hosted decode,76,14.81
+baseline,004010,repeated,Observation projection,76,14.81
+baseline,004010,repeated,Other,162,31.58
+baseline,004010,repeated,Other EDI compilation,23,4.48
+baseline,004010,repeated,Protocol JSON,55,10.72
+baseline,004010,repeated,Protocol hashes,49,9.55
+baseline,004010,repeated,Query physical planning,6,1.17
+baseline,004010,repeated,Query realization hashes,2,0.39
+baseline,004010,repeated,Storage content hashes,50,9.75
+baseline,005030,cold,Catalog authoring,142,5.07
+baseline,005030,cold,Catalog/context,17,0.61
+baseline,005030,cold,Commit/checkpoint hash,8,0.29
+baseline,005030,cold,Hosted decode,269,9.61
+baseline,005030,cold,Observation projection,145,5.18
+baseline,005030,cold,Other,1611,57.54
+baseline,005030,cold,Other EDI compilation,73,2.61
+baseline,005030,cold,Protocol JSON,203,7.25
+baseline,005030,cold,Protocol hashes,66,2.36
+baseline,005030,cold,Query physical planning,63,2.25
+baseline,005030,cold,Query realization hashes,21,0.75
+baseline,005030,cold,Storage content hashes,182,6.5
+baseline,005030,repeated,Catalog authoring,8,1.35
+baseline,005030,repeated,Catalog/context,4,0.68
+baseline,005030,repeated,Hosted decode,92,15.54
+baseline,005030,repeated,Observation projection,83,14.02
+baseline,005030,repeated,Other,196,33.11
+baseline,005030,repeated,Other EDI compilation,24,4.05
+baseline,005030,repeated,Protocol JSON,60,10.14
+baseline,005030,repeated,Protocol hashes,61,10.3
+baseline,005030,repeated,Query physical planning,7,1.18
+baseline,005030,repeated,Query realization hashes,2,0.34
+baseline,005030,repeated,Storage content hashes,55,9.29
+candidate,004010,cold,Catalog authoring,145,5.33
+candidate,004010,cold,Catalog/context,14,0.52
+candidate,004010,cold,Commit/checkpoint hash,10,0.37
+candidate,004010,cold,Hosted decode,270,9.93
+candidate,004010,cold,Observation projection,119,4.38
+candidate,004010,cold,Other,1591,58.54
+candidate,004010,cold,Other EDI compilation,65,2.39
+candidate,004010,cold,Protocol JSON,192,7.06
+candidate,004010,cold,Protocol hashes,57,2.1
+candidate,004010,cold,Query physical planning,54,1.99
+candidate,004010,cold,Query realization hashes,20,0.74
+candidate,004010,cold,Storage content hashes,181,6.66
+candidate,004010,repeated,Catalog authoring,9,1.92
+candidate,004010,repeated,Catalog/context,4,0.85
+candidate,004010,repeated,Hosted decode,74,15.81
+candidate,004010,repeated,Observation projection,75,16.03
+candidate,004010,repeated,Other,126,26.92
+candidate,004010,repeated,Other EDI compilation,21,4.49
+candidate,004010,repeated,Protocol JSON,51,10.9
+candidate,004010,repeated,Protocol hashes,49,10.47
+candidate,004010,repeated,Query physical planning,7,1.5
+candidate,004010,repeated,Query realization hashes,2,0.43
+candidate,004010,repeated,Storage content hashes,50,10.68
+candidate,005030,cold,Catalog authoring,148,5.2
+candidate,005030,cold,Catalog/context,12,0.42
+candidate,005030,cold,Commit/checkpoint hash,7,0.25
+candidate,005030,cold,Hosted decode,278,9.76
+candidate,005030,cold,Observation projection,133,4.67
+candidate,005030,cold,Other,1643,57.71
+candidate,005030,cold,Other EDI compilation,79,2.77
+candidate,005030,cold,Protocol JSON,203,7.13
+candidate,005030,cold,Protocol hashes,70,2.46
+candidate,005030,cold,Query physical planning,66,2.32
+candidate,005030,cold,Query realization hashes,16,0.56
+candidate,005030,cold,Storage content hashes,192,6.74
+candidate,005030,repeated,Catalog authoring,6,1.02
+candidate,005030,repeated,Catalog/context,6,1.02
+candidate,005030,repeated,Hosted decode,93,15.74
+candidate,005030,repeated,Observation projection,85,14.38
+candidate,005030,repeated,Other,190,32.15
+candidate,005030,repeated,Other EDI compilation,25,4.23
+candidate,005030,repeated,Protocol JSON,65,11.0
+candidate,005030,repeated,Protocol hashes,59,9.98
+candidate,005030,repeated,Query physical planning,8,1.35
+candidate,005030,repeated,Query realization hashes,1,0.17
+candidate,005030,repeated,Storage content hashes,53,8.97

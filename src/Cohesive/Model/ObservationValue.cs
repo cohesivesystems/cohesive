@@ -37,6 +37,11 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     readonly ScalarPayload scalar;
     readonly object? reference;
 
+    // Composite storage is immutable after construction: public inputs are snapshotted or
+    // use framework immutable collections. Identity scopes derived structural evidence only.
+    internal object? CompositeStorage => Kind is ObservationValueKind.Object or ObservationValueKind.Array
+        ? reference : null;
+
     /// <summary>Creates a value whose active payload is selected by <paramref name="kind"/>.</summary>
     /// <param name="kind">The logical value kind that selects the active payload.</param>
     /// <param name="int64">The Int64 payload when <paramref name="kind"/> is <see cref="ObservationValueKind.Int64"/>.</param>

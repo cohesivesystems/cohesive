@@ -1,0 +1,80 @@
+{
+  "recorded_at_utc": "2026-10-18T03:31:26.700744+00:00",
+  "qualification": "Source Core replacement in a frozen public alpha.146 runtime; not a published upgrade.",
+  "core_base_commit": "f11f88c25294c34c29d19cb9a07dcbdf5aa642f0",
+  "ari_base_commit": "e710802f49b53ec81a5bf6b76c28d4e441e69a34",
+  "ari_src_tree": "daeaa420aeb0cde37feea08a506c844a1bbcfa96",
+  "core_runtime_sources_sha256": {
+    "src/Cohesive/Model/Annotations.cs": "d84aa15a9f9f54a9ba13dbe0f128ec6f1653459f3ff0367a4a7a8223befb7edb",
+    "src/Cohesive/Model/DefaultObservationValueConverterCache.cs": "2d7f84eccd209c98eae2da704943785bd00f3326e63954267a53ab457e5ac8a3",
+    "src/Cohesive/Model/PreparedDeclaredObservationProjection.cs": "c11a0e1c3e9a375b1624769d7c5815b81400c4e67279c41d3174f0b91711767e",
+    "src/Cohesive/Model/Serialization/SingleValueWrapperJsonConverter.cs": "3130af1c5b2184be45c4276c6f94ed83c87bc7ce6785b2317cb7f02129084c40",
+    "src/Cohesive/Model/Serialization/JsonText.cs": "bf98be5ca31ab76b057a06694c0116863de971fbf2e2dc58c5ba81c59902b801"
+  },
+  "counter_source_sha256": "813f40f991db279785452e4be9088fbd3cebad7a78c93377edb41a299389f7b1",
+  "comparison_driver_sha256": "56a35560a0ccb75d44e05aa774aaa21b3d3766b7216608b7c16ffe0d74d6bd79",
+  "counter_harness_sha256": "a92a1231c566d8f18ea3114758728b90ffaf2fff2e5426c8c54f7fbaf189ca90",
+  "benchmark_harness_sha256": "6b8ca363146d8727ade01ce075aebb13324e9a1cf5405ec0877d9ecd284b6a17",
+  "core_module_sha256": {
+    "control": "7b83b3ecb80dea88dd1a2d55945b68d6b900431af9e6077579db273643f5a232",
+    "candidate": "113159776ac200f1ece2227bf4f2636c662998c734c6e07a7e5ead0ceb0b559e"
+  },
+  "shared_runtime_dll_count": 124,
+  "shared_runtime_dll_manifest_sha256": "c63fe1de0c9824169d25096499fb561e58bac8189bd71a35d63d757370c1e819",
+  "runtime_changes": [
+    "Cohesive.dll"
+  ],
+  "archive_verification": "27 baseline packaged DLLs match official alpha.146 archives and publisher commit; 26 candidate packaged DLLs are identical, with only source Core replaced. Three Ari-owned protocol incubators remain source projects.",
+  "public_release_manifest_sha256": "28e2933ca697aba4e0ea8ad9dcd5e7bd6bce5fb1b3e3349d6ab5f91aa6ae88fc",
+  "measurement": "Five alternating fresh-process pairs per source, cold and second invocation; no local build/test/benchmark/trace overlap. CPU is all-thread process TotalProcessorTime, not elapsed time. Second invocation is not established steady state.",
+  "benchmark_settings": {
+    "toolchain": "InProcessEmit",
+    "launches": 1,
+    "warmups": 3,
+    "iterations": 5,
+    "iteration_time_ms": 250
+  },
+  "benchmark_reports_sha256": {
+    "benchmark-candidate-report/results/ScalarWrapperDecodeBenchmarks-report.csv": "39082de80a69723ca25dc16fb43c2033799161eea61000aed771d1865e93b9d7",
+    "benchmark-candidate-report/results/CompiledGraphProjectionBenchmarks-report.csv": "533788b0c2bdff94da68973274e3e266bbe061a4e38b9a75e935af7bc414edc7",
+    "benchmark-control-report/results/ScalarWrapperDecodeBenchmarks-report.csv": "26ea660ad451f9faa9168b46b529988c19c47997beb85815a7533d990f8d7a15",
+    "benchmark-control-report/results/CompiledGraphProjectionBenchmarks-report.csv": "b9b6815da0c2396f67ac852f63ef5c399103e12b79ec35311208ff270709b47c"
+  },
+  "trace_sha256": {
+    "traces/candidate/004010/1/run.nettrace": "d9f956a2d81bf58ea0aab0fc3ffd4777076c4f9820c3d6ac89b663826ead3e23",
+    "traces/candidate/004010/3/run.nettrace": "a6bda622a4d21afeec815fdf5e303d99f1b48005f452265f0c1ca58b96420ac9",
+    "traces/candidate/004010/2/run.nettrace": "bb9a192430e1e14725ca0e33dce9d32113e5f4b8c62cab7f2c69c2803b00e656",
+    "traces/candidate/005030/1/run.nettrace": "f57f297c39aed369e0921c5a2edf42be8379398d8ffdf8f137f0eb18092f491c",
+    "traces/candidate/005030/3/run.nettrace": "87079331fce746edf0ef5f1c282956e38f447da19bc093f71e04caa82f353e84",
+    "traces/candidate/005030/2/run.nettrace": "0c7572c5b69d91c6c8e25f157e550cf307c6b885837855b816d3b483ee1994f9",
+    "traces/control/004010/1/run.nettrace": "902314c2bc19dac32d19f0797cda226486bf809b8f46de37f047488c88451ef9",
+    "traces/control/004010/3/run.nettrace": "2440707ee7a044958035132e45945637e6d8e8b79630c6541e8de7145feb7966",
+    "traces/control/004010/2/run.nettrace": "57a457273e50ca5927f7d5c96ff333a3c7d4bb8e1ca7d01386e9366983628ba4",
+    "traces/control/005030/1/run.nettrace": "fe4ae4014092711eb73080e21346d867bdcede7614358e355726c552d5bb2c41",
+    "traces/control/005030/3/run.nettrace": "dfb059d5dfda3201b0aaf7ce9d7527804b067cd54487153c5dd5262aab063ad2",
+    "traces/control/005030/2/run.nettrace": "29245eda4c10f629cfe71b3142e321b035d38082bd3660df0d2cce6d4e5ac415"
+  },
+  "trace_quality": "Twelve traces: zero lost events, zero missing allocation stacks and zero missing managed CPU stacks. Sampled categories are disjoint estimates, not counter-exact bytes.",
+  "environment": {
+    "cpu": "Apple M5 Max arm64",
+    "os": "macOS 27.0.1",
+    "sdk": "10.0.402",
+    "runtime": "10.0.13",
+    "configuration": "Release"
+  },
+  "validation": {
+    "core_passed": 4818,
+    "sqlite_passed": 233,
+    "ari_engine_passed": 963,
+    "comparison_driver_tests_passed": 3,
+    "existing_integration_skips": 41,
+    "existing_emulator_skips": 18,
+    "graph_hashes_unchanged": true
+  },
+  "rejected_experiment": "Observation-backed structured annotations were prototyped but removed: modest full-case impact did not justify another retained representation and encoding-order obligations. Exploratory longer-run CPU timings were sensitive to JIT/GC warmup and establish no end-to-end CPU claim.",
+  "benchmark_sources_sha256": {
+    "eng/runtime-performance/value-conversion/ScalarWrapperDecodeBenchmarks.cs": "835541e7a6a464e286a2677c9c056685ef4f8531fb4441d326369e4725610498",
+    "eng/runtime-performance/value-conversion/CompiledGraphProjectionBenchmarks.cs": "756ea54a5f587762b3ac97fc0e80d596906c8685fbcdefc2bd1f2cf97c72ed5d",
+    "eng/runtime-performance/value-conversion/Program.cs": "ac4295f1d6d3a0e3b408d31110363db49c121672e9929417258cea3a4bad9e36"
+  }
+}

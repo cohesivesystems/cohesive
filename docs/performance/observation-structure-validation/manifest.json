@@ -1,0 +1,33 @@
+{
+  "baseline_core_commit": "ce93b53f8f474151c3bb604935d1cad2fa33dd9c",
+  "ari_commit": "1c2b78c63da3042d2471930829af58b07790eac2",
+  "packages": "official alpha.151; local Core replacement in frozen outputs only; NuGet cache unmodified",
+  "environment": {
+    "hardware": "Apple M5 Max arm64",
+    "os": "macOS 27.0.1",
+    "sdk": "10.0.402",
+    "runtime": "10.0.13",
+    "configuration": "Release"
+  },
+  "core_dll_sha256": {
+    "control": "c4eb85f456547786bdbd59fdd611bfd6d1f82828cbd31e18440ab1a0dd12f37e",
+    "candidate": "e0cca9ba6ea7e5e14fde3a1322c991eaa5b6c2966b7436451bca28076e89e5d0"
+  },
+  "only_changed_module": "Cohesive.dll",
+  "module_count": 125,
+  "module_manifest_sha256": "2979db73665676cc468f1c1db9ede4c2424deda604003858588b3709fefac425",
+  "candidate_source_sha256": {
+    "src/Cohesive/Execution/PortableExecutionValidator.cs": "4348b4e5d2d37165eb850052c25781169987d46632ccb3347cf7bfd5fcbda156",
+    "src/Cohesive/Model/ObservationValue.cs": "227f8e702900ee53b3b62bdc8df59155bf6895e7ce3c32c821212b8fc84d7e54",
+    "src/Cohesive/Model/WeakPreparationCache.cs": "9bdbb1d9a850ab30c21f03db0d141ed80660adec526bdf0a1e1f25f247d952a8",
+    "src/Cohesive.Tests/ExecutionKernel/ObservationStructurePreparationTests.cs": "b559fe50bb6a420d4a69fc855c83c296582ccf7b05b289df18084111f9a90725",
+    "eng/runtime-performance/value-conversion/ObservationStructureBenchmarks.cs": "bee65dd646fd4bb20efd5d7274d08d4048b727c5bd8f0a31c8146e74730ca85b"
+  },
+  "successful_x12_cases": 512,
+  "method": "5 alternating process pairs per source default; 3 no-tiering; 16 cases/process; process-median then across-process median; independent non-overlapping workloads",
+  "raw_measurements_sha256": {
+    "default": "d94602227f14d3fc2ed9c1af8cc59f82535b5b7a186649650e5e6ef69f6df1b9",
+    "no-tiering": "a5c42d78c5658cab17c7a334dda20a15ed3a41f5e41f9fcac440ad7b9a983b85"
+  },
+  "bdn": "0.15.8 ShortRun InProcess; 3 warmups, 3 measurements; 250ms target iteration; frozen before/after runtimes"
+}

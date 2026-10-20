@@ -752,9 +752,15 @@ public sealed class RelationQueryExpressionEvaluatorTests
         long Measure(Expr input)
         {
             for (var i = 0; i < 1000; i++) evaluator.Evaluate(input, context);
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < 10000; i++) evaluator.Evaluate(input, context);
-            return GC.GetAllocatedBytesForCurrentThread() - before;
+            var samples = new long[7];
+            for (var sample = 0; sample < samples.Length; sample++)
+            {
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < 10000; i++) evaluator.Evaluate(input, context);
+                samples[sample] = GC.GetAllocatedBytesForCurrentThread() - before;
+            }
+            System.Array.Sort(samples);
+            return samples[3];
         }
         var empty = Expr.Coalesce(Expr.Const(ObservationValue.FromArray([])), Expr.Null());
         var smallAllocation = Measure(empty);

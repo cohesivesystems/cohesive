@@ -1,0 +1,62 @@
+{
+  "recorded_at_utc": "2026-10-19T00:04:00.675398+00:00",
+  "status": "Unpublished Core immutable-converter projection preparation, qualified against merged Ari #239 and public alpha.149.",
+  "baseline_commit": "a7d5741121d4180fc63909c927e47680eeb9a8da",
+  "baseline_modules": "Exact frozen candidate runtime from Ari prepared-protocol-source qualification (merged #239). Same original X12 test assembly and harness in both variants; remote-only recovery observation limits do not affect these in-memory cases.",
+  "package_provenance": "Control Core and all other packaged DLLs are from previously verified public alpha.149 at merged publisher c262a431142e77c6365f38360a01606f6e411661. Candidate replaces only Cohesive.dll with a build of that source plus the checked-in projection fix. This is unpublished source qualification, not an adopted package. No package cache mutation or source-analyzer override.",
+  "environment": {
+    "cpu": "Apple M5 Max arm64",
+    "os": "macOS 27.0.1",
+    "sdk": "10.0.402",
+    "runtime": "10.0.13",
+    "configuration": "Release"
+  },
+  "runtime_changes": {
+    "control": {
+      "Cohesive.dll": "90b62d0929374986595cad915695d141d7b380941cca42e86c86a72c28215f82"
+    },
+    "candidate": {
+      "Cohesive.dll": "5513213c11fb7292499c1a34aaf1c93f8181789a4a9b7afe74afcbbe3fac3706"
+    }
+  },
+  "identical_harness_sha256": "f11df7f50a948f49613fb372326226a6e104ad3e9fde641115093ff3dd26bf7d",
+  "identical_original_test_assembly_sha256": "4f44a45ff871d3eab985a287fd4e1681605137486d1f9afdc490edbdcf9813ef",
+  "measured_runtime_source_sha256": {
+    "src/Cohesive/Model/PreparedDeclaredObservationProjection.cs": "02ef624065324834ecaaa302fd041ff5e3cf6e3f15162d8c2c92690e02e51e03"
+  },
+  "measurement": "32 alternating fresh processes, 832 successful original X12 cases: default five pairs/source at 32 invocations/process; separate no-tiering diagnostic three pairs/source at 16. No agent-controlled builds, tests or traces overlap the untraced measurements.",
+  "statistics": "Per-process median in fixed windows, then median across independent processes. Default later window 17..32; no-tiering diagnostic 9..16. CPU, JIT and GC overlap; never subtract them as disjoint buckets. Cumulative allocations are not retained heap.",
+  "validation": "Full Core Release suite: 4946 pass /41 existing skips, including 15 new regressions. Full Ari engine suite in an isolated runtime with the source Core DLL: 996 pass /18 existing skips. No Ari source or generated acceptance changes. Converter output, concurrent first use, mutable fallback, changed owners, duplicate and malformed rejection, retries, depth, collection and warm 512-byte allocation ceiling are covered.",
+  "graph_hashes_unchanged": true,
+  "raw_counter_files_sha256": {
+    "default.csv": "f12781fc8e1f208753c2744a44a8cd7be2afcfeec674174e4f179fb6a11716f9",
+    "no-tiering.csv": "24ccac22618ea0b0afd8dd67a079633275a2058c2dfd93570c8fede3c1e6da54"
+  },
+  "trace_files_sha256": {
+    "traces/candidate/004010/1/run.nettrace": "6053d29789a9c933b6a9163181b35b775be4b98cb445c302e4268d9a8ec56590",
+    "traces/candidate/004010/2/run.nettrace": "6cd1332be289918aafc137a0be891574d4e3119bcd5f111d21b3ebaadd03641c",
+    "traces/candidate/004010/3/run.nettrace": "bdefb2c17b9fd73b78a97a20e1208e80a119826fa70899ed849c93bf166145f4",
+    "traces/candidate/005030/1/run.nettrace": "3eb543188d078772df05df285b9e38a71c5f8041c80a31922f803e8b2c3141df",
+    "traces/candidate/005030/2/run.nettrace": "118438d74e9e6caffa60d2bf038e10d0efe0d74ce80818c22b567e52fd82bc49",
+    "traces/candidate/005030/3/run.nettrace": "3853fcbeb63ba8e2ad8b3321e3fb6219a38c0b587c682fd0882c2d17d7c2186b",
+    "traces/control/004010/1/run.nettrace": "b88acb355951d63aa764f11ae112581dd460404da59e8442a5de1a484184f5c3",
+    "traces/control/004010/2/run.nettrace": "c78f26f3642d230581ccdd04fe676b63f50b918b4b0926010d7fb7838b948459",
+    "traces/control/004010/3/run.nettrace": "064f9d309ca9bc2dcb1cc9cade15cfe6d8665ed9ab23e3d4804be675611328d2",
+    "traces/control/005030/1/run.nettrace": "cfbad6d7c8c721f779441daeb661752b1cbe15fab10b782012df050eed7c1364",
+    "traces/control/005030/2/run.nettrace": "d713407e1506f47b0e0608b7da26b9957990e8797fed980e81e2ae67af6b352a",
+    "traces/control/005030/3/run.nettrace": "444d232a272004e93df839104084d24d7fc0078dd1a7b73f5d541693423c38a9"
+  },
+  "evidence_sha256": {
+    "graph-hashes.csv": "3c307c3804d5d41f5e560ec28035355358ae9855925bc95c99951907a652213d",
+    "benchmarkdotnet.md": "ff12106ea286885f9756d79376cc15f7368df9099b8eee97a685de8c40617f20",
+    "allocation-budget.csv": "d8f45a741af48b6b1c09810ec8ab02e1bb5526903d63edaabd424ab96511dd8a",
+    "trace-quality.csv": "fa32d6cb3e36ada21b992c9875e0ce9dc886529836efdc8ef9489aa4ea6a35f3",
+    "cpu-budget.csv": "9606f309e26f33d560bff3e9b2bd9e58b01c0e6adbf795284424d84beafe39c9",
+    "workflow-budget.csv": "cb1c536192e94a99fee328019a4a5b92cad5b7e3d06499a7b7f572ecd7ad0ca8",
+    "process-counters.csv": "22200d1db02febea69608700b7829453c6be6810203336815ad0f4686a74f2b2"
+  },
+  "result": "Default second allocation 14.015 to 12.124 MB /15.000 to 12.685 MB (13.5% /15.4% less), CPU 197.3 to 180.7 ms /227.1 to 206.5 ms (8.4% /9.1% lower). Cold allocation approximately flat. Later default CPU lower but elapsed mixed; no-tiering diagnostic CPU 14% /13% lower. Sampled benefit is primarily seeding/control workflow and preview, not durable execution. See report for complete windows and residual work.",
+  "trace_quality": "12 matched traces /24 phases: zero lost events, missing allocation stacks and missing managed CPU stacks.",
+  "component_benchmark": "BenchmarkDotNet ShortRun, six cases: 1/128 nested items, uncached serializer reference vs cold owner vs warm owner. The serializer reference is independent, not a same-binary old-path comparison. Run sequentially before untraced X12 runs. Cold preparation allocates and retains state; warm owner reuse has zero measured allocation.",
+  "benchmark_report_sha256": "ff12106ea286885f9756d79376cc15f7368df9099b8eee97a685de8c40617f20"
+}

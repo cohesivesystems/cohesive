@@ -1,0 +1,13 @@
+variant,workload,fields,mean,error,stddev,allocated,gen0,gen1,toolchain,iteration_count,warmup_count,iteration_time
+baseline,ScalarWrapperDecodeBenchmarks.DecodeWrappers,1,267.8 ns,1.79 ns,0.46 ns,576 B,0.0689,0.0000,InProcessEmitToolchain,5,3,250ms
+baseline,ScalarWrapperDecodeBenchmarks.DecodeWrappers,128,"15,542.9 ns",119.93 ns,18.56 ns,28013 B,3.3449,0.1239,InProcessEmitToolchain,5,3,250ms
+baseline,ScalarWrapperDecodeBenchmarks.DecodeWrappers,1024,"121,462.3 ns","1,954.33 ns",507.53 ns,221580 B,26.0827,6.3976,InProcessEmitToolchain,5,3,250ms
+baseline,CompiledGraphProjectionBenchmarks.DecodeNewGraphStorage,1,3.660 μs,0.0561 μs,0.0146 μs,10.87 KB,1.3270,0.0292,InProcessEmitToolchain,5,3,250ms
+baseline,CompiledGraphProjectionBenchmarks.DecodeNewGraphStorage,128,121.077 μs,1.7400 μs,0.4519 μs,184.5 KB,22.2868,7.2674,InProcessEmitToolchain,5,3,250ms
+baseline,CompiledGraphProjectionBenchmarks.DecodeNewGraphStorage,1024,"1,150.585 μs",103.9041 μs,16.0793 μs,1409.62 KB,169.6429,84.8214,InProcessEmitToolchain,5,3,250ms
+candidate,ScalarWrapperDecodeBenchmarks.DecodeWrappers,1,154.4 ns,1.39 ns,0.36 ns,368 B,0.0435,0,InProcessEmitToolchain,5,3,250ms
+candidate,ScalarWrapperDecodeBenchmarks.DecodeWrappers,128,"1,658.7 ns",46.44 ns,7.19 ns,1384 B,0.1652,0,InProcessEmitToolchain,5,3,250ms
+candidate,ScalarWrapperDecodeBenchmarks.DecodeWrappers,1024,"12,189.8 ns",41.29 ns,6.39 ns,8554 B,0.9743,0,InProcessEmitToolchain,5,3,250ms
+candidate,CompiledGraphProjectionBenchmarks.DecodeNewGraphStorage,1,3.242 μs,0.2944 μs,0.0765 μs,10.25 KB,1.2544,0.0256,InProcessEmitToolchain,5,3,250ms
+candidate,CompiledGraphProjectionBenchmarks.DecodeNewGraphStorage,128,103.683 μs,1.4477 μs,0.2240 μs,158.08 KB,19.1667,4.1667,InProcessEmitToolchain,5,3,250ms
+candidate,CompiledGraphProjectionBenchmarks.DecodeNewGraphStorage,1024,968.210 μs,8.0811 μs,2.0986 μs,1201.18 KB,144.5313,70.3125,InProcessEmitToolchain,5,3,250ms

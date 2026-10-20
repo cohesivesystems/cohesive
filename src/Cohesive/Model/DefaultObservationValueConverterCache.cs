@@ -106,6 +106,12 @@ static class DefaultObservationValueConverterCache
                     value, Expression.Constant(options), Expression.Constant(reader, ConverterType(targetType)));
             }
 
+            var scalarOptions = options ?? (strict ? JsonSerializerOptions.Default : ObservationMaterializerDefaults.SerializerOptions);
+            if ((options is not null || SingleValueWrapperJsonConverter.ScalarOnly.CanConvert(targetType))
+                && scalarOptions.GetConverter(targetType) is SingleValueWrapperJsonConverter.IObservationStringProjection wrapper
+                && wrapper.PrepareStringReader(scalarOptions) is { } scalarReader)
+                return Expression.Invoke(Expression.Constant(scalarReader, ConverterType(targetType)), value);
+
             if (options is not null && targetType == typeof(ImmutableDictionary<AnnotationKey, AnnotationValue>)
                 && CanReadAnnotations(options))
                 return StrictContainer(targetType, value, Expression.Call(typeof(ConverterBuilder),

@@ -61,7 +61,11 @@ interpretations of the same immutable payload under the same frozen serializer p
 Mutable results remain independent. Reuse conveys no validation or admission evidence.
 Shape graph documents prepare their observation representation once by immutable object identity;
 new envelopes over the same graph share its payload and typed interpretation. First decoding and
-external admission still run normally. Preparation remains owned by the live document/graph.
+external admission still run normally. Preparation remains owned by the live document/graph. Deterministic converter-backed immutable values
+also retain one prepared observation per exact owner and declared type under the fixed profile; mutable
+converter values remain independent, failures retry, and nested reuse still enforces the depth limit.
+An opaque object read may propose its original storage; the first reprojection verifies converter output
+before retaining that storage, so normalization never silently reuses different input.
 The hosted materializer reads immutable collections and supported polymorphic members directly from observations;
 customized contracts retain their serializer. See [prepared projection qualification](../../docs/performance/prepared-observation-projections.md).
 `CanonicalJsonWriter.GetCanonicalSequenceText` returns owned text using the same explicit profile, encoder and exclusions as streaming canonical output.
@@ -88,6 +92,11 @@ var snapshot = new EntityObservationSnapshot(
 
 Physical layouts, source placement, relation occurrences, and storage concurrency tokens belong to the interpreting
 block or adapter.
+
+`PortableExecutionValidator` reuses successful checks of immutable inline type declarations and
+structural evidence for immutable observation storage. Type compatibility and contract modifiers
+are checked on every call; named types and shapes resolve against that call's graph. Newly decoded
+or changed payloads require fresh structural validation. See the [structural-validation qualification](../../docs/performance/observation-structure-validation/README.md).
 
 ## Native operation telemetry
 

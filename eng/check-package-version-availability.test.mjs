@@ -159,3 +159,51 @@ test('release without a selected artifact family fails closed', async () => {
   await assert.rejects(checkPackageVersionAvailability({ version }),
     /At least one package artifact directory is required/);
 });
+
+for (const transient of ['transport', 429, 503]) {
+  test(`retries ${transient} and requires a fresh absence response`, async () => {
+    const artifacts = await createArtifacts();
+    let attempts = 0;
+    const observations = await checkPackageVersionAvailability({
+      version, nuGetDirectory: artifacts.nuGetDirectory,
+      requestStatus: async () => {
+        attempts += 1;
+        if (attempts > 1) return 404;
+        if (transient === 'transport') throw new Error('temporary fetch failure');
+        return transient;
+      },
+    });
+    assert.equal(attempts, 2);
+    assert.equal(observations[0].status, 404);
+  });
+}
+
+test('transport failures exhaust three attempts and never become absence', async () => {
+  const artifacts = await createArtifacts();
+  let attempts = 0;
+  await assert.rejects(checkPackageVersionAvailability({
+    version, nuGetDirectory: artifacts.nuGetDirectory,
+    requestStatus: async () => { attempts += 1; throw new Error('fetch failed'); },
+  }), /Could not verify.*fetch failed/);
+  assert.equal(attempts, 3);
+});
+
+test('an existing version after a retry still blocks publication', async () => {
+  const artifacts = await createArtifacts();
+  let attempts = 0;
+  await assert.rejects(checkPackageVersionAvailability({
+    version, nuGetDirectory: artifacts.nuGetDirectory,
+    requestStatus: async () => { attempts += 1; return attempts === 1 ? 503 : 200; },
+  }), PublishedPackageVersionError);
+  assert.equal(attempts, 2);
+});
+
+test('permanent registry failures do not retry', async () => {
+  const artifacts = await createArtifacts();
+  let attempts = 0;
+  await assert.rejects(checkPackageVersionAvailability({
+    version, nuGetDirectory: artifacts.nuGetDirectory,
+    requestStatus: async () => { attempts += 1; return 403; },
+  }), /HTTP 403/);
+  assert.equal(attempts, 1);
+});

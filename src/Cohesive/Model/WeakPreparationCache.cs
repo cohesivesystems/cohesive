@@ -21,6 +21,10 @@ internal sealed class WeakPreparationCache<TKey, TValue> where TKey : class
         return false;
     }
 
+    // Callers may prepare recursively without holding a slot lock, then publish a success.
+    internal TValue Publish(TKey key, TValue value) =>
+        slots.GetValue(key, static _ => new()).Get(value, static prepared => prepared);
+
     /// <summary>Prepares once under the key's shared slot and returns the published value.</summary>
     /// <param name="key">Weak identity key.</param><param name="factory">Factory; an exception leaves the slot retryable.</param><returns>Prepared value.</returns>
     internal TValue Get(TKey key, Func<TKey, TValue> factory) =>

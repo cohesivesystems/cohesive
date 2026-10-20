@@ -102,6 +102,7 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
     internal interface IObservationStringProjection
     {
         bool TryGetString(object value, out string? text);
+        Delegate? PrepareStringReader(JsonSerializerOptions options);
     }
 
     static bool DeclaresSingleValueWrapperConverter(Type type) =>
@@ -236,6 +237,17 @@ public sealed class SingleValueWrapperJsonConverter : JsonConverterFactory
             }
             text = null;
             return false;
+        }
+
+        public Delegate? PrepareStringReader(JsonSerializerOptions options)
+        {
+            if (typeof(TValue) != typeof(string) || options.ReferenceHandler is not null
+                || options.GetConverter(typeof(string)).GetType() != JsonSerializerOptions.Default.GetConverter(typeof(string)).GetType())
+                return null;
+            return (Func<ObservationValue, TWrapper>)(value =>
+                value.Kind == ObservationValueKind.String && value.String is { } text && JsonText.IsWellFormed(text)
+                    ? createWrapper((TValue)(object)text)
+                    : value.DeserializeIndependent<TWrapper>(options)!);
         }
 
         public override TWrapper Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
