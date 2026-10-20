@@ -1,0 +1,41 @@
+{
+  "baseline_source_commit": "a5a6d5a208c70ff1a986e3100b2b08e2677a0e1c",
+  "date": "2026-10-18",
+  "comparison": "Identical harnesses and closures; only Core and Relations DLLs substituted. Local source qualification, not a consumer package upgrade.",
+  "benchmark_libraries": {
+    "control": {
+      "Cohesive.dll": "a74fbdec8906e418f70a825ae877fe817cce8386b4c63de372cca74803abffc0",
+      "Cohesive.Relations.dll": "220d6b8531b229dcb5290f78b211993ba2160c9220a3dfaf005841ff24012e28",
+      "Cohesive.Relations.Benchmarks.dll": "442dd14620c06f748cb2c77c13ab2862277e09fc08583550670c272e1875b6fb"
+    },
+    "candidate": {
+      "Cohesive.dll": "6727400c8240d258de73a213ac99b97b5880dd808a46cb360ff06446b43f99e9",
+      "Cohesive.Relations.dll": "b62874490a0399f474492b2f63863d5137fa04be9f435e2a22c787bcbfe187c0",
+      "Cohesive.Relations.Benchmarks.dll": "442dd14620c06f748cb2c77c13ab2862277e09fc08583550670c272e1875b6fb"
+    }
+  },
+  "edi_harness": "991c6fa51313905d8145873866f03a77192f47d9aafbd4c0d325baf1641bffab",
+  "edi_adapter": "50f1d731aec67889c66184e130089eef8c801c917e7d2b7eaeba3e5148c9c758",
+  "source_files": {
+    "src/Cohesive/Model/ObservationValue.cs": "8304d57aef57d801e7414099e6b79949463986c0e5956a8f26ad57557fb1efd5",
+    "src/Cohesive/Model/SmallObservationFields.cs": "f7332a4605469ae0c0cc336cb8d3b77a0dd0040bca4bd8656ec19966b0c1d012",
+    "src/Cohesive/Model/Serialization/ObservationJsonReader.cs": "dafbd07417babd0462b8e50901ae38a69b427b21ab433fbc1b5b9c938da9c1b7",
+    "src/Cohesive/Model/Serialization/ObservationJsonContainers.cs": "4ea00374b8a9372da33ecddfc7cc885e946b25ada6558ec3615d5a9ea5d467c1",
+    "src/Cohesive.Relations/Execution/RelationQueryExpressionEvaluator.cs": "502800f7cbee9e15e8e1e48f3b6e86244c2448ff933b43d793b8bac9f490979d",
+    "src/Cohesive.Relations.Benchmarks/ObservationValuePipelineBenchmarks.cs": "c1468345270921652a1e361ad021a527218e07736798188b3f70e38273c2566c",
+    "eng/runtime-performance/observation-values/Program.cs": "78212866aabb786bd42a491a9b8024ab5db365a2438a3683bf422e5edce8f782"
+  },
+  "ari_artifacts": {
+    "datasets/ari/edi-transportation/acceptance/204-004010-ecf/v1/inputs/original.edi": "75a39672108191f5677417b9a9f8a25cfb46e21b1b78a035bac2d607670d428e",
+    "src/Ari.Training.Seeding/Definitions/edi-204-canonical.shape.json": "99fefe13b99537de09526003d28b7920814e32096e547f93cedd54f090e88b11",
+    "src/Ari.Training.Scenarios/Transportation/Definitions/edi-204-v4010-to-canonical.relation.generated.json": "44e6ee3e34a964516d5c50587a1fd66c264e6227961b7c1ee2a3c665c5fc12cb"
+  },
+  "protocol_harness": "30f2a3833f64940d881ac538194518c03b77fe0e22f61ff4c6d64434e673a6a1",
+  "verification": {
+    "core_passed": 4953,
+    "core_skipped": 54,
+    "relations_passed": 1141,
+    "protocol_fingerprints_equal": true,
+    "edi_output_hashes_equal": true
+  }
+}

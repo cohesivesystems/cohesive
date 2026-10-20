@@ -1,0 +1,30 @@
+[
+  {
+    "args": [],
+    "exit_code": 2
+  },
+  {
+    "args": [
+      "8",
+      "shared",
+      "1000"
+    ],
+    "exit_code": 2
+  },
+  {
+    "args": [
+      "16",
+      "unknown",
+      "1000"
+    ],
+    "exit_code": 2
+  },
+  {
+    "args": [
+      "16",
+      "generic",
+      "999"
+    ],
+    "exit_code": 2
+  }
+]

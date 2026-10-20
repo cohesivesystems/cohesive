@@ -1,0 +1,30 @@
+{
+  "cohesive-cpu-current-detail.nettrace": {
+    "sha256": "a975978c34867ed1fff181a8eebbc512ddeda3ad63bad01d490ff8a35afae985",
+    "bytes": 588178
+  },
+  "cohesive-cpu-before-reuse.nettrace": {
+    "sha256": "ca38e6952ede8048aa9542a1c93748402cbd7c93a47a960354d8e0b80453fc8c",
+    "bytes": 576566
+  },
+  "cohesive-cpu-current-mixed.nettrace": {
+    "sha256": "0088ac34e9e74fe2cd53c147b13517c9e64673a2e8c0c2b38dcf2ce323be1f96",
+    "bytes": 1081470
+  },
+  "cohesive-cpu-before-reuse-mixed.nettrace": {
+    "sha256": "426e98d920817193506d6978c8d50778f03d1e63521d73f61a5d82a9bf574745",
+    "bytes": 1053102
+  },
+  "cohesive-cpu-inline-flat.nettrace": {
+    "sha256": "37023b170faf7f43beeedab8ced6c08a79e9f22a3087eb6777cde42bb4d23048",
+    "bytes": 2458298
+  },
+  "cohesive-cpu-inline-mixed.nettrace": {
+    "sha256": "af7b92571299f6ace4875d7cb24cf1dfb2f8f6b86e2f4a3000b74fb096e42a5b",
+    "bytes": 4605018
+  },
+  "cohesive-cpu-inline-candidate.nettrace": {
+    "sha256": "e574542291d1c1e7be90a6b5a8015d949575f6beebd963fc767f87728d25c52a",
+    "bytes": 4512382
+  }
+}

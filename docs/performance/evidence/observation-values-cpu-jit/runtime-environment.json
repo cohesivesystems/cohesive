@@ -1,0 +1,14 @@
+{
+  "DOTNET_TieredCompilation": null,
+  "COMPlus_TieredCompilation": null,
+  "DOTNET_TieredPGO": null,
+  "COMPlus_TieredPGO": null,
+  "DOTNET_ReadyToRun": null,
+  "COMPlus_ReadyToRun": null,
+  "DOTNET_TC_QuickJitForLoops": null,
+  "COMPlus_TC_QuickJitForLoops": null,
+  "DOTNET_JitMinOpts": null,
+  "COMPlus_JitMinOpts": null,
+  "DOTNET_JitStress": null,
+  "COMPlus_JitStress": null
+}

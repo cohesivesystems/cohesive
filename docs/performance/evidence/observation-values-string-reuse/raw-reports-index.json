@@ -1,0 +1,13 @@
+{
+  "archive_sha256": "bd212321241987b5fd9c62090615bd2b0bed2842011019afafe07c1d51746d2f",
+  "files": [
+    {"path": "candidate-checkpoint.json", "bytes": 52912, "sha256": "bc6b50e15c3e7d4e1d93265d46aabc229d2c0264a256fda0bb0010864ee3a929"},
+    {"path": "candidate-pipeline.json", "bytes": 183298, "sha256": "0c90f7c34712f30cdb9aa91453382841d3c06a0b12a0ff1e19266f626ee1efc9"},
+    {"path": "candidate-tagged.json", "bytes": 62507, "sha256": "b135c2d8c429987bbb52e1c690e2ae08d27a3cdc24de877d8b95a13ca490d8c0"},
+    {"path": "candidate-text.json", "bytes": 118848, "sha256": "f36d4c3ab58957afd8f7a5c7077c8c29b4b56e9134429ef9d1b3a91565afbe35"},
+    {"path": "control-checkpoint.json", "bytes": 53359, "sha256": "74ad414c1e448348ef44e56017aee7d7a1706d820a20a6075828d42b7dfb309c"},
+    {"path": "control-pipeline.json", "bytes": 186296, "sha256": "ad1a047f775f5e3e3080ff8c15183af0fc24ffffa284237de19e87a691e96d30"},
+    {"path": "control-tagged.json", "bytes": 61024, "sha256": "b257d1bfd10932c9e889467c58d27c452f7a38c5390fdde7d181a19d7719a76b"},
+    {"path": "control-text.json", "bytes": 118134, "sha256": "d1ddeb1d8e6153628dfa15866570196e16ab74c8433d815d023178ab24e5ce5a"}
+  ]
+}

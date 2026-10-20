@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+  <!-- Optional consumer qualification against an already-built, frozen Ari runtime.
+       Never builds or changes the sibling checkout; no production dependency on Ari. -->
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <Reference Include="$(AriRuntimeDirectory)/Cohesive.dll" />
+    <Reference Include="$(AriRuntimeDirectory)/Cohesive.Relations.dll" />
+    <Reference Include="$(AriRuntimeDirectory)/Cohesive.Relations.Contracts.dll" />
+    <Reference Include="$(AriRuntimeDirectory)/Cohesive.Protocols.dll" />
+    <Reference Include="$(AriRuntimeDirectory)/Cohesive.Adapters.Edi.dll" />
+    <None Include="$(AriRuntimeDirectory)/*.dll" CopyToOutputDirectory="PreserveNewest" Link="%(Filename)%(Extension)" />
+  </ItemGroup>
+  <Target Name="RequireAriRuntime" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(AriRuntimeDirectory)/Cohesive.Adapters.Edi.dll')"
+           Text="Set AriRuntimeDirectory to an already-built Ari runtime containing the EDI adapter." />
+  </Target>
+</Project>
