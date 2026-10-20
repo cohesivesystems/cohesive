@@ -77,4 +77,4 @@ The existing indexed-ingestion guard changes by +1.4%, -0.1% and +0.1% at 4/16/3
 
 **Retain the explicit strict entry point and shared framing.** It makes the previously measured shared-layout path directly usable in Core, preserves full admission, and gives a small measured incremental gain for the representative scalar mapping without inventing occurrence metadata. It does not justify migrating permissive JSON boundaries or claiming a universal pipeline speedup. Whole-tree parsing/validation of unmapped payloads remains intentionally intact.
 
-These measurements are working-tree qualification against the recorded pre-adoption baseline. Broader branch integration and qualification against newer main are separate follow-up work; historical measurements are not substituted for that comparison.
+These measurements are working-tree qualification against the recorded pre-adoption baseline. The subsequent [integrated qualification against main](observation-values-main-qualification.md) records the rebase, current full test counts and fresh matched comparisons; historical measurements are not substituted for that comparison.
