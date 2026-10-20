@@ -4,6 +4,8 @@ The candidate is benchmark-only; production Core/Relations remain bytecode-equiv
 
 ## Reproduce
 
+These historical filters target benchmark source commit `940739c1`. The subsequent [density/fallback experiment](../../observation-values-nested-density.md) adds a parameter and preserves its own scripts/manifests. Check out the historical source revision to reproduce this original matrix.
+
 Build `src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj` in Release with `-m:1 -p:UseSharedCompilation=false`. Before timing, execute:
 
 ```text

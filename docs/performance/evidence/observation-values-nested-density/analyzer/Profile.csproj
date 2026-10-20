@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+<PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings></PropertyGroup>
+<ItemGroup>
+<Reference Include="Microsoft.Diagnostics.Tracing.TraceEvent"><HintPath>/Users/eulerfx/.nuget/packages/microsoft.diagnostics.tracing.traceevent/3.2.8/lib/netstandard2.0/Microsoft.Diagnostics.Tracing.TraceEvent.dll</HintPath></Reference>
+<Reference Include="Microsoft.Diagnostics.FastSerialization"><HintPath>/Users/eulerfx/.nuget/packages/microsoft.diagnostics.tracing.traceevent/3.2.8/lib/netstandard2.0/Microsoft.Diagnostics.FastSerialization.dll</HintPath></Reference>
+</ItemGroup>
+</Project>

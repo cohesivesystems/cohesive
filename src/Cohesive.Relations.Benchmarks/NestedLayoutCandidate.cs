@@ -1,4 +1,6 @@
+using System.Buffers;
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Cohesive.Model;
@@ -14,12 +16,14 @@ internal sealed class NestedLayoutCandidate
     readonly GraphShapeId shape;
     readonly ObservationLayout rootLayout;
     readonly Node root;
+    readonly NestedLayoutStorage storage;
     int projectedLayouts;
     int preparationDepth;
 
-    internal NestedLayoutCandidate(GraphShapeId shape)
+    internal NestedLayoutCandidate(GraphShapeId shape, NestedLayoutStorage storage = NestedLayoutStorage.FixedVector)
     {
         this.shape = shape;
+        this.storage = storage;
         rootLayout = ObservationLayout.Create(shape);
         root = Record(rootLayout, rootLayout.FieldIdentities.Select((_, index) => rootLayout.GetFieldDefinition(index)));
     }
@@ -45,6 +49,41 @@ internal sealed class NestedLayoutCandidate
                 throw new JsonException("The JSON observation contains trailing content.");
         fellBack = false;
         return value;
+    }
+
+    // The wrapper owns no localloc. Fallback can tier independently of successful admission.
+    internal ObservationValue ParseSeparated(ReadOnlySpan<byte> json, out bool fellBack)
+    {
+        if (TryParseOnly(json, out var value)) { fellBack = false; return value; }
+        return Fallback(json, out fellBack);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    bool TryParseOnly(ReadOnlySpan<byte> json, out ObservationValue value)
+    {
+        value = default;
+        var reader = new Utf8JsonReader(json);
+        if (!reader.Read() || !root.Supported) return false;
+        if (!ReadRecord(ref reader, root, strictRoot: true, out value, out var values)) return false;
+        Span<ulong> presence = stackalloc ulong[1];
+        presence.Clear();
+        for (var index = 0; index < values.Length; index++)
+            if (values[index].Kind != ObservationValueKind.Undefined) presence[0] |= 1UL << index;
+        if (!ObservationValidator.TryValidateAgainstShape(shape, rootLayout, values, presence, out var error))
+            throw new ArgumentException(error, nameof(json));
+        foreach (var character in json[checked((int)reader.BytesConsumed)..])
+            if (character is not (0x20 or 0x09 or 0x0A or 0x0D))
+                throw new JsonException("The JSON observation contains trailing content.");
+        return true;
+    }
+
+    internal ObservationValue ParseForcedFallback(ReadOnlySpan<byte> json) => Fallback(json, out _);
+
+    // Profiling ablation: only the speculative prefix, with no full-input fallback or admission.
+    internal bool Probe(ReadOnlySpan<byte> json)
+    {
+        var reader = new Utf8JsonReader(json);
+        return reader.Read() && root.Supported && ReadRecord(ref reader, root, strictRoot: true, out _, out _);
     }
 
     ObservationValue Fallback(ReadOnlySpan<byte> json, out bool fellBack)
@@ -101,7 +140,7 @@ internal sealed class NestedLayoutCandidate
     }
 
     Node Record(ObservationLayout layout, IEnumerable<FieldDefinition> declarations) =>
-        new(layout, [.. declarations.Select(field => Prepare(field.Type, field.Cardinality))]);
+        new(layout, [.. declarations.Select(field => Prepare(field.Type, field.Cardinality))], storage: storage);
 
     static bool Read(ref Utf8JsonReader reader, Node node, out ObservationValue value)
     {
@@ -130,6 +169,8 @@ internal sealed class NestedLayoutCandidate
         values = [];
         if (reader.TokenType != JsonTokenType.StartObject) return false;
         var layout = node.Layout!;
+        if (!strictRoot && node.Storage == NestedLayoutStorage.DensityAware && layout.Count > SmallObservationFields.JsonFieldLimit)
+            return ReadDensityAwareRecord(ref reader, node, out value);
         values = new ObservationValue[layout.Count];
         var count = 0;
         while (reader.Read())
@@ -153,11 +194,65 @@ internal sealed class NestedLayoutCandidate
         throw new JsonException("The JSON object is incomplete.");
     }
 
-    sealed class Node(ObservationLayout? layout = null, Node[]? children = null, Node? element = null, bool supported = true)
+    static bool ReadDensityAwareRecord(ref Utf8JsonReader reader, Node node, out ObservationValue value)
     {
+        var layout = node.Layout!;
+        var scratch = ArrayPool<ObservationValue>.Shared.Rent(layout.Count);
+        scratch.AsSpan(0, layout.Count).Clear();
+        value = default;
+        var count = 0;
+        try
+        {
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndObject)
+                {
+                    // Experimental policy: compact at half occupancy or below. Count is actual
+                    // decoded unique presence, including Null, not a guessed schema/input density.
+                    if (count <= layout.Count / 2)
+                    {
+                        if (count <= SmallObservationFields.JsonFieldLimit)
+                        {
+                            var compact = new ObservationJsonObjectBuilder();
+                            for (var slot = 0; slot < layout.Count; slot++)
+                                if (scratch[slot].Kind != ObservationValueKind.Undefined)
+                                    compact.Set(layout.FieldIdentities[slot], scratch[slot]);
+                            value = compact.Build();
+                        }
+                        else
+                        {
+                            var compact = new Dictionary<string, ObservationValue>(count, StringComparer.Ordinal);
+                            for (var slot = 0; slot < layout.Count; slot++)
+                                if (scratch[slot].Kind != ObservationValueKind.Undefined)
+                                    compact.Add(layout.FieldIdentities[slot], scratch[slot]);
+                            value = ObservationValue.FromOwnedObject(compact);
+                        }
+                    }
+                    else
+                        value = ObservationValue.FromOrdinalFields(new OrdinalObservationFields(layout,
+                            ImmutableArray.Create(scratch.AsSpan(0, layout.Count)), count));
+                    return true;
+                }
+                if (reader.TokenType != JsonTokenType.PropertyName || !layout.TryGetJsonOrdinal(ref reader, out var ordinal)) return false;
+                var present = scratch[ordinal].Kind != ObservationValueKind.Undefined;
+                if (!reader.Read()) throw new JsonException("The JSON object ended before its property value.");
+                if (!Read(ref reader, node.Children![ordinal], out var field)) return false;
+                scratch[ordinal] = field;
+                if (!present) count++;
+            }
+            throw new JsonException("The JSON object is incomplete.");
+        }
+        finally { ArrayPool<ObservationValue>.Shared.Return(scratch, clearArray: true); }
+    }
+
+    sealed class Node(ObservationLayout? layout = null, Node[]? children = null, Node? element = null, bool supported = true, NestedLayoutStorage storage = NestedLayoutStorage.FixedVector)
+    {
+        internal NestedLayoutStorage Storage { get; } = storage;
         internal ObservationLayout? Layout { get; } = layout;
         internal Node[]? Children { get; } = children;
         internal Node? Element { get; } = element;
         internal bool Supported { get; } = supported && (element?.Supported ?? true) && (children?.All(child => child.Supported) ?? true);
     }
 }
+
+internal enum NestedLayoutStorage { FixedVector, DensityAware }
