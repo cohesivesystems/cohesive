@@ -27,16 +27,30 @@ public sealed class ExecutionDefinitionNormalizationTests
         using var source = JsonDocument.Parse("{\"rows\":[" + string.Join(",", Enumerable.Repeat(
             "{\"z\":\"λ/\\\"<>&\",\"values\":[1.00,-0.0,1e21,null],\"a\":true}", rows)) + "]}");
         var input = source.RootElement;
-        for (var i = 0; i < 4; i++) _ = Normalize(input);
-        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 8; i++) { _ = Previous(input); _ = Normalize(input); }
         var expected = Previous(input);
-        var previousBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
         var actual = Normalize(input);
-        var revisedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
         Assert.Equal(expected.GetRawText(), actual.GetRawText());
-        Assert.True(revisedBytes < previousBytes * 0.95,
-            $"Previous normalization allocated {previousBytes} B; revised allocated {revisedBytes} B.");
+        long[] previous = new long[7], revised = new long[7];
+        for (var i = 0; i < previous.Length; i++)
+        {
+            // Alternate order so shared pool state does not always favor one implementation.
+            if ((i & 1) == 0) { previous[i] = Measure(Previous, input); revised[i] = Measure(Normalize, input); }
+            else { revised[i] = Measure(Normalize, input); previous[i] = Measure(Previous, input); }
+        }
+        Array.Sort(previous); Array.Sort(revised);
+        // Fixed fixture-scaled saving protects the removed buffer without a near-boundary ratio.
+        Assert.True(previous[3] - revised[3] >= rows * 32L,
+            $"Previous normalization allocated {previous[3]} B; revised allocated {revised[3]} B.");
+
+        static long Measure(Func<JsonElement, JsonElement> normalize, JsonElement input)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var result = normalize(input);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            GC.KeepAlive(result);
+            return allocated;
+        }
     }
 
     [Fact]
