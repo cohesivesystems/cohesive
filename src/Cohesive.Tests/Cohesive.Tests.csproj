@@ -66,4 +66,7 @@
     <Folder Include="Configuration\" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="../adapters/Cohesive.Adapters.Marten/Cohesive.Adapters.Marten.csproj" />
+  </ItemGroup>
 </Project>

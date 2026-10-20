@@ -46,6 +46,9 @@ an authoritative reservation lifecycle should be a declared transition, not an i
 
 ## Local walkthrough
 
+The SQL seed below is for **state-authoritative mode**. Event-authoritative mode must seed through
+the configured repository so the first action is retained; see [State authority](STATE-AUTHORITY.md).
+
 Start the AppHost as described in README. Create an order with `POST /orders`. In the disposable PostgreSQL
 instance shown in the Aspire dashboard, seed a synthetic SKU using native SQL:
 

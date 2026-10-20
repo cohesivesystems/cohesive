@@ -1,3 +1,6 @@
+using Cohesive.Adapters.Marten;
+using Marten;
+using JasperFx.Events;
 using Microsoft.Extensions.Logging;
 using Xunit.Abstractions;
 using System.Diagnostics;
@@ -17,7 +20,7 @@ using Cohesive.Transitions.Execution;
 
 namespace Cohesive.Tests.Storage.Conformance;
 
-public sealed class PostgresRepositoryConformanceTests(ITestOutputHelper output)
+public sealed partial class PostgresRepositoryConformanceTests(ITestOutputHelper output)
 {
     const string ConnectionVariable = "COHESIVE_POSTGRES_TEST_CONNECTION_STRING";
 
@@ -26,7 +29,8 @@ public sealed class PostgresRepositoryConformanceTests(ITestOutputHelper output)
     public async Task Conforms(RepositoryProbe probe)
         => await WithRepository((repository, _, _) => EntityRepositoryConformance.Verify(repository, probe));
 
-    static async Task WithRepository(Func<PostgresEntityRepository, NpgsqlDataSource, string, Task> verify, int maximumReceiptBytes = 1_048_576, ILoggerFactory? loggerFactory = null)
+    static async Task WithRepository(Func<PostgresEntityRepository, NpgsqlDataSource, string, Task> verify, int maximumReceiptBytes = 1_048_576, ILoggerFactory? loggerFactory = null, EntityStateAuthority? authority = null,
+        EntityReconstitutionMode reconstitution = EntityReconstitutionMode.CheckpointAndTail, int maximumReplayActions = 10_000)
     {
         var dataSourceBuilder = new NpgsqlDataSourceBuilder(Environment.GetEnvironmentVariable(ConnectionVariable)!);
         if (loggerFactory is not null) dataSourceBuilder.UseLoggerFactory(loggerFactory);
@@ -47,8 +51,21 @@ public sealed class PostgresRepositoryConformanceTests(ITestOutputHelper output)
             var receipts = new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a", maximumReceiptBytes);
             await using (var create = new NpgsqlCommand(receipts.SchemaSql, connection)) await create.ExecuteNonQueryAsync();
             var receiptStorage = await receipts.BindAsync(dataSource);
+            using var store = DocumentStore.For(options =>
+            {
+                options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
+                options.Connection(dataSource);
+                options.DatabaseSchemaName = schema;
+                options.UseCohesiveEntityHistory();
+            });
+            PostgresEntityHistoryStorage? history = null;
+            if (authority is { } selected)
+            {
+                await store.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
+                history = await MartenEntityHistoryStorage.BindAsync(dataSource, store, selected, reconstitution, checkpointInterval: 2, maximumReplayActions: maximumReplayActions);
+            }
             var repository = new PostgresEntityRepository(RunControlFixture.Entity,
-                new(new("adoption/postgres"), dataSource, "cohesive.conformance"), mapping, receiptStorage);
+                new(new("adoption/postgres"), dataSource, "cohesive.conformance"), mapping, receiptStorage, history);
             await verify(repository, dataSource, schema);
         }
         finally

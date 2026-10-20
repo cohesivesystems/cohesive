@@ -142,8 +142,8 @@ public sealed record PostgresEntityRepositoryMapping
 /// PostgreSQL observation repository backed by a normalized relational table.
 /// </summary>
 /// <remarks>
-/// The repository validates writes through the canonical entity definition, uses PostgreSQL <c>xmin</c> as an
-/// opaque optimistic-concurrency token, and stores the semantic observation version separately. Batches execute in
+/// The repository validates writes through the canonical entity definition. State authority uses PostgreSQL
+/// <c>xmin</c>; event authority uses an ordered stream position. Both store semantic observation version separately. Batches execute in
 /// one database transaction and therefore support same-partition and cross-partition all-or-nothing semantics.
 /// The caller owns the bound <see cref="NpgsqlDataSource"/> and must keep it alive for the repository lifetime.
 /// </remarks>
@@ -161,6 +161,7 @@ public sealed partial class PostgresEntityRepository : IEntityTransitionOperatio
     /// <param name="runtime">Exact attested Npgsql runtime that owns database access.</param>
     /// <param name="mapping">Explicit table, column, identity, partition, version, and batch mapping.</param>
     /// <param name="transitionReceipts">Optional explicit receipt table and trusted partition; schema migration remains caller-owned.</param>
+    /// <param name="stateHistory">Optional validated state authority and history attachment on the same data source.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">
     /// The mapping does not bind every semantic field exactly once, contains an extra field, uses an incompatible
@@ -170,13 +171,17 @@ public sealed partial class PostgresEntityRepository : IEntityTransitionOperatio
         EntityDefinition entityDefinition,
         PostgresNpgsqlRuntimeBinding runtime,
         PostgresEntityRepositoryMapping mapping,
-        PostgresTransitionReceiptStorage? transitionReceipts = null)
+        PostgresTransitionReceiptStorage? transitionReceipts = null,
+        PostgresEntityHistoryStorage? stateHistory = null)
     {
         EntityDefinition = Guard.RequireNotNull(entityDefinition);
         this.runtime = Guard.RequireNotNull(runtime);
         this.mapping = Guard.RequireNotNull(mapping);
         if (transitionReceipts is not null && !ReferenceEquals(transitionReceipts.DataSource, runtime.DataSource))
             throw new ArgumentException("Receipt storage was validated against a different native data source.", nameof(transitionReceipts));
+        if (stateHistory is not null && !ReferenceEquals(stateHistory.DataSource, runtime.DataSource))
+            throw new ArgumentException("State history belongs to a different native data source.", nameof(stateHistory));
+        history = stateHistory;
         receipts = transitionReceipts?.Options;
         receiptFenceNames = transitionReceipts?.FenceNames;
         layout = ObservationLayout.Create(entityDefinition.StateShape, mapping.Fields.Select(static field => field.FieldName));
@@ -213,6 +218,8 @@ public sealed partial class PostgresEntityRepository : IEntityTransitionOperatio
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         context.ThrowIfCancellationRequested();
 
+        if (history?.Authority == EntityStateAuthority.Events)
+            return await ReadHistory(context, id, options).ConfigureAwait(false);
         var template = options?.PartitionKey is null ? sql.ReadByIdentity : sql.ReadByIdentityAndPartition;
         await using var command = runtime.DataSource.CreateCommand(template.Text);
         AddReadParameters(command, template, id, options?.PartitionKey);
@@ -329,7 +336,18 @@ public sealed partial class PostgresEntityRepository : IEntityTransitionOperatio
         return new(snapshots, request.Atomicity);
     }
 
-    async Task<EntitySnapshot> UpsertCore(
+    async Task<EntitySnapshot> UpsertCore(OperationContext context, NpgsqlConnection connection,
+        NpgsqlTransaction? transaction, EntityWriteRequest write, bool createOnly = false)
+    {
+        if (history is null) return await UpsertMapped(context, connection, transaction, write, createOnly).ConfigureAwait(false);
+        if (transaction is not null) return await UpsertWithHistory(context, connection, transaction, write, createOnly).ConfigureAwait(false);
+        await using var owned = await connection.BeginTransactionAsync(context.CancellationToken).ConfigureAwait(false);
+        var result = await UpsertWithHistory(context, connection, owned, write, createOnly).ConfigureAwait(false);
+        await owned.CommitAsync(context.CancellationToken).ConfigureAwait(false);
+        return result;
+    }
+
+    async Task<EntitySnapshot> UpsertMapped(
         OperationContext context,
         NpgsqlConnection connection,
         NpgsqlTransaction? transaction,

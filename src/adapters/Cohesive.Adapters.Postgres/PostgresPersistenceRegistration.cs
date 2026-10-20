@@ -31,34 +31,36 @@ public sealed partial class PostgresPersistenceRegistration
     /// <param name="selectEntityId">Optional explicit typed-write identity selector; otherwise compiled from the registered canonical identity field at setup.</param>
     /// <param name="selectVersion">Optional typed-write semantic version selector; otherwise existing Version/zero conventions apply.</param>
     /// <param name="transitionReceipts">Optional schema-validated receipt storage bound to this same native data source.</param>
+    /// <param name="stateHistory">Optional schema-validated authority and history attachment on this data source.</param>
     /// <returns>A repository using the registered mapping and caller-owned native data source.</returns>
     /// <exception cref="ArgumentNullException">Entity is null.</exception>
     /// <exception cref="InvalidOperationException">The exact entity definition has not been registered, or its identity cannot be mapped to one readable property.</exception>
     public IEntityRepository<T> Repository<T>(DomainEntity<T> entity,
         Func<T, string>? selectEntityId = null, Func<T, long>? selectVersion = null,
-        PostgresTransitionReceiptStorage? transitionReceipts = null) where T : notnull
+        PostgresTransitionReceiptStorage? transitionReceipts = null, PostgresEntityHistoryStorage? stateHistory = null) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(entity);
         if (!tables.TryGetValue(entity.Definition.StateShape.QualifiedId, out var attachment)
             || !ReferenceEquals(attachment.Entity, entity.Definition))
             throw new InvalidOperationException("Register this exact entity before creating its repository.");
-        return new TypedEntityRepository<T>(new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping, transitionReceipts),
+        return new TypedEntityRepository<T>(new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping, transitionReceipts, stateHistory),
             selectEntityId, selectVersion);
     }
 
     /// <summary>Resolves an untyped repository from an exact entity observation contract in these mappings.</summary>
     /// <param name="observation">Required canonical entity observation.</param>
     /// <param name="transitionReceipts">Optional schema-validated receipt storage on this data source.</param>
+    /// <param name="stateHistory">Optional schema-validated authority and history attachment on this data source.</param>
     /// <returns>A repository retaining the registered entity authority and native mapping.</returns>
     /// <exception cref="InvalidOperationException">No unique exact mapping exists.</exception>
-    public IEntityRepository Repository(ValueContract observation, PostgresTransitionReceiptStorage? transitionReceipts = null)
+    public IEntityRepository Repository(ValueContract observation, PostgresTransitionReceiptStorage? transitionReceipts = null, PostgresEntityHistoryStorage? stateHistory = null)
     {
         ArgumentNullException.ThrowIfNull(observation);
         var matches = tables.Values.Where(item => ValueContract.FromShape(item.Entity.Shape) == observation).ToArray();
         if (matches.Length != 1)
             throw new InvalidOperationException("Exactly one registered entity mapping must match the observation contract.");
         var attachment = matches[0];
-        return new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping, transitionReceipts);
+        return new PostgresEntityRepository(attachment.Entity, runtime, attachment.Mapping, transitionReceipts, stateHistory);
     }
 
     /// <summary>Validates and prepares a typed query using the existing static, placement and native compilers.</summary>

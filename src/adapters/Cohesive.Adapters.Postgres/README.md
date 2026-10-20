@@ -244,3 +244,12 @@ method or repeated database ID is required. The authority remains explicit and n
 association without database IO; it does not verify the live database name. The explicit
 `Bind(PostgresNpgsqlRuntimeBinding)` overload remains available for advanced configuration, including
 logical replication connections, and retains its database-identity mismatch check.
+
+## Entity state authority and delivery
+
+`Cohesive.Adapters.Marten` attaches schema-validated current-state or event authority
+to the existing repository through its borrowed-transaction history seam. This package itself
+does not reference Marten. `PostgresEntityOutboxOptions.BindAsync` independently attaches direct
+transition delivery intents. Both compose with native transition receipts in the same transaction.
+See the [PostgreSQL example authority walkthrough](../../../eng/examples/aspire-first/STATE-AUTHORITY.md)
+for the replacement-action contract, bounds, concurrency and migration limits.

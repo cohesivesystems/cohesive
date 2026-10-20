@@ -1,3 +1,5 @@
+For state-authoritative versus event-authoritative PostgreSQL execution, see [State authority](STATE-AUTHORITY.md).
+
 # One fulfillment model, two storage compositions
 
 Declare orders, reservations, inventory, their queries and transitions once. Attach native storage and

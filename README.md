@@ -68,6 +68,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Adapters.OpenApi` | OpenAPI document emission from Cohesive API declarations. |
 | [`Cohesive.Adapters.OpenTelemetry`](src/adapters/Cohesive.Adapters.OpenTelemetry/README.md) | Optional native OpenTelemetry builder registration for existing Cohesive tracing and metric scopes. |
 | `Cohesive.Adapters.Parquet` | Parquet row and column writing helpers. |
+| [`Cohesive.Adapters.Marten`](src/adapters/Cohesive.Adapters.Marten/README.md) | Optional PostgreSQL event history using Marten streams, enlisted atomically with existing entity state, receipts and outbox contracts. |
 | [`Cohesive.Adapters.Postgres.Infra`](src/adapters/Cohesive.Adapters.Postgres.Infra/README.md) | Plan-specific infrastructure evidence derived from prepared native PostgreSQL query bindings. |
 | [`Cohesive.Adapters.Postgres.Services`](src/adapters/Cohesive.Adapters.Postgres.Services/README.md) | Shared service query selections for native readers and infrastructure evidence. |
 | [`Cohesive.Relations.Infra`](src/Cohesive.Relations.Infra/README.md) | Provider-neutral versioned query snapshot requirements. |
