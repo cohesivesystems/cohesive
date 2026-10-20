@@ -13,6 +13,7 @@ namespace AspireFirst;
 /// <summary>A native AppHost with optional Cohesive requirement validation attached to selected resources.</summary>
 public sealed class FulfillmentInfrastructure : InfrastructureModel
 {
+    readonly FulfillmentHistoryPolicy policy;
     /// <summary>Canonical order storage identity.</summary>
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
@@ -24,8 +25,10 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
 
     /// <summary>Prepares requirements from the same offline composition as the worker.</summary>
     /// <param name="model">Same activated application graph consumed by the worker.</param>
-    public FulfillmentInfrastructure(FulfillmentApplication model)
+    /// <param name="policy">Explicit environment selection used to activate that graph.</param>
+    public FulfillmentInfrastructure(FulfillmentApplication model, FulfillmentHistoryPolicy policy)
     {
+        this.policy = policy;
         Define(
             id: new("example/orders"),
             revision: new("4"),
@@ -47,16 +50,12 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     {
         ArgumentNullException.ThrowIfNull(builder);
         var postgres = builder.AddPostgres("postgres").WithDataVolume();
-        var authorityText = builder.Configuration["EntityState:Authority"] ?? nameof(EntityStateAuthority.State);
-        if (!Enum.TryParse<EntityStateAuthority>(authorityText, out var authority) || !Enum.IsDefined(authority))
-            throw new ArgumentException("EntityState:Authority must be State or Events.");
-        var database = postgres.AddDatabase(FulfillmentStoragePolicy.OrdersDatabaseName,
-            databaseName: authority == EntityStateAuthority.Events ? "orders_events" : "orders");
+        var database = postgres.AddDatabase(FulfillmentStoragePolicy.OrdersDatabaseName, databaseName: policy.DatabaseName);
         var worker = builder.AddProject<Projects.OrderWorker>("worker")
             .WithHttpEndpoint(env: "ASPNETCORE_HTTP_PORTS")
             .WithReference(database).WaitFor(database)
-            .WithEnvironment("EntityState__Authority", authority.ToString())
-            .WithEnvironment("EntityState__Reconstitution", builder.Configuration["EntityState:Reconstitution"] ?? nameof(EntityReconstitutionMode.CheckpointAndTail));
+            .WithEnvironment("EntityState__Authority", policy.Authority.ToString())
+            .WithEnvironment("EntityState__Reconstitution", policy.Reconstitution.ToString());
         _ = builder.AddContainer("native-only", "redis", "7.4");
 
         // Associate existing Aspire resources with the canonical requirements and implementations.

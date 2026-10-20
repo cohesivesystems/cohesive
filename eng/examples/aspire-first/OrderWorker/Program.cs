@@ -1,6 +1,5 @@
 using Cohesive.Adapters.Marten;
 using Marten;
-using JasperFx.Events;
 using Cohesive.Host.Composition;
 using AspireFirst;
 using AspireFirst.Orders;
@@ -10,24 +9,19 @@ using Npgsql;
 using Cohesive.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
-var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy
-{
-    Authority = builder.Configuration.GetValue("EntityState:Authority", EntityStateAuthority.State),
-    Reconstitution = builder.Configuration.GetValue("EntityState:Reconstitution", EntityReconstitutionMode.CheckpointAndTail)
-}));
+var policy = FulfillmentHistoryPolicy.FromConfiguration(builder.Configuration);
+var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(policy));
 builder.Services.AddRequestOperationContext();
 builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
 builder.Services.AddCohesiveExceptionHandling();
 var connectionString = builder.Configuration.GetConnectionString(FulfillmentStoragePolicy.OrdersDatabaseName)
     ?? throw new InvalidOperationException("The native Aspire orders database reference is required.");
-builder.Services.AddKeyedSingleton<NpgsqlDataSource>(FulfillmentStoragePolicy.OrdersDatabaseName,
+builder.Services.AddKeyedSingleton<NpgsqlDataSource>(policy.DatabaseName,
     (_, _) => NpgsqlDataSource.Create(connectionString));
-builder.Services.AddKeyedSingleton<IDocumentStore>(FulfillmentStoragePolicy.OrdersDatabaseName, (services, _) => DocumentStore.For(options =>
+builder.Services.AddKeyedSingleton<IDocumentStore>(policy.DatabaseName, (services, _) => DocumentStore.For(options =>
 {
-    options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
-    options.Connection(services.GetRequiredKeyedService<NpgsqlDataSource>(FulfillmentStoragePolicy.OrdersDatabaseName));
-    options.DatabaseSchemaName = "cohesive_events";
-    options.UseCohesiveEntityHistory();
+    options.Connection(services.GetRequiredKeyedService<NpgsqlDataSource>(policy.DatabaseName));
+    policy.History.Configure(options);
 }));
 builder.Services.AddCohesiveServices(model.Endpoints, model.Storage);
 

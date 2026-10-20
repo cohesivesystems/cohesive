@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Adapters.Marten;
 using Marten;
 using JasperFx.Events;
@@ -22,7 +23,7 @@ public sealed partial class OrderStorageIntegrationTests
         await Model.Storage.Bindings.PrepareSchemaAsync(database);
         foreach (var authority in new[] { EntityStateAuthority.State, EntityStateAuthority.Events })
         {
-            var model = Cohesive.Host.Composition.ModelActivator.Create<FulfillmentApplication>();
+            var model = Cohesive.Host.Composition.ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
             var prefix = "authority_" + Guid.NewGuid().ToString("N");
             using var store = DocumentStore.For(options =>
             {

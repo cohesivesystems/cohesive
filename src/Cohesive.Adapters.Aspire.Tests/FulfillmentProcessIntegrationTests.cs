@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Adapters.Marten;
 using Marten;
 using JasperFx.Events;
@@ -27,7 +28,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 [Collection("Order PostgreSQL schema")]
 public sealed class FulfillmentProcessIntegrationTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
 
     static ServiceBuilder TerminalService() => Service.Define(new("terminal-test"), new("1"), Model.Process.Provenance)
         .Use(new ServiceDependencies().Process(Model.Process))
@@ -166,7 +167,7 @@ public sealed class FulfillmentProcessIntegrationTests
     public async Task Unified_api_resolves_storage_and_executes_fulfillment_over_http(int stock, int quantity,
         string expectedStatus, int remaining)
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")!);
         await Model.Storage.Bindings.PrepareSchemaAsync(database);
         var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);

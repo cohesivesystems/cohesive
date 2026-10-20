@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Cohesive.Adapters.Aspire/Cohesive.Adapters.Aspire.csproj" />
+    <ProjectReference Include="../Cohesive.Adapters.Cosmos/Cohesive.Adapters.Cosmos.csproj" />
+    <ProjectReference Include="../../Cohesive.Relations.Infra/Cohesive.Relations.Infra.csproj" />
+    <PackageReference Include="Aspire.Hosting.Azure.CosmosDB" Version="13.5.2" />
+  </ItemGroup>
+</Project>

@@ -13,7 +13,7 @@ public sealed class ServicePersistenceTests
     [Fact]
     public void Default_and_explicit_authority_are_pinned_for_native_and_composed_storage()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         Assert.Equal("di/orders", model.Storage.RequireComposition<PostgresStorageComposition>().Authority);
         Assert.Equal("host/explicit", new PostgresStorageComposition(model.Storage.Bindings, model.Endpoints.Plan, "host/explicit").Authority);
         var mixed = ModelActivator.Create<AspireFirst.PostgresCosmos.PostgresCosmosApplication>();
@@ -25,7 +25,7 @@ public sealed class ServicePersistenceTests
     [Fact]
     public async Task Wrong_history_data_source_rejects_before_product_or_attachment_preparation()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=unused;Username=unused");
         await using var other = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=unused;Username=unused");
         using var history = global::Marten.DocumentStore.For(options =>
@@ -59,7 +59,7 @@ public sealed class ServicePersistenceTests
     [Fact]
     public async Task Native_callback_receives_host_services_and_sync_bind_does_not_run_it()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         var marker = new object();
         var calls = 0;
         await using var provider = new ServiceCollection().AddSingleton(marker).BuildServiceProvider();
@@ -79,7 +79,7 @@ public sealed class ServicePersistenceTests
     [Fact]
     public async Task Product_schema_preparation_is_deferred_and_fails_before_attachment_admission()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         var calls = 0;
         var failure = new InvalidOperationException("Explicit migration failed.");
         var bindings = PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
@@ -124,7 +124,7 @@ public sealed class ServicePersistenceTests
     [Fact]
     public void Receipt_policy_is_model_owned_and_frozen_with_native_mappings()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         Assert.Equal(PostgresSchemaInitialization.CreateIfMissing, model.Storage.Bindings.ReceiptInitialization);
         Assert.IsType<Cohesive.Adapters.Marten.MartenEntityHistoryConfiguration>(model.Storage.Bindings.HistoryConfiguration);
         Assert.NotNull(model.Storage.Bindings.OutboxOptions);
@@ -139,7 +139,7 @@ public sealed class ServicePersistenceTests
     [Fact]
     public async Task Shared_query_is_prepared_once_per_resolver_and_bound_without_database_io()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=unused;Username=unused");
         var persistence = model.Storage.Bindings.Bind(database, authority: "test/fulfillment").ForServices();
         var offline = model.Storage.Bindings.Prepare(model.Queries.OrderDetails.CompilationRequest);

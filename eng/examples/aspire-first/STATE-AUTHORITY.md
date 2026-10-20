@@ -108,8 +108,17 @@ claimed: full replacement payloads trade space for a small, explicit initial act
 
 ## Native Marten realization
 
-The worker configures a native `DocumentStore`, explicitly migrates its schema for the demo,
-and calls `MartenEntityHistoryStorage.BindAsync` to validate it before serving requests. The
+AppHost and worker both select `FulfillmentHistoryPolicy.FromConfiguration` and register it
+explicitly before model activation. Event authority selects `orders_events` in both the prepared
+storage model and native Aspire database; state authority selects `orders`. The logical Aspire
+connection reference remains `orders`. Invalid values fail before constructing native resources.
+
+The storage policy declares the `cohesive_events` schema and create-only initialization. The
+worker registers a DI-owned `DocumentStore`, applying `policy.History.Configure(options)` after
+its connection. Storage preparation checks schema names, disabled automatic migrations, string
+stream identity and event registration before database access. Initialization uses the existing
+storage preparation path; it is not performed by Program. Library configuration defaults to
+validation-only; this demo explicitly chooses creation. The
 PostgreSQL package remains independently usable. Marten sessions borrow the repository's
 transaction with `shouldAutoCommit: false`; no event flush can commit a receipt or row early.
 Deferred-trigger tests fail the final database COMMIT and verify that relational state,

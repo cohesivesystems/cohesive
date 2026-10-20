@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Host.Composition;
 using AspireFirst.Orders;
 using Cohesive.Api;
@@ -13,7 +14,7 @@ public sealed class CompositionModelTests
     [Fact]
     public void Domain_owns_transition_authorities_used_by_the_separate_process()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         var dependencies = model.Process.Dependencies;
         var expected = new[]
         {
@@ -30,7 +31,7 @@ public sealed class CompositionModelTests
         Assert.Same(model.Process, model.Composition.Get<FulfillmentProcess>());
         Assert.Throws<KeyNotFoundException>(() => model.Composition.Get<OrderTransitions>());
         Assert.Throws<KeyNotFoundException>(() => model.Composition.Get<InventoryTransitions>());
-        var independent = ModelActivator.Create<FulfillmentApplication>();
+        var independent = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         Assert.NotSame(model.Domain.OrderTransitions.Submit, independent.Domain.OrderTransitions.Submit);
         Assert.Equal(model.Domain.OrderTransitions.Submit.Reference, independent.Domain.OrderTransitions.Submit.Reference);
     }
@@ -38,7 +39,7 @@ public sealed class CompositionModelTests
     [Fact]
     public void Colocated_and_separate_service_authoring_produce_identical_contracts()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         var process = model.Process;
         var separate = Service.Define(new("fulfillment"), new("3"), process.Provenance)
             .Use(new ServiceDependencies().Process(process))
@@ -55,7 +56,7 @@ public sealed class CompositionModelTests
     [Fact]
     public void Accepted_fulfillment_reuses_process_and_declares_independent_receipt_and_polling_contracts()
     {
-        var model = ModelActivator.Create<FulfillmentApplication>();
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         var api = model.Api;
         Assert.Equal(7, api.Definition.Endpoints.Count);
         Assert.Equal(api.Fulfill.Service.Build().Reference, api.Fulfill.Declaration.Reference);
@@ -87,8 +88,8 @@ public sealed class CompositionModelTests
     [Fact]
     public void Independent_program_models_keep_typed_authorities_isolated_but_semantically_equal()
     {
-        var appHost = ModelActivator.Create<FulfillmentApplication>();
-        var worker = ModelActivator.Create<FulfillmentApplication>();
+        var appHost = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var worker = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         Assert.NotSame(appHost.Domain, worker.Domain);
         Assert.Same(appHost.Storage.Bindings, Assert.Single(appHost.Storage.Definition));
         Assert.NotSame(appHost.Domain.Orders.Definition, worker.Domain.Orders.Definition);

@@ -1,3 +1,4 @@
+using Cohesive.Relations.Infra;
 using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
@@ -207,24 +208,4 @@ public sealed class PostgresComposedServicePreparation
                 "Query authority and bounds must match the prepared endpoint selection.", "/bindings/queries")]));
         return entry;
     }
-}
-
-/// <summary>Plan-derived acquisition evidence for one explicitly associated native resource.</summary>
-public sealed class ComposedQueryResourceEvidence : IInfrastructureResourcePreparation
-{
-    readonly InfrastructureTargetImplementation implementation;
-    readonly string identity;
-    internal ComposedQueryResourceEvidence(string identity, string kind, IEnumerable<InfrastructureCapabilityEvidence> evidence)
-    {
-        this.identity = identity;
-        implementation = InfrastructureTargetImplementation.ResourceImplementation(new("query-source/" + kind + "/" + Uri.EscapeDataString(identity)), evidence.ToArray());
-        Requirements = [.. implementation.Evidence.Select(item => item.Capability)];
-    }
-    /// <inheritdoc />
-    public ImmutableArray<InfrastructureCapabilityId> Requirements { get; }
-    /// <summary>Checks resource affinity before exposing the implementation.</summary>
-    /// <param name="identity">Exact native database name or canonical remote source identity.</param>
-    /// <returns>Acquisition evidence for this resource only.</returns>
-    public InfrastructureTargetImplementation ForSource(string identity) => this.identity == identity ? implementation
-        : throw new ArgumentException("Prepared acquisition evidence belongs to a different source.", nameof(identity));
 }

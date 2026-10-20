@@ -50,6 +50,9 @@ public sealed class CosmosEntityStorageBinding : IEntityStorageBinding
             FieldPath.FromField(identityField));
     }
 
+    /// <summary>Native partition path required by the adapter's observation envelope.</summary>
+    public string PartitionKeyPath => CosmosObservationContainerDocument.PartitionPath;
+
     /// <summary>Offline acquisition metadata used for physical planning and infrastructure evidence.</summary>
     public CosmosEntityQueryBinding Query { get; }
 
