@@ -3,6 +3,7 @@ using Cohesive.Prelude;
 namespace Cohesive.Adapters.Postgres;
 
 /// <summary>Native product or attachment schema drift requiring explicit migration before admission.</summary>
+/// <remarks>Compare Code with <see cref="PostgresSchemaDiagnosticCodes"/> constants for stable consumer branching.</remarks>
 public sealed class PostgresSchemaValidationException : PreparationException
 {
     internal PostgresSchemaValidationException(string code, string table, string message, string? column = null)

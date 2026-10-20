@@ -381,3 +381,12 @@ a pg_constraint row exists, since PostgreSQL reports the violated index name. A 
 Schema diagnostics are closed, typed definitions pairing each stable code with its remedy. Failure sites
 select a definition directly; there is no string lookup or throwing fallback that can replace schema drift
 with an unrelated error. Tests specify expected code/remedy pairs as independent case data.
+
+Consumers can branch on `PostgresSchemaDiagnosticCodes.TableMissing`, `.ColumnMismatch`, `.KeyMismatch`
+and the other documented constants instead of spelling codes. The exception's string Code remains the
+serialized diagnostic contract; the public constants are also used by the internal typed definitions.
+
+Receipt conflict conformance includes an actual standalone-index violation: the schema retains its required
+primary/creation constraints, a valid conditional write reaches the duplicate receipt insert, and PostgreSQL
+reports the standalone index name. The test observes that native error and verifies structured identity-conflict
+resolution, preserved replay evidence, and rollback of entity state and its concurrency token.

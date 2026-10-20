@@ -23,7 +23,7 @@ public sealed partial class OrderStorageIntegrationTests
             await bindings.PrepareOutboxAsync(database);
             await using (var drop = database.CreateCommand($"DROP TABLE {schema}.outbox_commits CASCADE")) await drop.ExecuteNonQueryAsync();
             var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => bindings.PrepareOutboxAsync(database));
-            Assert.Equal("postgres.schema.referenceMismatch", failure.Code);
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ReferenceMismatch, failure.Code);
             await using var missing = database.CreateCommand($"SELECT to_regclass('{schema}.outbox_commits') IS NULL");
             Assert.Equal(true, await missing.ExecuteScalarAsync());
         }
@@ -35,11 +35,11 @@ public sealed partial class OrderStorageIntegrationTests
     }
 
     [PostgresTheory]
-    [InlineData(true, "receipts DROP CONSTRAINT receipts_pkey", "postgres.schema.keyMismatch", "immediate primary/unique key")]
-    [InlineData(true, "receipts DROP CONSTRAINT receipts_entity_type_partition_key_creation_subject_key", "postgres.schema.keyMismatch", "immediate primary/unique key")]
-    [InlineData(false, "outbox_commits DROP CONSTRAINT outbox_commits_pkey CASCADE", "postgres.schema.keyMismatch", "immediate primary/unique key")]
-    [InlineData(false, "outbox_commits ALTER COLUMN sequence DROP IDENTITY", "postgres.schema.identityMismatch", "generated-always identity")]
-    [InlineData(false, "outbox_emissions DROP CONSTRAINT outbox_emissions_sequence_fkey", "postgres.schema.referenceMismatch", "non-deferrable foreign key")]
+    [InlineData(true, "receipts DROP CONSTRAINT receipts_pkey", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.KeyMismatch, "immediate primary/unique key")]
+    [InlineData(true, "receipts DROP CONSTRAINT receipts_entity_type_partition_key_creation_subject_key", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.KeyMismatch, "immediate primary/unique key")]
+    [InlineData(false, "outbox_commits DROP CONSTRAINT outbox_commits_pkey CASCADE", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.KeyMismatch, "immediate primary/unique key")]
+    [InlineData(false, "outbox_commits ALTER COLUMN sequence DROP IDENTITY", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.IdentityMismatch, "generated-always identity")]
+    [InlineData(false, "outbox_emissions DROP CONSTRAINT outbox_emissions_sequence_fkey", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ReferenceMismatch, "non-deferrable foreign key")]
     public async Task Attachment_drift_reports_precise_diagnostics(bool receipts, string mutation, string code, string remedy)
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
@@ -129,7 +129,7 @@ public sealed partial class OrderStorageIntegrationTests
                 await alter.ExecuteNonQueryAsync();
             recording = true;
             var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(Prepare);
-            Assert.Equal("postgres.schema.columnMismatch", failure.Code);
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch, failure.Code);
             recording = false;
             Assert.Equal(0, writes);
             if (!receipts)
@@ -147,11 +147,11 @@ public sealed partial class OrderStorageIntegrationTests
     }
 
     [PostgresTheory]
-    [InlineData(PostgresSchemaInitialization.ValidateOnly, false, false, false, "postgres.schema.tableMissing")]
-    [InlineData(PostgresSchemaInitialization.ValidateOnly, true, false, false, "postgres.schema.columnMismatch")]
-    [InlineData(PostgresSchemaInitialization.CreateIfMissing, true, false, false, "postgres.schema.columnMismatch")]
-    [InlineData(PostgresSchemaInitialization.CreateIfMissing, true, true, false, "postgres.schema.columnMismatch")]
-    [InlineData(PostgresSchemaInitialization.CreateIfMissing, true, true, true, "postgres.schema.columnMismatch")]
+    [InlineData(PostgresSchemaInitialization.ValidateOnly, false, false, false, Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.TableMissing)]
+    [InlineData(PostgresSchemaInitialization.ValidateOnly, true, false, false, Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch)]
+    [InlineData(PostgresSchemaInitialization.CreateIfMissing, true, false, false, Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch)]
+    [InlineData(PostgresSchemaInitialization.CreateIfMissing, true, true, false, Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch)]
+    [InlineData(PostgresSchemaInitialization.CreateIfMissing, true, true, true, Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch)]
     public async Task Product_admission_prevents_history_DDL(PostgresSchemaInitialization initialization,
         bool existing, bool missingOrder, bool direct, string code)
     {
@@ -336,7 +336,7 @@ public sealed partial class OrderStorageIntegrationTests
             await using (var alter = database.CreateCommand($"ALTER TABLE public.{table} DROP CONSTRAINT \"{constraint}\", ADD CONSTRAINT \"{constraint}\" CHECK (available >= -100)"))
                 await alter.ExecuteNonQueryAsync();
             var drift = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => bindings.ProductSchema!.ValidateAsync(database));
-            Assert.Equal("postgres.schema.checkMismatch", drift.Code);
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.CheckMismatch, drift.Code);
             Assert.Equal("available", drift.Column);
         }
         finally { await using var drop = database.CreateCommand($"DROP TABLE IF EXISTS public.{table}"); await drop.ExecuteNonQueryAsync(); }
@@ -360,17 +360,17 @@ public sealed partial class OrderStorageIntegrationTests
         try
         {
             var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => bindings.PrepareSchemaAsync(database));
-            Assert.Equal("postgres.schema.columnMismatch", failure.Code);
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch, failure.Code);
         }
         finally { await using var drop = database.CreateCommand($"DROP TABLE IF EXISTS public.{table}"); await drop.ExecuteNonQueryAsync(); }
     }
 
     [PostgresTheory]
-    [InlineData("ADD COLUMN unexpected text", "postgres.schema.undeclaredColumns")]
-    [InlineData("DROP COLUMN available", "postgres.schema.columnMismatch")]
-    [InlineData("DROP CONSTRAINT {table}_pkey", "postgres.schema.keyMismatch")]
-    [InlineData("ALTER COLUMN sku TYPE text COLLATE \"default\"", "postgres.schema.columnMismatch")]
-    [InlineData("ALTER COLUMN available TYPE bigint", "postgres.schema.columnMismatch")]
+    [InlineData("ADD COLUMN unexpected text", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.UndeclaredColumns)]
+    [InlineData("DROP COLUMN available", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch)]
+    [InlineData("DROP CONSTRAINT {table}_pkey", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.KeyMismatch)]
+    [InlineData("ALTER COLUMN sku TYPE text COLLATE \"default\"", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch)]
+    [InlineData("ALTER COLUMN available TYPE bigint", Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch)]
     public async Task Projected_schema_rejects_key_collation_type_and_extra_column_drift(string mutation, string code)
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
@@ -431,7 +431,7 @@ public sealed partial class OrderStorageIntegrationTests
         try
         {
             var missing = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => validate.PrepareSchemaAsync(database));
-            Assert.Equal("postgres.schema.tableMissing", missing.Code);
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.TableMissing, missing.Code);
             await using (var count = database.CreateCommand("SELECT count(*) FROM information_schema.tables WHERE table_schema=$1"))
             {
                 count.Parameters.AddWithValue(schema);
@@ -491,7 +491,7 @@ public sealed partial class OrderStorageIntegrationTests
             await using (var change = database.CreateCommand($"ALTER TABLE {schema}.cohesive_inventory ALTER COLUMN available DROP NOT NULL"))
                 await change.ExecuteNonQueryAsync();
             var drift = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => create.PrepareSchemaAsync(database));
-            Assert.Equal("postgres.schema.columnMismatch", drift.Code);
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch, drift.Code);
             Assert.Equal("available", drift.Column);
             await using (var repair = database.CreateCommand($"ALTER TABLE {schema}.cohesive_inventory ALTER COLUMN available SET NOT NULL"))
                 await repair.ExecuteNonQueryAsync();
@@ -501,7 +501,7 @@ public sealed partial class OrderStorageIntegrationTests
             await using (var dropReference = database.CreateCommand($"ALTER TABLE {schema}.cohesive_reservations DROP CONSTRAINT \"{constraint}\""))
                 await dropReference.ExecuteNonQueryAsync();
             var reference = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => create.PrepareSchemaAsync(database));
-            Assert.Equal("postgres.schema.referenceMismatch", reference.Code);
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ReferenceMismatch, reference.Code);
         }
         finally
         {
@@ -519,7 +519,7 @@ public sealed partial class OrderStorageIntegrationTests
         var validate = PostgresPersistenceBindings.Define(new("orders"), b => b.Outbox(options));
         var create = PostgresPersistenceBindings.Define(new("orders"), b => b.Outbox(options, PostgresSchemaInitialization.CreateIfMissing));
         var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => validate.PrepareOutboxAsync(database));
-        Assert.Equal("postgres.schema.tableMissing", failure.Code);
+        Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.TableMissing, failure.Code);
         Assert.Contains("CreateIfMissing", failure.Message);
         await using (var missing = database.CreateCommand("SELECT to_regclass($1) IS NULL"))
         {
@@ -533,7 +533,7 @@ public sealed partial class OrderStorageIntegrationTests
             await using (var alter = database.CreateCommand($"ALTER TABLE public.{prefix}_commits DROP COLUMN content_hash"))
                 await alter.ExecuteNonQueryAsync();
             var drift = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => create.PrepareOutboxAsync(database));
-            Assert.Equal("postgres.schema.columnMismatch", drift.Code);
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch, drift.Code);
         }
         finally
         {

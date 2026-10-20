@@ -143,13 +143,13 @@ internal sealed class PostgresCatalogSchema(ImmutableArray<PostgresCatalogSchema
         Diagnostic(string code, string remedy) { Code = code; Remedy = remedy; }
         internal string Code { get; }
         internal string Remedy { get; }
-        internal static readonly Diagnostic TableMissing = new("postgres.schema.tableMissing", "Create the table with a reviewed migration or explicitly select CreateIfMissing for initial bootstrap.");
-        internal static readonly Diagnostic ColumnMismatch = new("postgres.schema.columnMismatch", "Migrate the column to its declared type, nullability and collation; creation does not repair existing columns.");
-        internal static readonly Diagnostic UndeclaredColumns = new("postgres.schema.undeclaredColumns", "Reconcile extra columns with the declared mapping using a reviewed migration.");
-        internal static readonly Diagnostic KeyMismatch = new("postgres.schema.keyMismatch", "Restore the declared immediate primary/unique key and required NULL semantics; partial or deferred keys do not qualify.");
-        internal static readonly Diagnostic IdentityMismatch = new("postgres.schema.identityMismatch", "Restore the declared generated-always identity column using a reviewed migration.");
-        internal static readonly Diagnostic ReferenceMismatch = new("postgres.schema.referenceMismatch", "Restore the validated, non-deferrable foreign key with the declared target columns and NO ACTION behavior.");
-        internal static readonly Diagnostic CheckMismatch = new("postgres.schema.checkMismatch", "Restore and validate the declared CHECK predicate using a reviewed migration.");
+        internal static readonly Diagnostic TableMissing = new(PostgresSchemaDiagnosticCodes.TableMissing, "Create the table with a reviewed migration or explicitly select CreateIfMissing for initial bootstrap.");
+        internal static readonly Diagnostic ColumnMismatch = new(PostgresSchemaDiagnosticCodes.ColumnMismatch, "Migrate the column to its declared type, nullability and collation; creation does not repair existing columns.");
+        internal static readonly Diagnostic UndeclaredColumns = new(PostgresSchemaDiagnosticCodes.UndeclaredColumns, "Reconcile extra columns with the declared mapping using a reviewed migration.");
+        internal static readonly Diagnostic KeyMismatch = new(PostgresSchemaDiagnosticCodes.KeyMismatch, "Restore the declared immediate primary/unique key and required NULL semantics; partial or deferred keys do not qualify.");
+        internal static readonly Diagnostic IdentityMismatch = new(PostgresSchemaDiagnosticCodes.IdentityMismatch, "Restore the declared generated-always identity column using a reviewed migration.");
+        internal static readonly Diagnostic ReferenceMismatch = new(PostgresSchemaDiagnosticCodes.ReferenceMismatch, "Restore the validated, non-deferrable foreign key with the declared target columns and NO ACTION behavior.");
+        internal static readonly Diagnostic CheckMismatch = new(PostgresSchemaDiagnosticCodes.CheckMismatch, "Restore and validate the declared CHECK predicate using a reviewed migration.");
     }
 
     static PostgresSchemaValidationException Failure(Diagnostic diagnostic, string table, string? column = null) =>

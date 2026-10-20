@@ -51,7 +51,7 @@ public sealed partial class OrderStorageIntegrationTests
             await using (var alter = database.CreateCommand($"ALTER TABLE public.{table} DROP COLUMN content_hash"))
                 await alter.ExecuteNonQueryAsync();
             var failure = await Assert.ThrowsAsync<Cohesive.Adapters.Postgres.PostgresSchemaValidationException>(() => bindings.PrepareReceiptsAsync(database));
-            Assert.Equal("postgres.schema.columnMismatch", failure.Code);
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch, failure.Code);
             await using var column = database.CreateCommand("SELECT count(*) FROM information_schema.columns WHERE table_name=$1 AND column_name='content_hash'");
             column.Parameters.AddWithValue(table);
             Assert.Equal(0L, await column.ExecuteScalarAsync());
@@ -75,7 +75,7 @@ public sealed partial class OrderStorageIntegrationTests
         registrations.AddKeyedSingleton(FulfillmentStoragePolicy.OrdersDatabaseName, database);
         await using var provider = registrations.BuildServiceProvider();
         var missing = await Assert.ThrowsAsync<Cohesive.Adapters.Postgres.PostgresSchemaValidationException>(() => composition.BindAsync(provider).AsTask());
-        Assert.Equal("postgres.schema.tableMissing", missing.Code);
+        Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.TableMissing, missing.Code);
         await using (var exists = database.CreateCommand("SELECT to_regclass($1) IS NULL"))
         {
             exists.Parameters.AddWithValue("public." + table);
