@@ -306,6 +306,36 @@ public sealed class IndexedObservationOccurrenceTests
         Assert.Contains("trailing content", trailing.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(65)]
+    public void FromJson_CompleteInputFramingPreservesEmptyAndMultiwordPresence(int count)
+    {
+        Shape definition = new(new("framing"), [.. Enumerable.Range(0, count).Select(index =>
+            new FieldDefinition(new("field" + index), new ScalarTypeRef(ScalarTypeKind.Int64)))]);
+        ShapeGraph graph = new(new("framing-json"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id);
+        var occurrence = Occurrence(shape, "framing/0", "framing-0");
+        var json = Encoding.UTF8.GetBytes("{" + string.Join(',', Enumerable.Range(0, count).Select(index => $"\"field{index}\":{index}")) + "} \r\n\t");
+        var row = IndexedObservationOccurrence.FromJson(shape, occurrence, ObservationLayout.Create(shape), json);
+        Assert.Equal(count, row.Fields.Count);
+        if (count != 0)
+        {
+            Assert.True(row.TryGetField(64, out var last));
+            Assert.Equal(64, last.Int64);
+        }
+    }
+
+    [Fact]
+    public void FromJson_ShapeFailureRetainsPrecedenceOverTrailingContent()
+    {
+        var shape = CustomerShape("customer-graph/v1");
+        var error = Assert.Throws<ArgumentException>(() => IndexedObservationOccurrence.FromJson(shape,
+            Occurrence(shape, "framing/0", "framing-0"), ObservationLayout.Create(shape), "{}{}"u8));
+        Assert.Equal("utf8Json", error.ParamName);
+        Assert.Contains("required field 'name'", error.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void FromJson_FlatOrdinalHydrationAvoidsRootDictionaryAllocations()
     {

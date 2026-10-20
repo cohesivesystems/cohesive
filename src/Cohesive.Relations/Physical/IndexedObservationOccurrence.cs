@@ -317,45 +317,17 @@ public sealed class IndexedObservationOccurrence : IOrdinalObservationFieldReade
         inlinePresenceWord.Clear();
         var presenceWords = ObservationBuffer.CreatePresenceWords(layout.Count);
 
-        var reader = new Utf8JsonReader(utf8Json);
-        if (!reader.Read())
-            throw new JsonException("The JSON observation is empty.");
-        string? validationError;
-        var isValid = layout.Count switch
+        var presence = layout.Count switch
         {
-            0 => ObservationJsonReader.TryReadShape(
-                ref reader,
-                shape,
-                layout,
-                values,
-                Span<ulong>.Empty,
-                out validationError),
-            <= 64 => ObservationJsonReader.TryReadShape(
-                ref reader,
-                shape,
-                layout,
-                values,
-                inlinePresenceWord,
-                out validationError),
-            _ => ObservationJsonReader.TryReadShape(
-                ref reader,
-                shape,
-                layout,
-                values,
-                presenceWords,
-                out validationError),
+            0 => Span<ulong>.Empty,
+            <= 64 => inlinePresenceWord,
+            _ => presenceWords.AsSpan()
         };
-        if (!isValid)
+        if (!ObservationJsonReader.TryReadShape(utf8Json, shape, layout, values, presence, out var validationError))
         {
             throw new ArgumentException(
                 $"JSON observation does not adhere to shape '{shape.QualifiedId}': {validationError}",
                 nameof(utf8Json));
-        }
-        var trailing = utf8Json[checked((int)reader.BytesConsumed)..];
-        foreach (var character in trailing)
-        {
-            if (character is not (0x20 or 0x09 or 0x0A or 0x0D))
-                throw new JsonException("The JSON observation contains trailing content.");
         }
 
         var inlinePresence = layout.Count is > 0 and <= 64 ? inlinePresenceWord[0] : 0;

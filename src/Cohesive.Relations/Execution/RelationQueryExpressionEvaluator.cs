@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
@@ -493,7 +494,7 @@ sealed class RelationQueryExpressionEvaluator
                     $"Field path '{path}' cannot navigate through value kind '{current.Kind}'.");
             }
 
-            if (!TryGetOrdinalProperty(current.Fields, segment.Segment, out current))
+            if (!current.TryGetProperty(segment.Segment, out current))
                 return ObservationValue.Undefined;
         }
 
@@ -849,19 +850,25 @@ sealed class RelationQueryExpressionEvaluator
             return ObservationValue.FromBool(expected);
         }
 
-        ObservationValue[] values;
+        // Retain selector-first failure order. Only temporary storage changes: all selectors
+        // finish before reduction; a late selector failure still precedes an early numeric failure.
         if (call.Arguments.Length == 1)
-        {
-            values = [.. source];
-        }
-        else
-        {
-            values = new ObservationValue[source.Count];
-            for (var index = 0; index < source.Count; index++)
-                values[index] = Evaluate(call.Arguments[1], context.WithCurrentItem(source[index]));
-        }
+            return ReduceSequence(call.Function, source);
+        if (source.Count == 0)
+            return ReduceSequence(call.Function, Array.Empty<ObservationValue>());
 
-        return call.Function switch
+        var selectedValues = ArrayPool<ObservationValue>.Shared.Rent(source.Count);
+        try
+        {
+            for (var index = 0; index < source.Count; index++)
+                selectedValues[index] = Evaluate(call.Arguments[1], context.WithCurrentItem(source[index]));
+            return ReduceSequence(call.Function, new ArraySegment<ObservationValue>(selectedValues, 0, source.Count));
+        }
+        finally { ArrayPool<ObservationValue>.Shared.Return(selectedValues, clearArray: true); }
+    }
+
+    static ObservationValue ReduceSequence<TValues>(string function, TValues values)
+        where TValues : IReadOnlyList<ObservationValue> => function switch
         {
             ExprFunctionNames.Sum => Sum(values),
             ExprFunctionNames.Min => MinOrMax(values, findMaximum: false),
@@ -869,15 +876,14 @@ sealed class RelationQueryExpressionEvaluator
             ExprFunctionNames.Avg => Average(values),
             _ => throw new UnreachableException()
         };
-    }
 
-    static ObservationValue Sum(IReadOnlyList<ObservationValue> values)
+    static ObservationValue Sum<TValues>(TValues values) where TValues : IReadOnlyList<ObservationValue>
     {
         try
         {
             var sum = 0m;
-            foreach (var value in values)
-                sum += RelationQueryValueSemantics.RequireDecimal(value, ExprFunctionNames.Sum);
+            for (var index = 0; index < values.Count; index++)
+                sum += RelationQueryValueSemantics.RequireDecimal(values[index], ExprFunctionNames.Sum);
             return ObservationValue.FromDecimal(sum);
         }
         catch (OverflowException exception)
@@ -889,7 +895,7 @@ sealed class RelationQueryExpressionEvaluator
         }
     }
 
-    static ObservationValue Average(IReadOnlyList<ObservationValue> values)
+    static ObservationValue Average<TValues>(TValues values) where TValues : IReadOnlyList<ObservationValue>
     {
         if (values.Count == 0)
             return ObservationValue.Undefined;
@@ -897,8 +903,8 @@ sealed class RelationQueryExpressionEvaluator
         try
         {
             var sum = 0m;
-            foreach (var value in values)
-                sum += RelationQueryValueSemantics.RequireDecimal(value, ExprFunctionNames.Avg);
+            for (var index = 0; index < values.Count; index++)
+                sum += RelationQueryValueSemantics.RequireDecimal(values[index], ExprFunctionNames.Avg);
             return ObservationValue.FromDecimal(sum / values.Count);
         }
         catch (OverflowException exception)
@@ -910,9 +916,9 @@ sealed class RelationQueryExpressionEvaluator
         }
     }
 
-    static ObservationValue MinOrMax(
-        IReadOnlyList<ObservationValue> values,
-        bool findMaximum)
+    static ObservationValue MinOrMax<TValues>(
+        TValues values,
+        bool findMaximum) where TValues : IReadOnlyList<ObservationValue>
     {
         if (values.Count == 0)
             return ObservationValue.Undefined;
@@ -1087,23 +1093,6 @@ sealed class RelationQueryExpressionEvaluator
         ObservationValue right,
         Func<int, bool> predicate) =>
         ObservationValue.FromBool(predicate(RelationQueryValueSemantics.Compare(left, right)));
-
-    static bool TryGetOrdinalProperty(
-        IReadOnlyDictionary<string, ObservationValue> fields,
-        string name,
-        out ObservationValue value)
-    {
-        foreach (var (key, candidate) in fields)
-        {
-            if (!string.Equals(key, name, StringComparison.Ordinal))
-                continue;
-            value = candidate;
-            return true;
-        }
-
-        value = default;
-        return false;
-    }
 
     static void Copy(
         IReadOnlyList<ObservationValue> source,

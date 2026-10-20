@@ -1,5 +1,5 @@
-using System.Collections.Immutable;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -29,10 +29,7 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
     sealed class TaggedObservationConverter : JsonConverter<ObservationValue>
     {
         public override ObservationValue Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
-        {
-            using var document = JsonDocument.ParseValue(ref reader);
-            return ReadObservation(document.RootElement);
-        }
+            => ReadObservation(ref reader);
 
         public override void Write(Utf8JsonWriter writer, ObservationValue value, JsonSerializerOptions options) => WriteObservation(writer, value);
     }
@@ -89,41 +86,63 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
         Type typeToConvert,
         JsonSerializerOptions options)
     {
-        using var document = JsonDocument.ParseValue(ref reader);
-        var root = document.RootElement;
-        if (root.ValueKind != JsonValueKind.Object)
-            throw new JsonException("A portable value must be encoded as a JSON object.");
-        ValidatePortableValueProperties(root);
-
-        var contractElement = GetRequiredProperty(root, ContractProperty);
-        var contract = contractElement.Deserialize<ValueContract>(options)
-            ?? throw new JsonException("A portable value requires a non-null semantic contract.");
-
-        var stateElement = GetRequiredProperty(root, StateProperty);
-        if (stateElement.ValueKind != JsonValueKind.String)
-            throw new JsonException("Portable value 'state' must be a string.");
-        var state = ParseState(stateElement.GetString());
-
-        var hasValue = root.TryGetProperty(ValueProperty, out var valueElement);
-        var hasFailure = root.TryGetProperty(FailureProperty, out var failureElement);
-
+        RequireObject(ref reader, "A portable value must be encoded as a JSON object.");
+        ValueContract? contract = null;
+        DocumentValidationDiagnostic? failure = null;
+        var state = default(PortableValueState);
+        var value = default(ObservationValue);
+        var hasContract = false;
+        var hasState = false;
+        var hasValue = false;
+        var hasFailure = false;
+        var complete = false;
+        while (reader.Read())
+        {
+            if (reader.TokenType == JsonTokenType.EndObject) { complete = true; break; }
+            RequireProperty(ref reader);
+            if (reader.ValueTextEquals(ContractProperty))
+            {
+                ReadPropertyValue(ref reader, ref hasContract, "Portable value property 'contract'");
+                contract = JsonSerializer.Deserialize<ValueContract>(ref reader, options)
+                    ?? throw new JsonException("A portable value requires a non-null semantic contract.");
+            }
+            else if (reader.ValueTextEquals(StateProperty))
+            {
+                ReadPropertyValue(ref reader, ref hasState, "Portable value property 'state'");
+                if (reader.TokenType != JsonTokenType.String) throw new JsonException("Portable value 'state' must be a string.");
+                state = ParseState(reader.GetString());
+            }
+            else if (reader.ValueTextEquals(ValueProperty))
+            {
+                ReadPropertyValue(ref reader, ref hasValue, "Portable value property 'value'");
+                value = ReadObservation(ref reader);
+            }
+            else if (reader.ValueTextEquals(FailureProperty))
+            {
+                ReadPropertyValue(ref reader, ref hasFailure, "Portable value property 'failure'");
+                try { failure = JsonSerializer.Deserialize<DocumentValidationDiagnostic>(ref reader, options); }
+                catch (ArgumentException exception)
+                {
+                    throw new JsonException("The portable value violates its structural invariants.", exception);
+                }
+            }
+            else throw new JsonException($"Unknown portable value property '{reader.GetString()}'.");
+        }
+        if (!complete) throw new JsonException("The portable value is incomplete.");
+        if (!hasContract) throw new JsonException("Portable value property 'contract' is required.");
+        if (!hasState) throw new JsonException("Portable value property 'state' is required.");
         try
         {
             return state switch
             {
-                PortableValueState.Missing when !hasValue && !hasFailure => PortableValue.Missing(contract),
-                PortableValueState.Absent when !hasValue && !hasFailure => PortableValue.Absent(contract),
-                PortableValueState.Null when !hasValue && !hasFailure => PortableValue.Null(contract),
-                PortableValueState.Unknown when !hasValue && !hasFailure => PortableValue.Unknown(contract),
-                PortableValueState.Failed when !hasValue && hasFailure => PortableValue.Failed(
-                    contract,
-                    failureElement.Deserialize<DocumentValidationDiagnostic>(options)
-                        ?? throw new JsonException("A failed portable value requires a non-null diagnostic.")),
-                PortableValueState.Concrete when hasValue && !hasFailure => PortableValue.Concrete(
-                    contract,
-                    ReadObservation(valueElement)),
-                _ => throw new JsonException(
-                    $"Portable value state '{state}' has an invalid value or failure payload combination.")
+                PortableValueState.Missing when !hasValue && !hasFailure => PortableValue.Missing(contract!),
+                PortableValueState.Absent when !hasValue && !hasFailure => PortableValue.Absent(contract!),
+                PortableValueState.Null when !hasValue && !hasFailure => PortableValue.Null(contract!),
+                PortableValueState.Unknown when !hasValue && !hasFailure => PortableValue.Unknown(contract!),
+                PortableValueState.Failed when !hasValue && hasFailure => PortableValue.Failed(contract!,
+                    failure ?? throw new JsonException("A failed portable value requires a non-null diagnostic.")),
+                PortableValueState.Concrete when hasValue && !hasFailure => PortableValue.Concrete(contract!, value),
+                _ => throw new JsonException($"Portable value state '{state}' has an invalid value or failure payload combination.")
             };
         }
         catch (ArgumentException exception)
@@ -176,33 +195,22 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
         writer.WriteEndObject();
     }
 
-    static JsonElement GetRequiredProperty(JsonElement value, string propertyName)
+    static void RequireObject(ref Utf8JsonReader reader, string message)
     {
-        if (value.TryGetProperty(propertyName, out var property))
-            return property;
-
-        throw new JsonException($"Portable value property '{propertyName}' is required.");
+        if (reader.TokenType != JsonTokenType.StartObject) throw new JsonException(message);
     }
 
-    static void ValidatePortableValueProperties(JsonElement value)
+    static void RequireProperty(ref Utf8JsonReader reader)
     {
-        var hasContract = false;
-        var hasState = false;
-        var hasValue = false;
-        var hasFailure = false;
-        foreach (var property in value.EnumerateObject())
-        {
-            var duplicate = property.Name switch
-            {
-                ContractProperty => MarkSeen(ref hasContract),
-                StateProperty => MarkSeen(ref hasState),
-                ValueProperty => MarkSeen(ref hasValue),
-                FailureProperty => MarkSeen(ref hasFailure),
-                _ => throw new JsonException($"Unknown portable value property '{property.Name}'.")
-            };
-            if (duplicate)
-                throw new JsonException($"Portable value property '{property.Name}' is declared more than once.");
-        }
+        if (reader.TokenType != JsonTokenType.PropertyName) throw new JsonException("Expected a JSON property name.");
+    }
+
+    // Descriptions are constants; successful decoding constructs no diagnostic text.
+    static void ReadPropertyValue(ref Utf8JsonReader reader, ref bool seen, string description)
+    {
+        if (seen) throw new JsonException($"{description} is declared more than once.");
+        seen = true;
+        if (!reader.Read()) throw new JsonException("The JSON object ended before its property value.");
     }
 
     static PortableValueState ParseState(string? value) => value switch
@@ -292,140 +300,134 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
         writer.WriteEndObject();
     }
 
-    static ObservationValue ReadObservation(JsonElement element)
+    static ObservationValue ReadObservation(ref Utf8JsonReader reader)
     {
-        if (element.ValueKind != JsonValueKind.Object)
-            throw new JsonException("A tagged observation value must be a JSON object.");
-        ValidateTaggedObservationProperties(element);
+        var strings = new ObservationJsonPropertyNames.TokenScope();
+        try { return ReadObservation(ref reader, ref strings); }
+        finally { strings.Dispose(); }
+    }
 
-        var kindElement = GetRequiredTaggedProperty(element, KindTagProperty);
-        if (kindElement.ValueKind != JsonValueKind.String)
-            throw new JsonException("Tagged observation '$kind' must be a string.");
-        var kind = ParseObservationKind(kindElement.GetString());
-
-        if (kind is ObservationValueKind.Undefined or ObservationValueKind.Null)
+    static ObservationValue ReadObservation(ref Utf8JsonReader reader, ref ObservationJsonPropertyNames.TokenScope strings)
+    {
+        RequireObject(ref reader, "A tagged observation value must be a JSON object.");
+        var kind = default(ObservationValueKind);
+        var value = default(ObservationValue);
+        var hasKind = false;
+        var hasValue = false;
+        var complete = false;
+        JsonDocument? deferredPayload = null;
+        try
         {
-            if (element.TryGetProperty(TaggedValueProperty, out _))
-                throw new JsonException($"Observation kind '{kind}' cannot contain '$value'.");
-            return kind == ObservationValueKind.Undefined
-                ? ObservationValue.Undefined
-                : ObservationValue.Null;
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndObject) { complete = true; break; }
+                RequireProperty(ref reader);
+                if (reader.ValueTextEquals(KindTagProperty))
+                {
+                    ReadPropertyValue(ref reader, ref hasKind, "Tagged observation property '$kind'");
+                    if (reader.TokenType != JsonTokenType.String) throw new JsonException("Tagged observation '$kind' must be a string.");
+                    kind = ParseObservationKind(ref reader);
+                }
+                else if (reader.ValueTextEquals(TaggedValueProperty))
+                {
+                    ReadPropertyValue(ref reader, ref hasValue, "Tagged observation property '$value'");
+                    // Canonical output declares kind first. Arbitrary input order remains supported
+                    // without imposing a recursive lookahead on the successful canonical path.
+                    if (hasKind) value = ReadPayload(ref reader, kind, ref strings);
+                    else deferredPayload = JsonDocument.ParseValue(ref reader);
+                }
+                else throw new JsonException($"Unknown tagged observation property '{reader.GetString()}'.");
+            }
+            if (!complete) throw new JsonException("The tagged observation is incomplete.");
+            if (!hasKind) throw new JsonException("Tagged observation property '$kind' is required.");
+            if (kind is ObservationValueKind.Undefined or ObservationValueKind.Null)
+            {
+                if (hasValue) throw new JsonException($"Observation kind '{kind}' cannot contain '$value'.");
+                return kind == ObservationValueKind.Undefined ? ObservationValue.Undefined : ObservationValue.Null;
+            }
+            if (!hasValue) throw new JsonException("Tagged observation property '$value' is required.");
+            if (deferredPayload is not null)
+            {
+                var deferred = new Utf8JsonReader(JsonMarshal.GetRawUtf8Value(deferredPayload.RootElement), reader.CurrentState.Options);
+                deferred.Read();
+                value = ReadPayload(ref deferred, kind, ref strings);
+            }
+            return value;
         }
+        finally { deferredPayload?.Dispose(); }
+    }
 
-        var payload = GetRequiredTaggedProperty(element, TaggedValueProperty);
+    static ObservationValue ReadPayload(ref Utf8JsonReader reader, ObservationValueKind kind, ref ObservationJsonPropertyNames.TokenScope strings)
+    {
         try
         {
             return kind switch
             {
-                ObservationValueKind.Int64 => new(
-                    ObservationValueKind.Int64,
-                    int64: long.Parse(RequireString(payload, kind), NumberStyles.Integer, CultureInfo.InvariantCulture)),
-                ObservationValueKind.Double => ReadDouble(payload),
-                ObservationValueKind.Decimal => new(
-                    ObservationValueKind.Decimal,
-                    dec: decimal.Parse(RequireString(payload, kind), NumberStyles.Float, CultureInfo.InvariantCulture)),
-                ObservationValueKind.Bool when payload.ValueKind is JsonValueKind.True or JsonValueKind.False =>
-                    new(ObservationValueKind.Bool, b: payload.GetBoolean()),
+                ObservationValueKind.Undefined or ObservationValueKind.Null => throw new JsonException($"Observation kind '{kind}' cannot contain '$value'."),
+                ObservationValueKind.Int64 => new(ObservationValueKind.Int64,
+                    int64: long.Parse(RequireString(ref reader, kind, ref strings), NumberStyles.Integer, CultureInfo.InvariantCulture)),
+                ObservationValueKind.Decimal => new(ObservationValueKind.Decimal,
+                    dec: decimal.Parse(RequireString(ref reader, kind, ref strings), NumberStyles.Float, CultureInfo.InvariantCulture)),
+                ObservationValueKind.Double => ReadDouble(ref reader),
+                ObservationValueKind.Bool when reader.TokenType is JsonTokenType.True or JsonTokenType.False => new(ObservationValueKind.Bool, b: reader.GetBoolean()),
                 ObservationValueKind.Bool => throw new JsonException("A Boolean observation requires a Boolean payload."),
-                ObservationValueKind.String => new(ObservationValueKind.String, s: RequireString(payload, kind)),
-                ObservationValueKind.DateTimeOffset => new(
-                    ObservationValueKind.DateTimeOffset,
-                    s: RequireString(payload, kind)),
-                ObservationValueKind.DateOnly => new(ObservationValueKind.DateOnly, s: RequireString(payload, kind)),
-                ObservationValueKind.TimeOnly => new(ObservationValueKind.TimeOnly, s: RequireString(payload, kind)),
-                ObservationValueKind.TimeSpan => new(ObservationValueKind.TimeSpan, s: RequireString(payload, kind)),
-                ObservationValueKind.Bytes => ObservationValue.FromBytes(payload.GetBytesFromBase64()),
-                ObservationValueKind.Object => ReadObject(payload),
-                ObservationValueKind.Array => ReadArray(payload),
+                ObservationValueKind.String or ObservationValueKind.DateTimeOffset or ObservationValueKind.DateOnly
+                    or ObservationValueKind.TimeOnly or ObservationValueKind.TimeSpan => new(kind, s: RequireString(ref reader, kind, ref strings)),
+                ObservationValueKind.Bytes => ObservationValue.FromOwnedBytes(reader.GetBytesFromBase64()),
+                ObservationValueKind.Object => ReadObject(ref reader, ref strings),
+                ObservationValueKind.Array => ReadArray(ref reader, ref strings),
                 _ => throw new JsonException($"Unknown observation value kind '{kind}'.")
             };
         }
-        catch (FormatException exception)
-        {
-            throw new JsonException($"Observation kind '{kind}' has an invalid payload.", exception);
-        }
-        catch (OverflowException exception)
-        {
-            throw new JsonException($"Observation kind '{kind}' has an out-of-range payload.", exception);
-        }
-        catch (InvalidOperationException exception)
-        {
-            throw new JsonException($"Observation kind '{kind}' has an invalid JSON payload.", exception);
-        }
+        catch (FormatException exception) { throw new JsonException($"Observation kind '{kind}' has an invalid payload.", exception); }
+        catch (OverflowException exception) { throw new JsonException($"Observation kind '{kind}' has an out-of-range payload.", exception); }
+        catch (InvalidOperationException exception) { throw new JsonException($"Observation kind '{kind}' has an invalid JSON payload.", exception); }
     }
 
-    static JsonElement GetRequiredTaggedProperty(JsonElement value, string propertyName)
+    static string RequireString(ref Utf8JsonReader reader, ObservationValueKind kind, ref ObservationJsonPropertyNames.TokenScope strings)
     {
-        if (value.TryGetProperty(propertyName, out var property))
-            return property;
-
-        throw new JsonException($"Tagged observation property '{propertyName}' is required.");
-    }
-
-    static void ValidateTaggedObservationProperties(JsonElement value)
-    {
-        var hasKind = false;
-        var hasValue = false;
-        foreach (var property in value.EnumerateObject())
-        {
-            var duplicate = property.Name switch
-            {
-                KindTagProperty => MarkSeen(ref hasKind),
-                TaggedValueProperty => MarkSeen(ref hasValue),
-                _ => throw new JsonException($"Unknown tagged observation property '{property.Name}'.")
-            };
-            if (duplicate)
-                throw new JsonException($"Tagged observation property '{property.Name}' is declared more than once.");
-        }
-    }
-
-    static bool MarkSeen(ref bool value)
-    {
-        var previous = value;
-        value = true;
-        return previous;
-    }
-
-    static string RequireString(JsonElement element, ObservationValueKind kind)
-    {
-        if (element.ValueKind == JsonValueKind.String && element.GetString() is { } value)
-            return value;
-
+        if (reader.TokenType == JsonTokenType.String && strings.Get(ref reader) is { } value) return value;
         throw new JsonException($"Observation kind '{kind}' requires a string payload.");
     }
 
-    static ObservationValue ReadDouble(JsonElement payload)
+    static ObservationValue ReadDouble(ref Utf8JsonReader reader)
     {
-        if (payload.ValueKind != JsonValueKind.Number || !payload.TryGetDouble(out var value))
+        if (reader.TokenType != JsonTokenType.Number || !reader.TryGetDouble(out var value))
             throw new JsonException("A Double observation requires a numeric payload.");
-        if (!double.IsFinite(value))
-            throw new JsonException("Portable observation values cannot contain non-finite doubles.");
+        if (!double.IsFinite(value)) throw new JsonException("Portable observation values cannot contain non-finite doubles.");
         return new(ObservationValueKind.Double, d: value);
     }
 
-    static ObservationValue ReadObject(JsonElement payload)
+    static ObservationValue ReadObject(ref Utf8JsonReader reader, ref ObservationJsonPropertyNames.TokenScope strings)
     {
-        if (payload.ValueKind != JsonValueKind.Object)
-            throw new JsonException("An Object observation requires an object payload.");
-
-        var fields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
-        foreach (var property in payload.EnumerateObject())
+        RequireObject(ref reader, "An Object observation requires an object payload.");
+        var fields = new ObservationJsonObjectBuilder();
+        while (reader.Read())
         {
-            if (!fields.TryAdd(property.Name, ReadObservation(property.Value)))
-                throw new JsonException($"Object observation contains duplicate property '{property.Name}'.");
+            if (reader.TokenType == JsonTokenType.EndObject) return fields.Build();
+            RequireProperty(ref reader);
+            var name = strings.Get(ref reader);
+            if (!reader.Read()) throw new JsonException("The JSON object ended before its property value.");
+            if (!fields.TryAdd(name, ReadObservation(ref reader, ref strings)))
+                throw new JsonException($"Object observation contains duplicate property '{name}'.");
         }
-        return ObservationValue.FromObject(fields.ToImmutable());
+        throw new JsonException("The object observation is incomplete.");
     }
 
-    static ObservationValue ReadArray(JsonElement payload)
+    static ObservationValue ReadArray(ref Utf8JsonReader reader, ref ObservationJsonPropertyNames.TokenScope strings)
     {
-        if (payload.ValueKind != JsonValueKind.Array)
-            throw new JsonException("An Array observation requires an array payload.");
-
-        var values = ImmutableArray.CreateBuilder<ObservationValue>(payload.GetArrayLength());
-        foreach (var element in payload.EnumerateArray())
-            values.Add(ReadObservation(element));
-        return ObservationValue.FromImmutableArray(values.MoveToImmutable());
+        if (reader.TokenType != JsonTokenType.StartArray) throw new JsonException("An Array observation requires an array payload.");
+        var values = new ObservationJsonArrayBuilder();
+        try
+        {
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndArray) return values.Build();
+                values.Add(ReadObservation(ref reader, ref strings));
+            }
+            throw new JsonException("The array observation is incomplete.");
+        }
+        finally { values.Dispose(); }
     }
 
     static string FormatObservationKind(ObservationValueKind kind) => kind switch
@@ -447,22 +449,24 @@ public sealed class PortableValueJsonConverter : JsonConverter<PortableValue>
         _ => throw new JsonException($"Unknown observation value kind '{kind}'.")
     };
 
-    static ObservationValueKind ParseObservationKind(string? kind) => kind switch
+    // Match fixed wire metadata without allocating or admitting it to the retained-text cache.
+    // ValueTextEquals also handles escaped and segmented JSON strings.
+    static ObservationValueKind ParseObservationKind(ref Utf8JsonReader reader)
     {
-        "undefined" => ObservationValueKind.Undefined,
-        "null" => ObservationValueKind.Null,
-        "int64" => ObservationValueKind.Int64,
-        "double" => ObservationValueKind.Double,
-        "decimal" => ObservationValueKind.Decimal,
-        "bool" => ObservationValueKind.Bool,
-        "string" => ObservationValueKind.String,
-        "object" => ObservationValueKind.Object,
-        "array" => ObservationValueKind.Array,
-        "bytes" => ObservationValueKind.Bytes,
-        "dateTimeOffset" => ObservationValueKind.DateTimeOffset,
-        "dateOnly" => ObservationValueKind.DateOnly,
-        "timeOnly" => ObservationValueKind.TimeOnly,
-        "timeSpan" => ObservationValueKind.TimeSpan,
-        _ => throw new JsonException($"Unknown observation value kind '{kind}'.")
-    };
+        if (reader.ValueTextEquals("string"u8)) return ObservationValueKind.String;
+        if (reader.ValueTextEquals("object"u8)) return ObservationValueKind.Object;
+        if (reader.ValueTextEquals("array"u8)) return ObservationValueKind.Array;
+        if (reader.ValueTextEquals("int64"u8)) return ObservationValueKind.Int64;
+        if (reader.ValueTextEquals("decimal"u8)) return ObservationValueKind.Decimal;
+        if (reader.ValueTextEquals("null"u8)) return ObservationValueKind.Null;
+        if (reader.ValueTextEquals("bool"u8)) return ObservationValueKind.Bool;
+        if (reader.ValueTextEquals("double"u8)) return ObservationValueKind.Double;
+        if (reader.ValueTextEquals("bytes"u8)) return ObservationValueKind.Bytes;
+        if (reader.ValueTextEquals("undefined"u8)) return ObservationValueKind.Undefined;
+        if (reader.ValueTextEquals("dateTimeOffset"u8)) return ObservationValueKind.DateTimeOffset;
+        if (reader.ValueTextEquals("dateOnly"u8)) return ObservationValueKind.DateOnly;
+        if (reader.ValueTextEquals("timeOnly"u8)) return ObservationValueKind.TimeOnly;
+        if (reader.ValueTextEquals("timeSpan"u8)) return ObservationValueKind.TimeSpan;
+        throw new JsonException($"Unknown observation value kind '{reader.GetString()}'.");
+    }
 }

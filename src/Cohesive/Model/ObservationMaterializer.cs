@@ -1,9 +1,13 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Linq.Expressions;
+using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Model;
 
@@ -73,6 +77,53 @@ public sealed class ObservationMaterializer<T>
             ? ordinalReader : observation);
     }
 
+    /// <summary>Reads strict shape-bound JSON and materializes it through this plan's prebound ordinal mappings.</summary>
+    /// <param name="utf8Json">One complete plain JSON object. Root names are exact-case layout identities;
+    /// unknown or decoded duplicate root properties are rejected. Input bytes are borrowed only for this call.</param>
+    /// <returns>A CLR value produced after complete shape admission. Owned value storage and the existing
+    /// conversion, serializer and missing-member policies are used. Default mutable projections are independent;
+    /// custom converters retain their existing contracts.</returns>
+    /// <remarks>
+    /// Compile with <see cref="ObservationMaterializerBuilder{T}.Compile(ObservationLayout)"/> first. The exact
+    /// bound layout supplies the graph and ordinals. Validation covers the whole record, including unmapped
+    /// fields, before any converter executes. This strict entry point does not change ordinary JSON conversion
+    /// or the behavior of <see cref="Materialize(IObservationFieldReader)"/> on already validated readers.
+    /// Serializer options configure CLR projection; they do not relax JSON shape admission.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">The plan has no bound ordinal layout, a required mapped
+    /// field is absent, conversion fails, or a converter returns null for a non-nullable target member.</exception>
+    /// <exception cref="JsonException">Input is empty, malformed, has trailing non-whitespace content, is not an
+    /// object, or contains unknown, wrong-case or decoded duplicate root names.</exception>
+    /// <exception cref="ArgumentException">Parsed values fail the governing shape's semantic validation.</exception>
+    public T MaterializeJson(ReadOnlySpan<byte> utf8Json)
+    {
+        if (ordinalLayout is null || materializeByOrdinal is null)
+            throw new InvalidOperationException("Strict JSON materialization requires a plan compiled with an observation layout.");
+        var layout = ordinalLayout;
+        var shape = new GraphShapeId(layout.Graph, ShapeId.ShapeId);
+        var values = new ObservationValue[layout.Count];
+        var wordCount = layout.Count == 0 ? 0 : ((layout.Count - 1) >> 6) + 1;
+        ulong[]? rented = null;
+        Span<ulong> presence = wordCount <= 64
+            ? stackalloc ulong[wordCount]
+            : (rented = ArrayPool<ulong>.Shared.Rent(wordCount)).AsSpan(0, wordCount);
+        try
+        {
+            if (!ObservationJsonReader.TryReadShape(utf8Json, shape, layout, values, presence, out var error))
+                throw new ArgumentException($"JSON observation does not adhere to shape '{ShapeId}': {error}", nameof(utf8Json));
+            var count = 0;
+            foreach (var word in presence) count += BitOperations.PopCount(word);
+            // Fresh values transfer once to the existing immutable reader. No dictionary, name lookup,
+            // second validation pass or portable Observation wrapper is needed for this CLR interpretation.
+            var fields = new OrdinalObservationFields(layout, ImmutableCollectionsMarshal.AsImmutableArray(values), count);
+            return materializeByOrdinal(fields);
+        }
+        finally
+        {
+            if (rented is not null) ArrayPool<ulong>.Shared.Return(rented);
+        }
+    }
+
     /// <summary>Materializes a CLR value directly from a physical reader governed by <see cref="ShapeId"/>.</summary>
     /// <param name="reader">Validated physical interpretation of identity-free observation fields.</param>
     /// <returns>The materialized CLR value.</returns>
@@ -121,6 +172,35 @@ public static class ObservationMaterializer
     public static Func<ObservationValue, T?> PrepareJsonValue<T>() =>
         DefaultObservationValueConverterCache.GetStrict(typeof(T)) is Func<ObservationValue, T?> prepared
             ? prepared : static value => value.Deserialize<T>();
+
+    /// <summary>Prepares a CLR interpretation for one explicit frozen JSON profile.</summary>
+    /// <typeparam name="T">CLR result contract.</typeparam>
+    /// <param name="options">Read-only serializer options retained by the returned converter; never modified.</param>
+    /// <param name="bytesEncoding">Policy for projecting binary values into compatibility JSON.</param>
+    /// <returns>A reusable converter, shareable under the supplied profile's converter/constructor contracts.
+    /// Mutable results remain independent; existing immutable
+    /// interpretation reuse follows the exact payload, profile and binary policy.</returns>
+    /// <remarks>Prepare at registration and retain the delegate. Conventional exact-name objects, arrays and
+    /// scalars read directly. Custom metadata, converters, naming, case variants and unsupported contracts retain
+    /// serializer behavior through local compatibility paths. This does not establish semantic admission.</remarks>
+    /// <exception cref="ArgumentNullException"><paramref name="options"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="options"/> is mutable.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="bytesEncoding"/> is unsupported.</exception>
+    /// <exception cref="InvalidOperationException">The CLR interpretation cannot be prepared.</exception>
+    /// <exception cref="NotSupportedException">Serializer metadata for the target type is unavailable.</exception>
+    public static Func<ObservationValue, T?> PrepareJsonValue<T>(JsonSerializerOptions options,
+        ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!options.IsReadOnly) throw new ArgumentException("A prepared JSON profile must be read-only.", nameof(options));
+        if (!Enum.IsDefined(bytesEncoding)) throw new ArgumentOutOfRangeException(nameof(bytesEncoding));
+        if (DefaultObservationValueConverterCache.PrepareJsonProfile(typeof(T), options, bytesEncoding) is not Func<ObservationValue, T?> prepared)
+            return value => value.Deserialize<T>(options, bytesEncoding);
+        var maxDepth = options.MaxDepth == 0 ? DefaultObservationValueConverterCache.JsonProjectionDepthLimit
+            : Math.Min(options.MaxDepth, DefaultObservationValueConverterCache.JsonProjectionDepthLimit);
+        return value => DefaultObservationValueConverterCache.CanProjectJson(value, maxDepth, bytesEncoding)
+            ? prepared(value) : value.Deserialize<T>(options, bytesEncoding);
+    }
 
     /// <summary>Creates a configurable materializer builder for an exact graph-scoped shape.</summary>
     /// <typeparam name="T">CLR target type.</typeparam>
