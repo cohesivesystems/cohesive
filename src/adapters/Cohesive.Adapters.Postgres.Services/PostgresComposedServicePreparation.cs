@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Infra;
 using Cohesive.Infra.Realization;
@@ -13,12 +15,35 @@ namespace Cohesive.Adapters.Postgres.Services;
 /// <summary>Prepares endpoint-selected heterogeneous queries once for native binding and infrastructure inference.</summary>
 public static class PostgresComposedServiceExtensions
 {
+    /// <summary>Prepares a composite storage model using each source's canonical acquisition declaration.</summary>
+    /// <param name="bindings">Local native database mappings and receipt policy.</param>
+    /// <param name="plan">Endpoint requirements, including consistency.</param>
+    /// <param name="sources">Exact native contributions declared by the storage model.</param>
+    /// <param name="policy">Explicit bounded query policy.</param>
+    /// <param name="authority">Runtime authority; defaults to the canonical database identity.</param>
+    /// <returns>One preparation for infrastructure evidence and DI runtime binding.</returns>
+    public static PostgresComposedStorageComposition ComposeServices(this PostgresPersistenceBindings bindings,
+        ServiceImplementationPlan plan, IEnumerable<IEntityStorageBinding> sources,
+        Func<int, long, PostgresRelationQueryComposedPolicy> policy, string? authority = null)
+    {
+        ArgumentNullException.ThrowIfNull(sources);
+        var selected = sources.ToImmutableArray();
+        return new(bindings, PrepareCore(bindings, plan, new(selected.Select(source => source.Source)), policy), selected, authority);
+    }
+
     /// <summary>Derives source acquisition requirements and bounded evaluation requirements from actual physical preparation.</summary>
     /// <param name="bindings">Offline PostgreSQL mappings.</param><param name="plan">Authoritative endpoint selections.</param>
     /// <param name="sources">Offline remote source contracts.</param><param name="policy">Explicit bounds/partition policy for each selected query.</param>
     /// <returns>Prepared readers' metadata and attributable infrastructure evidence; no clients or IO.</returns>
     /// <exception cref="ServiceBindingValidationException">A query requires a shared snapshot.</exception>
     public static PostgresComposedServicePreparation PrepareComposedService(this PostgresPersistenceBindings bindings,
+        ServiceImplementationPlan plan, EntityRelationQuerySourceCatalog sources,
+        Func<int, long, PostgresRelationQueryComposedPolicy> policy)
+    {
+        return PrepareCore(bindings, plan, sources, policy);
+    }
+
+    static PostgresComposedServicePreparation PrepareCore(PostgresPersistenceBindings bindings,
         ServiceImplementationPlan plan, EntityRelationQuerySourceCatalog sources,
         Func<int, long, PostgresRelationQueryComposedPolicy> policy)
     {
@@ -110,10 +135,16 @@ public sealed class PostgresComposedServicePreparation
     public IServicePersistence Bind(PostgresPersistenceRegistration persistence,
         PostgresTransitionReceiptStorage? receipts = null, params EntityStorageRegistration[] sources)
     {
+        return BindCore(persistence, receipts, sources, null, null);
+    }
+
+    internal IServicePersistence BindCore(PostgresPersistenceRegistration persistence, PostgresTransitionReceiptStorage? receipts,
+        EntityStorageRegistration[] sources, PostgresEntityHistoryStorage? history, PostgresEntityOutboxStorage? outbox)
+    {
         ArgumentNullException.ThrowIfNull(persistence);
         ArgumentNullException.ThrowIfNull(sources);
         RequirePersistence(persistence);
-        var repositories = new ServicePersistenceBuilder(persistence.ForServices(receipts));
+        var repositories = new ServicePersistenceBuilder(persistence.ForServices(receipts, history, outbox));
         foreach (var source in sources)
         {
             ArgumentNullException.ThrowIfNull(source);

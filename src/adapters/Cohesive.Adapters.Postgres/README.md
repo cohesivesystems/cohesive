@@ -253,3 +253,140 @@ does not reference Marten. `PostgresEntityOutboxOptions.BindAsync` independently
 transition delivery intents. Both compose with native transition receipts in the same transaction.
 See the [PostgreSQL example authority walkthrough](../../../eng/examples/aspire-first/STATE-AUTHORITY.md)
 for the replacement-action contract, bounds, concurrency and migration limits.
+
+Receipt schema admission can also be owned by `PostgresPersistenceBindings.TransitionReceipts(options,
+initialization: PostgresSchemaInitialization.CreateIfMissing)`. Native and composed service preparation
+share `PrepareReceiptsAsync`: create a missing receipt table in an existing schema, then validate it.
+The default is `ValidateOnly`; incompatible tables are never altered. Offline model construction performs no IO.
+Host preparation runs once before route/worker admission; explicit asynchronous preparation repeats validation.
+Synchronous `Bind(dataSource, authority)` constructs a binding and performs no schema IO. Built-in product, receipt
+and outbox creation share a transaction-scoped database advisory lock, including concurrent hosts. Native additions or extra validation can be attached using `SchemaPreparation(async (database, token) => ...)`; projected-contract migrations must run separately before preparation.
+Native and composed async preparation run that callback after product admission and history preparation, before receipts/outbox. No callback means
+no product-schema work; there is no inferred validation, generated schema or create-only promise for arbitrary
+SQL. The callback borrows the native source, owns its commands/transactions, and defines native-addition policy.
+Host preparation retains failures without retry; explicit asynchronous preparation repeats the callback. `History(configuration)` and `Outbox(options, initialization)`
+are optional model-owned attachments. History is prepared by its adapter; PostgreSQL remains independent
+of Marten. Outbox initialization follows the same validation-only default and explicit create/validate policy.
+
+## Product schema projection
+
+`bindings.Schema()` opts into validation of the schema derived from the canonical field contracts and
+native entity mappings. `Schema(PostgresSchemaInitialization.CreateIfMissing, schema => ...)` additionally
+creates missing tables in existing schemas. `bindings.ProductSchema.CreateSql` is deterministic, inspectable
+initial DDL, prepared once with the mappings. It does not generate migrations or backfills.
+
+Use `schema.ForeignKey(domain.Reference)` to explicitly enforce a direct observation-identity relationship
+within the same database and partition. Cross-database endpoints, cyclic FK graphs and mismatched source/target
+key types or collations (including partition columns) are rejected offline. Unspecified collation means the
+database default; it is not silently treated as equivalent to an explicit `C` collation.
+Query correlation alone does not select a database constraint. `schema.Collation(entity, x => x.Field, "C")`
+attaches a native collation without repeating physical column names. Scalar type names come from the existing
+PostgreSQL scalar catalog; a single metadata row owns each type's semantic kind, native name/OIDs, encoding,
+parameter type and TOAST policy. Domain nullability and mapping key selections remain authoritative.
+
+Declare simple native checks without repeating physical names or policy values:
+
+```csharp
+schema.Check(domain.Inventory, item => item.Partition, SqlBinaryOperator.Equal, StoragePolicy.LocalPartition)
+      .Check(domain.Inventory, item => item.Available, SqlBinaryOperator.GreaterThanOrEqual, 0);
+```
+
+This first slice supports direct text/Int32 field comparisons with fixed, typed values. Values are captured
+once, not evaluated on requests. SQL CHECK permits null; semantic nullability is enforced separately.
+Compound predicates and other scalar types remain native migration concerns. Generated checks are validated
+against PostgreSQL's deparsed predicate, not just the constraint name. Equivalent custom rewrites may fail
+closed; this is deliberately not a general SQL equivalence prover.
+
+Admission checks exact mapped columns/types/nullability, explicit collations, immediate non-partial unique
+partition/identity keys, validated non-deferrable selected FKs with NO ACTION semantics, and declared checks. Drift raises
+`PostgresSchemaValidationException` with a stable code and native table/column context. Existing objects are
+never altered to force a match. Missing tables use `postgres.schema.tableMissing`; existing tables with
+incompatible or missing columns use `postgres.schema.columnMismatch`, and check drift uses
+`postgres.schema.checkMismatch`. Additional undeclared CHECKs, defaults and native indexes remain explicit native SQL,
+may be applied in `SchemaPreparation` afterward, and are outside generated validation. Do not interpret a
+successful projected-schema check as full native schema equivalence. Keep external migrations coordinated
+and revalidate after DDL changes; admission evidence does not lock schema against later changes.
+
+Catalog validation submits one Npgsql batch per pass, with error barriers disabled, rather than awaiting
+one network exchange per table/key/reference. A native `SchemaPreparation` hook deliberately keeps admission
+checks both before and after it: do not mutate an incompatible schema, and do not admit a hook that damages
+the contract. Those are two batches, not duplicate preparation accidentally performed per repository.
+
+### Native initialization boundaries
+
+`SchemaPreparation(assembly, "Exact.Resource.sql")` rejects a missing resource at model definition and executes
+the embedded SQL atomically under the same advisory lock as built-in creation during preparation. `SchemaPreparation((services, database, token) => ...)` allows a post-admission native
+callback to borrow host logging/configuration; direct preparation can supply `PrepareSchemaAsync(services, database, ct)`. The database-only overload supplies an empty provider. Custom callbacks
+own transactions and multi-host coordination; the embedded-SQL wrapper supplies both. Product admission runs before any schema writer, including under `CreateIfMissing` for existing tables. History preparation then checks
+native identity/configuration before initializing/validating its schema.
+Product preparation and receipt/outbox admission follow in both single-store and composed preparation.
+Explicit `CreateIfMissing` bootstrap allows absent product tables and retains its create/validate lifecycle.
+A later migration or bootstrap failure can leave earlier prepared objects; no cross-phase rollback is implied. Projected schema validation runs before
+and after a native callback: these are distinct admission checks, each one batched round trip, because the callback
+can change the schema. In validation-only mode without a callback it runs once; creation also requires post-creation validation.
+
+Both service compositions use the same attachment lifecycle. Runtime authority defaults to `di/` followed by the declared database
+identity and can be supplied explicitly. `PrepareComposedService` returns offline `PostgresComposedServicePreparation` for evidence and explicit binding.
+`ComposeServices` returns `PostgresComposedStorageComposition` with immutable native source contributions and
+its offline `Preparation`. Only the latter implements the storage-composition contract required by model/DI registration. `MapServicesAsync<T>()` is required
+before host start; forgetting it fails startup before resolving storage rather than serving an empty API.
+
+Internal preparation caching reuses Core's WeakPreparationCache/PreparationSlot through the Postgres friend
+assembly. The mechanism stays internal and is compiled once, without adapter-specific namespaces or compiler
+symbols in Core. Schema unit tests check ordinal scalar coverage through the guarded slot lookup; the hot
+catalog has no explicit static constructor. No benchmarked speedup is claimed for the indexed representation.
+
+### Ordered storage preparation
+
+`bindings.PrepareAsync(services, database, authority)` is the shared native/composed host and direct-caller
+entry point for product schema, history, receipts and outbox. The bindings own admission before preparation:
+existing product tables must satisfy the contract before any history DDL or native callback runs.
+`CreateIfMissing` tolerates absent tables, but still checks every existing table and its constraints first;
+it cannot repair an incompatible table. Missing source tables have their constraints checked after creation.
+An existing source missing a required foreign key still requires migration, even if its target is absent.
+
+Validation-only preparation uses one product catalog batch. Creating missing tables adds post-creation
+validation; a custom schema callback adds post-callback validation. When no tables are missing, CreateIfMissing skips both locked creation and post-creation validation. `PrepareSchemaAsync` uses the same
+admission/preparation stages for schema-only callers. Neither caches admission across explicit invocations.
+This is ordered admission, not a cross-attachment DDL transaction: later failures can leave completed objects,
+and callers must coordinate external migrations. Native clients remain caller/DI-owned.
+
+`SchemaPreparation` cannot repair drift in a projected contract: admission rejects that drift before the
+callback runs. Use it for native additions (indexes/defaults) or extra validation after projected tables
+exist. Run a reviewed drift-repair migration separately **before** host/storage preparation, as in the
+legacy migration example. The callback is not a migration-before-admission hook. Its transaction policy
+still governs its additions, and post-validation prevents them from invalidating the projected contract.
+
+Receipt and outbox preparation also admit existing objects before creation. With `CreateIfMissing`, a fully
+valid attachment returns its validated binding without a creation lock or DDL. Missing tables trigger locked
+creation and a complete validation pass; incompatible existing tables fail before creation. A valid commits
+table with absent emissions is supported, but an existing emissions table without its required commit foreign
+key needs migration. Missing attachment tables in ValidateOnly report `postgres.schema.tableMissing`.
+Product and attachment requirements use one catalog validator and one Npgsql batch per admission pass.
+An unchanged receipt or outbox startup uses one batch and zero standalone commands, verified by tracing.
+Columns, immediate keys, generated identity, foreign keys and checks report structured `postgres.schema.*`
+diagnostics with table/column context. Receipt fences retain their exact index names for conflict handling, including standalone unique indexes.
+This does not combine product, receipt and outbox admission into a single global batch or transaction.
+
+The Services adapter supplies `bindings.PrepareAsync(services, authority)` to resolve the native data source
+once using the declared database identity. Explicit native-source preparation remains available without DI.
+
+`PostgresSchemaValidationException` remains an `InvalidOperationException`: existing catch blocks still
+work. The move to structured attachment diagnostics changes exact-type assertions, not that catch contract.
+Each diagnostic includes a remedy; missing tables mention reviewed creation or explicit `CreateIfMissing`.
+Receipt admission still requires the declared primary and unique constraint kinds. Conflict recognition also
+retains redundant immediate unique indexes over the same columns and NULL semantics, whether or not
+a pg_constraint row exists, since PostgreSQL reports the violated index name. A redundant unique constraint or standalone index cannot replace the required primary key.
+
+Schema diagnostics are closed, typed definitions pairing each stable code with its remedy. Failure sites
+select a definition directly; there is no string lookup or throwing fallback that can replace schema drift
+with an unrelated error. Tests specify expected code/remedy pairs as independent case data.
+
+Consumers can branch on `PostgresSchemaDiagnosticCodes.TableMissing`, `.ColumnMismatch`, `.KeyMismatch`
+and the other documented constants instead of spelling codes. The exception's string Code remains the
+serialized diagnostic contract; the public constants are also used by the internal typed definitions.
+
+Receipt conflict conformance includes an actual standalone-index violation: the schema retains its required
+primary/creation constraints, a valid conditional write reaches the duplicate receipt insert, and PostgreSQL
+reports the standalone index name. The test observes that native error and verifies structured identity-conflict
+resolution, preserved replay evidence, and rollback of entity state and its concurrency token.

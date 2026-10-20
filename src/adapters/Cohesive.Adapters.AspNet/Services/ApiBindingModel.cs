@@ -10,6 +10,7 @@ public abstract class ApiBindingModel : IAuthoringModel
 {
     /// <summary>Construction-only implementation builder, shared with direct authoring.</summary>
     protected ServiceApiBindingsBuilder Bindings { get; } = new();
+    internal ServiceApiBindingsBuilder Builder => Bindings;
     /// <summary>Portable selection evidence for infrastructure preparation.</summary>
     public ServiceImplementationPlan Plan => Bindings.Plan;
     void IAuthoringModel.Complete() => Bindings.Complete();

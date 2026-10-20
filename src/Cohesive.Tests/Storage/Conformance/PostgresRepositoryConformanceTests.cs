@@ -148,7 +148,64 @@ public sealed partial class PostgresRepositoryConformanceTests(ITestOutputHelper
         await EntityTransitionReceiptConformance.ConcurrentReplay(repository);
         await using (var change = database.CreateCommand($"ALTER TABLE {schema}.receipts ALTER COLUMN format_version TYPE bigint"))
             await change.ExecuteNonQueryAsync();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => options.BindAsync(database));
+        var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => options.BindAsync(database));
+        Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch, failure.Code);
+        Assert.Equal("format_version", failure.Column);
+    });
+
+    [PostgresFact]
+    public Task Standalone_unique_index_violation_is_resolved_as_receipt_conflict() => WithRepository(async (_, database, schema) =>
+    {
+        var options = new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a");
+        // Create the independent index before the primary key so PostgreSQL checks it first.
+        // The admitted schema still contains both required constraints throughout the commit test.
+        await using (var recreate = database.CreateCommand($"DROP TABLE {schema}.receipts;" +
+            options.SchemaSql.Replace("PRIMARY KEY (entity_type, partition_key, operation_id),", "", StringComparison.Ordinal)))
+            await recreate.ExecuteNonQueryAsync();
+        const string indexName = "standalone_operation_fence";
+        await using (var indexes = database.CreateCommand($"""
+            CREATE UNIQUE INDEX {indexName} ON {schema}.receipts(entity_type,partition_key,operation_id);
+            ALTER TABLE {schema}.receipts ADD PRIMARY KEY(entity_type,partition_key,operation_id);
+            """)) await indexes.ExecuteNonQueryAsync();
+        var storage = await options.BindAsync(database);
+        var repository = new PostgresEntityRepository(RunControlFixture.Entity,
+            new(new("adoption/postgres"), database, "cohesive.conformance"), Mapping(schema), storage);
+        var violations = new ConcurrentQueue<string>();
+        void Observe(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs args)
+        {
+            if (args.Exception is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } error
+                && error.SchemaName == schema && error.ConstraintName == indexName)
+                violations.Enqueue(error.ConstraintName);
+        }
+        AppDomain.CurrentDomain.FirstChanceException += Observe;
+        try
+        {
+            // Includes a valid conditional entity write followed by a duplicate receipt insert,
+            // structured IdentityConflict resolution, retained replay evidence and rollback of state/token.
+            await EntityTransitionReceiptConformance.ConcurrentReplay(repository);
+            Assert.NotEmpty(violations);
+        }
+        finally { AppDomain.CurrentDomain.FirstChanceException -= Observe; }
+    });
+
+    [PostgresFact]
+    public Task Receipt_conflicts_include_redundant_unique_fences_but_admission_still_requires_primary_key() => WithRepository(async (_, database, schema) =>
+    {
+        await using (var add = database.CreateCommand($"ALTER TABLE {schema}.receipts ADD CONSTRAINT duplicate_operation_fence UNIQUE(entity_type,partition_key,operation_id)"))
+            await add.ExecuteNonQueryAsync();
+        await using (var addIndex = database.CreateCommand($"CREATE UNIQUE INDEX standalone_operation_fence ON {schema}.receipts(entity_type,partition_key,operation_id)"))
+            await addIndex.ExecuteNonQueryAsync();
+        var options = new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a");
+        var storage = await options.BindAsync(database);
+        Assert.Contains("standalone_operation_fence", storage.FenceNames);
+        Assert.Contains("duplicate_operation_fence", storage.FenceNames);
+        Assert.Contains("receipts_pkey", storage.FenceNames);
+        await using (var drop = database.CreateCommand($"ALTER TABLE {schema}.receipts DROP CONSTRAINT receipts_pkey"))
+            await drop.ExecuteNonQueryAsync();
+        var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => options.BindAsync(database));
+        Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.KeyMismatch, failure.Code);
+        Assert.Contains("immediate primary/unique key", failure.Message);
+        Assert.IsAssignableFrom<InvalidOperationException>(failure);
     });
 
     [PostgresFact]
@@ -156,7 +213,8 @@ public sealed partial class PostgresRepositoryConformanceTests(ITestOutputHelper
     {
         await using var change = database.CreateCommand($"ALTER TABLE {schema}.receipts DROP CONSTRAINT receipts_entity_type_partition_key_creation_subject_key");
         await change.ExecuteNonQueryAsync();
-        await Assert.ThrowsAsync<InvalidOperationException>(() => new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a").BindAsync(database));
+        var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(() => new PostgresTransitionReceiptOptions(schema, "receipts", "tenant/a").BindAsync(database));
+        Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.KeyMismatch, failure.Code);
     });
 
     [PostgresFact]

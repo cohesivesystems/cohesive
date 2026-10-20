@@ -33,7 +33,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             infra =>
             {
                 infra.Resource(Store).Persistent()
-                    .Postgres(model.Storage.Bindings, model.Endpoints.Plan);
+                    .Prepared(model.Storage.RequireComposition<PostgresStorageComposition>().Evidence);
                 infra.Workload(Worker).Requires(ApplicationExecution).RequiresReady(Store);
             });
     }

@@ -52,12 +52,12 @@ demand; selecting it with the ephemeral executor fails at setup. See [process po
 
 A `StorageModel` can own multiple providers. `StorageModelBuilder` is available directly; the base
 class is optional authoring convenience. Binding recipes never open connections during activation.
-The workers explicitly initialize local schemas before preparing runtime API bindings.
+The storage models explicitly initialize local schemas during async preparation, before publishing runtime API bindings.
 
 `FulfillmentStoragePolicy` owns the fixed demo partition and orders connection name. Queries still compile
 that fixed partition as a literal; invocation-scoped partition selection is not introduced by this file cleanup.
-The order-registration helper is test-only. Storage mappings live in the shared model assembly; native schema
-resources and executable startup remain in their workers.
+The order-registration helper is test-only. Storage mappings and native schema additions live with their
+storage models; executable startup only registers native clients and configures the host.
 
 ## Run either composition
 
@@ -117,7 +117,7 @@ setup, including when that reader was already cached for an independent-source r
 
 `PostgresCosmosStorage` declares inventory once with `CosmosEntityStorageBinding`: its entity, canonical
 identity, native container, fixed partition and acquisition limits supply both the repository and query
-source. `Preparation.Bind(postgres, receipts, Inventory.Bind(container))` resolves every query selected
+source. `Storage.Compose(...)` retains the selected preparation; its DI binding resolves every query selected
 by the endpoint plan; adding an endpoint query does not require another registration in `Bind`. Readers
 are shared within that persistence instance, while inputs and results remain invocation-scoped. A foreign
 query, changed bound or stronger consistency request is rejected even after a reader has been cached.
@@ -183,6 +183,62 @@ physical preparation. Native account/database/container names are checked when a
 gets its connection from the corresponding native Aspire reference. Its `Bind` supplies runtime clients
 to those plans without rediscovering the split or recompiling the physical remainder.
 
+## Storage preparation and native resource ownership
+
+`StorageModel` owns native mappings, receipt/history/outbox configuration and a single offline composition. The PostgreSQL
+example composes its endpoint plan with `PostgresStorageComposition`; the mixed example uses
+`ComposeServices` with its declared Cosmos source. Infrastructure consumes this same preparation through
+`RequireComposition<T>()`. There is no extra `Preparation` property or application-owned mixed-store `Bind` recipe.
+
+The workers register keyed native singleton clients using the **existing Aspire connection names** (`orders`
+and `inventory-cosmos`). No additional resource catalog is introduced. A PostgreSQL data source owns its pool;
+a Cosmos client owns its connections/caches. Repositories and readers borrow these resources. The Marten store
+uses the exact DI data source selected for the relational repositories.
+
+```csharp
+// For a database whose schema is already migrated:
+builder.Services.AddCohesiveServices(model.Endpoints, model.Storage);
+await using var app = builder.Build();
+await app.MapServicesAsync<OrderEndpoints>();
+await app.RunAsync();
+```
+
+Both Programs register native clients and call `AddCohesiveServices(model.Endpoints, model.Storage)`.
+Product columns, scalar types, nullability, partitioned identity and selected foreign keys are projected
+from the canonical entities and PostgreSQL mappings through `Schema(...)`. Validation-only is the library
+default; the demos explicitly select `CreateIfMissing`. `Bindings.ProductSchema.CreateSql` exposes the
+initial DDL for inspection. Creation contains no ALTER/backfill, and validation rejects drift before admission.
+Relationship enforcement is selected explicitly with `ForeignKey(domain.ReservationOrder)`; the mixed model
+never declares an inventory FK across PostgreSQL and Cosmos.
+
+Local partition and positive/nonnegative quantity rules use typed `schema.Check(...)` declarations, reading
+`FulfillmentStoragePolicy.LocalPartition` rather than repeating it in SQL. Shared order/reservation schema
+configuration lives with `FulfillmentPostgresMappings`; order keys and reservation references both use `C`
+collation. Existing installations using default-collated order keys need a reviewed migration.
+
+The remaining `schema.sql` files contain native additions only: global identity indexes and
+the Draft SQL default. They run through `SchemaPreparation` after generated-schema validation, followed by another contract check. They are
+not inferred from transition rules and are not covered by the generated validator. Their migration and
+verification remain operator/native-SQL responsibilities. The validator covers exact columns/types/nullability,
+explicit collations, immediate non-partial partition/identity uniqueness, validated selected foreign keys and
+the typed checks. Each validation pass uses one metadata batch; the native hook retains before/after validation.
+Existing tables with the old inventory FK or missing status column need a reviewed migration; startup no
+longer silently adds mapped columns. Cyclic foreign-key graphs require native migrations in this first slice.
+Callbacks own transaction policy; failures prevent admission. Coordinate multi-host migrations externally.
+
+The PostgreSQL model declares history authority, reconstitution and outbox options. Async preparation resolves
+the keyed DI Marten store and validates its exact shared data source before history initialization. Auxiliary
+schema policies default to `ValidateOnly`; the demos opt into `CreateIfMissing`. Marten uses native `CreateOnly`
+followed by validation. Receipt/outbox bootstrap requires an existing schema, while Marten owns its configured
+event-schema objects. Cosmos metadata remains validation-only. None of these declarations allocate clients.
+Registration performs no native IO. Mapping awaits one cached preparation; failure or cancellation prevents
+route publication and remains failed for that host. Rebuild the host after correcting configuration.
+
+DI factory registrations own client disposal; registrations of externally supplied instances leave disposal to
+the caller. Stop the host before disposing it so admitted workers stop before native clients are released.
+Do not build a second service provider, allocate clients in repositories, or put request identity, transactions,
+query iterators or results in singleton state. Direct native binding APIs remain available without DI.
+
 Fulfillment treats an existing reservation with the same order, SKU and quantity as an idempotent completed
 intent only when the order is already submitted. A conflicting reservation returns `ReservationConflict`
 before stock changes. Concurrent competing intents can still race the preflight read; conditional creation
@@ -191,3 +247,20 @@ for another intent's reservation. This example does not claim cross-entity trans
 Stock rejection mapping is an exhaustive typed enum switch: adding a new outcome requires updating the
 process definition. Reservation creation and release cannot reject the positive quantity already admitted
 by Reserve; physical failures remain interruptions resolved by the original receipts.
+
+### Upgrading an existing demo database
+
+Fresh databases are generated from the storage model. A database created by the earlier demo can require explicit
+collation/check migration. Stop the demo, back up its database, review
+[`migrations/001-explicit-collations.sql`](migrations/001-explicit-collations.sql), then execute it once against that
+database before starting the new host. It keeps rows and native foreign keys, aligns the declared key collations,
+and validates the new partition/quantity checks; incompatible existing rows abort the transaction. This historical
+migration is tested against seeded legacy tables. It is not run implicitly and is not the fresh-schema authority.
+The migration supports both placements (the mixed placement has no local inventory table); unrelated/custom
+schemas need their own reviewed migration. Marten history format migrations remain separate.
+
+`FulfillmentStorage` and the environment-only `FulfillmentHistoryPolicy` now live with the PostgreSQL worker.
+`Orders.Model` owns only shared mappings/policy and no longer references Marten, so the Cosmos worker does not
+inherit that backend. Native clients remain DI-owned. The embedded native additions run through the model's
+`SchemaPreparation` declaration in one transaction under the schema advisory lock, including in integration tests. Built-in creation serializes competing host
+bootstraps with a transaction advisory lock; custom native-addition callbacks still own their coordination. These callbacks cannot repair projected-schema drift: run reviewed migrations before host preparation.

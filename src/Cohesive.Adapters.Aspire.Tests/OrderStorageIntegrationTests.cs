@@ -1,3 +1,6 @@
+using Cohesive.Adapters.Marten;
+using Marten;
+using JasperFx.Events;
 using Cohesive.Host.Composition;
 using Cohesive.Api.Execution.Services;
 using AspireFirst.Orders;
@@ -26,13 +29,78 @@ public sealed partial class OrderStorageIntegrationTests
     const string ConnectionVariable = "COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING";
 
     [PostgresFact]
+    public async Task Model_receipt_bootstrap_creates_validates_and_rejects_incompatible_schema()
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var table = "receipts_" + Guid.NewGuid().ToString("N");
+        var bindings = Cohesive.Adapters.Postgres.PostgresPersistenceBindings.Define(new("test"), storage => storage
+            .TransitionReceipts(new("public", table, "local"),
+                Cohesive.Adapters.Postgres.PostgresSchemaInitialization.CreateIfMissing));
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => bindings.PrepareReceiptsAsync(database, canceled.Token));
+        await using (var exists = database.CreateCommand("SELECT to_regclass($1) IS NULL"))
+        {
+            exists.Parameters.AddWithValue("public." + table);
+            Assert.Equal(true, await exists.ExecuteScalarAsync());
+        }
+        try
+        {
+            Assert.NotNull(await bindings.PrepareReceiptsAsync(database));
+            Assert.NotNull(await bindings.PrepareReceiptsAsync(database));
+            await using (var alter = database.CreateCommand($"ALTER TABLE public.{table} DROP COLUMN content_hash"))
+                await alter.ExecuteNonQueryAsync();
+            var failure = await Assert.ThrowsAsync<Cohesive.Adapters.Postgres.PostgresSchemaValidationException>(() => bindings.PrepareReceiptsAsync(database));
+            Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.ColumnMismatch, failure.Code);
+            await using var column = database.CreateCommand("SELECT count(*) FROM information_schema.columns WHERE table_name=$1 AND column_name='content_hash'");
+            column.Parameters.AddWithValue(table);
+            Assert.Equal(0L, await column.ExecuteScalarAsync());
+        }
+        finally { await using var drop = database.CreateCommand($"DROP TABLE IF EXISTS public.{table}"); await drop.ExecuteNonQueryAsync(); }
+    }
+
+    [PostgresFact]
+    public async Task Model_receipt_policy_validates_without_migrating_and_binds_every_repository()
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
+        var table = "receipts_" + Guid.NewGuid().ToString("N");
+        var options = new Cohesive.Adapters.Postgres.PostgresTransitionReceiptOptions("public", table, FulfillmentStoragePolicy.LocalPartition);
+        var native = Cohesive.Adapters.Postgres.PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
+            .TransitionReceipts(options)
+            .Entity(Model.Domain.Orders, Model.Storage.Bindings.Mapping(Model.Domain.Orders))
+            .Entity(Model.Domain.Inventory, Model.Storage.Bindings.Mapping(Model.Domain.Inventory))
+            .Entity(Model.Domain.Reservations, Model.Storage.Bindings.Mapping(Model.Domain.Reservations)));
+        var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(native, Model.Endpoints.Plan);
+        var registrations = new ServiceCollection();
+        registrations.AddKeyedSingleton(FulfillmentStoragePolicy.OrdersDatabaseName, database);
+        await using var provider = registrations.BuildServiceProvider();
+        var missing = await Assert.ThrowsAsync<Cohesive.Adapters.Postgres.PostgresSchemaValidationException>(() => composition.BindAsync(provider).AsTask());
+        Assert.Equal(Cohesive.Adapters.Postgres.PostgresSchemaDiagnosticCodes.TableMissing, missing.Code);
+        await using (var exists = database.CreateCommand("SELECT to_regclass($1) IS NULL"))
+        {
+            exists.Parameters.AddWithValue("public." + table);
+            Assert.Equal(true, await exists.ExecuteScalarAsync());
+        }
+        try
+        {
+            await using (var migrate = database.CreateCommand(options.SchemaSql)) await migrate.ExecuteNonQueryAsync();
+            var persistence = await composition.BindAsync(provider);
+            foreach (var entity in new[] { Model.Domain.Orders.Definition, Model.Domain.Inventory.Definition, Model.Domain.Reservations.Definition })
+            {
+                var repository = persistence.Repository(ValueContract.FromShape(entity.Shape));
+                Assert.True(repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt);
+                Assert.Equal(FulfillmentStoragePolicy.LocalPartition, repository.TransitionOperationCapabilities.PartitionKey);
+            }
+        }
+        finally { await using var drop = database.CreateCommand($"DROP TABLE public.{table}"); await drop.ExecuteNonQueryAsync(); }
+    }
+
+    [PostgresFact]
     public async Task Example_schema_round_trip_and_stale_write_rejection()
     {
         // Only point this opt-in test at a disposable example database.
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
-        await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
-            await command.ExecuteNonQueryAsync();
+        await Model.Storage.Bindings.PrepareSchemaAsync(database);
         var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var repository = persistence.Repository(Model.Domain.Orders);
         var context = OperationContext.Create();
@@ -113,9 +181,7 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Concurrent_HTTP_submits_return_one_commit_and_one_sanitized_conflict_without_middleware()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
-        await using (var command = database.CreateCommand(await schema.ReadToEndAsync()))
-            await command.ExecuteNonQueryAsync();
+        await Model.Storage.Bindings.PrepareSchemaAsync(database);
         var persistence = Model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
         var repository = persistence.Repository(Model.Domain.Orders);
         var context = OperationContext.Create();
@@ -155,13 +221,16 @@ public sealed partial class OrderStorageIntegrationTests
         finally { await DeleteOrder(database, id.ToString("D")); }
     }
 
-    [PostgresFact]
-    public async Task Actual_program_bootstraps_schema_context_and_order_HTTP_contract()
+    [PostgresTheory]
+    [InlineData(EntityStateAuthority.State)]
+    [InlineData(EntityStateAuthority.Events)]
+    public async Task Actual_program_bootstraps_schema_context_and_order_HTTP_contract(EntityStateAuthority authority)
     {
         var connection = Environment.GetEnvironmentVariable(ConnectionVariable)!;
         var start = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         start.ArgumentList.Add(typeof(FulfillmentApplication).Assembly.Location);
         start.Environment["ConnectionStrings__orders"] = connection;
+        start.Environment["EntityState__Authority"] = authority.ToString();
         start.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
         start.Environment["Logging__LogLevel__Default"] = "Information";
         using var process = Process.Start(start)!;
@@ -187,22 +256,31 @@ public sealed partial class OrderStorageIntegrationTests
             id = (await created.Content.ReadFromJsonAsync<OrderCreated>())!.Id;
             Assert.Equal($"/orders/{id}", created.Headers.Location!.OriginalString);
             // Domain identity is an opaque string, even though creation currently allocates UUID text.
-            var opaqueId = "order-" + Guid.NewGuid().ToString("N");
-            await using (var database = NpgsqlDataSource.Create(connection))
-            await using (var rename = database.CreateCommand("UPDATE public.cohesive_orders SET order_id=$1 WHERE order_id=$2"))
+            if (authority == EntityStateAuthority.State)
             {
-                rename.Parameters.AddWithValue(opaqueId);
-                rename.Parameters.AddWithValue(id);
-                Assert.Equal(1, await rename.ExecuteNonQueryAsync());
+                var opaqueId = "order-" + Guid.NewGuid().ToString("N");
+                await using (var database = NpgsqlDataSource.Create(connection))
+                await using (var rename = database.CreateCommand("UPDATE public.cohesive_orders SET order_id=$1 WHERE order_id=$2"))
+                {
+                    rename.Parameters.AddWithValue(opaqueId);
+                    rename.Parameters.AddWithValue(id);
+                    Assert.Equal(1, await rename.ExecuteNonQueryAsync());
+                }
+                id = opaqueId;
             }
-            id = opaqueId;
             Assert.Equal(OrderStatus.Draft, (await client.GetFromJsonAsync<OrderSummary>($"/orders/{id}"))!.Status);
             Assert.Empty((await client.GetFromJsonAsync<OrderDetails>($"/orders/{id}/details"))!.Reservations);
             await using (var database = NpgsqlDataSource.Create(connection))
-            await using (var seed = database.CreateCommand("INSERT INTO public.cohesive_inventory VALUES ($1, 'local', 5, 0)"))
             {
-                seed.Parameters.AddWithValue(fulfillmentSku);
-                await seed.ExecuteNonQueryAsync();
+                using var events = DocumentStore.For(options =>
+                {
+                    options.Connection(database); options.DatabaseSchemaName = "cohesive_events";
+                    options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
+                    options.UseCohesiveEntityHistory();
+                });
+                var history = await MartenEntityHistoryStorage.BindAsync(database, events, authority);
+                var inventory = Model.Storage.Bindings.Bind(database, "test/seed").Repository(Model.Domain.Inventory, stateHistory: history);
+                await inventory.Upsert(OperationContext.Create(), new InventoryItem(fulfillmentSku, FulfillmentStoragePolicy.LocalPartition, 5));
             }
             var fulfillment = await client.PostAsJsonAsync("/fulfillment", new ServiceProcessCommand<FulfillOrder>(id, id, id, "1", new(id, fulfillmentSku, 2)));
             Assert.Equal(HttpStatusCode.Accepted, fulfillment.StatusCode);
@@ -292,6 +370,15 @@ public sealed partial class OrderStorageIntegrationTests
         {
             Interlocked.Increment(ref writes);
             return inner.Upsert(context, write);
+        }
+    }
+
+    sealed class PostgresTheoryAttribute : TheoryAttribute
+    {
+        public PostgresTheoryAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ConnectionVariable)))
+                Skip = $"Set {ConnectionVariable} to a disposable PostgreSQL database.";
         }
     }
 

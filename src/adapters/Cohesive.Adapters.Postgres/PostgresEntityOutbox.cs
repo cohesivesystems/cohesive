@@ -24,6 +24,11 @@ public sealed class PostgresEntityOutboxOptions
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumCommitBytes);
         MaximumCommitBytes = maximumCommitBytes;
         Commits = Name("_commits"); Emissions = Name("_emissions");
+        catalog = new([
+            new(Commits, [new("sequence", "bigint", true, Identity: "a"), new("entity_type", "text", true),
+                new("content", "bytea", true), new("content_hash", "text", true), new("format_version", "integer", true)], [new(["sequence"], PostgresCatalogSchema.PrimaryKey)]),
+            new(Emissions, [new("emission_id", "text", true), new("sequence", "bigint", true)], [new(["emission_id"], PostgresCatalogSchema.PrimaryKey)],
+                [new(["sequence"], Commits, ["sequence"], DiagnosticColumn: "sequence")])]);
         var commit = new SqlInsertBuilder(new SqlQualifiedTable(schema, prefix + "_commits"));
         foreach (var column in new[] { "entity_type", "content", "content_hash", "format_version" })
             commit.Value(column, SqlExpression.RuntimeParameter(column));
@@ -39,6 +44,7 @@ public sealed class PostgresEntityOutboxOptions
             return new SqlQualifiedTable(schema, prefix + suffix).ToSql(PostgresSqlDialect.Instance);
         }
     }
+    readonly PostgresCatalogSchema catalog;
     internal string InsertCommitSql { get; }
     internal string InsertEmissionSql { get; }
     internal string Commits { get; }
@@ -55,21 +61,21 @@ public sealed class PostgresEntityOutboxOptions
     /// <param name="dataSource">Native data source owned by the caller.</param>
     /// <param name="cancellationToken">Metadata-read cancellation.</param>
     /// <returns>Validated storage on this exact data source.</returns>
-    /// <exception cref="InvalidOperationException">Schema needs explicit migration.</exception>
+    /// <exception cref="PostgresSchemaValidationException">A table, column, identity, key or foreign key needs explicit migration.</exception>
     /// <exception cref="NpgsqlException">Metadata access fails.</exception>
     public async Task<PostgresEntityOutboxStorage> BindAsync(NpgsqlDataSource dataSource, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(dataSource);
-        await PostgresEntityAuxiliarySchema.ValidateTable(dataSource, Commits,
-            ["sequence:bigint", "entity_type:text", "content:bytea", "content_hash:text", "format_version:integer"], ["sequence"], cancellationToken);
-        await PostgresEntityAuxiliarySchema.ValidateTable(dataSource, Emissions,
-            ["emission_id:text", "sequence:bigint"], ["emission_id"], cancellationToken);
-        await using var identity = dataSource.CreateCommand("SELECT attidentity::text FROM pg_attribute WHERE attrelid=to_regclass($1) AND attname='sequence'");
-        identity.Parameters.AddWithValue(Commits);
-        if (await identity.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not "a")
-            throw new InvalidOperationException("Outbox sequence requires its generated-always identity column.");
+        await catalog.ValidateAsync(dataSource, PostgresSchemaInitialization.ValidateOnly, cancellationToken).ConfigureAwait(false);
         return new(dataSource, this);
     }
+
+    internal async Task<PostgresEntityOutboxStorage?> AdmitAsync(NpgsqlDataSource dataSource,
+        PostgresSchemaInitialization policy, CancellationToken cancellationToken)
+    {
+        var admission = await catalog.ValidateAsync(dataSource, policy, cancellationToken).ConfigureAwait(false);
+        return admission.MissingCount == 0 ? new(dataSource, this) : null;
+    }
+
 }
 
 /// <summary>Validated native outbox attachment; does not deliver or acknowledge interactions.</summary>

@@ -16,6 +16,7 @@ namespace Cohesive.Adapters.Postgres;
 public sealed partial class PostgresPersistenceBindings
 {
     readonly AuthoringState<PostgresPersistenceBindings> state;
+    readonly WeakPreparationCache<RelationQueryCompilationRequest, PostgresRelationQueryCompiledArtifact> preparedQueries = new();
     ExceptionDispatchInfo? preparationFailure;
     internal readonly Dictionary<QualifiedShapeId, (EntityDefinition Entity, PostgresEntityRepositoryMapping Mapping)> Tables = [];
     /// <summary>Creates offline bindings for one explicitly identified database.</summary>
@@ -25,8 +26,58 @@ public sealed partial class PostgresPersistenceBindings
     {
         if (string.IsNullOrWhiteSpace(database.Value)) throw new ArgumentException("Database identity is required.", nameof(database));
         Database = database;
-        state = new(() => { preparationFailure?.Throw(); return this; });
+        state = new(() =>
+        {
+            preparationFailure?.Throw();
+            if (schemaSelected) productSchema = new(Tables, configureSchema);
+            return this;
+        });
     }
+    /// <summary>Optional native receipt policy, owned by these mappings rather than service binding.</summary>
+    public PostgresTransitionReceiptOptions? ReceiptOptions { get; private set; }
+
+    /// <summary>Schema admission policy applied during async runtime preparation.</summary>
+    public PostgresSchemaInitialization ReceiptInitialization { get; private set; }
+
+    /// <summary>Prepares configured receipts against a borrowed native data source.</summary>
+    /// <param name="database">Native database shared with entity repositories.</param>
+    /// <param name="cancellationToken">Cancellation of schema creation and validation.</param>
+    /// <returns>Validated storage, or null when receipts are not configured.</returns>
+    /// <remarks>Called once by host preparation, never during offline definition. CreateIfMissing creates only
+    /// the receipt table in an existing schema; it does not migrate incompatible tables or retry failures.
+    /// Concurrent identical bootstraps are serialized. Explicit asynchronous preparation repeats admission checks; synchronous Bind performs no I/O.</remarks>
+    /// <exception cref="ArgumentNullException">Database is null.</exception>
+    /// <exception cref="OperationCanceledException">Preparation is canceled.</exception>
+    /// <exception cref="InvalidOperationException">Existing schema is incompatible.</exception>
+    /// <exception cref="NpgsqlException">Native schema creation or metadata access fails.</exception>
+    public async Task<PostgresTransitionReceiptStorage?> PrepareReceiptsAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(database);
+        _ = state.Value;
+        return await PostgresSchemaPreparation.PrepareAsync(database, ReceiptOptions, ReceiptInitialization,
+            static options => options.SchemaSql, static (options, source, policy, token) => options.AdmitAsync(source, policy, token), cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Declares atomic operation receipts for repositories bound from this database.</summary>
+    /// <param name="options">Native schema/table and trusted partition policy.</param>
+    /// <param name="initialization">Validate only by default; explicitly opt into receipt-table bootstrap.</param>
+    /// <returns>This authoring builder.</returns>
+    /// <exception cref="ArgumentNullException">Options are null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Initialization policy is unknown.</exception>
+    /// <exception cref="InvalidOperationException">Already configured or frozen.</exception>
+    public PostgresPersistenceBindings TransitionReceipts(PostgresTransitionReceiptOptions options, PostgresSchemaInitialization initialization = PostgresSchemaInitialization.ValidateOnly)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!Enum.IsDefined(initialization)) throw new ArgumentOutOfRangeException(nameof(initialization));
+        return state.Edit(() =>
+        {
+            if (ReceiptOptions is not null) throw new InvalidOperationException("Receipt policy is already declared.");
+            ReceiptOptions = options;
+            ReceiptInitialization = initialization;
+            return this;
+        });
+    }
+
     /// <summary>Database identity covered by these mappings.</summary>
     public PostgresRelationQueryDatabaseId Database { get; }
 
@@ -139,6 +190,11 @@ public sealed partial class PostgresPersistenceBindings
     {
         ArgumentNullException.ThrowIfNull(request);
         _ = state.Value;
+        return preparedQueries.Get(request, PrepareCore);
+    }
+
+    PostgresRelationQueryCompiledArtifact PrepareCore(RelationQueryCompilationRequest request)
+    {
         var compilation = RelationQueryStaticCompiler.Compile(request);
         if (!compilation.IsSuccessful) throw new RelationQueryPreparationException("query preparation", compilation);
         var plan = compilation.Plan!;

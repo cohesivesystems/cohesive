@@ -14,5 +14,15 @@ public abstract class StorageModel : IAuthoringModel
     /// <summary>Frozen native binding contributions in declaration order; retains their original instances.</summary>
     public ImmutableArray<object> Definition => Storage.Build();
 
+    /// <summary>Exact adapter preparation owned by this model; null for a model without composed placement.</summary>
+    public IStorageComposition? Composition { get { _ = Definition; return Storage.Composition; } }
+
+    /// <summary>Gets the selected offline composition with its native adapter API.</summary>
+    /// <typeparam name="T">Expected adapter preparation.</typeparam>
+    /// <returns>The shared prepared instance.</returns>
+    /// <exception cref="InvalidOperationException">The model has no composition of the requested kind.</exception>
+    public T RequireComposition<T>() where T : class, IStorageComposition => Composition as T
+        ?? throw new InvalidOperationException($"Storage model requires composition {typeof(T).Name}.");
+
     void IAuthoringModel.Complete() => _ = Definition;
 }

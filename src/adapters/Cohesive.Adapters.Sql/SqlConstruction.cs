@@ -1931,8 +1931,11 @@ internal sealed class SqlRenderContext
     static string Placeholder(int position) => $"${position.ToString(CultureInfo.InvariantCulture)}";
 }
 
-internal static class SqlOperators
+/// <summary>Canonical SQL tokens for the shared operator vocabulary.</summary>
+public static class SqlOperators
 {
+    /// <summary>Returns the SQL token for a binary operator.</summary>
+    /// <param name="operator">Shared operator.</param><returns>Native SQL token.</returns>
     public static string Text(SqlBinaryOperator @operator) => @operator switch
     {
         SqlBinaryOperator.Equal => "=",
@@ -1953,6 +1956,8 @@ internal static class SqlOperators
         _ => throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported SQL binary operator.")
     };
 
+    /// <summary>Returns the SQL token for a unary operator.</summary>
+    /// <param name="operator">Shared operator.</param><returns>Native SQL token.</returns>
     public static string Text(SqlUnaryOperator @operator) => @operator switch
     {
         SqlUnaryOperator.Not => "NOT ",
@@ -1960,6 +1965,8 @@ internal static class SqlOperators
         _ => throw new ArgumentOutOfRangeException(nameof(@operator), @operator, "Unsupported SQL unary operator.")
     };
 
+    /// <summary>Returns the SQL token for a join.</summary>
+    /// <param name="kind">Shared join kind.</param><returns>Native SQL token.</returns>
     public static string Text(SqlJoinKind kind) => kind switch
     {
         SqlJoinKind.Inner => "INNER JOIN",

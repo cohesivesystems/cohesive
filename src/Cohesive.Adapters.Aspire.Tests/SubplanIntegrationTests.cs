@@ -17,9 +17,7 @@ public sealed partial class OrderStorageIntegrationTests
         await using var inventoryDatabase = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(InventoryConnectionVariable)!);
         foreach (var database in new[] { orders, inventoryDatabase })
         {
-            using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
-            await using var command = database.CreateCommand(await schema.ReadToEndAsync());
-            await command.ExecuteNonQueryAsync();
+            await Model.Storage.Bindings.PrepareSchemaAsync(database);
         }
         var id = Guid.NewGuid().ToString("D");
         var sku = "subplan-" + Guid.NewGuid().ToString("N");

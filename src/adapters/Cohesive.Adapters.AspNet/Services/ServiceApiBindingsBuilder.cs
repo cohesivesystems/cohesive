@@ -29,7 +29,23 @@ public sealed class ServiceApiBindingsBuilder
     ServiceApiBindings? built;
     IServiceCollection? builtServices;
     IServicePersistence? builtPersistence;
-    readonly List<Func<IServiceCollection, IServicePersistence, PreparedApiContribution>> contributions = [];
+    readonly List<Func<IServiceProcessLifetime, IServicePersistence, PreparedApiContribution>> contributions = [];
+    readonly List<Action<IServiceCollection>> registrations = [];
+    internal void ConfigureServices(Action<IServiceCollection> configure) => registrations.Add(configure);
+    internal void Register(IServiceCollection services)
+    {
+        Complete();
+        lock (buildGate)
+        {
+            if (builtServices is not null)
+            {
+                if (!ReferenceEquals(builtServices, services)) throw ServiceImplementationPlan.Error("services.api.hostMismatch", "API bindings belong to one host.");
+                return;
+            }
+            foreach (var register in registrations) register(services);
+            builtServices = services;
+        }
+    }
     readonly AuthoringState<ServiceApiBindingsBuilder> state;
 
     /// <summary>Starts an empty, host-local implementation composition.</summary>
@@ -55,14 +71,15 @@ public sealed class ServiceApiBindingsBuilder
         return state.Edit(() =>
         {
             var count = contributions.Count;
+            var registrationCount = registrations.Count;
             try { Plan.Contribute(definition, () => configure(new(this, api, definition))); }
-            catch { contributions.RemoveRange(count, contributions.Count - count); throw; }
+            catch { contributions.RemoveRange(count, contributions.Count - count); registrations.RemoveRange(registrationCount, registrations.Count - registrationCount); throw; }
             return this;
         });
     }
 
     internal void Add(Func<IServicePersistence, PreparedApiContribution> prepare) => state.Edit(() => { contributions.Add((_, persistence) => prepare(persistence)); return this; });
-    internal void Add(Func<IServiceCollection, IServicePersistence, PreparedApiContribution> prepare) =>
+    internal void Add(Func<IServiceProcessLifetime, IServicePersistence, PreparedApiContribution> prepare) =>
         state.Edit(() => { contributions.Add(prepare); return this; });
     /// <summary>Freezes authoring and validates offline endpoint coverage without preparing native resources.</summary>
     /// <exception cref="ServiceBindingValidationException">Coverage is incomplete or inconsistent.</exception>
@@ -79,20 +96,26 @@ public sealed class ServiceApiBindingsBuilder
     /// <exception cref="ServiceBindingValidationException">Contract coverage or implementation ownership is invalid.</exception>
     public ServiceApiBindings Build(IServiceCollection services, IServicePersistence persistence)
     {
-        ArgumentNullException.ThrowIfNull(services); ArgumentNullException.ThrowIfNull(persistence);
+        ArgumentNullException.ThrowIfNull(services);
+        Register(services);
+        return Build(new ServiceCollectionProcessLifetime(services), persistence);
+    }
+
+    internal ServiceApiBindings Build(IServiceProcessLifetime lifetime, IServicePersistence persistence)
+    {
+        ArgumentNullException.ThrowIfNull(persistence);
         _ = state.Value;
         lock (buildGate)
         {
             if (built is not null)
             {
-                if (!ReferenceEquals(services, builtServices) || !ReferenceEquals(persistence, builtPersistence))
-                    throw ServiceImplementationPlan.Error("services.api.hostMismatch", "Build a separate model for a different host or persistence scope.");
+                if (!ReferenceEquals(builtPersistence, persistence))
+                    throw ServiceImplementationPlan.Error("services.api.hostMismatch", "API bindings are already prepared for another persistence runtime.");
                 return built;
             }
             var definition = Plan.Definition;
-            var prepared = contributions.Select(prepare => prepare(services, persistence)).ToArray();
-            foreach (var process in prepared.SelectMany(item => item.LoggedProcesses)) services.AddCohesiveTransitionFailureLogging(process);
-            builtServices = services;
+            var prepared = contributions.Select(prepare => prepare(lifetime, persistence)).ToArray();
+            foreach (var process in prepared.SelectMany(item => item.LoggedProcesses)) lifetime.Log(process);
             builtPersistence = persistence;
             return built = new(definition, prepared);
         }
@@ -283,13 +306,14 @@ public sealed class ServiceApiImplementation<TApi>
         {
             model.Plan.Implement(definition, start);
             model.Plan.Implement(definition, result);
-            model.Add((services, persistence) =>
+            var policies = authorizationPolicyResolver;
+            model.ConfigureServices(services => policies ??= ServiceProcessHttpAuthorization.Register(services, pair, authorization));
+            model.Add((lifetime, persistence) =>
             {
                 var prepared = service.PrepareProcess(process.Definition, persistence.Repository);
-                if (logPrivateFailures) services.AddCohesiveTransitionFailureLogging(prepared);
-                var worker = services.AddCohesiveHostProcessWorker(prepared, maximumExecutions);
+                if (logPrivateFailures) lifetime.Log(prepared);
+                var worker = lifetime.Worker(prepared, maximumExecutions);
                 var runtime = worker.Bind(declaration, authority, authorization);
-                var policies = authorizationPolicyResolver ?? ServiceProcessHttpAuthorization.Register(services, pair, authorization);
                 return new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project, policies), []);
             });
         });

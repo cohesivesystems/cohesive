@@ -52,8 +52,7 @@ public sealed class FulfillmentProcessIntegrationTests
         string expectedStatus, int remaining, bool interruptReservation, FulfillmentOutcome expectedOutcome, bool existingReservation = false)
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")!);
-        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
-        await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
+        await Model.Storage.Bindings.PrepareSchemaAsync(database);
         var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
         await using (var command = database.CreateCommand(receipts.SchemaSql)) await command.ExecuteNonQueryAsync();
         var receiptStorage = await receipts.BindAsync(database);
@@ -169,8 +168,7 @@ public sealed class FulfillmentProcessIntegrationTests
     {
         var model = ModelActivator.Create<FulfillmentApplication>();
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")!);
-        using var schema = new StreamReader(typeof(FulfillmentApplication).Assembly.GetManifestResourceStream("Orders.schema.sql")!);
-        await using (var command = database.CreateCommand(await schema.ReadToEndAsync())) await command.ExecuteNonQueryAsync();
+        await Model.Storage.Bindings.PrepareSchemaAsync(database);
         var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
         await using (var command = database.CreateCommand(receipts.SchemaSql)) await command.ExecuteNonQueryAsync();
         var receiptStorage = await receipts.BindAsync(database);

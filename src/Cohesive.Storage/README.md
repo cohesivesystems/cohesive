@@ -262,3 +262,16 @@ entity definition. Stream position is separate from semantic version; replay nev
 transition or publishes an envelope. PostgreSQL supplies conditional append, exact checkpoints and
 atomic composition with existing transition receipts and outbox contracts. This initial action
 contract stores complete canonical state; it is not a custom domain-event reducer.
+
+### Composite preparation
+
+`StorageModelBuilder.Compose` retains one `IStorageComposition` over the exact native bindings previously
+contributed with `Define`. Foreign instances are rejected; subsequent source additions and a second composition
+are rejected. `StorageModel.Composition` exposes the shared preparation, and `RequireComposition<T>` provides
+its adapter API. This is offline placement/preparation, not a second client registry.
+
+`IEntityStorageBinding` connects an entity's acquisition declaration to its native runtime registration.
+Its `BindAsync` borrows host-registered resources and validates required metadata. Service adapters implement
+`IServiceStorageComposition` in Api.Execution to return prepared service persistence. The Storage layer does
+not reference API or infrastructure packages. Each provider remains responsible for its native configuration
+and guarantees; composition never upgrades independent sources to a shared snapshot.

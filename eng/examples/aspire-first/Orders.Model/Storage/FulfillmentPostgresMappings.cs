@@ -1,38 +1,16 @@
 using Cohesive.Adapters.Postgres;
-using Cohesive.Storage;
-
+using Cohesive.Adapters.Sql;
 namespace AspireFirst.Orders;
-
-/// <summary>Instance-owned native storage attachments to the exact domain supplied by composition.</summary>
-public sealed class FulfillmentStorage : StorageModel
-{
-    /// <summary>Builds immutable offline mappings without opening a connection.</summary>
-    /// <param name="domain">Shared canonical entities.</param>
-    /// <param name="mappings">Shared native table mappings.</param>
-    public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings)
-    {
-        Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
-            new(FulfillmentStoragePolicy.OrdersDatabaseName), storage =>
-            {
-                storage.Entity(domain.Orders, mappings.Orders);
-                storage.Entity(domain.Reservations, mappings.Reservations);
-                storage.Entity(domain.Inventory, mappings.Inventory);
-            }));
-    }
-
-    /// <summary>Native mappings for the primary database.</summary>
-    public PostgresPersistenceBindings Bindings { get; }
-
-
-}
 
 /// <summary>Shared native table mappings, independent of which entities a composition places in PostgreSQL.</summary>
 public sealed class FulfillmentPostgresMappings
 {
+    readonly FulfillmentDomain domain;
     /// <summary>Authors each immutable mapping once against the shared domain.</summary>
     /// <param name="domain">Canonical entities owned by this application.</param>
     public FulfillmentPostgresMappings(FulfillmentDomain domain)
     {
+        this.domain = domain;
         Orders = PostgresEntityRepositoryMapping.For(domain.Orders)
             .Table("public", "cohesive_orders").Identity(x => x.Id, "order_id")
             .Partition(x => x.Partition, "partition_key").Column(x => x.Status, "status").Build();
@@ -44,6 +22,17 @@ public sealed class FulfillmentPostgresMappings
             .Table("public", "cohesive_inventory").Identity(x => x.Sku, "sku")
             .Partition(x => x.Partition, "partition_key").Column(x => x.Available, "available").Build();
     }
+    /// <summary>Shared constraints for orders/reservations in either database placement.</summary>
+    /// <param name="schema">Native schema declaration for the mapped entities.</param>
+    public void ConfigureOrderSchema(PostgresEntitySchemaBuilder schema) => schema
+        .ForeignKey(domain.ReservationOrder)
+        .Collation(domain.Orders, item => item.Id, "C")
+        .Collation(domain.Reservations, item => item.Id, "C")
+        .Collation(domain.Reservations, item => item.OrderId, "C")
+        .Collation(domain.Reservations, item => item.Sku, "C")
+        .Check(domain.Reservations, item => item.Partition, SqlBinaryOperator.Equal, FulfillmentStoragePolicy.LocalPartition)
+        .Check(domain.Reservations, item => item.Quantity, SqlBinaryOperator.GreaterThan, 0);
+
     /// <summary>Native order table mapping.</summary>
     public PostgresEntityRepositoryMapping Orders { get; }
     /// <summary>Native reservation table mapping.</summary>

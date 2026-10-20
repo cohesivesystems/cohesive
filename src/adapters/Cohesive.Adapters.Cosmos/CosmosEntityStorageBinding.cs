@@ -1,4 +1,5 @@
 using Cohesive.Model;
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
@@ -9,7 +10,7 @@ namespace Cohesive.Adapters.Cosmos;
 /// <summary>One canonical observation-container declaration for repository access and bounded query acquisition.</summary>
 /// <remarks>Uses the adapter's standard observation envelope and a fixed string partition. Native container
 /// partition metadata must be verified by the host. No client or IO is needed for construction.</remarks>
-public sealed class CosmosEntityStorageBinding
+public sealed class CosmosEntityStorageBinding : IEntityStorageBinding
 {
     readonly EntityDefinition entity;
     readonly string identityField;
@@ -43,7 +44,7 @@ public sealed class CosmosEntityStorageBinding
         this.identityField = identityField;
         partition = EntityPartitionKeyPolicy.Fixed(partitionKey, partitionField);
         Query = new(entity.StateShape.QualifiedId, account, database, container,
-            new("partitionKey", logicalPartition, fixedPartitionKey: new PartitionKey(partitionKey),
+            new(CosmosObservationContainerDocument.PartitionField, logicalPartition, fixedPartitionKey: new PartitionKey(partitionKey),
                 maximumEnumerationRows: maximumEnumerationRows, maximumKeysPerQuery: maximumKeysPerQuery,
                 maximumQueryChunks: maximumQueryChunks, maximumSdkPageSize: maximumSdkPageSize),
             FieldPath.FromField(identityField));
@@ -51,6 +52,21 @@ public sealed class CosmosEntityStorageBinding
 
     /// <summary>Offline acquisition metadata used for physical planning and infrastructure evidence.</summary>
     public CosmosEntityQueryBinding Query { get; }
+
+    /// <inheritdoc />
+    public EntityRelationQuerySourceBinding Source => Query.Binding;
+
+    /// <inheritdoc />
+    public async ValueTask<EntityStorageRegistration> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        var client = services.GetRequiredKeyedService<CosmosClient>(Query.Account);
+        var container = client.GetContainer(Query.Database, Query.Container);
+        var metadata = await container.ReadContainerAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        if (metadata.Resource.PartitionKeyPath != CosmosObservationContainerDocument.PartitionPath)
+            throw new InvalidOperationException("The observation envelope requires container partition path /partitionKey.");
+        return Bind(container);
+    }
 
     /// <summary>Binds repository and query acquisition to the same caller-owned native container.</summary>
     /// <param name="container">Container whose database, name and partition metadata were verified by the host.</param>

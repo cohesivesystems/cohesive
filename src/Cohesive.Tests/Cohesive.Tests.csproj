@@ -69,4 +69,7 @@
   <ItemGroup>
     <ProjectReference Include="../adapters/Cohesive.Adapters.Marten/Cohesive.Adapters.Marten.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../eng/examples/aspire-first/migrations/001-explicit-collations.sql" LogicalName="PostgresMigration001.sql" />
+  </ItemGroup>
 </Project>
