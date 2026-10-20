@@ -1,5 +1,9 @@
 using BenchmarkDotNet.Running;
 
+if (args is ["--nested-layout-conformance"]) return Cohesive.Relations.Benchmarks.ObservationNestedLayoutBenchmarks.RunConformance();
+if (args is ["--nested-layout-retained", .. var nestedArgs]) return Cohesive.Relations.Benchmarks.ObservationNestedLayoutBenchmarks.RunRetained(nestedArgs);
+
+
 if (args is ["--shared-layout-retained", .. var sharedRetainedArgs])
     return Cohesive.Relations.Benchmarks.ObservationSharedLayoutBenchmarks.RunRetained(sharedRetainedArgs);
 
