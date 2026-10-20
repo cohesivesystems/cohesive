@@ -34,6 +34,24 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     });
     internal static JsonSerializerOptions DeclaredJsonProfile => DeclaredJsonOptions.Value;
 
+    // Only immutable reflection facts are shared; property values and traversal state stay local.
+    static readonly WeakPreparationCache<Type, ClrProjectionProperty[]> ProjectionProperties = new();
+    readonly record struct ClrProjectionProperty(PropertyInfo Property, string Name, bool UseDeclaredJson);
+
+    static ClrProjectionProperty[] GetProjectionProperties(Type type) =>
+        ProjectionProperties.Get(type, static owner =>
+        {
+            var properties = GetReadableProperties(owner);
+            var prepared = new ClrProjectionProperty[properties.Length];
+            var count = 0;
+            foreach (var property in properties)
+                if (!ShouldIgnoreProperty(property))
+                    prepared[count++] = new(property, ResolvePropertyName(property),
+                        ShouldProjectWithDeclaredJsonType(property.PropertyType));
+            if (count != prepared.Length) System.Array.Resize(ref prepared, count);
+            return prepared;
+        });
+
     readonly ScalarPayload scalar;
     readonly object? reference;
 
@@ -991,19 +1009,13 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         var entered = TryEnterReference(value, ref visited);
         try
         {
-            var properties = GetReadableProperties(value.GetType());
+            var properties = GetProjectionProperties(value.GetType());
             if (properties.Length == 0)
                 return FromObject(EmptyObjectValues);
 
             var values = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
             foreach (var property in properties)
-            {
-                if (ShouldIgnoreProperty(property))
-                    continue;
-
-                var propertyName = ResolvePropertyName(property);
-                values[propertyName] = FromPropertyValue(value, property, ref visited);
-            }
+                values[property.Name] = FromPropertyValue(value, property, ref visited);
 
             return values.Count == 0
                 ? FromObject(EmptyObjectValues)
@@ -1015,14 +1027,14 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         }
     }
 
-    static ObservationValue FromPropertyValue(object source, PropertyInfo property, ref HashSet<object>? visited)
+    static ObservationValue FromPropertyValue(object source, ClrProjectionProperty property, ref HashSet<object>? visited)
     {
-        var value = property.GetValue(source);
+        var value = property.Property.GetValue(source);
         if (value is null)
             return Null;
 
-        if (ShouldProjectWithDeclaredJsonType(property.PropertyType))
-            return ProjectDeclaredJsonValue(value, property.PropertyType);
+        if (property.UseDeclaredJson)
+            return ProjectDeclaredJsonValue(value, property.Property.PropertyType);
 
         return FromObjectCore(value, ref visited);
     }

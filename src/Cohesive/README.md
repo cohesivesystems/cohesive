@@ -55,6 +55,11 @@ JSON tree. See [typed projection qualification](../../docs/performance/hosted-va
 JSON-to-observation conversion reuses repeated property names and string values within large input traversals;
 its temporary bounded table never retains parser data after return. Small inputs bypass preparation.
 See [property-name qualification](../../docs/performance/observation-name-reuse.md).
+CLR property projection prepares immutable property names, ignore decisions and declared-JSON dispatch
+once per exact runtime type through Core's weak preparation cache. Caller values and traversal/cycle
+state remain invocation-owned; failed preparation is retryable. Property getters still run on every call,
+and ordinary CLR projection builds fresh immutable storage. See [projection metadata qualification](../../docs/performance/observation-projection-metadata/README.md).
+
 `ObservationValue.Deserialize<T>` uses pooled UTF-8 storage; results own retained JSON data.
 Explicit `IImmutableObservationProjection` types (including `ShapeGraphDocument`) can reuse decoded
 interpretations of the same immutable payload under the same frozen serializer profile and binary encoding.
