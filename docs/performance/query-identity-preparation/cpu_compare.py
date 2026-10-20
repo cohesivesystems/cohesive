@@ -20,6 +20,7 @@ p.add_argument('--sources', nargs='+', default=['x12-004010-204', 'x12-005030-20
 p.add_argument('--mode', choices=['default', 'pgo-off', 'no-tiering'], default='default')
 p.add_argument('--ari-program', type=Path, help='Original protocol-preparation/Program.cs; needed above 64 cases')
 p.add_argument('--candidate-first', action='store_true')
+p.add_argument('--changed-module', action='append', help='Expected differing DLL; repeat for multiple modules (default: Core and Relations)')
 a = p.parse_args()
 if not 2 <= a.iterations <= 4096 or a.runs < 1:
     p.error('Use 2..4096 iterations and at least one process pair')
@@ -36,7 +37,7 @@ bases = {'control': a.control.resolve(), 'candidate': a.candidate.resolve()}
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 modules = {v: {p.name: sha(p) for p in root.glob('*.dll')} for v, root in bases.items()}
 assert modules['control'].keys() == modules['candidate'].keys()
-assert {n for n in modules['control'] if modules['control'][n] != modules['candidate'][n]} == {'Cohesive.dll', 'Cohesive.Relations.dll'}
+assert {n for n in modules['control'] if modules['control'][n] != modules['candidate'][n]} == set(a.changed_module or ['Cohesive.dll', 'Cohesive.Relations.dll'])
 a.output.mkdir(parents=True, exist_ok=False)
 (a.output / 'modules.json').write_text(json.dumps(modules, indent=2) + '\n')
 if a.iterations > 64:

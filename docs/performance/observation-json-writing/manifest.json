@@ -1,0 +1,61 @@
+{
+  "baselineCommit": "39c490ed9e846f23a88849b915974983229e582a",
+  "publishedDependencies": {
+    "run": 39445812652,
+    "commit": "39c490ed9e846f23a88849b915974983229e582a",
+    "version": "0.1.0-alpha.153"
+  },
+  "ariCommit": "92ff488d952acd72dcc07d9436948cd16fa6ac52",
+  "qualification": "Frozen verified official alpha.153 runtime, replace only local Core in both variants. Other 124 DLLs identical; only Core differs between variants. Package caches remain official and unmodified. Source qualification, not publication of the new fix.",
+  "changedModuleHashes": {
+    "control": "e71b33670308aae6e19a7153dfef1d7870166804b5fde430819c50908a24f7f7",
+    "candidate": "33e5caa6b0e9c2137a3965832e1d534391a366d2d3e9e0bffa0f321c9e78c553"
+  },
+  "moduleManifestSha256": "7eb7b3b60cfc42755113e7ab04543f0dafa83069b8be449708351925338e7428",
+  "sourceSha256": {
+    "src/Cohesive/Model/ObservationValue.cs": "8c2240558445729caf3e1b01ee61d0b66136bd7dd39d80556e472b247461e121",
+    "src/Cohesive.Tests/Model/ObservationJsonWritingTests.cs": "c53e16ce7065b64cb4ce0b33625a3d7a4ce78c52b283b6226a28bc23bbc1fb4b",
+    "eng/runtime-performance/value-conversion/ObservationJsonWritingBenchmarks.cs": "b4d929adc7c64eae335b0cedfa509fea1c8bcf55628d7103dc421fba385f76db"
+  },
+  "counterSha256": "7cb3a5bae50761d1051446b557e0724b4d23182892a54dd83b52e1606cb644a5",
+  "comparison": {
+    "iterations": 2048,
+    "runs": 2,
+    "mode": "default",
+    "sources": [
+      "x12-004010-204",
+      "x12-005030-204"
+    ],
+    "candidateFirst": false,
+    "harnessSha256": {
+      "control": "80c5cef5dc87cb416a6ebbb83164835ba720c4090d2be01fcfde1e4bc136d41a",
+      "candidate": "80c5cef5dc87cb416a6ebbb83164835ba720c4090d2be01fcfde1e4bc136d41a"
+    }
+  },
+  "environment": "Apple M5 Max arm64, macOS 27.0.1, SDK10.0.402/runtime10.0.13, Release",
+  "aggregation": "Within-process median/mean for fixed windows, then median across two independent alternating process pairs/source. CPU includes JIT and GC; no subtraction. No builds, tests, traces or other benchmarks overlap untraced comparisons.",
+  "successfulOriginalX12Cases": 16384,
+  "validation": {
+    "core": {
+      "passed": 5012,
+      "failed": 0,
+      "total": 5072,
+      "notExecuted": 0
+    },
+    "relations": {
+      "passed": 1137,
+      "failed": 0,
+      "total": 1137,
+      "notExecuted": 0
+    },
+    "ariEngine": {
+      "passed": 999,
+      "failed": 0,
+      "total": 1017,
+      "notExecuted": 0
+    }
+  },
+  "allocationGuards": "Median7, fixed256B cap for128/1024 objects; all6 unchanged-baseline guards fail. Measured numeric fixture allocation excludes output storage and writer prepared before measurement.",
+  "benchmark": "BenchmarkDotNet0.15.8 ShortRun in-process,3warmup/3measure,250ms target.12 cases=3 storage*2 widths*2 depths. Favorable and unfavorable timing results retained.",
+  "localRawData": "/tmp/observation-json-x12/comparison"
+}

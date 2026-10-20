@@ -175,6 +175,11 @@ text. Explicit serializer customizations retain their chosen conversion contract
 can opt into `PortableValueJsonConverter.TaggedObservationValues`, which reuses the PortableValue node encoding to
 preserve byte, temporal, numeric, and undefined kinds. Opting in changes the wire format and requires a versioned profile;
 ordinary observation JSON remains unchanged. Entity receipts use the explicit `EntityStorageJson` profile in Storage.
+Ordinary `ObservationValue.WriteTo` retains each store's existing field order, including layout order.
+It directly enumerates common small, owned-dictionary and ordinal storage without boxing; other
+collection implementations retain their normal enumerator and disposal behavior. See
+[JSON writing qualification](../../docs/performance/observation-json-writing/README.md).
+
 Portable validation preserves deterministic diagnostics and writers preserve ordinal field encoding;
 see [field-ordering qualification](../../docs/performance/portable-observation-field-ordering.md).
 
