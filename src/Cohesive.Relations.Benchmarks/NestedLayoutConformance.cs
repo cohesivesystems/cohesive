@@ -105,8 +105,11 @@ internal static class NestedLayoutConformance
         var rows = mixed.ParseDensityAware().GetProperty("payload").Array;
         if (rows[0].Fields is IOrdinalObservationFieldReader || rows[1].Fields is not IOrdinalObservationFieldReader)
             throw new InvalidOperationException("Per-record density selection disagrees with actual presence.");
+        var packedRows = mixed.ParseCompactOrdinal().GetProperty("payload").Array;
+        if (packedRows[0].Fields is not CompactOrdinalObservationFields || packedRows[1].Fields is not OrdinalObservationFields)
+            throw new InvalidOperationException("Packed policy did not retain sparse ordinals/dense vectors.");
         Console.WriteLine($"sparse_128x16_bytes={sparseAllocation},sparse_allocation_budget_bytes=125952");
-        Console.WriteLine($"checks={checks},candidate_variants=3,ownership=passed,allocation_128x16_bytes={allocation},allocation_budget_bytes={128 * 640 + 4096}");
+        Console.WriteLine($"checks={checks},candidate_variants=4,ownership=passed,allocation_128x16_bytes={allocation},allocation_budget_bytes={128 * 640 + 4096}");
         return 0;
     }
 
@@ -128,12 +131,15 @@ internal static class NestedLayoutConformance
         var c = Outcome(() => candidate.ParseSeparated(input, out _));
         var adaptive = new NestedLayoutCandidate(shape, NestedLayoutStorage.DensityAware);
         var d = Outcome(() => adaptive.ParseSeparated(input, out _));
+        var compact = new NestedLayoutCandidate(shape, NestedLayoutStorage.CompactOrdinal);
+        var e = Outcome(() => compact.ParseSeparated(input, out _));
+        if (a != e) throw new InvalidOperationException($"Packed mismatch for {json}: {a} vs {e}");
         if (a != c || a != d) throw new InvalidOperationException($"Adaptive/separated mismatch for {json}: {a} vs {c} vs {d}");
         if (a != b) throw new InvalidOperationException($"Differential mismatch for {json}: {a} vs {b}");
         // Caller bytes never become retained keys or value storage, including escaped keys and fallback.
         try
         {
-            var value = adaptive.ParseSeparated(input, out _);
+            var value = compact.ParseSeparated(input, out _);
             var before = Canonical(value);
             if (!NestedLayoutCandidate.ParseExisting(shape, layout, input).Equals(value)) throw new InvalidOperationException("Value kinds differ.");
             Array.Fill(input, (byte)0);

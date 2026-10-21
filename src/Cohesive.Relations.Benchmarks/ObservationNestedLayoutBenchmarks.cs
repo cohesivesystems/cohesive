@@ -16,6 +16,9 @@ public class ObservationNestedLayoutBenchmarks
     NestedLayoutCandidate candidate = null!;
     NestedLayoutCandidate adaptive = null!;
     ObservationValue densityShared;
+    NestedLayoutCandidate packed = null!;
+    ObservationValue packedShared;
+    long packedPreparationBytes;
     byte[] json = null!;
     ObservationValue existing;
     ObservationValue shared;
@@ -25,7 +28,7 @@ public class ObservationNestedLayoutBenchmarks
     long adaptivePreparationBytes;
 
     /// <summary>Declared scalar fields in each repeated leaf record.</summary>
-    [Params(4, 16, 32, 256)]
+    [Params(4, 16, 32, 65, 129, 256)]
     public int Width { get; set; } = 16;
 
     /// <summary>Rows in an array; single-record scenarios use one.</summary>
@@ -76,6 +79,9 @@ public class ObservationNestedLayoutBenchmarks
         before = GC.GetAllocatedBytesForCurrentThread();
         adaptive = new(shape, NestedLayoutStorage.DensityAware);
         adaptivePreparationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        packed = new(shape, NestedLayoutStorage.CompactOrdinal);
+        packedPreparationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
         json = input;
         names = ["field0", "field" + Width / 2, "field" + (Width - 1), "missing"];
         ordinals = [0, Width / 2, Width - 1, -1];
@@ -86,6 +92,9 @@ public class ObservationNestedLayoutBenchmarks
         Equivalent(existing, candidate.ParseSeparated(json, out _));
         densityShared = adaptive.ParseSeparated(json, out _);
         Equivalent(existing, densityShared);
+        packedShared = packed.ParseSeparated(json, out _);
+        Equivalent(existing, packedShared);
+        if (Read(existing, ordinal: false) != Read(packedShared, ordinal: true)) throw new InvalidOperationException("Packed reads differ.");
         if (Read(existing, ordinal: false) != Read(densityShared, ordinal: true)) throw new InvalidOperationException("Adaptive reads differ.");
         if (ReadExisting() != ReadSharedNames() || (!fellBack && ReadExisting() != ReadOrdinals()))
             throw new InvalidOperationException("Nested field reads differ.");
@@ -111,7 +120,7 @@ public class ObservationNestedLayoutBenchmarks
                     var field = Scenario == "reordered-array" ? Width - 1 - offset : offset;
                     if (Scenario == "sparse-array" && field % 4 != 0) continue;
                     var percentage = Scenario == "mixed-array" ? (row % 2 == 0 ? 25 : 100) : PresentPercent;
-                    if (Scenario is "array" or "mixed-array" && field * 100 / Width >= percentage) continue;
+                    if (Scenario != "sparse-array" && field * 100 / Width >= percentage) continue;
                     writer.WriteNumber((Scenario == "case-array" ? "FIELD" : "field") + field, row + field);
                 }
                 writer.WriteEndObject();
@@ -157,6 +166,21 @@ public class ObservationNestedLayoutBenchmarks
     /// <returns>The complete checksum.</returns>
     [Benchmark]
     public long ParseDensityAwareAndRead() => Read(ParseDensityAware(), ordinal: true);
+
+    /// <summary>Freezes sparse records into packed ordinal storage, retaining fixed vectors for dense records.</summary>
+    /// <returns>A freshly owned completely admitted tree.</returns>
+    [Benchmark]
+    public ObservationValue ParseCompactOrdinal() => packed.ParseSeparated(json, out _);
+
+    /// <summary>Performs the same prebound reads over compact ordinal storage.</summary>
+    /// <returns>The equivalent checksum, with misses preserved.</returns>
+    [Benchmark]
+    public long ReadCompactOrdinal() => Read(packedShared, ordinal: true);
+
+    /// <summary>Includes packed construction, complete admission and prebound reads.</summary>
+    /// <returns>The complete checksum.</returns>
+    [Benchmark]
+    public long ParseCompactOrdinalAndRead() => Read(ParseCompactOrdinal(), ordinal: true);
 
     /// <summary>Profiles the fallback call chain without executing the speculative prefix.</summary>
     /// <returns>The existing fully admitted result.</returns>
@@ -242,7 +266,7 @@ public class ObservationNestedLayoutBenchmarks
     public static int RunConformance() => NestedLayoutConformance.Run();
 
     /// <summary>Measures live retained trees, excluding prepared metadata and the retention array.</summary>
-    /// <param name="args">Width, row count, scenario, existing/shared/density route, retained tree count, and optional present percentage.</param>
+    /// <param name="args">Width, row count, scenario, existing/shared/density/packed route, retained tree count, and optional present percentage.</param>
     /// <returns>Zero with counters; two for invalid arguments.</returns>
     /// <exception cref="InvalidOperationException">Fixture interpretations disagree.</exception>
     public static int RunRetained(string[] args)
@@ -250,14 +274,14 @@ public class ObservationNestedLayoutBenchmarks
         if (args.Length is not (5 or 6) || !int.TryParse(args[0], out var width) || width is < 1 or > 256
             || !int.TryParse(args[1], out var rows) || rows is < 1 or > 4096
             || args[2] is not ("record" or "nested" or "array" or "named-array" or "sparse-array" or "reordered-array" or "mixed-array")
-            || args[3] is not ("existing" or "shared" or "density") || !int.TryParse(args[4], out var count) || count is < 1 or > 20000)
+            || args[3] is not ("existing" or "shared" or "density" or "packed") || !int.TryParse(args[4], out var count) || count is < 1 or > 20000)
             return 2;
         var percent = 100;
         if (args.Length == 6 && (!int.TryParse(args[5], out percent) || percent is < 1 or > 100)) return 2;
         var benchmark = new ObservationNestedLayoutBenchmarks { Width = width, Count = rows, Scenario = args[2], PresentPercent = percent };
         benchmark.Setup();
         Func<ObservationValue> parse = args[3] switch { "shared" => benchmark.ParseSharedSeparated,
-            "density" => benchmark.ParseDensityAware, _ => benchmark.ParseExisting };
+            "density" => benchmark.ParseDensityAware, "packed" => benchmark.ParseCompactOrdinal, _ => benchmark.ParseExisting };
         for (var index = 0; index < 100; index++) _ = parse();
         var values = new ObservationValue[count];
         var beforeHeap = ObservationBenchmarkMemory.CollectLiveBytes();
@@ -266,7 +290,7 @@ public class ObservationNestedLayoutBenchmarks
         var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeAllocation;
         var retained = ObservationBenchmarkMemory.CollectLiveBytes() - beforeHeap;
         GC.KeepAlive(values); GC.KeepAlive(benchmark);
-        Console.WriteLine(FormattableString.Invariant($"width={width},rows={rows},scenario={args[2]},present_percent={percent},route={args[3]},trees={count},allocated_bytes={allocated},retained_bytes={retained},preparation_allocated_bytes={(args[3] == "density" ? benchmark.adaptivePreparationBytes : benchmark.preparationBytes)},projected_layouts={benchmark.candidate.ProjectedLayoutCount}"));
+        Console.WriteLine(FormattableString.Invariant($"width={width},rows={rows},scenario={args[2]},present_percent={percent},route={args[3]},trees={count},allocated_bytes={allocated},retained_bytes={retained},preparation_allocated_bytes={(args[3] == "packed" ? benchmark.packedPreparationBytes : args[3] == "density" ? benchmark.adaptivePreparationBytes : benchmark.preparationBytes)},projected_layouts={benchmark.candidate.ProjectedLayoutCount}"));
         return 0;
     }
 }

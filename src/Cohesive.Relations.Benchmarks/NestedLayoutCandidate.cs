@@ -169,7 +169,7 @@ internal sealed class NestedLayoutCandidate
         values = [];
         if (reader.TokenType != JsonTokenType.StartObject) return false;
         var layout = node.Layout!;
-        if (!strictRoot && node.Storage == NestedLayoutStorage.DensityAware && layout.Count > SmallObservationFields.JsonFieldLimit)
+        if (!strictRoot && (node.Storage is NestedLayoutStorage.DensityAware or NestedLayoutStorage.CompactOrdinal) && layout.Count > SmallObservationFields.JsonFieldLimit)
             return ReadDensityAwareRecord(ref reader, node, out value);
         values = new ObservationValue[layout.Count];
         var count = 0;
@@ -211,7 +211,9 @@ internal sealed class NestedLayoutCandidate
                     // decoded unique presence, including Null, not a guessed schema/input density.
                     if (count <= layout.Count / 2)
                     {
-                        if (count <= SmallObservationFields.JsonFieldLimit)
+                        if (node.Storage == NestedLayoutStorage.CompactOrdinal)
+                            value = ObservationValue.FromObject(CompactOrdinalObservationFields.Create(layout, scratch.AsSpan(0, layout.Count)));
+                        else if (count <= SmallObservationFields.JsonFieldLimit)
                         {
                             var compact = new ObservationJsonObjectBuilder();
                             for (var slot = 0; slot < layout.Count; slot++)
@@ -255,4 +257,4 @@ internal sealed class NestedLayoutCandidate
     }
 }
 
-internal enum NestedLayoutStorage { FixedVector, DensityAware }
+internal enum NestedLayoutStorage { FixedVector, DensityAware, CompactOrdinal }

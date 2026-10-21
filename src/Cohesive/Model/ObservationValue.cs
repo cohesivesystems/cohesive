@@ -351,7 +351,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         if (fields is null)
             return null;
-        if (fields is OrdinalObservationFields or SmallObservationFields or OwnedObservationFields)
+        if (fields is OrdinalObservationFields or SmallObservationFields or OwnedObservationFields or CompactOrdinalObservationFields)
             return fields;
         if (fields.Count == 0)
             return EmptyObjectValues;
