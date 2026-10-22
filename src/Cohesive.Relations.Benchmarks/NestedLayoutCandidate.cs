@@ -19,14 +19,32 @@ internal sealed class NestedLayoutCandidate
     readonly NestedLayoutStorage storage;
     int projectedLayouts;
     int preparationDepth;
+    readonly Dictionary<TypeRef, ObservationLayout> validationLayouts = new(ReferenceEqualityComparer.Instance);
+    readonly ObservationValidationPlan?[]? boundPlans;
 
-    internal NestedLayoutCandidate(GraphShapeId shape, NestedLayoutStorage storage = NestedLayoutStorage.FixedVector)
+    internal NestedLayoutCandidate(GraphShapeId shape, NestedLayoutStorage storage = NestedLayoutStorage.FixedVector, NestedValidationMode validation = NestedValidationMode.Reference)
     {
         this.shape = shape;
         this.storage = storage;
         rootLayout = ObservationLayout.Create(shape);
         root = Record(rootLayout, rootLayout.FieldIdentities.Select((_, index) => rootLayout.GetFieldDefinition(index)));
+        if (validation == NestedValidationMode.LayoutBound && root.Supported)
+        {
+            var definition = shape.Graph.GetShape(shape.ShapeId);
+            boundPlans = new ObservationValidationPlan?[definition.Fields.Length];
+            for (var index = 0; index < boundPlans.Length; index++)
+            {
+                var type = definition.Fields[index].Type;
+                if (type is ArrayTypeRef or ObjectTypeRef or NamedTypeRef or EnumTypeRef)
+                    boundPlans[index] = ObservationValidationPlan.Get(type, shape.Graph).BindLayouts(shape.Graph, validationLayouts);
+            }
+        }
     }
+
+    internal bool ValidateRoot(ReadOnlySpan<ObservationValue> values, ReadOnlySpan<ulong> presence, out string? error) =>
+        boundPlans is null
+            ? ObservationValidator.TryValidateAgainstShape(shape, rootLayout, values, presence, out error)
+            : ObservationValidator.TryValidateAgainstShape(shape, rootLayout, values, presence, out error, boundPlans);
 
     internal int ProjectedLayoutCount => projectedLayouts;
 
@@ -42,7 +60,7 @@ internal sealed class NestedLayoutCandidate
         presence.Clear();
         for (var index = 0; index < values.Length; index++)
             if (values[index].Kind != ObservationValueKind.Undefined) presence[0] |= 1UL << index;
-        if (!ObservationValidator.TryValidateAgainstShape(shape, rootLayout, values, presence, out var error))
+        if (!ValidateRoot(values, presence, out var error))
             throw new ArgumentException(error, nameof(json));
         foreach (var character in json[checked((int)reader.BytesConsumed)..])
             if (character is not (0x20 or 0x09 or 0x0A or 0x0D))
@@ -69,7 +87,7 @@ internal sealed class NestedLayoutCandidate
         presence.Clear();
         for (var index = 0; index < values.Length; index++)
             if (values[index].Kind != ObservationValueKind.Undefined) presence[0] |= 1UL << index;
-        if (!ObservationValidator.TryValidateAgainstShape(shape, rootLayout, values, presence, out var error))
+        if (!ValidateRoot(values, presence, out var error))
             throw new ArgumentException(error, nameof(json));
         foreach (var character in json[checked((int)reader.BytesConsumed)..])
             if (character is not (0x20 or 0x09 or 0x0A or 0x0D))
@@ -136,7 +154,9 @@ internal sealed class NestedLayoutCandidate
             return new(supported: false);
         Shape projection = new(new("nested-layout-" + projectedLayouts++), declarations);
         ShapeGraph physical = new(new("benchmark/" + shape.Graph.Id.Value + "/" + projection.Id.Value), [projection], shape.Graph.NamedTypes);
-        return Record(ObservationLayout.Create(new(physical, projection.Id)), declarations);
+        var layout = ObservationLayout.Create(new(physical, projection.Id));
+        validationLayouts[type] = layout;
+        return Record(layout, declarations);
     }
 
     Node Record(ObservationLayout layout, IEnumerable<FieldDefinition> declarations) =>
@@ -258,3 +278,5 @@ internal sealed class NestedLayoutCandidate
 }
 
 internal enum NestedLayoutStorage { FixedVector, DensityAware, CompactOrdinal }
+
+internal enum NestedValidationMode { Reference, LayoutBound }

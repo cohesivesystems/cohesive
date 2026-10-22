@@ -19,6 +19,13 @@ public class ObservationNestedLayoutBenchmarks
     NestedLayoutCandidate packed = null!;
     ObservationValue packedShared;
     long packedPreparationBytes;
+    NestedLayoutCandidate boundFixed = null!;
+    NestedLayoutCandidate boundPacked = null!;
+    long boundFixedPreparationBytes;
+    long boundPackedPreparationBytes;
+    ObservationValue[] sharedValidationValues = null!;
+    ObservationValue[] packedValidationValues = null!;
+    readonly ulong[] validationPresence = [1];
     byte[] json = null!;
     ObservationValue existing;
     ObservationValue shared;
@@ -82,6 +89,12 @@ public class ObservationNestedLayoutBenchmarks
         before = GC.GetAllocatedBytesForCurrentThread();
         packed = new(shape, NestedLayoutStorage.CompactOrdinal);
         packedPreparationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        boundFixed = new(shape, NestedLayoutStorage.FixedVector, NestedValidationMode.LayoutBound);
+        boundFixedPreparationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        boundPacked = new(shape, NestedLayoutStorage.CompactOrdinal, NestedValidationMode.LayoutBound);
+        boundPackedPreparationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
         json = input;
         names = ["field0", "field" + Width / 2, "field" + (Width - 1), "missing"];
         ordinals = [0, Width / 2, Width - 1, -1];
@@ -93,6 +106,14 @@ public class ObservationNestedLayoutBenchmarks
         densityShared = adaptive.ParseSeparated(json, out _);
         Equivalent(existing, densityShared);
         packedShared = packed.ParseSeparated(json, out _);
+        var boundFixedValue = ParseBoundShared();
+        var boundPackedValue = ParseBoundCompactOrdinal();
+        Equivalent(existing, boundFixedValue);
+        Equivalent(existing, boundPackedValue);
+        sharedValidationValues = [boundFixedValue.Fields!["payload"]];
+        packedValidationValues = [boundPackedValue.Fields!["payload"]];
+        if (!ValidateShared() || !ValidateCompactOrdinal() || !ValidateBoundShared() || !ValidateBoundCompactOrdinal())
+            throw new InvalidOperationException("Prepared admission differs.");
         Equivalent(existing, packedShared);
         if (Read(existing, ordinal: false) != Read(packedShared, ordinal: true)) throw new InvalidOperationException("Packed reads differ.");
         if (Read(existing, ordinal: false) != Read(densityShared, ordinal: true)) throw new InvalidOperationException("Adaptive reads differ.");
@@ -182,6 +203,53 @@ public class ObservationNestedLayoutBenchmarks
     [Benchmark]
     public long ParseCompactOrdinalAndRead() => Read(ParseCompactOrdinal(), ordinal: true);
 
+    /// <summary>Validates an already parsed fixed-layout tree, excluding construction.</summary>
+    /// <returns>Whether the authoritative ordinal root admission accepts the tree.</returns>
+    [Benchmark]
+    public bool ValidateShared() => ObservationValidator.TryValidateAgainstShape(
+        shape, rootLayout, sharedValidationValues, validationPresence, out _);
+
+    /// <summary>Validates an already parsed compact-layout tree, excluding construction.</summary>
+    /// <returns>Whether the authoritative ordinal root admission accepts the tree.</returns>
+    [Benchmark]
+    public bool ValidateCompactOrdinal() => ObservationValidator.TryValidateAgainstShape(
+        shape, rootLayout, packedValidationValues, validationPresence, out _);
+
+    /// <summary>Validates the same fixed-layout tree using explicitly bound original semantic plans.</summary>
+    /// <returns>Whether complete admission accepts the tree.</returns>
+    [Benchmark]
+    public bool ValidateBoundShared() => boundFixed.ValidateRoot(sharedValidationValues, validationPresence, out _);
+
+    /// <summary>Validates the same packed-layout tree using explicitly bound original semantic plans.</summary>
+    /// <returns>Whether complete admission accepts the tree.</returns>
+    [Benchmark]
+    public bool ValidateBoundCompactOrdinal() => boundPacked.ValidateRoot(packedValidationValues, validationPresence, out _);
+
+    /// <summary>Parses fixed-layout records with bound nested validation and original whole-input fallback.</summary>
+    /// <returns>A fresh completely admitted value.</returns>
+    [Benchmark]
+    public ObservationValue ParseBoundShared() => boundFixed.ParseSeparated(json, out _);
+
+    /// <summary>Parses packed sparse records with bound nested validation and original whole-input fallback.</summary>
+    /// <returns>A fresh completely admitted value.</returns>
+    [Benchmark]
+    public ObservationValue ParseBoundCompactOrdinal() => boundPacked.ParseSeparated(json, out _);
+
+    /// <summary>Includes packed construction, bound validation and prebound field reads.</summary>
+    /// <returns>The complete checksum.</returns>
+    [Benchmark]
+    public long ParseBoundCompactOrdinalAndRead() => Read(ParseBoundCompactOrdinal(), ordinal: true);
+
+    /// <summary>Prepares fresh packed parser/layout metadata with already warmed governing graph plans.</summary>
+    /// <returns>The independently owned prepared parser.</returns>
+    [Benchmark]
+    public object PrepareCompactOrdinal() => new NestedLayoutCandidate(shape, NestedLayoutStorage.CompactOrdinal);
+
+    /// <summary>Includes fresh layout bindings and private validation links over warmed governing graph metadata.</summary>
+    /// <returns>The independently owned prepared parser and validation closure.</returns>
+    [Benchmark]
+    public object PrepareBoundCompactOrdinal() => new NestedLayoutCandidate(shape, NestedLayoutStorage.CompactOrdinal, NestedValidationMode.LayoutBound);
+
     /// <summary>Profiles the fallback call chain without executing the speculative prefix.</summary>
     /// <returns>The existing fully admitted result.</returns>
     [Benchmark]
@@ -266,7 +334,7 @@ public class ObservationNestedLayoutBenchmarks
     public static int RunConformance() => NestedLayoutConformance.Run();
 
     /// <summary>Measures live retained trees, excluding prepared metadata and the retention array.</summary>
-    /// <param name="args">Width, row count, scenario, existing/shared/density/packed route, retained tree count, and optional present percentage.</param>
+    /// <param name="args">Width, row count, scenario, existing/shared/density/packed/bound-fixed/bound-packed route, retained tree count, and optional present percentage.</param>
     /// <returns>Zero with counters; two for invalid arguments.</returns>
     /// <exception cref="InvalidOperationException">Fixture interpretations disagree.</exception>
     public static int RunRetained(string[] args)
@@ -274,14 +342,14 @@ public class ObservationNestedLayoutBenchmarks
         if (args.Length is not (5 or 6) || !int.TryParse(args[0], out var width) || width is < 1 or > 256
             || !int.TryParse(args[1], out var rows) || rows is < 1 or > 4096
             || args[2] is not ("record" or "nested" or "array" or "named-array" or "sparse-array" or "reordered-array" or "mixed-array")
-            || args[3] is not ("existing" or "shared" or "density" or "packed") || !int.TryParse(args[4], out var count) || count is < 1 or > 20000)
+            || args[3] is not ("existing" or "shared" or "density" or "packed" or "bound-fixed" or "bound-packed") || !int.TryParse(args[4], out var count) || count is < 1 or > 20000)
             return 2;
         var percent = 100;
         if (args.Length == 6 && (!int.TryParse(args[5], out percent) || percent is < 1 or > 100)) return 2;
         var benchmark = new ObservationNestedLayoutBenchmarks { Width = width, Count = rows, Scenario = args[2], PresentPercent = percent };
         benchmark.Setup();
         Func<ObservationValue> parse = args[3] switch { "shared" => benchmark.ParseSharedSeparated,
-            "density" => benchmark.ParseDensityAware, "packed" => benchmark.ParseCompactOrdinal, _ => benchmark.ParseExisting };
+            "density" => benchmark.ParseDensityAware, "packed" => benchmark.ParseCompactOrdinal, "bound-fixed" => benchmark.ParseBoundShared, "bound-packed" => benchmark.ParseBoundCompactOrdinal, _ => benchmark.ParseExisting };
         for (var index = 0; index < 100; index++) _ = parse();
         var values = new ObservationValue[count];
         var beforeHeap = ObservationBenchmarkMemory.CollectLiveBytes();
@@ -290,7 +358,7 @@ public class ObservationNestedLayoutBenchmarks
         var allocated = GC.GetAllocatedBytesForCurrentThread() - beforeAllocation;
         var retained = ObservationBenchmarkMemory.CollectLiveBytes() - beforeHeap;
         GC.KeepAlive(values); GC.KeepAlive(benchmark);
-        Console.WriteLine(FormattableString.Invariant($"width={width},rows={rows},scenario={args[2]},present_percent={percent},route={args[3]},trees={count},allocated_bytes={allocated},retained_bytes={retained},preparation_allocated_bytes={(args[3] == "packed" ? benchmark.packedPreparationBytes : args[3] == "density" ? benchmark.adaptivePreparationBytes : benchmark.preparationBytes)},projected_layouts={benchmark.candidate.ProjectedLayoutCount}"));
+        Console.WriteLine(FormattableString.Invariant($"width={width},rows={rows},scenario={args[2]},present_percent={percent},route={args[3]},trees={count},allocated_bytes={allocated},retained_bytes={retained},preparation_allocated_bytes={(args[3] == "bound-fixed" ? benchmark.boundFixedPreparationBytes : args[3] == "bound-packed" ? benchmark.boundPackedPreparationBytes : args[3] == "packed" ? benchmark.packedPreparationBytes : args[3] == "density" ? benchmark.adaptivePreparationBytes : benchmark.preparationBytes)},projected_layouts={benchmark.candidate.ProjectedLayoutCount}"));
         return 0;
     }
 }

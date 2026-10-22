@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 
 namespace Cohesive.Model;
@@ -29,6 +30,69 @@ internal sealed class ObservationValidationPlan(TypeRef type)
     {
         if (!ReferenceEquals(Type, expected))
             throw new InvalidOperationException("Validation plan does not belong to the expected type declaration.");
+    }
+
+    // Explicit, private execution bindings. Published graph plans are never modified: a bound
+    // closure shares original declarations/metadata but owns its links and layout permutation.
+    internal ObservationLayout? BoundLayout { get; private set; }
+    internal ImmutableArray<int> BoundOrdinals { get; private set; }
+    internal ShapeGraph? BoundGraph { get; private set; }
+
+    internal ObservationValidationPlan BindLayouts(ShapeGraph graph, IReadOnlyDictionary<TypeRef, ObservationLayout> layouts)
+    {
+        if (!ReferenceEquals(Get(Type, graph), this))
+            throw new ArgumentException("Binding requires the exact graph's published validation plan.", nameof(graph));
+        Dictionary<ObservationValidationPlan, ObservationValidationPlan> copies = new(ReferenceEqualityComparer.Instance);
+        Queue<ObservationValidationPlan> pending = new();
+        var result = Add(this);
+        while (pending.TryDequeue(out var original))
+        {
+            var copy = copies[original];
+            copy.Children = new ObservationValidationPlan?[original.Children.Length];
+            for (var index = 0; index < original.Children.Length; index++)
+                if (original.Children[index] is { } child) copy.Children[index] = Add(child);
+            if (!layouts.TryGetValue(original.Type, out var layout)) continue;
+            var count = original.Type is ObjectTypeRef obj ? obj.Fields.Length
+                : original.Definition is TypeDefinition.Structural structural ? structural.Fields.Length : -1;
+            if (count < 0 || count != layout.Count)
+                throw new ArgumentException("A bound record layout must contain exactly the original declared fields.", nameof(layouts));
+            var ordinals = ImmutableArray.CreateBuilder<int>(count);
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (var index = 0; index < count; index++)
+            {
+                if (original.Type is ObjectTypeRef objectType)
+                {
+                    var field = objectType.Fields[index];
+                    Bind(field.Name, field.Type, field.Cardinality, field.Presence, field.Nullability);
+                }
+                else
+                {
+                    var field = ((TypeDefinition.Structural)original.Definition!).Fields[index];
+                    Bind(field.Name.Value, field.Type, field.Cardinality, field.Presence, field.Nullability);
+                }
+            }
+            copy.BoundLayout = layout;
+            copy.BoundOrdinals = ordinals.MoveToImmutable();
+
+            void Bind(string name, TypeRef type, FieldCardinality cardinality, FieldPresence presence, FieldNullability nullability)
+            {
+                if (!names.Add(name) || !layout.TryGetOrdinal(name, out var ordinal))
+                    throw new ArgumentException("Binding requires unambiguous exact declared names.", nameof(layouts));
+                var field = layout.GetFieldDefinition(ordinal);
+                if (!ReferenceEquals(field.Type, type) || field.Cardinality != cardinality
+                    || field.Presence != presence || field.Nullability != nullability)
+                    throw new ArgumentException("A layout field differs from its original semantic declaration.", nameof(layouts));
+                ordinals.Add(ordinal);
+            }
+        }
+        return result;
+
+        ObservationValidationPlan Add(ObservationValidationPlan original)
+        {
+            if (copies.TryGetValue(original, out var copy)) return copy;
+            copy = new(original.Type) { Definition = original.Definition, metadata = original.Metadata, BoundGraph = graph };
+            copies.Add(original, copy); pending.Enqueue(original); return copy;
+        }
     }
 
     static readonly ConditionalWeakTable<ShapeGraph, GraphPlans> Graphs = new();

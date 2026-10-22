@@ -1,0 +1,17 @@
+{
+  "core_passed": 5183,
+  "core_skipped": 60,
+  "relations_passed": 1149,
+  "focused_tests": 11,
+  "semantic_scenarios": 223,
+  "candidate_variants": 6,
+  "main_timing_processes": 138,
+  "guard_processes": 12,
+  "retained_processes": 14,
+  "cpu_jit_profiles": 7,
+  "tested_core_methods": 11898,
+  "tested_core_il_differences": 0,
+  "warm_bound_sparse_validation_allocated_bytes": 0,
+  "public_api_changed": false,
+  "production_binding_selection_changed": false
+}

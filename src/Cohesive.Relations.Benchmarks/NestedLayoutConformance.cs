@@ -109,7 +109,7 @@ internal static class NestedLayoutConformance
         if (packedRows[0].Fields is not CompactOrdinalObservationFields || packedRows[1].Fields is not OrdinalObservationFields)
             throw new InvalidOperationException("Packed policy did not retain sparse ordinals/dense vectors.");
         Console.WriteLine($"sparse_128x16_bytes={sparseAllocation},sparse_allocation_budget_bytes=125952");
-        Console.WriteLine($"checks={checks},candidate_variants=4,ownership=passed,allocation_128x16_bytes={allocation},allocation_budget_bytes={128 * 640 + 4096}");
+        Console.WriteLine($"checks={checks},candidate_variants=6,ownership=passed,allocation_128x16_bytes={allocation},allocation_budget_bytes={128 * 640 + 4096}");
         return 0;
     }
 
@@ -133,13 +133,19 @@ internal static class NestedLayoutConformance
         var d = Outcome(() => adaptive.ParseSeparated(input, out _));
         var compact = new NestedLayoutCandidate(shape, NestedLayoutStorage.CompactOrdinal);
         var e = Outcome(() => compact.ParseSeparated(input, out _));
+        foreach (var storage in new[] { NestedLayoutStorage.FixedVector, NestedLayoutStorage.CompactOrdinal })
+        {
+            var bound = new NestedLayoutCandidate(shape, storage, NestedValidationMode.LayoutBound);
+            var f = Outcome(() => bound.ParseSeparated(input, out _));
+            if (a != f) throw new InvalidOperationException($"Bound {storage} mismatch for {json}: {a} vs {f}");
+        }
         if (a != e) throw new InvalidOperationException($"Packed mismatch for {json}: {a} vs {e}");
         if (a != c || a != d) throw new InvalidOperationException($"Adaptive/separated mismatch for {json}: {a} vs {c} vs {d}");
         if (a != b) throw new InvalidOperationException($"Differential mismatch for {json}: {a} vs {b}");
         // Caller bytes never become retained keys or value storage, including escaped keys and fallback.
         try
         {
-            var value = compact.ParseSeparated(input, out _);
+            var value = new NestedLayoutCandidate(shape, NestedLayoutStorage.CompactOrdinal, NestedValidationMode.LayoutBound).ParseSeparated(input, out _);
             var before = Canonical(value);
             if (!NestedLayoutCandidate.ParseExisting(shape, layout, input).Equals(value)) throw new InvalidOperationException("Value kinds differ.");
             Array.Fill(input, (byte)0);
