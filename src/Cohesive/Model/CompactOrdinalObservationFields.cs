@@ -5,7 +5,7 @@ using System.Runtime.InteropServices;
 
 namespace Cohesive.Model;
 
-// Experimental physical storage, selected only by the nested benchmark. Meaning and name/ordinal
+// Immutable sparse physical storage used by strict nested ingestion and benchmarks. Meaning and name/ordinal
 // identity remain layout-owned. Present values are packed in declaration order; a bitmap plus
 // per-word rank makes reads independent of the number of preceding fields, including wide layouts.
 internal sealed class CompactOrdinalObservationFields : IReadOnlyDictionary<string, ObservationValue>, IOrdinalObservationFieldReader

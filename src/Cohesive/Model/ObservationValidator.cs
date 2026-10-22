@@ -135,7 +135,7 @@ public static class ObservationValidator
         out string? validationError) =>
         TryValidateAgainstShape(shape, layout, valuesByOrdinal, hasValueBitMask, out validationError, default);
 
-    // Experimental scoped bindings are supplied explicitly; ordinary admission never discovers
+    // Scoped bindings are supplied explicitly; ordinary admission never discovers
     // or installs them in a graph cache. Failures rerun the unchanged diagnostic interpreter.
     internal static bool TryValidateAgainstShape(
         GraphShapeId shape, ObservationLayout layout, ReadOnlySpan<ObservationValue> valuesByOrdinal,
@@ -1205,7 +1205,8 @@ public static class ObservationValidator
         internal ObjectFieldLookup(IReadOnlyDictionary<string, ObservationValue> fields, ObservationValidationPlan? plan)
         {
             Fields = fields;
-            ordinal = fields switch
+            var storage = fields is ObservationNestedFields nested ? nested.Storage : fields;
+            ordinal = storage switch
             {
                 OrdinalObservationFields dense when ReferenceEquals(plan?.BoundLayout, dense.Layout) => dense,
                 CompactOrdinalObservationFields packed when ReferenceEquals(plan?.BoundLayout, packed.Layout) => packed,

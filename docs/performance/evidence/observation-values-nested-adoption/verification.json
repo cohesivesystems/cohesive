@@ -1,0 +1,21 @@
+{
+  "core_passed": 5188,
+  "core_skipped": 60,
+  "relations_passed": 1149,
+  "focused_boundary_tests": 24,
+  "new_tests": 5,
+  "semantic_scenarios": 223,
+  "candidate_variants": 7,
+  "final_timing_processes": 72,
+  "tested_and_both_final_timing_core_binaries_identical": true,
+  "broad_candidate_timing_processes": 60,
+  "initial_timing_processes": 60,
+  "enumerator_timing_processes": 60,
+  "tested_core_methods": 11929,
+  "tested_core_il_differences": 0,
+  "runtime_differences_per_pair": [
+    "Cohesive.dll"
+  ],
+  "public_api_changed": false,
+  "production_boundary": "ObservationMaterializer<T>.MaterializeJson on explicit layout-bound plans"
+}

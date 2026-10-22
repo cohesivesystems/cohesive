@@ -1,4 +1,6 @@
 using System.Buffers;
+using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using System.Globalization;
 using System.Text.Json;
 
@@ -55,7 +57,13 @@ public static class ObservationJsonReader
         ObservationLayout layout,
         scoped Span<ObservationValue> valuesByOrdinal,
         scoped Span<ulong> hasValueBitMask,
-        out string? validationError)
+        out string? validationError) =>
+        TryReadShapeCore(ref reader, shape, layout, valuesByOrdinal, hasValueBitMask, out validationError, null);
+
+    static bool TryReadShapeCore(
+        scoped ref Utf8JsonReader reader, GraphShapeId shape, ObservationLayout layout,
+        scoped Span<ObservationValue> valuesByOrdinal, scoped Span<ulong> hasValueBitMask,
+        out string? validationError, ObservationJsonIngestionPlan? ingestion)
     {
         ArgumentNullException.ThrowIfNull(shape.Graph);
         ArgumentNullException.ThrowIfNull(layout);
@@ -82,7 +90,7 @@ public static class ObservationJsonReader
 
         valuesByOrdinal.Clear();
         hasValueBitMask.Clear();
-        var scope = new ReadScope();
+        var scope = new ReadScope(ingestion);
         try { scope.ReadShapeObject(ref reader, shape.Graph, layout, valuesByOrdinal, hasValueBitMask); }
         finally { scope.Dispose(); }
         return ObservationValidator.TryValidateAgainstShape(
@@ -90,22 +98,28 @@ public static class ObservationJsonReader
             layout,
             valuesByOrdinal,
             hasValueBitMask,
-            out validationError);
+            out validationError, ingestion is null ? default : ingestion.ValidationPlans);
     }
 
     // Complete-input framing shared by strict shape-aware ingestion boundaries. Keep admission before
     // trailing-content checks to preserve the indexed reader's existing failure precedence.
+    internal static bool TryReadShape(
+        ReadOnlySpan<byte> utf8Json, GraphShapeId shape, ObservationLayout layout,
+        scoped Span<ObservationValue> valuesByOrdinal, scoped Span<ulong> hasValueBitMask,
+        out string? validationError) =>
+        TryReadShape(utf8Json, shape, layout, valuesByOrdinal, hasValueBitMask, out validationError, null);
+
     internal static bool TryReadShape(
         ReadOnlySpan<byte> utf8Json,
         GraphShapeId shape,
         ObservationLayout layout,
         scoped Span<ObservationValue> valuesByOrdinal,
         scoped Span<ulong> hasValueBitMask,
-        out string? validationError)
+        out string? validationError, ObservationJsonIngestionPlan? ingestion)
     {
         var reader = new Utf8JsonReader(utf8Json);
         if (!reader.Read()) throw new JsonException("The JSON observation is empty.");
-        if (!TryReadShape(ref reader, shape, layout, valuesByOrdinal, hasValueBitMask, out validationError))
+        if (!TryReadShapeCore(ref reader, shape, layout, valuesByOrdinal, hasValueBitMask, out validationError, ingestion))
             return false;
         foreach (var character in utf8Json[checked((int)reader.BytesConsumed)..])
             if (character is not (0x20 or 0x09 or 0x0A or 0x0D))
@@ -126,6 +140,9 @@ public static class ObservationJsonReader
     ref struct ReadScope
     {
         ObservationJsonPropertyNames.TokenScope strings;
+        ObservationJsonIngestionPlan? ingestion;
+
+        internal ReadScope(ObservationJsonIngestionPlan? ingestion) { strings = default; this.ingestion = ingestion; }
 
         internal void Dispose() => strings.Dispose();
 
@@ -272,6 +289,9 @@ public static class ObservationJsonReader
             if (reader.TokenType != JsonTokenType.StartObject)
                 return ReadValueCore(ref reader);
 
+            if (ingestion is not null && ingestion.TryGetLayout(objectType, out var layout)
+                && TryReadNested(ref reader, layout, graph, out var nested)) return nested;
+
             var values = new ObservationJsonObjectBuilder();
             while (reader.Read())
             {
@@ -303,10 +323,13 @@ public static class ObservationJsonReader
         ObservationValue ReadStructural(
             ref Utf8JsonReader reader,
             TypeDefinition.Structural structural,
-            ShapeGraph graph)
+            ShapeGraph graph, NamedTypeRef named)
         {
             if (reader.TokenType != JsonTokenType.StartObject)
                 return ReadValueCore(ref reader);
+
+            if (ingestion is not null && ingestion.TryGetLayout(named, out var layout)
+                && TryReadNested(ref reader, layout, graph, out var nested)) return nested;
 
             var values = new ObservationJsonObjectBuilder();
             while (reader.Read())
@@ -336,6 +359,51 @@ public static class ObservationJsonReader
             throw new JsonException("The JSON object is incomplete.");
         }
 
+        // A speculative exact-name record borrows scratch only. On the first spelling/unknown
+        // miss, restore the token cursor and use the original typed reader for this object and
+        // the remainder of the input. Completed ancestors/earlier records stay immutable and
+        // validation uses bindings only where their exact private layout still matches.
+        bool TryReadNested(ref Utf8JsonReader reader, ObservationLayout layout, ShapeGraph graph, out ObservationValue value)
+        {
+            var checkpoint = reader;
+            var slots = ArrayPool<ObservationValue>.Shared.Rent(layout.Count);
+            slots.AsSpan(0, layout.Count).Clear();
+            var count = 0;
+            value = default;
+            try
+            {
+                while (reader.Read())
+                {
+                    if (reader.TokenType == JsonTokenType.EndObject)
+                    {
+                        IReadOnlyDictionary<string, ObservationValue> storage;
+                        if (layout.Count > SmallObservationFields.JsonFieldLimit && count <= layout.Count / 2)
+                            storage = CompactOrdinalObservationFields.Create(layout, slots.AsSpan(0, layout.Count));
+                        else
+                        {
+                            ObservationValue[] owned = [.. slots.AsSpan(0, layout.Count)];
+                            storage = new OrdinalObservationFields(layout, ImmutableCollectionsMarshal.AsImmutableArray(owned), count);
+                        }
+                        value = ObservationValue.FromObject(new ObservationNestedFields(storage));
+                        return true;
+                    }
+                    RequireToken(reader.TokenType, JsonTokenType.PropertyName);
+                    if (!layout.TryGetJsonOrdinal(ref reader, out var ordinal))
+                    {
+                        ingestion = null;
+                        reader = checkpoint;
+                        return false;
+                    }
+                    if (!reader.Read()) throw new JsonException("The JSON object ended before its property value.");
+                    var child = ReadFieldValue(ref reader, layout.GetFieldDefinition(ordinal), graph);
+                    if (slots[ordinal].Kind == ObservationValueKind.Undefined) count++;
+                    slots[ordinal] = child;
+                }
+                throw new JsonException("The JSON object is incomplete.");
+            }
+            finally { ArrayPool<ObservationValue>.Shared.Return(slots, clearArray: true); }
+        }
+
         ObservationValue ReadObjectField(
             ref Utf8JsonReader reader,
             TypeRef type,
@@ -357,7 +425,7 @@ public static class ObservationJsonReader
 
             return definition switch
             {
-                TypeDefinition.Structural structural => ReadStructural(ref reader, structural, graph),
+                TypeDefinition.Structural structural => ReadStructural(ref reader, structural, graph, named),
                 TypeDefinition.Enum enumType => ReadPrimitive(ref reader, enumType.Underlying),
                 TypeDefinition.Union union => ReadUnion(ref reader, union, graph),
                 _ => ReadValueCore(ref reader)

@@ -32,7 +32,7 @@ public sealed class ObservationLayout
 
     ObservationLayout(
         GraphShapeId shapeId,
-        Shape shape,
+        ImmutableArray<FieldDefinition> sourceFields,
         ImmutableArray<string> fieldIdentities,
         ImmutableArray<FieldDefinition> fieldDefinitions)
     {
@@ -64,8 +64,8 @@ public sealed class ObservationLayout
                 ordinalByJsonNameHash[hash] = -1;
         }
 
-        var shapeFieldOrdinals = ImmutableArray.CreateBuilder<int>(shape.Fields.Length);
-        foreach (var field in shape.Fields)
+        var shapeFieldOrdinals = ImmutableArray.CreateBuilder<int>(sourceFields.Length);
+        foreach (var field in sourceFields)
         {
             shapeFieldOrdinals.Add(
                 ordinalByFieldIdentity.TryGetValue(field.Name.Value, out var ordinal)
@@ -181,7 +181,7 @@ public sealed class ObservationLayout
 
         return new(
             shape,
-            definition,
+            definition.Fields,
             identities.MoveToImmutable(),
             fields.MoveToImmutable());
     }
@@ -227,10 +227,16 @@ public sealed class ObservationLayout
 
         return new(
             shape,
-            definition,
+            definition.Fields,
             identities.ToImmutable(),
             fields.ToImmutable());
     }
+
+    // Nested layouts reuse token dispatch and canonical ordering, but their ShapeId is only
+    // owning-root provenance. They stay behind ObservationNestedFields and never become public
+    // shape-qualified readers, graph declarations, or entries in the root-layout cache.
+    internal static ObservationLayout CreateNested(GraphShapeId owner, ImmutableArray<FieldDefinition> fields) =>
+        new(owner, fields, [.. fields.Select(field => field.Name.Value)], fields);
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     static ulong GetUtf8Hash(ReadOnlySpan<byte> value)

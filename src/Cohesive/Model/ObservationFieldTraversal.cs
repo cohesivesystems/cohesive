@@ -16,6 +16,7 @@ internal static class ObservationFieldTraversal
     {
         switch (fields)
         {
+            case ObservationNestedFields nested: Visit(nested.Storage, ref visitor); break;
             case SmallObservationFields small: visitor.Visit(small.GetEnumerator(), true); break;
             case OwnedObservationFields owned: visitor.Visit(owned.GetEnumerator(), false); break;
             case OrdinalObservationFields ordinal: visitor.Visit(ordinal.GetCanonicalEnumerator(), true); break;

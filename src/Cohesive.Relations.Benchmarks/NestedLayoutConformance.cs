@@ -109,7 +109,7 @@ internal static class NestedLayoutConformance
         if (packedRows[0].Fields is not CompactOrdinalObservationFields || packedRows[1].Fields is not OrdinalObservationFields)
             throw new InvalidOperationException("Packed policy did not retain sparse ordinals/dense vectors.");
         Console.WriteLine($"sparse_128x16_bytes={sparseAllocation},sparse_allocation_budget_bytes=125952");
-        Console.WriteLine($"checks={checks},candidate_variants=6,ownership=passed,allocation_128x16_bytes={allocation},allocation_budget_bytes={128 * 640 + 4096}");
+        Console.WriteLine($"checks={checks},candidate_variants=7,ownership=passed,allocation_128x16_bytes={allocation},allocation_budget_bytes={128 * 640 + 4096}");
         return 0;
     }
 
@@ -139,6 +139,15 @@ internal static class NestedLayoutConformance
             var f = Outcome(() => bound.ParseSeparated(input, out _));
             if (a != f) throw new InvalidOperationException($"Bound {storage} mismatch for {json}: {a} vs {f}");
         }
+        var integrated = Outcome(() =>
+        {
+            var slots = new ObservationValue[layout.Count];
+            var presence = new ulong[(layout.Count + 63) / 64];
+            if (!Cohesive.Model.Serialization.ObservationJsonReader.TryReadShape(input, shape, layout, slots, presence,
+                    out var error, ObservationJsonIngestionPlan.Create(layout))) throw new ArgumentException(error, "json");
+            return ObservationValue.FromOrdinalFields(new(layout, ImmutableArray.CreateRange(slots), slots.Count(v => v.Kind != ObservationValueKind.Undefined)));
+        });
+        if (a != integrated) throw new InvalidOperationException($"Integrated mismatch for {json}: {a} vs {integrated}");
         if (a != e) throw new InvalidOperationException($"Packed mismatch for {json}: {a} vs {e}");
         if (a != c || a != d) throw new InvalidOperationException($"Adaptive/separated mismatch for {json}: {a} vs {c} vs {d}");
         if (a != b) throw new InvalidOperationException($"Differential mismatch for {json}: {a} vs {b}");
