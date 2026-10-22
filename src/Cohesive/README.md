@@ -206,6 +206,10 @@ values, allowed union discriminators, depth limits and diagnostics remain operat
 JSON decoding shares prepared dispatch indexes with validation without preparing unrelated closures.
 These optimizations introduce no public type IDs or wire contracts and do not replace validation.
 
+Shape-graph document admission checks every field on each call. It formats field subjects and escaped
+locations only for failing metadata; valid fields do not allocate diagnostic strings. See
+[field-metadata validation qualification](../../docs/performance/shape-graph-field-diagnostics/README.md).
+
 See the [performance overview](../../docs/performance/execution-preparation-allocations.md) for cache
 ownership, implementation invariants, benchmarks and qualification.
 

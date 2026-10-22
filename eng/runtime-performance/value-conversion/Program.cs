@@ -1,5 +1,29 @@
 using BenchmarkDotNet.Running;
 
+if (args is ["--metadata-validation-counters"])
+{
+    Console.WriteLine("fields,named,median_allocated_bytes");
+    foreach (var fields in new[] { 128, 4096 })
+    foreach (var named in new[] { false, true })
+    {
+        var benchmark = new ShapeGraphMetadataValidationBenchmarks { Fields = fields, Named = named };
+        benchmark.Setup();
+        for (var warm = 0; warm < 8; warm++) benchmark.Validate();
+        var samples = new long[7];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var result = benchmark.Validate();
+            samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (!result.IsValid) throw new InvalidOperationException("Validation failed.");
+        }
+        Array.Sort(samples);
+        Console.WriteLine($"{fields},{named},{samples[3]}");
+    }
+    return;
+}
+
+
 if (args is ["--graph-counters"])
 {
     Console.WriteLine("fields,operation,median_allocated_bytes");

@@ -1,0 +1,9 @@
+variant,fields,named,median_allocated_bytes
+control,128,False,46032
+control,128,True,48632
+control,4096,False,1474512
+control,4096,True,1597112
+candidate,128,False,32
+candidate,128,True,32
+candidate,4096,False,32
+candidate,4096,True,32
