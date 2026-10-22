@@ -1,0 +1,294 @@
+{
+  "after-parse-bound-packed-16-25.profile": {
+    "total_samples": 7571,
+    "selected_samples": 6025,
+    "dictionary_hash_leaf_samples": 0,
+    "poll_leaf_samples": 4432,
+    "top_nonpoll_leaf": [
+      {
+        "Key": "System.Threading.Monitor.Enter_Slowpath(class System.Object)",
+        "Value": 1588
+      },
+      {
+        "Key": "Cohesive.Model.CompactOrdinalObservationFields.Create(class Cohesive.Model.ObservationLayout,value class System.ReadOnlySpan`1<value class Cohesive.Model.ObservationValue>)",
+        "Value": 3
+      },
+      {
+        "Key": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure(class System.Func`1<value class Cohesive.Model.ObservationValue>,value class System.TimeSpan)",
+        "Value": 1
+      },
+      {
+        "Key": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ReadDensityAwareRecord(value class System.Text.Json.Utf8JsonReader&,class Node,value class Cohesive.Model.ObservationValue&)",
+        "Value": 1
+      }
+    ]
+  },
+  "after-validate-bound-packed-16-25.profile": {
+    "total_samples": 7527,
+    "selected_samples": 5967,
+    "dictionary_hash_leaf_samples": 0,
+    "poll_leaf_samples": 1801,
+    "top_nonpoll_leaf": [
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 3765
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.MatchesScalarType(value class Cohesive.Model.ScalarTypeKind,value class Cohesive.Model.ObservationValue&)",
+        "Value": 219
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryMatchTypeCore(class Cohesive.Model.TypeRef,value class Cohesive.Model.ObservationValue&,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 169
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateAgainstShape(value class Cohesive.Model.GraphShapeId,class Cohesive.Model.ObservationLayout,value class System.ReadOnlySpan`1<value class Cohesive.Model.ObservationValue>,value class System.ReadOnlySpan`1<unsigned int64>,class System.String&,value class System.ReadOnlySpan`1<class Cohesive.Model.ObservationValidationPlan>)",
+        "Value": 12
+      },
+      {
+        "Key": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure(class System.Func`1<value class Cohesive.Model.ObservationValue>,value class System.TimeSpan)",
+        "Value": 1
+      }
+    ]
+  },
+  "after-validate-bound-packed-256-6.profile": {
+    "total_samples": 7497,
+    "selected_samples": 5954,
+    "dictionary_hash_leaf_samples": 0,
+    "poll_leaf_samples": 97,
+    "top_nonpoll_leaf": [
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 5650
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryMatchTypeCore(class Cohesive.Model.TypeRef,value class Cohesive.Model.ObservationValue&,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 107
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.MatchesScalarType(value class Cohesive.Model.ScalarTypeKind,value class Cohesive.Model.ObservationValue&)",
+        "Value": 97
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateAgainstShape(value class Cohesive.Model.GraphShapeId,class Cohesive.Model.ObservationLayout,value class System.ReadOnlySpan`1<value class Cohesive.Model.ObservationValue>,value class System.ReadOnlySpan`1<unsigned int64>,class System.String&,value class System.ReadOnlySpan`1<class Cohesive.Model.ObservationValidationPlan>)",
+        "Value": 2
+      },
+      {
+        "Key": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure(class System.Func`1<value class Cohesive.Model.ObservationValue>,value class System.TimeSpan)",
+        "Value": 1
+      }
+    ]
+  },
+  "after-validate-packed-16-25.profile": {
+    "total_samples": 7377,
+    "selected_samples": 5864,
+    "dictionary_hash_leaf_samples": 1060,
+    "poll_leaf_samples": 129,
+    "top_nonpoll_leaf": [
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 4196
+      },
+      {
+        "Key": "System.Collections.Generic.Dictionary`2[System.__Canon,Cohesive.Model.ObservationValue].FindValue(!0)",
+        "Value": 673
+      },
+      {
+        "Key": "System.String.GetNonRandomizedHashCodeOrdinalIgnoreCase()",
+        "Value": 387
+      },
+      {
+        "Key": "Cohesive.Model.CompactOrdinalObservationFields+Enumerator.MoveNext()",
+        "Value": 186
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateObjectField(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.TypeRef,value class Cohesive.Model.FieldCardinality,value class Cohesive.Model.FieldPresence,value class Cohesive.Model.FieldNullability,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 158
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryMatchTypeCore(class Cohesive.Model.TypeRef,value class Cohesive.Model.ObservationValue&,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 45
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.MatchesScalarType(value class Cohesive.Model.ScalarTypeKind,value class Cohesive.Model.ObservationValue&)",
+        "Value": 44
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateAgainstShape(value class Cohesive.Model.GraphShapeId,class Cohesive.Model.ObservationLayout,value class System.ReadOnlySpan`1<value class Cohesive.Model.ObservationValue>,value class System.ReadOnlySpan`1<unsigned int64>,class System.String&,value class System.ReadOnlySpan`1<class Cohesive.Model.ObservationValidationPlan>)",
+        "Value": 29
+      },
+      {
+        "Key": "System.Collections.HashHelpers.GetPrime(int32)",
+        "Value": 9
+      },
+      {
+        "Key": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure(class System.Func`1<value class Cohesive.Model.ObservationValue>,value class System.TimeSpan)",
+        "Value": 7
+      },
+      {
+        "Key": "System.Marvin.ComputeHash32(unsigned int8&,unsigned int32,unsigned int32,unsigned int32)",
+        "Value": 1
+      }
+    ]
+  },
+  "before-parse-packed-16-25.profile": {
+    "total_samples": 7382,
+    "selected_samples": 5873,
+    "dictionary_hash_leaf_samples": 241,
+    "poll_leaf_samples": 1578,
+    "top_nonpoll_leaf": [
+      {
+        "Key": "System.Threading.Monitor.Enter_Slowpath(class System.Object)",
+        "Value": 2766
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&)",
+        "Value": 986
+      },
+      {
+        "Key": "System.Collections.Generic.Dictionary`2[System.__Canon,Cohesive.Model.ObservationValue].FindValue(!0)",
+        "Value": 145
+      },
+      {
+        "Key": "System.String.GetNonRandomizedHashCodeOrdinalIgnoreCase()",
+        "Value": 95
+      },
+      {
+        "Key": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ReadDensityAwareRecord(value class System.Text.Json.Utf8JsonReader&,class Node,value class Cohesive.Model.ObservationValue&)",
+        "Value": 59
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateObjectField(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.TypeRef,value class Cohesive.Model.FieldCardinality,value class Cohesive.Model.FieldPresence,value class Cohesive.Model.FieldNullability,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 41
+      },
+      {
+        "Key": "Cohesive.Model.CompactOrdinalObservationFields+Enumerator.MoveNext()",
+        "Value": 40
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.ConsumeValue(unsigned int8)",
+        "Value": 28
+      },
+      {
+        "Key": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.Read(value class System.Text.Json.Utf8JsonReader&,class Node,value class Cohesive.Model.ObservationValue&)",
+        "Value": 18
+      },
+      {
+        "Key": "System.SpanHelpers.ClearWithReferences(int&,unsigned int)",
+        "Value": 18
+      },
+      {
+        "Key": "Cohesive.Model.CompactOrdinalObservationFields.Create(class Cohesive.Model.ObservationLayout,value class System.ReadOnlySpan`1<value class Cohesive.Model.ObservationValue>)",
+        "Value": 16
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.MatchesScalarType(value class Cohesive.Model.ScalarTypeKind,value class Cohesive.Model.ObservationValue&)",
+        "Value": 15
+      }
+    ]
+  },
+  "before-validate-packed-16-25.profile": {
+    "total_samples": 7391,
+    "selected_samples": 5874,
+    "dictionary_hash_leaf_samples": 1228,
+    "poll_leaf_samples": 130,
+    "top_nonpoll_leaf": [
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&)",
+        "Value": 4092
+      },
+      {
+        "Key": "System.Collections.Generic.Dictionary`2[System.__Canon,Cohesive.Model.ObservationValue].FindValue(!0)",
+        "Value": 737
+      },
+      {
+        "Key": "System.String.GetNonRandomizedHashCodeOrdinalIgnoreCase()",
+        "Value": 491
+      },
+      {
+        "Key": "Cohesive.Model.CompactOrdinalObservationFields+Enumerator.MoveNext()",
+        "Value": 187
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateObjectField(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.TypeRef,value class Cohesive.Model.FieldCardinality,value class Cohesive.Model.FieldPresence,value class Cohesive.Model.FieldNullability,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 133
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryMatchTypeCore(class Cohesive.Model.TypeRef,value class Cohesive.Model.ObservationValue&,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 39
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.MatchesScalarType(value class Cohesive.Model.ScalarTypeKind,value class Cohesive.Model.ObservationValue&)",
+        "Value": 29
+      },
+      {
+        "Key": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure(class System.Func`1<value class Cohesive.Model.ObservationValue>,value class System.TimeSpan)",
+        "Value": 28
+      },
+      {
+        "Key": "System.Collections.HashHelpers.GetPrime(int32)",
+        "Value": 6
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateOrdinalFields(value class System.ReadOnlySpan`1<value class Cohesive.Model.ObservationValue>,value class System.ReadOnlySpan`1<unsigned int64>,class Cohesive.Model.ObservationLayout,class Cohesive.Model.Shape,class Cohesive.Model.ShapeGraph,!!0&)",
+        "Value": 1
+      },
+      {
+        "Key": "Cohesive.Model.ShapeGraph.GetShape(value class Cohesive.Model.ShapeId)",
+        "Value": 1
+      }
+    ]
+  },
+  "before-validate-packed-256-6.profile": {
+    "total_samples": 7436,
+    "selected_samples": 5920,
+    "dictionary_hash_leaf_samples": 1652,
+    "poll_leaf_samples": 7,
+    "top_nonpoll_leaf": [
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&)",
+        "Value": 4148
+      },
+      {
+        "Key": "System.Collections.Generic.Dictionary`2[System.__Canon,Cohesive.Model.ObservationValue].FindValue(!0)",
+        "Value": 1065
+      },
+      {
+        "Key": "System.String.GetNonRandomizedHashCodeOrdinalIgnoreCase()",
+        "Value": 587
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateObjectField(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.TypeRef,value class Cohesive.Model.FieldCardinality,value class Cohesive.Model.FieldPresence,value class Cohesive.Model.FieldNullability,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 47
+      },
+      {
+        "Key": "Cohesive.Model.CompactOrdinalObservationFields+Enumerator.MoveNext()",
+        "Value": 36
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryMatchTypeCore(class Cohesive.Model.TypeRef,value class Cohesive.Model.ObservationValue&,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 15
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.MatchesScalarType(value class Cohesive.Model.ScalarTypeKind,value class Cohesive.Model.ObservationValue&)",
+        "Value": 10
+      },
+      {
+        "Key": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure(class System.Func`1<value class Cohesive.Model.ObservationValue>,value class System.TimeSpan)",
+        "Value": 2
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateOrdinalFields(value class System.ReadOnlySpan`1<value class Cohesive.Model.ObservationValue>,value class System.ReadOnlySpan`1<unsigned int64>,class Cohesive.Model.ObservationLayout,class Cohesive.Model.Shape,class Cohesive.Model.ShapeGraph,!!0&)",
+        "Value": 1
+      },
+      {
+        "Key": "System.Collections.HashHelpers.GetPrime(int32)",
+        "Value": 1
+      },
+      {
+        "Key": "Cohesive.Model.ShapeGraph.GetShape(value class Cohesive.Model.ShapeId)",
+        "Value": 1
+      }
+    ]
+  }
+}

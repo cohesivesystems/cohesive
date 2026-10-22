@@ -14,6 +14,25 @@ namespace Cohesive.Tests.ExecutionKernel;
 public sealed class ProcessDurableCheckpointContractTests
 {
     [Fact]
+    public void InternalSerializerProfilesAreIndependentOfCallerOptionsAndSafeToShare()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var expected = ProcessDurableCheckpointJsonSerializer.Serialize(fixture.Checkpoint);
+        var options = ProcessDurableCheckpointJsonSerializer.CreateOptions();
+        Assert.False(options.IsReadOnly);
+        options.WriteIndented = true;
+        options.MaxDepth = 1;
+        Assert.NotSame(options, ProcessDurableCheckpointJsonSerializer.CreateOptions());
+        Parallel.For(0, 16, _ => Assert.Equal(expected,
+            ProcessDurableCheckpointJsonSerializer.Serialize(fixture.Checkpoint)));
+        var indented = ProcessDurableCheckpointJsonSerializer.Serialize(fixture.Checkpoint, PortableDocumentJsonFormatting.Indented);
+        Assert.Contains('\n', indented);
+        using var document = JsonDocument.Parse(indented);
+        Assert.True(JsonElement.DeepEquals(JsonSerializer.SerializeToElement(fixture.Checkpoint,
+            ProcessDurableCheckpointJsonSerializer.CreateOptions()), document.RootElement));
+    }
+
+    [Fact]
     public void StreamingCommitAndCheckpointHashesPreserveSha256V1Bytes()
     {
         var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;

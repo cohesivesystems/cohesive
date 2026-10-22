@@ -7,6 +7,7 @@ namespace Cohesive.Model;
 // over a bounded number of keys. Unlike graph-qualified ordinal layouts, names belong to this value.
 internal sealed class SmallObservationFields : IReadOnlyDictionary<string, ObservationValue>
 {
+    internal const int JsonFieldLimit = 8;
     readonly KeyValuePair<string, ObservationValue>[] fields;
     public int Count { get; }
     SmallObservationFields(KeyValuePair<string, ObservationValue>[] fields, int count)
@@ -14,7 +15,7 @@ internal sealed class SmallObservationFields : IReadOnlyDictionary<string, Obser
 
     internal static SmallObservationFields Read(JsonElement element, int capacity, ObservationJsonPropertyNames? names, bool rejectDuplicates = false)
     {
-        System.Diagnostics.Debug.Assert(capacity is > 0 and <= 8);
+        System.Diagnostics.Debug.Assert(capacity is > 0 and <= JsonFieldLimit);
         var fields = new KeyValuePair<string, ObservationValue>[capacity];
         var count = 0;
         foreach (var property in element.EnumerateObject())

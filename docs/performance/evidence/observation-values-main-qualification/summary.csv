@@ -1,0 +1,133 @@
+repeat,case,side,full_name,mean_ns,allocated_bytes
+1,ParseDirect-flat,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""flat"")",814.2691206345089,1680
+1,ParseDirect-flat,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""flat"")",552.684550546741,1680
+1,ParseDirect-nested,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""nested"")",13041.089408824546,12184
+1,ParseDirect-nested,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""nested"")",1815.2916357337292,4720
+1,ParseDirect-collection,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""collection"")",74380.15181213018,99728
+1,ParseDirect-collection,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""collection"")",34711.26345254011,34984
+1,ParseDirect-large,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""large"")",3349894.0989583335,3179223
+1,ParseDirect-large,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""large"")",1442442.273148148,1019252
+1,ParseMapWrite-flat,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""flat"")",1085.747792179262,2096
+1,ParseMapWrite-flat,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""flat"")",695.3468608833864,1936
+1,ParseMapWrite-large,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""large"")",3824736.45,3638682
+1,ParseMapWrite-large,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""large"")",1548505.2083333333,1019375
+1,aggregate-False,control,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: False)",46453.502594485755,131356
+1,aggregate-False,current,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: False)",32541.86953328982,80
+1,aggregate-True,control,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: True)",238408.21122685188,459031
+1,aggregate-True,current,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: True)",161885.4559659091,80
+1,portable-flat,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""flat"")",2145.8824413798925,2224
+1,portable-flat,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""flat"")",994.16027353058,1312
+1,portable-nested,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""nested"")",7795.507763854296,7345
+1,portable-nested,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""nested"")",2808.2435709451834,3360
+1,portable-collection,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""collection"")",164702.22117579906,159915
+1,portable-collection,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""collection"")",67686.31295045046,46798
+1,portable-large,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""large"")",6914683.316666666,5081334
+1,portable-large,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""large"")",2807325.0625,1150498
+1,Encode-flat,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""flat"")",6364834.848958333,2645941
+1,Encode-flat,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""flat"")",17023.00726902174,9367
+1,Encode-large,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""large"")",39820444.458333336,6069208
+1,Encode-large,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""large"")",9113058.333333332,2221727
+1,DecodeAndAdmit-flat,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""flat"")",6685112.859375,2678881
+1,DecodeAndAdmit-flat,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""flat"")",209019.27091346154,37321
+1,DecodeAndAdmit-large,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""large"")",68878482.66666667,12114704
+1,DecodeAndAdmit-large,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""large"")",42978197.833333336,3649476
+1,strings-unique,control,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""unique"")",63871.27171875,221240
+1,strings-unique,current,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""unique"")",32094.164002557547,110648
+1,strings-escaped,control,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""escaped"")",149577.37103174604,229432
+1,strings-escaped,current,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""escaped"")",82167.6237109375,69024
+1,response-1-compatibility,control,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 1, Route: ""compatibility"")",23672.33188982522,132433
+1,response-1-compatibility,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 1, Route: ""compatibility"")",24869.36881868132,132433
+1,response-1-prepared,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 1, Route: ""prepared"")",1122.155618207533,96
+1,response-4096-compatibility,control,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 4096, Route: ""compatibility"")",623140.9345238096,984441
+1,response-4096-compatibility,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 4096, Route: ""compatibility"")",614177.6666666666,984434
+1,response-4096-prepared,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 4096, Route: ""prepared"")",321547.30859375,131136
+1,strict-flat-IndexedNamePlan,current,"Cohesive.Relations.Benchmarks.ObservationJsonMaterializationBenchmarks.IndexedNamePlan(Workload: ""flat"")",1150.7372204006467,752
+1,strict-flat-StrictOrdinalPlan,current,"Cohesive.Relations.Benchmarks.ObservationJsonMaterializationBenchmarks.StrictOrdinalPlan(Workload: ""flat"")",1061.3311643690797,720
+2,ParseDirect-flat,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""flat"")",615.0350043177893,1680
+2,ParseDirect-flat,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""flat"")",904.2593169816237,1680
+2,ParseDirect-nested,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""nested"")",1872.6757732421072,4720
+2,ParseDirect-nested,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""nested"")",13879.28648989899,12184
+2,ParseDirect-collection,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""collection"")",35523.051115023474,34984
+2,ParseDirect-collection,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""collection"")",76644.33227926587,99728
+2,ParseDirect-large,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""large"")",1396390.818287037,1019234
+2,ParseDirect-large,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""large"")",3316212.25,3179223
+2,ParseMapWrite-flat,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""flat"")",718.0488983336099,1936
+2,ParseMapWrite-flat,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""flat"")",1106.000463265158,2096
+2,ParseMapWrite-large,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""large"")",1653548.8072916667,1019430
+2,ParseMapWrite-large,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""large"")",3739583.99375,3638670
+2,aggregate-False,current,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: False)",30694.274903421636,80
+2,aggregate-False,control,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: False)",44138.03609411422,131355
+2,aggregate-True,current,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: True)",126371.02285289114,80
+2,aggregate-True,control,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: True)",218423.16077044024,459034
+2,portable-flat,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""flat"")",927.3286434853298,1312
+2,portable-flat,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""flat"")",2023.3059430440665,2224
+2,portable-nested,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""nested"")",2680.721733138781,3360
+2,portable-nested,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""nested"")",7528.380399378632,7345
+2,portable-collection,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""collection"")",65228.80725,39341
+2,portable-collection,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""collection"")",152590.16208881576,159915
+2,portable-large,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""large"")",2236203.1458333335,1150498
+2,portable-large,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""large"")",7080422.95,5081336
+2,Encode-flat,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""flat"")",17593.394119385342,9367
+2,Encode-flat,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""flat"")",7121479.614583333,2645254
+2,Encode-large,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""large"")",13784912.055555554,2221727
+2,Encode-large,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""large"")",32883637.166666668,6043844
+2,DecodeAndAdmit-flat,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""flat"")",57344.126609848485,37237
+2,DecodeAndAdmit-flat,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""flat"")",7104139.7125,2704464
+2,DecodeAndAdmit-large,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""large"")",36336607.666666664,3649476
+2,DecodeAndAdmit-large,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""large"")",74546275,12144600
+2,strings-unique,current,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""unique"")",31724.64373393316,110648
+2,strings-unique,control,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""unique"")",65371.78334354575,221240
+2,strings-escaped,current,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""escaped"")",76540.97537878787,69024
+2,strings-escaped,control,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""escaped"")",150165.93932926827,229432
+2,response-1-prepared,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 1, Route: ""prepared"")",981.5107320768951,96
+2,response-1-compatibility,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 1, Route: ""compatibility"")",23008.237760896256,132433
+2,response-1-compatibility,control,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 1, Route: ""compatibility"")",23395.63284090909,132434
+2,response-4096-prepared,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 4096, Route: ""prepared"")",207228.0090277778,131136
+2,response-4096-compatibility,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 4096, Route: ""compatibility"")",556917.2217261904,984441
+2,response-4096-compatibility,control,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 4096, Route: ""compatibility"")",574636.599702381,984441
+2,strict-flat-StrictOrdinalPlan,current,"Cohesive.Relations.Benchmarks.ObservationJsonMaterializationBenchmarks.StrictOrdinalPlan(Workload: ""flat"")",994.3202901146133,720
+2,strict-flat-IndexedNamePlan,current,"Cohesive.Relations.Benchmarks.ObservationJsonMaterializationBenchmarks.IndexedNamePlan(Workload: ""flat"")",1046.9837115544474,752
+3,ParseDirect-flat,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""flat"")",806.5424792475205,1680
+3,ParseDirect-flat,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""flat"")",544.5521790379792,1680
+3,ParseDirect-nested,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""nested"")",13620.994519335514,12184
+3,ParseDirect-nested,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""nested"")",1723.0671738881247,4720
+3,ParseDirect-collection,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""collection"")",73686.3972868217,99728
+3,ParseDirect-collection,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""collection"")",33127.493125,34984
+3,ParseDirect-large,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""large"")",3293807.9427083335,3179223
+3,ParseDirect-large,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect(Workload: ""large"")",1396735.8703703703,1019261
+3,ParseMapWrite-flat,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""flat"")",1102.6805806358125,2096
+3,ParseMapWrite-flat,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""flat"")",656.4130646726663,1936
+3,ParseMapWrite-large,control,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""large"")",3659699.8802083335,3638670
+3,ParseMapWrite-large,current,"Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseMapWrite(Workload: ""large"")",1491183.8368055553,1019450
+3,aggregate-False,control,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: False)",43553.21259306987,131355
+3,aggregate-False,current,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: False)",30547.121463414638,80
+3,aggregate-True,control,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: True)",218813.65229885056,459033
+3,aggregate-True,current,"Cohesive.Relations.Benchmarks.ObservationAggregateBenchmarks.Evaluate(Function: ""sum"", Count: 4096, Selector: True)",140240.45018115942,80
+3,portable-flat,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""flat"")",1950.7284462074306,2224
+3,portable-flat,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""flat"")",926.860874713239,1312
+3,portable-nested,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""nested"")",7575.299697153241,7345
+3,portable-nested,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""nested"")",2670.904320579311,3360
+3,portable-collection,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""collection"")",157908.09336419753,159915
+3,portable-collection,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""collection"")",64005.792749587454,39341
+3,portable-large,control,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""large"")",7848868.037037037,5081381
+3,portable-large,current,"Cohesive.Relations.Benchmarks.ObservationBoundaryConversionBenchmarks.DecodePortable(Workload: ""large"")",2129012.796875,1150498
+3,Encode-flat,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""flat"")",6675082.901041667,2696456
+3,Encode-flat,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""flat"")",17037.88595027248,9367
+3,Encode-large,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""large"")",44944105.916666664,6066566
+3,Encode-large,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.Encode(Workload: ""large"")",11439873.833333334,2221727
+3,DecodeAndAdmit-flat,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""flat"")",7159020.411458333,2708690
+3,DecodeAndAdmit-flat,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""flat"")",57502.116303516814,37238
+3,DecodeAndAdmit-large,control,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""large"")",53605725,12114664
+3,DecodeAndAdmit-large,current,"Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks.DecodeAndAdmit(Workload: ""large"")",38182232.666666664,3649476
+3,strings-unique,control,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""unique"")",62480.25377859477,221240
+3,strings-unique,current,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""unique"")",31712.395280934346,110648
+3,strings-escaped,control,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""escaped"")",148507.34186746986,229432
+3,strings-escaped,current,"Cohesive.Relations.Benchmarks.ObservationJsonStringReuseBenchmarks.ParseDirect(Workload: ""escaped"")",76134.69478527606,69024
+3,response-1-compatibility,control,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 1, Route: ""compatibility"")",22650.144572072073,132433
+3,response-1-compatibility,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 1, Route: ""compatibility"")",23671.87308225508,132434
+3,response-1-prepared,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 1, Route: ""prepared"")",1012.4466661291623,96
+3,response-4096-compatibility,control,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 4096, Route: ""compatibility"")",591638.7604166666,984441
+3,response-4096-compatibility,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 4096, Route: ""compatibility"")",580224.3288690477,984441
+3,response-4096-prepared,current,"Cohesive.Relations.Benchmarks.ObservationMainResponseQualificationBenchmarks.Read(Count: 4096, Route: ""prepared"")",207183.05153688526,131136
+3,strict-flat-IndexedNamePlan,current,"Cohesive.Relations.Benchmarks.ObservationJsonMaterializationBenchmarks.IndexedNamePlan(Workload: ""flat"")",1051.4203334980946,752
+3,strict-flat-StrictOrdinalPlan,current,"Cohesive.Relations.Benchmarks.ObservationJsonMaterializationBenchmarks.StrictOrdinalPlan(Workload: ""flat"")",986.0324578240885,720

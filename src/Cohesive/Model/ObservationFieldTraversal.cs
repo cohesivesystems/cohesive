@@ -16,9 +16,11 @@ internal static class ObservationFieldTraversal
     {
         switch (fields)
         {
+            case ObservationNestedFields nested: Visit(nested.Storage, ref visitor); break;
             case SmallObservationFields small: visitor.Visit(small.GetEnumerator(), true); break;
             case OwnedObservationFields owned: visitor.Visit(owned.GetEnumerator(), false); break;
             case OrdinalObservationFields ordinal: visitor.Visit(ordinal.GetCanonicalEnumerator(), true); break;
+            case CompactOrdinalObservationFields compact: visitor.Visit(compact.GetCanonicalEnumerator(), true); break;
             case ImmutableDictionary<string, ObservationValue> immutable: visitor.Visit(immutable.GetEnumerator(), false); break;
             case ImmutableSortedDictionary<string, ObservationValue> sorted: visitor.Visit(sorted.GetEnumerator(), ReferenceEquals(sorted.KeyComparer, StringComparer.Ordinal)); break;
             case Dictionary<string, ObservationValue> dictionary: visitor.Visit(dictionary.GetEnumerator(), false); break;

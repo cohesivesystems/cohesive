@@ -1,0 +1,5 @@
+side,warmup,ns_per_op,bytes_per_op
+current,flat,765.8117507302776,1680.0
+before-reuse,flat,770.5276612060123,1680.0
+current,collection,844.8671334342561,1680.0
+before-reuse,collection,775.3522478614243,1680.0

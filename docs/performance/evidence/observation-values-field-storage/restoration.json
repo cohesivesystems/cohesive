@@ -1,0 +1,17 @@
+{
+  "src/Cohesive/Model/SmallObservationFields.cs": {
+    "before_sha256": "f7332a4605469ae0c0cc336cb8d3b77a0dd0040bca4bd8656ec19966b0c1d012",
+    "after_sha256": "f7332a4605469ae0c0cc336cb8d3b77a0dd0040bca4bd8656ec19966b0c1d012"
+  },
+  "src/Cohesive/Model/Serialization/ObservationJsonContainers.cs": {
+    "before_sha256": "2ea7948baa2c47aed9305911effa91cd6a106b976e9c511f561664856a498b61",
+    "after_sha256": "2ea7948baa2c47aed9305911effa91cd6a106b976e9c511f561664856a498b61"
+  },
+  "candidate_tests_passed": 100,
+  "restored_tests_passed": 143,
+  "timing_processes": 76,
+  "corrected_heap_processes": 42,
+  "previous_source_restored_test_note": "The 100-test run used a stale candidate DLL because preserved source timestamps did not invalidate incremental compilation. See restored-tests-stale-binary.log.",
+  "restored_core_sha256": "698305941afad42c05f26b4e4edd3ed28b6e094760d04db6259de6c708246f5a",
+  "restored_core_method_differences": 0
+}

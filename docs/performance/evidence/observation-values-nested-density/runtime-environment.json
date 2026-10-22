@@ -1,0 +1,10 @@
+{
+  "DOTNET_TieredCompilation": null,
+  "DOTNET_TieredPGO": null,
+  "DOTNET_ReadyToRun": null,
+  "DOTNET_gcServer": null,
+  "COMPlus_TieredCompilation": null,
+  "COMPlus_TieredPGO": null,
+  "COMPlus_ReadyToRun": null,
+  "COMPlus_gcServer": null
+}

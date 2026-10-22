@@ -1,0 +1,13 @@
+{
+  "core_passed": 5094,
+  "core_skipped": 59,
+  "relations_passed": 1144,
+  "case_count": 62,
+  "initial_case_count": 54,
+  "large_qualification_case_count": 8,
+  "tested_final_core_method_differences": 0,
+  "guard_dll_differences": [
+    "Cohesive.Relations.dll",
+    "Cohesive.dll"
+  ]
+}

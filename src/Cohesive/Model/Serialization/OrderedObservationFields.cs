@@ -18,6 +18,7 @@ internal ref struct OrderedObservationFields
     internal OrderedObservationFields(IReadOnlyDictionary<string, ObservationValue>? fields, ArrayPool<KeyValuePair<string, ObservationValue>>? pool = null)
     {
         rental = default;
+        if (fields is ObservationNestedFields nested) fields = nested.Storage;
         pool ??= ArrayPool<KeyValuePair<string, ObservationValue>>.Shared;
         ordinal = fields as OrdinalObservationFields;
         small = fields as SmallObservationFields;

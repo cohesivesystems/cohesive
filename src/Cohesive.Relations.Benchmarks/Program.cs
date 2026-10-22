@@ -1,5 +1,31 @@
 using BenchmarkDotNet.Running;
 
+if (args is ["--nested-layout-profile", .. var profileArgs]) return Cohesive.Relations.Benchmarks.NestedLayoutProfile.Run(profileArgs);
+if (args is ["--nested-layout-conformance"]) return Cohesive.Relations.Benchmarks.ObservationNestedLayoutBenchmarks.RunConformance();
+if (args is ["--nested-layout-retained", .. var nestedArgs]) return Cohesive.Relations.Benchmarks.ObservationNestedLayoutBenchmarks.RunRetained(nestedArgs);
+
+
+if (args is ["--shared-layout-retained", .. var sharedRetainedArgs])
+    return Cohesive.Relations.Benchmarks.ObservationSharedLayoutBenchmarks.RunRetained(sharedRetainedArgs);
+
+if (args is ["--field-storage-retained", .. var retainedArgs])
+    return Cohesive.Relations.Benchmarks.ObservationJsonFieldStorageBenchmarks.RunRetained(retainedArgs);
+
+if (args is ["--json-parse-profile", .. var parseArgs])
+    return Cohesive.Relations.Benchmarks.ObservationJsonParseProfile.Run(parseArgs);
+
+if (args is ["--checkpoint-wire-sizes"])
+{
+    Console.WriteLine("workload,utf8_bytes,sha256");
+    foreach (var workload in new[] { "flat", "nested", "collection", "large" })
+    {
+        var benchmark = new Cohesive.Relations.Benchmarks.ObservationCheckpointBenchmarks { Workload = workload };
+        benchmark.Setup();
+        Console.WriteLine($"{workload},{benchmark.WireBytes},{benchmark.WireHash}");
+    }
+    return 0;
+}
+
 if (args is ["--portable-field-concurrency", .. var fieldArgs])
     return Cohesive.Relations.Benchmarks.PortableFieldConcurrencyBenchmark.Run(fieldArgs);
 

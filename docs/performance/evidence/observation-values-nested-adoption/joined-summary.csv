@@ -1,0 +1,13 @@
+repeat,benchmark,method,workload,route,mean_ns,allocated_bytes
+1,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-128,before,225388.38541666666,243936
+1,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-128,after,166006.10624999998,142424
+1,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-large,before,15418104.125,7802384
+1,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-large,after,10267625,4419160
+2,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-128,after,160613.31442307692,141136
+2,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-128,before,355138.91907051275,233432
+2,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-large,after,10936223.214285715,4421952
+2,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-large,before,9043468.75,7367388
+3,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-128,before,190627.80539772726,236136
+3,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-128,after,163334.19999999998,139512
+3,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-large,before,11895203.083333334,7291736
+3,ObservationNestedApplicationBenchmarks,IngestAndProject,joined-large,after,7793736.095238096,4383088

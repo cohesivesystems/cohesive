@@ -1,0 +1,4 @@
+Passed!  - Failed:     0, Passed:  5006, Skipped:    54, Total:  5060, Duration: 2 m 19 s - Cohesive.Tests.dll (net10.0)
+Passed!  - Failed:     0, Passed:  1141, Skipped:     0, Total:  1141, Duration: 2 s - Cohesive.Relations.Tests.dll (net10.0)
+Passed!  - Failed:     0, Passed:   192, Skipped:     0, Total:   192, Duration: 2 s - Cohesive.Tests.dll (net10.0)
+Full Core run precedes the final MethodImpl inlining adjustment; the 192 affected final checks use the exact measured Core binary.

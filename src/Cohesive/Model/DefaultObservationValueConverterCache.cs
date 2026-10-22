@@ -5,6 +5,7 @@ using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Model;
@@ -35,7 +36,71 @@ static class DefaultObservationValueConverterCache
         options.RespectNullableAnnotations || options.RespectRequiredConstructorParameters
             ? null : new ConverterBuilder(strict: true, options).Build(targetType);
 
+    // Public profiles are conservative: custom metadata, reference protocols and population
+    // remain serializer-owned. No global profile/result cache is introduced; registration owns the delegate.
+    internal static Delegate? PrepareJsonProfile(Type targetType, JsonSerializerOptions options, ObservationBytesJsonEncoding bytesEncoding) =>
+        options.TypeInfoResolver?.GetType() != typeof(DefaultJsonTypeInfoResolver)
+        || ((DefaultJsonTypeInfoResolver)options.TypeInfoResolver).Modifiers.Count != 0
+        || options.PropertyNamingPolicy is not null || options.ReferenceHandler is not null || options.IncludeFields
+        || options.RespectNullableAnnotations || options.RespectRequiredConstructorParameters
+        || options.PreferredObjectCreationHandling != JsonObjectCreationHandling.Replace
+            ? null : new ConverterBuilder(strict: true, options, customProfile: true, bytesEncoding).Build(targetType);
+
     sealed record ConverterEntry(Delegate? Converter);
+
+    // STJ's default reader depth; keep deeper configured profiles on the serializer path.
+    internal const int JsonProjectionDepthLimit = 64;
+
+    // This is only a fast-path gate. The JSON writer/serializer remain the failure authorities,
+    // including values in ignored CLR members and the depth of a nested compatibility fallback.
+    internal static bool CanProjectJson(ObservationValue value, int remainingDepth, ObservationBytesJsonEncoding bytesEncoding)
+    {
+        switch (value.Kind)
+        {
+            case ObservationValueKind.Object:
+                if (remainingDepth == 0) return false;
+                if (value.Fields is null) return true;
+                var visitor = new JsonProjectionVisitor(remainingDepth - 1, bytesEncoding);
+                ObservationFieldTraversal.Visit(value.Fields, ref visitor);
+                return visitor.Valid;
+            case ObservationValueKind.Array:
+                if (remainingDepth == 0) return false;
+                if (!value.Array.IsDefault)
+                    foreach (var child in value.Array)
+                        if (!CanProjectJson(child, remainingDepth - 1, bytesEncoding)) return false;
+                return true;
+            case ObservationValueKind.Double: return double.IsFinite(value.Double);
+            case ObservationValueKind.Bytes: return bytesEncoding == ObservationBytesJsonEncoding.Base64String;
+            case ObservationValueKind.Undefined:
+            case ObservationValueKind.Null:
+            case ObservationValueKind.Int64:
+            case ObservationValueKind.Decimal:
+            case ObservationValueKind.Bool:
+            case ObservationValueKind.String:
+            case ObservationValueKind.DateTimeOffset:
+            case ObservationValueKind.DateOnly:
+            case ObservationValueKind.TimeOnly:
+            case ObservationValueKind.TimeSpan: return true;
+            default: return false;
+        }
+    }
+
+    struct JsonProjectionVisitor(int remainingDepth, ObservationBytesJsonEncoding bytesEncoding) : IObservationFieldVisitor
+    {
+        internal bool Valid = true;
+
+        public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+            where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+        {
+            using (fields)
+                while (fields.MoveNext())
+                    if (!CanProjectJson(fields.Current.Value, remainingDepth, bytesEncoding))
+                    {
+                        Valid = false;
+                        return;
+                    }
+        }
+    }
 
     // Mutable CLR output must own its bytes; keep the default JSON compatibility fallback in one place.
     public static byte[]? ReadBytes(ObservationValue value) =>
@@ -43,7 +108,8 @@ static class DefaultObservationValueConverterCache
             ? value.Bytes.ToArray()
             : value.Deserialize<byte[]>(ObservationMaterializerDefaults.SerializerOptions);
 
-    sealed class ConverterBuilder(bool strict = false, JsonSerializerOptions? options = null)
+    sealed class ConverterBuilder(bool strict = false, JsonSerializerOptions? options = null,
+        bool customProfile = false, ObservationBytesJsonEncoding bytesEncoding = ObservationBytesJsonEncoding.Throw)
     {
         static readonly MethodInfo ReadArrayMethod = GetGenericMethod(nameof(ReadArray));
         static readonly MethodInfo ReadNullableMethod = GetGenericMethod(nameof(ReadNullable));
@@ -94,6 +160,12 @@ static class DefaultObservationValueConverterCache
 
         Expression? BuildExpression(Type targetType, Expression value, bool prepareImmutable = true)
         {
+            if (customProfile && (typeof(IImmutableObservationProjection).IsAssignableFrom(targetType)
+                || options!.GetConverter(targetType).GetType() != JsonSerializerOptions.Default.GetConverter(targetType).GetType()
+                || options.GetTypeInfo(targetType).PolymorphismOptions is not null
+                || targetType.IsEnum || targetType == typeof(Guid) || targetType == typeof(DateOnly)
+                || targetType == typeof(TimeOnly) || targetType == typeof(DateTimeOffset) || targetType == typeof(TimeSpan)))
+                return null;
             if (prepareImmutable && options is not null && typeof(IImmutableObservationProjection).IsAssignableFrom(targetType))
             {
                 // Build the interpretation once; its result still belongs to the exact observation/profile.
@@ -413,6 +485,14 @@ static class DefaultObservationValueConverterCache
         Expression StrictContainer(Type target, Expression value, Expression direct, ObservationValueKind expected)
         {
             if (!strict) return direct;
+            if (customProfile && expected == ObservationValueKind.Object)
+            {
+                // Exact names are the fast path. Case variants, colliding spellings and unknown
+                // members use the serializer, preserving last-member wins and profile diagnostics.
+                var names = ShapeTypeInspector.GetReadableProperties(target).Select(static property => property.Name).ToHashSet(StringComparer.Ordinal);
+                direct = Expression.Condition(Expression.Call(GetGenericMethod(nameof(HasExactContractNames)), value,
+                    Expression.Constant(names)), direct, DeserializeExpression(target, value));
+            }
             var kind = Expression.Property(value, nameof(ObservationValue.Kind));
             Expression matches = Expression.Equal(kind, Expression.Constant(expected));
             if (!target.IsValueType) matches = Expression.OrElse(matches,
@@ -446,6 +526,14 @@ static class DefaultObservationValueConverterCache
         Expression CallConverter(Expression value, string methodName)
         {
             var direct = Expression.Call(typeof(ConverterBuilder), methodName, typeArguments: null, value);
+            if (customProfile)
+            {
+                var allowed = Expression.Call(GetGenericMethod(nameof(CanReadProfileScalar)).MakeGenericMethod(direct.Type), value);
+                return Expression.Condition(allowed, direct, DeserializeExpression(direct.Type, value));
+            }
+            if (strict && direct.Type == typeof(string))
+                return Expression.Condition(Expression.Call(GetGenericMethod(nameof(IsWellFormedString)), value), direct,
+                    DeserializeExpression(direct.Type, value));
             if (!strict || direct.Type is not { } target
                 || (target != typeof(int) && target != typeof(long) && target != typeof(double) && target != typeof(decimal)))
                 return direct;
@@ -459,14 +547,39 @@ static class DefaultObservationValueConverterCache
             return Expression.Condition(Expression.OrElse(stringValue, invalidDouble), fallback, direct);
         }
 
-        Expression RequireExpression(Type target, Expression value, PropertyInfo[] properties) => options is null
+        // The fixed-profile scalar helpers can fall back to their own defaults. A public
+        // profile may use those helpers only within their direct domain; all other inputs
+        // must fall back through the caller's exact options and binary policy.
+        static bool CanReadProfileScalar<T>(ObservationValue value)
+        {
+            if (typeof(T) == typeof(string)) return (value.Kind is ObservationValueKind.String or ObservationValueKind.Null
+                or ObservationValueKind.DateTimeOffset or ObservationValueKind.DateOnly or ObservationValueKind.TimeOnly or ObservationValueKind.TimeSpan)
+                && IsWellFormedString(value);
+            if (typeof(T) == typeof(bool)) return value.Kind == ObservationValueKind.Bool;
+            if (typeof(T) == typeof(int)) return value.Kind == ObservationValueKind.Int64 && value.Int64 is >= int.MinValue and <= int.MaxValue;
+            if (typeof(T) == typeof(long)) return value.Kind == ObservationValueKind.Int64;
+            return value.Kind is ObservationValueKind.Int64 or ObservationValueKind.Decimal
+                || value.Kind == ObservationValueKind.Double && double.IsFinite(value.Double);
+        }
+
+        static bool IsWellFormedString(ObservationValue value) => JsonText.IsWellFormed(value.String.AsSpan());
+
+        Expression RequireExpression(Type target, Expression value, PropertyInfo[] properties) => options is null || customProfile
             ? Expression.Call(RequireObjectMethod, value)
             : Expression.Call(GetGenericMethod(nameof(RequireContractObject)).MakeGenericMethod(target), value,
                 Expression.Constant(properties.Select(static property => property.Name).ToHashSet(StringComparer.Ordinal)));
 
         Expression DeserializeExpression(Type target, Expression value) => Expression.Call(
             GetGenericMethod(nameof(DeserializeStrict)).MakeGenericMethod(target), value,
-            Expression.Constant(options, typeof(JsonSerializerOptions)));
+            Expression.Constant(options, typeof(JsonSerializerOptions)), Expression.Constant(bytesEncoding));
+
+        static bool HasExactContractNames(ObservationValue value, HashSet<string> names)
+        {
+            if (value.Kind != ObservationValueKind.Object || value.Fields is null) return false;
+            var visitor = new KnownNamesVisitor(names);
+            ObservationFieldTraversal.Visit(value.Fields, ref visitor);
+            return visitor.UnknownName is null;
+        }
 
         static void RequireContractObject<T>(ObservationValue value, HashSet<string> knownNames)
         {
@@ -562,7 +675,8 @@ static class DefaultObservationValueConverterCache
             return result.MoveToImmutable();
         }
 
-        static T DeserializeStrict<T>(ObservationValue value, JsonSerializerOptions? options) => value.Deserialize<T>(options)!;
+        static T DeserializeStrict<T>(ObservationValue value, JsonSerializerOptions? options, ObservationBytesJsonEncoding bytesEncoding) =>
+            value.Deserialize<T>(options, bytesEncoding)!;
 
         static bool HasJsonContractCustomization(MemberInfo member) =>
             member.GetCustomAttributes(inherit: true).Any(static attribute =>

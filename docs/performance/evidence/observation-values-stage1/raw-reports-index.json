@@ -1,0 +1,9 @@
+{
+  "archive_sha256": "6aec48292b4f7236578dbad4801d4bb1cbe63e213cbf583b295db9c71f5f1d34",
+  "files": [
+    {"path": "candidate-aggregates.json", "bytes": 368032, "sha256": "19e7ad5e6d37e0055a557e4ef58a2d5049b5b3f6667987b6248710b56656137a"},
+    {"path": "candidate-pipeline.json", "bytes": 187478, "sha256": "038775f1833c86fb506ec44e294e0ecb7d2b6bb41b2ab86b60354004da91bd88"},
+    {"path": "control-aggregates.json", "bytes": 371625, "sha256": "ffdb20b35ad6b8b726e405a00a04c593d343c59c5e67c60e3eb5db2ae59721b0"},
+    {"path": "control-pipeline.json", "bytes": 183785, "sha256": "812fbdf9ec3d5f544de68e8b3a1983e5ef4a54673f8cd48609da6ad950b66e83"}
+  ]
+}

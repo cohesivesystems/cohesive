@@ -1,0 +1,14 @@
+width=16,rows=1,scenario=record,present_percent=25,route=packed,trees=2000,allocated_bytes=1824000,retained_bytes=592000,preparation_allocated_bytes=13336,projected_layouts=1
+width=16,rows=1,scenario=record,present_percent=25,route=bound-packed,trees=2000,allocated_bytes=656000,retained_bytes=592000,preparation_allocated_bytes=14784,projected_layouts=1
+width=16,rows=1,scenario=nested,present_percent=25,route=packed,trees=2000,allocated_bytes=2592000,retained_bytes=1359312,preparation_allocated_bytes=34592,projected_layouts=5
+width=16,rows=1,scenario=nested,present_percent=25,route=bound-packed,trees=2000,allocated_bytes=1424000,retained_bytes=1359312,preparation_allocated_bytes=37664,projected_layouts=5
+width=16,rows=128,scenario=array,present_percent=25,route=packed,trees=15,allocated_bytes=1629960,retained_bytes=447240,preparation_allocated_bytes=13384,projected_layouts=1
+width=16,rows=128,scenario=array,present_percent=25,route=bound-packed,trees=15,allocated_bytes=508680,retained_bytes=447240,preparation_allocated_bytes=14832,projected_layouts=1
+width=256,rows=128,scenario=array,present_percent=6,route=packed,trees=15,allocated_bytes=3534600,retained_bytes=1353480,preparation_allocated_bytes=158368,projected_layouts=1
+width=256,rows=128,scenario=array,present_percent=6,route=bound-packed,trees=15,allocated_bytes=1414920,retained_bytes=1353480,preparation_allocated_bytes=177984,projected_layouts=1
+width=32,rows=128,scenario=named-array,present_percent=25,route=packed,trees=15,allocated_bytes=2275080,retained_bytes=693000,preparation_allocated_bytes=25584,projected_layouts=1
+width=32,rows=128,scenario=named-array,present_percent=25,route=bound-packed,trees=15,allocated_bytes=754440,retained_bytes=693000,preparation_allocated_bytes=28016,projected_layouts=1
+width=16,rows=128,scenario=array,present_percent=100,route=packed,trees=15,allocated_bytes=1169160,retained_bytes=1169160,preparation_allocated_bytes=13384,projected_layouts=1
+width=16,rows=128,scenario=array,present_percent=100,route=bound-packed,trees=15,allocated_bytes=1169160,retained_bytes=1169160,preparation_allocated_bytes=14832,projected_layouts=1
+width=16,rows=4096,scenario=array,present_percent=25,route=packed,trees=2,allocated_bytes=6947056,retained_bytes=1900784,preparation_allocated_bytes=13384,projected_layouts=1
+width=16,rows=4096,scenario=array,present_percent=25,route=bound-packed,trees=2,allocated_bytes=2162928,retained_bytes=1900784,preparation_allocated_bytes=14832,projected_layouts=1

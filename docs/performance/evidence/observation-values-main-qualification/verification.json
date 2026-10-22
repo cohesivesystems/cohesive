@@ -1,0 +1,22 @@
+{
+  "main_commit": "39c490ed9e846f23a88849b915974983229e582a",
+  "branch_source_commit": "2feb28085d061e447a181bbb76521348239360aa",
+  "sdk": "10.0.402",
+  "configuration": "Release",
+  "build_arguments": [
+    "-m:1",
+    "-p:UseSharedCompilation=false"
+  ],
+  "processes": 132,
+  "core_tests": {
+    "passed": 5155,
+    "skipped": 60
+  },
+  "relations_tests": {
+    "passed": 1149,
+    "skipped": 0
+  },
+  "tested_core_method_count": 11842,
+  "tested_core_il_differences": 0,
+  "checkpoint_wire_equal": true
+}

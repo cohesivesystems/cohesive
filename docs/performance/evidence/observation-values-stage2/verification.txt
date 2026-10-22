@@ -1,0 +1,5 @@
+Core (test collections serialized): Passed!  - Failed:     0, Passed:  4991, Skipped:    54, Total:  5045, Duration: 2 m 18 s - Cohesive.Tests.dll (net10.0)
+Relations: Passed!  - Failed:     0, Passed:  1141, Skipped:     0, Total:  1141, Duration: 2 s - Cohesive.Relations.Tests.dll (net10.0)
+Focused checks: 28 passed.
+Earlier parallel Core run: 4,990 passed, one existing warm-pool allocation assertion failed; isolation and serialized full rerun passed. Cause not established.
+Final error-path adjustment (after measurement): Passed!  - Failed:     0, Passed:    75, Skipped:     0, Total:    75, Duration: 627 ms - Cohesive.Tests.dll (net10.0)

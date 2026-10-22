@@ -1,0 +1,6 @@
+{
+  "tested_core_sha256": "47edf8e303bc444f94088874061c68f976239004703153017210055e412cd82a",
+  "matches_accepted_control": true,
+  "production_experiments_retained": false,
+  "focused_tests_passed": 58
+}

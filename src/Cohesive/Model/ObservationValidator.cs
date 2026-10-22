@@ -132,7 +132,15 @@ public static class ObservationValidator
         ObservationLayout layout,
         ReadOnlySpan<ObservationValue> valuesByOrdinal,
         ReadOnlySpan<ulong> hasValueBitMask,
-        out string? validationError)
+        out string? validationError) =>
+        TryValidateAgainstShape(shape, layout, valuesByOrdinal, hasValueBitMask, out validationError, default);
+
+    // Scoped bindings are supplied explicitly; ordinary admission never discovers
+    // or installs them in a graph cache. Failures rerun the unchanged diagnostic interpreter.
+    internal static bool TryValidateAgainstShape(
+        GraphShapeId shape, ObservationLayout layout, ReadOnlySpan<ObservationValue> valuesByOrdinal,
+        ReadOnlySpan<ulong> hasValueBitMask, out string? validationError,
+        ReadOnlySpan<ObservationValidationPlan?> boundPlans)
     {
         ArgumentNullException.ThrowIfNull(shape.Graph);
         ArgumentNullException.ThrowIfNull(layout);
@@ -159,6 +167,18 @@ public static class ObservationValidator
         RequireNoPresenceOutsideLayout(hasValueBitMask, layout.Count);
 
         var definition = shape.Graph.GetShape(shape.ShapeId);
+        if (!boundPlans.IsEmpty)
+        {
+            if (boundPlans.Length != definition.Fields.Length)
+                throw new ArgumentException("One bound plan per declared root field is required.", nameof(boundPlans));
+            for (var index = 0; index < boundPlans.Length; index++)
+                if (boundPlans[index] is { } plan)
+                {
+                    if (!ReferenceEquals(plan.BoundGraph, shape.Graph))
+                        throw new ArgumentException("Bound plans require the exact governing graph.", nameof(boundPlans));
+                    plan.RequireType(definition.Fields[index].Type);
+                }
+        }
 
         NoDiagnostics noDiagnostics = default;
         if (TryValidateOrdinalFields(
@@ -167,7 +187,7 @@ public static class ObservationValidator
                 layout,
                 definition,
                 shape.Graph,
-                ref noDiagnostics))
+                ref noDiagnostics, boundPlans))
         {
             validationError = null;
             return true;
@@ -209,7 +229,8 @@ public static class ObservationValidator
         ObservationLayout layout,
         Shape shape,
         ShapeGraph graph,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        ReadOnlySpan<ObservationValidationPlan?> boundPlans = default)
         where TDiagnostics : IValidationDiagnostics
     {
         var ordinalsByShapeFieldIndex = layout.OrdinalsByShapeFieldIndex;
@@ -227,7 +248,8 @@ public static class ObservationValidator
             }
 
             diagnostics.PushField(field.Name.Value);
-            if (!TryValidateFieldValue(valuesByOrdinal[ordinal], field, graph, ref diagnostics))
+            if (!TryValidateFieldValue(valuesByOrdinal[ordinal], field, graph, ref diagnostics,
+                    boundPlans.IsEmpty ? null : boundPlans[fieldIndex]))
                 return false;
             diagnostics.Pop();
         }
@@ -328,7 +350,8 @@ public static class ObservationValidator
         in ObservationValue value,
         FieldDefinition field,
         ShapeGraph? graph,
-        ref TDiagnostics diagnostics)
+        ref TDiagnostics diagnostics,
+        ObservationValidationPlan? plan = null)
         where TDiagnostics : IValidationDiagnostics
     {
         if (!TryValidatePortableKind(value, ref diagnostics))
@@ -343,13 +366,12 @@ public static class ObservationValidator
         }
 
         if (field.Cardinality != FieldCardinality.Many)
-            return TryMatchTypeCore(field.Type, value, graph, MaxValidationDepth, ref diagnostics);
+            return TryMatchTypeCore(field.Type, value, graph, MaxValidationDepth, ref diagnostics, plan);
 
         if (value.Kind != ObservationValueKind.Array)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedArray));
 
         var items = value.EnumerateArray();
-        ObservationValidationPlan? plan = null;
         for (var index = 0; index < items.Length; index++)
         {
             diagnostics.PushElement(index);
@@ -484,7 +506,7 @@ public static class ObservationValidator
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedObject));
 
-        var lookup = new ObjectFieldLookup(value.Fields);
+        var lookup = new ObjectFieldLookup(value.Fields, allowedProperty is null ? plan : null);
         if (TryFindUnknownProperty<ObjectTypeRef, ObjectFieldTypeDef, ObjectFieldNameAccessor>(
                 ref lookup, objectType.Fields, objectType, plan,
                 allowedProperty, diagnostics.RequiresFailureDetails, out var unknown))
@@ -495,8 +517,9 @@ public static class ObservationValidator
         var fieldIndex = 0;
         foreach (var field in objectType.Fields)
         {
-            var childPlan = plan?.Child(fieldIndex++, field.Type);
-            if (!lookup.TryGet(field.Name, out var fieldValue))
+            var index = fieldIndex++;
+            var childPlan = plan?.Child(index, field.Type);
+            if (!lookup.TryGet(index, field.Name, out var fieldValue))
             {
                 if (field.Presence != FieldPresence.Required)
                     continue;
@@ -563,7 +586,7 @@ public static class ObservationValidator
         if (value.Kind != ObservationValueKind.Object || value.Fields is null)
             return Fail(ref diagnostics, new(ErrorCode.ExpectedStructuralObject, structural.Id.Value));
 
-        var lookup = new ObjectFieldLookup(value.Fields);
+        var lookup = new ObjectFieldLookup(value.Fields, allowedProperty is null ? plan : null);
         if (TryFindUnknownProperty<TypeDefinition.Structural, StructuralField, StructuralFieldNameAccessor>(
                 ref lookup, structural.Fields, structural, plan,
                 allowedProperty, diagnostics.RequiresFailureDetails, out var unknown))
@@ -576,8 +599,9 @@ public static class ObservationValidator
         var fieldIndex = 0;
         foreach (var field in structural.Fields)
         {
-            var childPlan = plan?.Child(fieldIndex++, field.Type);
-            if (!lookup.TryGet(field.Name.Value, out var fieldValue))
+            var index = fieldIndex++;
+            var childPlan = plan?.Child(index, field.Type);
+            if (!lookup.TryGet(index, field.Name.Value, out var fieldValue))
             {
                 if (field.Presence != FieldPresence.Required)
                     continue;
@@ -1171,10 +1195,32 @@ public static class ObservationValidator
 
     // Instance values stay local. Exact lookup wins; fallback preserves the first matching
     // property in source enumeration, including differently cased duplicate spellings.
-    struct ObjectFieldLookup(IReadOnlyDictionary<string, ObservationValue> fields)
+    struct ObjectFieldLookup
     {
-        internal readonly IReadOnlyDictionary<string, ObservationValue> Fields = fields;
+        internal readonly IReadOnlyDictionary<string, ObservationValue> Fields;
+        readonly IOrdinalObservationFieldReader? ordinal;
+        readonly ImmutableArray<int> ordinals;
         Dictionary<string, ObservationValue>? insensitive;
+
+        internal ObjectFieldLookup(IReadOnlyDictionary<string, ObservationValue> fields, ObservationValidationPlan? plan)
+        {
+            Fields = fields;
+            var storage = fields is ObservationNestedFields nested ? nested.Storage : fields;
+            ordinal = storage switch
+            {
+                OrdinalObservationFields dense when ReferenceEquals(plan?.BoundLayout, dense.Layout) => dense,
+                CompactOrdinalObservationFields packed when ReferenceEquals(plan?.BoundLayout, packed.Layout) => packed,
+                _ => null
+            };
+            ordinals = ordinal is null ? default : plan!.BoundOrdinals;
+            insensitive = null;
+        }
+
+        internal bool IsBound => ordinal is not null;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool TryGet(int index, string name, out ObservationValue value) => ordinal is null
+            ? TryGet(name, out value) : ordinal.TryGetField(ordinals[index], out value);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool TryGet(string name, out ObservationValue value) =>
@@ -1203,6 +1249,10 @@ public static class ObservationValidator
         where TNameAccessor : struct, IFieldNameAccessor<TOwner, TDefinition>
     {
         unknown = null;
+        // Exact immutable storage identity proves every present key belongs to this complete,
+        // unambiguous layout. Other representations and union discriminator exceptions retain
+        // the original name/case/unknown-member interpreter.
+        if (lookup.IsBound && allowedProperty is null) return false;
         var matchedCount = 0;
         var allowedPropertyIsDefined = false;
         foreach (var definition in definitions)

@@ -369,7 +369,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         if (fields is null)
             return null;
-        if (fields is OrdinalObservationFields or SmallObservationFields or OwnedObservationFields)
+        if (fields is OrdinalObservationFields or SmallObservationFields or OwnedObservationFields or CompactOrdinalObservationFields or ObservationNestedFields)
             return fields;
         if (fields.Count == 0)
             return EmptyObjectValues;
@@ -1892,7 +1892,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         var count = element.GetPropertyCount();
         if (count == 0) return FromObject(EmptyObjectValues);
-        if (count <= 8) return FromObject(SmallObservationFields.Read(element, count, names, rejectDuplicates));
+        if (count <= SmallObservationFields.JsonFieldLimit) return FromObject(SmallObservationFields.Read(element, count, names, rejectDuplicates));
         var values = new Dictionary<string, ObservationValue>(count, StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
         {

@@ -1,0 +1,23 @@
+{
+  "archive_sha256": "cbb97fc3d8a5d526e7c9eff6dcee67394fdd4de49c2aaa171eda4c5128930fc8",
+  "files": [
+    {"path": "before-reuse-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-full.json", "bytes": 69333, "sha256": "4acf3b2b44fb90a5b318cd6a9bf3972d4e15450273e8a945c8f6a5c9189d0358"},
+    {"path": "before-reuse-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-github.md", "bytes": 1245, "sha256": "bfa4e3b65c11061880b85a49825d00ed5c711316bf098bef28a9845f6d483702"},
+    {"path": "before-reuse-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report.csv", "bytes": 2488, "sha256": "547f63b0cf31920183ae5662caec49f388d8638e8523e6f20f52861cdd1ba794"},
+    {"path": "byte-prefix-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-full.json", "bytes": 72628, "sha256": "77564585da8eb99ccd5871fb2be2d99fe4b2ef2436c270c070a73b73fcd21858"},
+    {"path": "byte-prefix-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-github.md", "bytes": 1239, "sha256": "bff34cdc6df188fb6f3d8c02024ffbade8b8fbdc177b1232d0175cae434d2c43"},
+    {"path": "byte-prefix-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report.csv", "bytes": 2495, "sha256": "b181bd07bbd97fabe0b5bb7a0054cf5b6e9ff25415766dca1f6b51d340658fb0"},
+    {"path": "control-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-full.json", "bytes": 71599, "sha256": "5fed21452ca3d1da95daca2c8bb0e2b6a567eba496336787a30df934184982b7"},
+    {"path": "control-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-github.md", "bytes": 1227, "sha256": "45e531b0a5368d5de49f87563a2e45e204e8e8ce923eaa2dee0d86f542ef6622"},
+    {"path": "control-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report.csv", "bytes": 2484, "sha256": "a38c4f162415db4701ca0da7db3581ec2ea3f8cebfd690be5baaec6ed92715b2"},
+    {"path": "counter-prefix-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-full.json", "bytes": 72558, "sha256": "6c8a2afb82985dc2f138d44becf8346bc12f9f1bf725a02f35469d2beba5d316"},
+    {"path": "counter-prefix-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-github.md", "bytes": 1239, "sha256": "72911aad82fbf429bab9df80a8ea1516483c25063139019fadcd5fa3fb28e2bc"},
+    {"path": "counter-prefix-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report.csv", "bytes": 2489, "sha256": "921e60099c2cf238309854a9b2d31ecdaa6c1ee947136ddec8cce7cd7b50fede"},
+    {"path": "direct-equality-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-full.json", "bytes": 73985, "sha256": "480becf98b1197fa798db5efee63623f44f6307be75356825ec50b0629069472"},
+    {"path": "direct-equality-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-github.md", "bytes": 1233, "sha256": "96854df20323691def38a3f38dd3efeefa8ffbf13245ebe6b1488e71e2c630d0"},
+    {"path": "direct-equality-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report.csv", "bytes": 2485, "sha256": "662ce989bcc81bf189c23ea38f438b855c612ef94607403e0a96f51c060a8199"},
+    {"path": "outlined-prefix-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-full.json", "bytes": 70973, "sha256": "6e9c1679777ac7ccafd9e272a6487787501b6a248949fdb203f212b53bcfbb14"},
+    {"path": "outlined-prefix-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report-github.md", "bytes": 1239, "sha256": "6c90ce68a267ea4095fc4ff50b526fa0b97f16f6e9d09151c4d0a42d2a5434a6"},
+    {"path": "outlined-prefix-Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks-report.csv", "bytes": 2488, "sha256": "7429d2e04dfbfe1e508d7ca79bd40cb9e41659501221d3dda852b558c4043ee7"}
+  ]
+}
