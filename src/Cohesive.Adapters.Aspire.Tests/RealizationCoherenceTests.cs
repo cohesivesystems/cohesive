@@ -53,12 +53,37 @@ public sealed class RealizationCoherenceTests
 
     [Theory]
     [InlineData("EntityState:Authority", "unknown")]
-    [InlineData("EntityState:Authority", "99")]
     [InlineData("EntityState:Reconstitution", "unknown")]
     public void Invalid_policy_fails_at_shared_configuration_boundary(string key, string value)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { [key] = value }).Build();
-        Assert.Contains(key, Assert.Throws<ArgumentException>(() => FulfillmentHistoryPolicy.FromConfiguration(configuration)).Message);
+        Assert.Contains(value, Assert.Throws<InvalidOperationException>(() => FulfillmentHistoryPolicy.FromConfiguration(configuration)).Message);
+    }
+
+    [Theory]
+    [InlineData(null, null, EntityStateAuthority.State, EntityReconstitutionMode.CheckpointAndTail)]
+    [InlineData("events", null, EntityStateAuthority.Events, EntityReconstitutionMode.CheckpointAndTail)]
+    [InlineData(null, "FullReplay", EntityStateAuthority.State, EntityReconstitutionMode.FullReplay)]
+    public void Direct_binding_preserves_constructor_defaults(string? authority, string? reconstitution,
+        EntityStateAuthority expectedAuthority, EntityReconstitutionMode expectedReconstitution)
+    {
+        var values = new Dictionary<string, string?>();
+        if (authority is not null) values["EntityState:Authority"] = authority;
+        if (reconstitution is not null) values["EntityState:Reconstitution"] = reconstitution;
+        var policy = FulfillmentHistoryPolicy.FromConfiguration(new ConfigurationBuilder().AddInMemoryCollection(values).Build());
+        Assert.Equal(expectedAuthority, policy.Authority);
+        Assert.Equal(expectedReconstitution, policy.Reconstitution);
+    }
+
+    [Theory]
+    [InlineData("Authority")]
+    [InlineData("Reconstitution")]
+    public void Direct_binding_retains_constructor_enum_validation(string parameter)
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        { ["EntityState:" + parameter] = "99" }).Build();
+        var error = Assert.Throws<System.Reflection.TargetInvocationException>(() => FulfillmentHistoryPolicy.FromConfiguration(configuration));
+        Assert.IsType<ArgumentOutOfRangeException>(error.GetBaseException());
     }
 
     [Fact]

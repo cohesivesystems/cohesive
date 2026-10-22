@@ -30,19 +30,12 @@ public sealed class FulfillmentHistoryPolicy
     /// <summary>Reads the same validated configuration in either executable.</summary>
     /// <param name="configuration">Executable configuration; absent values use the documented demo defaults.</param>
     /// <returns>Immutable validated selection, including native history expectations.</returns>
-    /// <exception cref="ArgumentException">A configured selection is unknown.</exception>
+    /// <exception cref="InvalidOperationException">A configured value cannot be converted.</exception>
+    /// <exception cref="System.Reflection.TargetInvocationException">Constructor validation rejects a bound enum value.</exception>
     /// <exception cref="ArgumentNullException">Configuration is null.</exception>
     public static FulfillmentHistoryPolicy FromConfiguration(IConfiguration configuration)
     {
         ArgumentNullException.ThrowIfNull(configuration);
-        return new(Read(configuration, "EntityState:Authority", EntityStateAuthority.State),
-            Read(configuration, "EntityState:Reconstitution", EntityReconstitutionMode.CheckpointAndTail));
-    }
-    static T Read<T>(IConfiguration configuration, string key, T fallback) where T : struct, Enum
-    {
-        var text = configuration[key];
-        if (text is null) return fallback;
-        if (Enum.TryParse<T>(text, ignoreCase: true, out var value) && Enum.IsDefined(value)) return value;
-        throw new ArgumentException($"{key} must be one of: {string.Join(", ", Enum.GetNames<T>())}.");
+        return configuration.GetSection("EntityState").Get<FulfillmentHistoryPolicy>() ?? new();
     }
 }

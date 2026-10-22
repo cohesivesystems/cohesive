@@ -109,7 +109,9 @@ claimed: full replacement payloads trade space for a small, explicit initial act
 ## Native Marten realization
 
 AppHost and worker both select `FulfillmentHistoryPolicy.FromConfiguration` and register it
-explicitly before model activation. Event authority selects `orders_events` in both the prepared
+explicitly before model activation. The convenience method binds the immutable policy directly
+from the `EntityState` section with the standard .NET configuration binder; missing selections
+use constructor defaults, and enum validity remains enforced by the constructor. Event authority selects `orders_events` in both the prepared
 storage model and native Aspire database; state authority selects `orders`. The logical Aspire
 connection reference remains `orders`. Invalid values fail before constructing native resources.
 
