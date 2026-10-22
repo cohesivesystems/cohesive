@@ -1,0 +1,134 @@
+{
+  "cohesiveBase": "9b87410f8dbd895ea9a2a5accc517a1c30413fd7",
+  "ariSourceHead": "988893b77fa328b91c97881d661bc68b3ef8a112",
+  "dependencies": "Official alpha.155 packages; both Ari variants include the EDI scratch fix from #247. Only Cohesive.dll differs. Both Core modules built from source using the same SDK/configuration and source path. No package cache changes.",
+  "sourceSha256": {
+    "src/Cohesive/Model/Serialization/ShapeGraphDocumentSemanticValidator.cs": "193358a10c2c06c0d0a37ea9a071783adcb6b2c89b68a8df05f056d41544b844",
+    "src/Cohesive.Tests/Model/ShapeGraphDocumentValidationTests.cs": "cdd159cea8e062443bb233d9d9875a5bfe37bacb8559906532b3835cdc5cc403",
+    "eng/runtime-performance/value-conversion/ShapeGraphMetadataValidationBenchmarks.cs": "4fb92dcf126f9bfcb01760c6e9707d245223b763970f62c37a8dda0c381b014c",
+    "eng/runtime-performance/value-conversion/Program.cs": "804a99e00583b5b383ca95830a33bcc36e83bebb2b22baaa960eaa8e18fdd8b8"
+  },
+  "changedSource": {
+    "control": "611e7234f1cb77348873b525dc4ee87786cf142353dd2e48ecffbc74a7043fd3",
+    "candidate": "193358a10c2c06c0d0a37ea9a071783adcb6b2c89b68a8df05f056d41544b844"
+  },
+  "moduleManifestSha256": "9563d8bd6aa57195a7547e64448b47ead662f63b1de7b25caa7b7d462e35b4ec",
+  "changedModuleSha256": {
+    "control": "3c9d237a3d31f46a3ef50c0f17497de9ac12eba6571cdf21a5a59fdfbc14642e",
+    "candidate": "e1923661c9c858a8830ef983f31696d05f8e840c5dcee087dc96006b1f9e8c08"
+  },
+  "comparison": {
+    "iterations": 2048,
+    "runs": 4,
+    "mode": "default",
+    "sources": [
+      "x12-004010-204",
+      "x12-005030-204"
+    ],
+    "candidateFirst": false,
+    "harnessSha256": {
+      "control": "430d17644b6bd1b786189ca0716cd6cb8649b30f948b7e4311f25db2070ede97",
+      "candidate": "430d17644b6bd1b786189ca0716cd6cb8649b30f948b7e4311f25db2070ede97"
+    }
+  },
+  "counterSha256": "69d33ceda25a0b1bebef0dbfed8ed13ee6b151c99897f72190a434bf9c5223f3",
+  "coreTests": {
+    "passed": 5020,
+    "failed": 0,
+    "skipped": 60
+  },
+  "ariTests": {
+    "passed": 1412,
+    "failed": 0,
+    "skipped": 18
+  },
+  "baselineAllocationGuardFailures": 4,
+  "originalX12Cases": 32768,
+  "graphFingerprintsUnchanged": true,
+  "rawDataLocal": "/tmp/lazy-field-diagnostics",
+  "qualification": "Source-qualified unpublished Core prototype. CPU includes GC/JIT. All source tests/builds/guard checks completed before timing; BDN ran afterward. No owned builds/tests/traces overlap timing comparisons.",
+  "ari247Merge": "17de32a77c8b8312f72685bf71440770fa0321ff",
+  "followup004010": {
+    "reason": "Investigate primary 004010 median CPU +1.45%, mean CPU +0.25%, mixed pairs. Four additional alternating matched process pairs, candidate first in odd runs; no code or runtime-setting changes. Same fixed late window 1537-2048.",
+    "iterations": 2048,
+    "runs": 4,
+    "source": "x12-004010-204",
+    "runtime": "default",
+    "harnessSha256": {
+      "control": "430d17644b6bd1b786189ca0716cd6cb8649b30f948b7e4311f25db2070ede97",
+      "candidate": "430d17644b6bd1b786189ca0716cd6cb8649b30f948b7e4311f25db2070ede97"
+    },
+    "coreSha256": {
+      "control": "3c9d237a3d31f46a3ef50c0f17497de9ac12eba6571cdf21a5a59fdfbc14642e",
+      "candidate": "e1923661c9c858a8830ef983f31696d05f8e840c5dcee087dc96006b1f9e8c08"
+    },
+    "cases": 16384,
+    "counterSha256": "959c1e8f1a4bc054b7858b70363c27b9b0141cc9b9283e0f28acb014396c9ff6",
+    "allEightPairs": [
+      {
+        "batch": "primary",
+        "run": "1",
+        "median_cpu_delta_ms": -0.39949999999999974,
+        "mean_cpu_delta_ms": -0.24599218750000063
+      },
+      {
+        "batch": "primary",
+        "run": "2",
+        "median_cpu_delta_ms": -0.718,
+        "mean_cpu_delta_ms": -0.6960312500000008
+      },
+      {
+        "batch": "primary",
+        "run": "3",
+        "median_cpu_delta_ms": 0.2754999999999992,
+        "mean_cpu_delta_ms": 0.08191992187499864
+      },
+      {
+        "batch": "primary",
+        "run": "4",
+        "median_cpu_delta_ms": 1.0474999999999994,
+        "mean_cpu_delta_ms": 0.6235371093749986
+      },
+      {
+        "batch": "followup",
+        "run": "1",
+        "median_cpu_delta_ms": -0.2644999999999982,
+        "mean_cpu_delta_ms": -0.19249804687500038
+      },
+      {
+        "batch": "followup",
+        "run": "2",
+        "median_cpu_delta_ms": 0.9044999999999987,
+        "mean_cpu_delta_ms": 0.4563632812500007
+      },
+      {
+        "batch": "followup",
+        "run": "3",
+        "median_cpu_delta_ms": -0.03399999999999892,
+        "mean_cpu_delta_ms": 0.33384570312500017
+      },
+      {
+        "batch": "followup",
+        "run": "4",
+        "median_cpu_delta_ms": -0.7904999999999998,
+        "mean_cpu_delta_ms": -0.1907363281250003
+      }
+    ],
+    "meanOfPairedMeanCpuDeltasMs": 0.021301025390624506,
+    "medianOfPairedMeanCpuDeltasMs": -0.05440820312500083
+  },
+  "totalOriginalX12Cases": 49152,
+  "focusedBenchmark": {
+    "runner": "BenchmarkDotNet 0.15.8 ShortRun, InProcessEmitToolchain, 3 warmup and 3 measurement iterations; frozen Core modules; 4 successful cases per variant.",
+    "environment": "Apple M5 Max, Arm64, macOS 27.0.1, .NET SDK 10.0.402, runtime 10.0.13",
+    "sourceSha256": "4fb92dcf126f9bfcb01760c6e9707d245223b763970f62c37a8dda0c381b014c",
+    "harnessSha256": {
+      "control": "e25421799c6d155ef5f5d01c9cfa5864b57375febaa8b93d4f81f73486d5524f",
+      "candidate": "e25421799c6d155ef5f5d01c9cfa5864b57375febaa8b93d4f81f73486d5524f"
+    },
+    "reportSha256": {
+      "control": "79861ea4cda82109bb0d0b827dcdf52e15720388f7a9d027b681fd5cda1954d7",
+      "candidate": "533af8247ece2e33c7c7501a0b97076937bbe3eaee62b523ea7ca59d4a089d59"
+    }
+  }
+}

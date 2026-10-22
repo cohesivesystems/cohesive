@@ -91,14 +91,14 @@ public static class ShapeGraphDocumentSemanticValidator
                     field.Cardinality,
                     field.Presence,
                     field.Nullability,
-                    $"Shape '{shape.Id.Value}' field '{field.Name.Value}'",
-                    $"/graph/shapes/{Encode(shape.Id.Value)}/fields/{Encode(field.Name.Value)}",
+                    "Shape", "shapes", shape.Id.Value, field.Name.Value,
                     diagnostics);
             }
         }
 
-        foreach (var structural in graph.NamedTypes.OfType<TypeDefinition.Structural>())
+        foreach (var named in graph.NamedTypes)
         {
+            if (named is not TypeDefinition.Structural structural) continue;
             foreach (var field in structural.Fields)
             {
                 AddFieldValueDiagnostics(
@@ -106,8 +106,7 @@ public static class ShapeGraphDocumentSemanticValidator
                     field.Cardinality,
                     field.Presence,
                     field.Nullability,
-                    $"Structural type '{structural.Id.Value}' field '{field.Name.Value}'",
-                    $"/graph/namedTypes/{Encode(structural.Id.Value)}/fields/{Encode(field.Name.Value)}",
+                    "Structural type", "namedTypes", structural.Id.Value, field.Name.Value,
                     diagnostics);
             }
         }
@@ -118,10 +117,20 @@ public static class ShapeGraphDocumentSemanticValidator
         FieldCardinality cardinality,
         FieldPresence presence,
         FieldNullability nullability,
-        string subject,
-        string location,
+        string ownerKind,
+        string ownerCollection,
+        string ownerId,
+        string fieldName,
         ICollection<DocumentValidationDiagnostic> diagnostics)
     {
+        // Keep admission fresh, but format subjects and escaped locations only on failure.
+        var validCardinality = Enum.IsDefined(cardinality);
+        var validPresence = Enum.IsDefined(presence);
+        var validNullability = Enum.IsDefined(nullability);
+        if (type is not null && validCardinality && validPresence && validNullability) return;
+
+        var subject = $"{ownerKind} '{ownerId}' field '{fieldName}'";
+        var location = $"/graph/{ownerCollection}/{Encode(ownerId)}/fields/{Encode(fieldName)}";
         if (type is null)
         {
             diagnostics.Add(new(
@@ -130,7 +139,7 @@ public static class ShapeGraphDocumentSemanticValidator
                 $"{subject} must declare a semantic type.",
                 $"{location}/type"));
         }
-        if (!Enum.IsDefined(cardinality))
+        if (!validCardinality)
         {
             diagnostics.Add(new(
                 "shapeGraph.field.cardinality.invalid",
@@ -138,7 +147,7 @@ public static class ShapeGraphDocumentSemanticValidator
                 $"{subject} has unsupported cardinality '{((int)cardinality).ToString(CultureInfo.InvariantCulture)}'.",
                 $"{location}/cardinality"));
         }
-        if (!Enum.IsDefined(presence))
+        if (!validPresence)
         {
             diagnostics.Add(new(
                 "shapeGraph.field.presence.invalid",
@@ -146,7 +155,7 @@ public static class ShapeGraphDocumentSemanticValidator
                 $"{subject} has unsupported presence '{((int)presence).ToString(CultureInfo.InvariantCulture)}'.",
                 $"{location}/presence"));
         }
-        if (!Enum.IsDefined(nullability))
+        if (!validNullability)
         {
             diagnostics.Add(new(
                 "shapeGraph.field.nullability.invalid",
