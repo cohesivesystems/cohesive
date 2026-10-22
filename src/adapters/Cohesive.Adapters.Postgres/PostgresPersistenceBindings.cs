@@ -15,6 +15,8 @@ namespace Cohesive.Adapters.Postgres;
 /// share immutable mappings. Completion freezes authoring and rejects late contributions. Preparation performs no IO and retains no credentials or data source.</remarks>
 public sealed partial class PostgresPersistenceBindings
 {
+    /// <summary>Entity contracts derived from the frozen native mappings.</summary>
+    public System.Collections.Immutable.ImmutableArray<ValueContract> Observations => [.. Tables.Values.Select(item => ValueContract.FromShape(item.Entity.Shape))];
     readonly AuthoringState<PostgresPersistenceBindings> state;
     readonly WeakPreparationCache<RelationQueryCompilationRequest, PostgresRelationQueryCompiledArtifact> preparedQueries = new();
     ExceptionDispatchInfo? preparationFailure;

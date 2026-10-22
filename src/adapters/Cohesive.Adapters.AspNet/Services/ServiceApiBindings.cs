@@ -11,6 +11,11 @@ namespace Cohesive.Adapters.AspNet.Services;
 /// <summary>Prepared host bindings for one complete API surface; native resources remain caller-owned.</summary>
 public sealed class ServiceApiBindings
 {
+    internal static ServiceApiBindings Combine(IEnumerable<ServiceApiBindings> bindings)
+    {
+        var selected = bindings.ToArray();
+        return new(ApiDefinition.Combine(selected.Select(item => item.Definition)), selected.SelectMany(item => item.contributions).ToArray());
+    }
     readonly PreparedApiContribution[] contributions;
     int mappingStarted;
     internal ServiceApiBindings(ApiDefinition definition, PreparedApiContribution[] contributions)

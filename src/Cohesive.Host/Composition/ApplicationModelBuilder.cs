@@ -227,6 +227,10 @@ public abstract class ApplicationModel
 public sealed class PreparedApplicationModel
 {
     readonly IReadOnlyDictionary<Type, object> instances;
+    /// <summary>Returns completed contributions of a requested kind, once per instance.</summary>
+    /// <typeparam name="T">Contribution contract.</typeparam>
+    /// <returns>Original composition-owned declarations.</returns>
+    public IReadOnlyList<T> GetAll<T>() where T : class => instances.Values.OfType<T>().Distinct<T>(ReferenceEqualityComparer.Instance).ToArray();
     internal PreparedApplicationModel(IReadOnlyDictionary<Type, object> instances, ExecutionDefinitionDocumentCatalog catalog)
     { this.instances = instances; Executions = catalog; }
     /// <summary>Validated canonical execution documents, rejecting repeated identity/revision pairs.</summary>

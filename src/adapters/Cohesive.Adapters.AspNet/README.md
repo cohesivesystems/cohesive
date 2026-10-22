@@ -489,3 +489,34 @@ are borrowed from the final host provider and remain under their original DI own
 request/tenant state and transaction lifetimes must not be captured in its singleton result. Use keyed singleton
 SDK registrations under existing infrastructure connection names. The original explicit `Build` and
 `MapServices` APIs remain available for callers that prepare native persistence themselves.
+
+### Application-wide service composition
+
+```csharp
+builder.Services.AddCohesiveServices(model); // activated ApplicationModel
+await using var app = builder.Build();
+await app.MapServicesAsync();
+```
+
+The application overload collects registered `ApiBindingModel` and `StorageModel` instances
+from `model.Composition`. Multiple API groups can share a store, or use separate stores.
+Storage adapters declare their exact observation contracts and prepared query requests;
+selection never probes providers or falls back by registration order. Duplicate endpoint IDs,
+competing storage ownership and missing entity/query selections fail before native preparation.
+The complete route set is staged and validated before attachment to ASP.NET.
+
+Each distinct storage composition is prepared once in the host, before requests. Repeated
+references to the same composition share its preparation. Different compositions claiming the
+same entity, query or native binding are rejected: sharing a native client does not make two
+storage policies interchangeable. Independent contributions still borrow keyed DI clients;
+no second resource catalog or client ownership is introduced. Query consistency and bounds
+continue through the selected adapter without weakening.
+
+`AddCohesiveServices(bindings, storage)` and `MapServicesAsync<TBindings>()` remain available
+for an explicitly selected subset. Multiple explicit binding models share preparation when
+passed the same storage composition. Application-wide registration cannot overlap explicit
+registrations in one host. Model instances remain host-bound; activate a separate application
+for another host. Initial cancellation or preparation failure is retained for that host, with
+no automatic retry; schema writes already completed by a provider are not rolled back across
+stores. Disposal releases process lifetimes, while native clients remain DI-owned. Starting a
+host without mapping its registered services fails admission.

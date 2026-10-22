@@ -12,6 +12,8 @@ namespace Cohesive.Adapters.Cosmos;
 /// partition metadata must be verified by the host. No client or IO is needed for construction.</remarks>
 public sealed class CosmosEntityStorageBinding : IEntityStorageBinding
 {
+    /// <inheritdoc />
+    public ValueContract Observation => ValueContract.FromShape(entity.Shape);
     readonly EntityDefinition entity;
     readonly string identityField;
     readonly EntityPartitionKeyPolicy partition;

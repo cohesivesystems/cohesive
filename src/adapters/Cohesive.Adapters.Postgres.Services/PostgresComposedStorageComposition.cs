@@ -11,6 +11,10 @@ public sealed class PostgresComposedStorageComposition : IServiceStorageComposit
 {
     readonly PostgresPersistenceBindings postgres;
     readonly ImmutableArray<IEntityStorageBinding> sources;
+    /// <inheritdoc />
+    public ImmutableArray<Cohesive.Model.ValueContract> Observations { get; }
+    /// <inheritdoc />
+    public ImmutableArray<Cohesive.Relations.Compilation.RelationQueryCompilationRequest> Queries { get; }
     /// <summary>Stable runtime provenance authority, defaulting to di/ plus the database identity.</summary>
     public string Authority { get; }
     /// <summary>Offline evidence and explicit native binding, shared with infrastructure projections.</summary>
@@ -24,6 +28,8 @@ public sealed class PostgresComposedStorageComposition : IServiceStorageComposit
         this.postgres = postgres;
         Preparation = preparation;
         this.sources = sources;
+        Observations = [.. postgres.Observations, .. sources.Select(source => source.Observation)];
+        Queries = preparation.QueryRequests;
         Authority = authority ?? "di/" + postgres.Database.Value;
         ArgumentException.ThrowIfNullOrWhiteSpace(Authority);
         if (preparation.Sources.Keys.Any(id => !sources.Any(source => source.Source.Source.Id == id)))

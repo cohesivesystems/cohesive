@@ -398,3 +398,12 @@ authorized polling endpoint. `ServiceApiBindingsBuilder` binds the linked pair t
 `MapServiceAcceptedProcess` supports direct native routing. Execution remains with the qualified native
 dispatcher and retained-value provider, with no implicit worker activation or automatic retry.
 See [the protocol and binding walkthrough](../../docs/design/accepted-process-api.md) for contracts, examples and limits.
+
+`ServiceStorageComposition` combines model-declared observation and query ownership without
+native clients or transport dependencies. `IServiceStorageComposition.Observations` and
+`.Queries` are derived by adapters from mappings and prepared endpoint selections, not a
+second application-maintained catalog. Competing ownership is rejected before binding;
+missing selections have `services.storage.*` diagnostics. Query requests use exact instance
+identity, while repository ownership uses canonical observation contracts. Service process
+repository requirements are derived from the selected process's actual dependency references.
+Adapters implementing the interface must now expose this offline ownership metadata.

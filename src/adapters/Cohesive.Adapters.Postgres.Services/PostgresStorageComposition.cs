@@ -11,6 +11,10 @@ namespace Cohesive.Adapters.Postgres.Services;
 public sealed class PostgresStorageComposition : IServiceStorageComposition
 {
     readonly PostgresPersistenceBindings bindings;
+    /// <inheritdoc />
+    public ImmutableArray<Cohesive.Model.ValueContract> Observations { get; }
+    /// <inheritdoc />
+    public ImmutableArray<Cohesive.Relations.Compilation.RelationQueryCompilationRequest> Queries { get; }
     /// <summary>Stable runtime provenance authority, defaulting to di/ plus the database identity.</summary>
     public string Authority { get; }
     /// <summary>Prepares native evidence from exact endpoint selections without opening a connection.</summary>
@@ -20,6 +24,8 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
     public PostgresStorageComposition(PostgresPersistenceBindings bindings, ServiceImplementationPlan plan, string? authority = null)
     {
         this.bindings = bindings ?? throw new ArgumentNullException(nameof(bindings));
+        Observations = bindings.Observations;
+        Queries = [.. plan.QueryDependencies.Queries.Select(query => query.Request)];
         Authority = authority ?? "di/" + bindings.Database.Value;
         ArgumentException.ThrowIfNullOrWhiteSpace(Authority);
         Evidence = bindings.PrepareService(plan, new InfrastructureTargetFacilityId("postgres/" + bindings.Database.Value + "/implementation"));

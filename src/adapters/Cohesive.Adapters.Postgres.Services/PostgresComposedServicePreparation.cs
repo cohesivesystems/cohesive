@@ -1,3 +1,4 @@
+using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Infra;
 using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
@@ -71,6 +72,7 @@ public static class PostgresComposedServiceExtensions
 /// SQL snapshot never extends to remote reads. Physical-plan and source fingerprints remain evidence, not capability IDs.</remarks>
 public sealed class PostgresComposedServicePreparation
 {
+    internal ImmutableArray<RelationQueryCompilationRequest> QueryRequests => [.. queries.Values.Select(item => item.Selection.Request)];
     readonly PostgresPersistenceBindings bindings;
     readonly Dictionary<object, (ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries;
     /// <summary>Local database acquisition requirements and evidence.</summary>

@@ -270,3 +270,9 @@ Authority selection is shared by AppHost and worker through an explicitly regist
 expectations and isolated state/event databases. The mixed example uses the optional
 `Cohesive.Adapters.Aspire.Cosmos` association to validate native account, database, container
 and partition path against its prepared storage source before accepting evidence.
+
+The workers register their activated application with `AddCohesiveServices(model)` and map
+it with `MapServicesAsync()`. The application graph supplies API bindings and storage models;
+Program does not pair a single endpoint catalog with a single store. Native clients are still
+registered explicitly under the existing resource identities. Additional application modules
+can contribute endpoint and storage models; ambiguous ownership fails at host setup.

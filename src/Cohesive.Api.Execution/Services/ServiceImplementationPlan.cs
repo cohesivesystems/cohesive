@@ -16,6 +16,12 @@ public sealed class ServiceImplementationPlan
     readonly AuthoringState<ApiDefinition> state;
     ServiceDependencies queries = new();
     int contributionDepth;
+    System.Collections.Immutable.ImmutableHashSet<ValueContract> repositories = [];
+    /// <summary>Exact entity dependencies selected by entity endpoints and process bindings.</summary>
+    public IReadOnlyCollection<ValueContract> RepositoryRequirements { get { _ = Definition; return repositories; } }
+    /// <summary>Records repositories needed by an implementation contribution.</summary>
+    /// <param name="observations">Canonical observation contracts.</param>
+    public void RequireRepositories(IEnumerable<ValueContract> observations) => state.Edit(() => { repositories = repositories.Union(observations); return this; });
 
     /// <summary>Starts an empty portable implementation plan.</summary>
     public ServiceImplementationPlan() => state = new(() =>
@@ -46,6 +52,7 @@ public sealed class ServiceImplementationPlan
             var previousDefinitions = definitions.ToArray();
             var previousSupplied = supplied.ToArray();
             var previousQueries = queries;
+            var previousRepositories = repositories;
             contributionDepth++;
             try { Declare(definition); configure(); }
             catch
@@ -53,6 +60,7 @@ public sealed class ServiceImplementationPlan
                 definitions.Clear(); definitions.AddRange(previousDefinitions);
                 supplied.Clear(); supplied.UnionWith(previousSupplied);
                 queries = previousQueries;
+                repositories = previousRepositories;
                 throw;
             }
             finally { contributionDepth--; }
