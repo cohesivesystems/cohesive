@@ -17,6 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../eng/materialization-harness/model/Cohesive.MaterializationHarness.Model.csproj" />
     <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
     <ProjectReference Include="../Cohesive.ExecutionKernel.TestFixtures/Cohesive.ExecutionKernel.TestFixtures.csproj" />
     <ProjectReference Include="../Cohesive.Api.Execution/Cohesive.Api.Execution.csproj" />

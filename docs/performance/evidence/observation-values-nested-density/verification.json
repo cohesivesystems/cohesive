@@ -1,0 +1,22 @@
+{
+  "base_commit": "940739c1b31af7f0744eb89045e092af2065829c",
+  "semantic_scenarios": 223,
+  "candidate_variants": 3,
+  "ownership": "passed",
+  "dense_128x16_bytes": 77944,
+  "dense_budget_bytes": 86016,
+  "sparse_quarter_128x16_bytes": 99448,
+  "sparse_budget_bytes": 125952,
+  "main_timing_processes": 156,
+  "initial_ablation_processes": 12,
+  "tiering_control_processes": 6,
+  "retained_processes": 42,
+  "cpu_jit_captures": 4,
+  "core_il_methods": 11842,
+  "core_il_differences": 0,
+  "production_source_changes": false,
+  "phase_dll_differences": [
+    "Cohesive.Relations.Benchmarks.dll"
+  ],
+  "sdk": "10.0.402"
+}

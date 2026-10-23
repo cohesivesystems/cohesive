@@ -1,0 +1,7 @@
+repeat,method,mean_ns,allocated_bytes
+1,ParseExisting,412937.34878472215,280884
+1,ParseShared,418531.922044837,281475
+1,ParseSharedSeparated,436595.3809974747,301157
+2,ParseSharedSeparated,436916.3589488636,291317
+2,ParseShared,437884.05508720933,291317
+2,ParseExisting,435049.75681818184,280885
