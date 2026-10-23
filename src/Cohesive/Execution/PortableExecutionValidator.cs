@@ -155,7 +155,8 @@ public static class PortableExecutionValidator
     {
         public bool RequiresJsonRoundTrip { get; private set; }
         const int MaximumValueCompatibilityDepth = 64;
-        // Most validations succeed over small contracts: failure and recursion state is allocated on first use.
+        // Most validations succeed over small contracts. The location cursor is pre-sized for typical depth;
+        // diagnostics and recursive-type state are allocated only when first needed.
         public Location Root { get; } = new(new(capacity: 8), 0);
 
         List<DocumentValidationDiagnostic>? diagnostics;

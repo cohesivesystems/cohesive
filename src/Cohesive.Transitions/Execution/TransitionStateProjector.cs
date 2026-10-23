@@ -47,6 +47,7 @@ public static class TransitionStateProjector
                     + $"'{patch.Path}' does not match its before-value evidence.");
             }
 
+            RequireAssignableAncestors(ref candidate, pending, ref pendingCount, patch.Path);
             pending[pendingCount++] = new(patch.Path, patch.After.State switch
             {
                 PortableValueState.Concrete => patch.After.Value!.Value,
@@ -93,6 +94,25 @@ public static class TransitionStateProjector
         }
 
         return candidate.TryGetField(path, out var current) ? current : ObservationValue.Undefined;
+    }
+
+    // Sequential WithField failed at the offending patch when an ancestor held a scalar or array. Checking ancestors
+    // here keeps that failure ordered before any later patch's evidence mismatch; direct fields have no ancestors.
+    static void RequireAssignableAncestors(
+        ref ObservationValue candidate,
+        KeyValuePair<FieldPath, ObservationValue>[] pending,
+        ref int pendingCount,
+        FieldPath path)
+    {
+        for (var length = 1; length < path.Segments.Length; length++)
+        {
+            var ancestor = ReadCandidate(ref candidate, pending, ref pendingCount, new([.. path.Segments.AsSpan()[..length]]));
+            if (ancestor.Kind is ObservationValueKind.Undefined or ObservationValueKind.Null)
+                return;
+            if (ancestor.Kind != ObservationValueKind.Object)
+                throw new InvalidOperationException(
+                    $"Field path '{path}' cannot be assigned through value kind '{ancestor.Kind}'.");
+        }
     }
 
     // Equivalent to comparing with the PortableValue that Read would construct under the evidence's own contract.

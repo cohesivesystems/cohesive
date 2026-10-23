@@ -205,22 +205,33 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             case ImmutableArray<KeyValuePair<FieldPath, ObservationValue>> immutable: return WithFieldSpan(immutable.AsSpan());
             case List<KeyValuePair<FieldPath, ObservationValue>> list: return WithFieldSpan(CollectionsMarshal.AsSpan(list));
         }
-        using var enumerator = assignments.GetEnumerator();
-        if (!enumerator.MoveNext()) return this;
-        if (Kind is not (ObservationValueKind.Object or ObservationValueKind.Null or ObservationValueKind.Undefined))
-            throw new InvalidOperationException($"Value kind '{Kind}' cannot be updated as an object.");
-        var root = new AssignmentObject(this);
-        do
+        // Other sequences are buffered once into pooled storage, so every form shares one implementation.
+        var buffer = ArrayPool<KeyValuePair<FieldPath, ObservationValue>>.Shared.Rent(
+            assignments.TryGetNonEnumeratedCount(out var known) ? Math.Max(known, 1) : 8);
+        var count = 0;
+        try
         {
-            var assignment = enumerator.Current;
-            if (assignment.Key.Segments.IsDefaultOrEmpty) throw new ArgumentException("An object assignment requires a non-empty field path.", "path");
-            root.Set(assignment.Key, 0, assignment.Value);
-        } while (enumerator.MoveNext());
-        return root.Freeze();
+            foreach (var assignment in assignments)
+            {
+                if (count == buffer.Length)
+                {
+                    var grown = ArrayPool<KeyValuePair<FieldPath, ObservationValue>>.Shared.Rent(buffer.Length * 2);
+                    buffer.AsSpan(0, count).CopyTo(grown);
+                    ArrayPool<KeyValuePair<FieldPath, ObservationValue>>.Shared.Return(buffer, clearArray: true);
+                    buffer = grown;
+                }
+                buffer[count++] = assignment;
+            }
+            return WithFieldSpan(buffer.AsSpan(0, count));
+        }
+        finally
+        {
+            ArrayPool<KeyValuePair<FieldPath, ObservationValue>>.Shared.Return(buffer, clearArray: true);
+        }
     }
 
-    // Array-backed assignments are read without an enumerator. Direct fields need no assignment tree: one owned
-    // copy receives the ordered updates. Nested paths prepare each touched object once. The span is not retained.
+    // The single WithFields implementation. Direct fields need no assignment tree: one owned copy receives the
+    // ordered updates. Nested paths prepare each touched object once. The span is read and never retained.
     ObservationValue WithFieldSpan(ReadOnlySpan<KeyValuePair<FieldPath, ObservationValue>> assignments)
     {
         if (assignments.IsEmpty) return this;
@@ -228,15 +239,18 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             throw new InvalidOperationException($"Value kind '{Kind}' cannot be updated as an object.");
         var direct = true;
         foreach (var assignment in assignments)
-            if (!assignment.Key.TryGetDirectFieldName(out var name) || string.IsNullOrWhiteSpace(name)) { direct = false; break; }
+            if (assignment.Key.Segments.IsDefaultOrEmpty || !assignment.Key.TryGetDirectFieldName(out var name)
+                || string.IsNullOrWhiteSpace(name)) { direct = false; break; }
         if (direct)
         {
             var fields = Kind == ObservationValueKind.Object ? Fields : null;
             var owned = new Dictionary<string, ObservationValue>((fields?.Count ?? 0) + assignments.Length, StringComparer.Ordinal);
-            if (fields is OwnedObservationFields ownedFields)
-                foreach (var (key, value) in ownedFields) owned.Add(key, value);
-            else if (fields is not null)
-                foreach (var (key, value) in fields) owned.Add(key, value);
+            if (fields is not null)
+            {
+                // The shared storage traversal copies built-in stores through their unboxed enumerators.
+                var copier = new FieldDictionaryCopier(owned);
+                ObservationFieldTraversal.Visit(fields, ref copier);
+            }
             foreach (var assignment in assignments)
             {
                 assignment.Key.TryGetDirectFieldName(out var name);
@@ -252,6 +266,16 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             root.Set(assignment.Key, 0, assignment.Value);
         }
         return root.Freeze();
+    }
+
+    readonly struct FieldDictionaryCopier(Dictionary<string, ObservationValue> target) : IObservationFieldVisitor
+    {
+        public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+            where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+        {
+            try { while (fields.MoveNext()) target.Add(fields.Current.Key, fields.Current.Value); }
+            finally { fields.Dispose(); }
+        }
     }
 
     sealed class AssignmentObject

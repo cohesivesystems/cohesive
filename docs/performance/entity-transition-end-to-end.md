@@ -38,7 +38,9 @@ microseconds are indicative only; use the BenchmarkDotNet class for timing.
 
 Measured October 22, 2026, macOS 27.0.1 / Apple M5 Max arm64, .NET SDK 10.0.402, Release. The baseline is
 local `main` at `3054381f`, including the nested-layout ingestion merge, with only the benchmark files added.
-The candidate is this change on the same base. Values are bytes per operation.
+The candidate is this change on the same base. Values are bytes per operation. After this change was restacked on
+the nested-layout branch (#468), which lacks #465, the candidate endpoint measures 21,712 B (in-memory) and 48,832 B
+(SQLite). The stage rows are identical.
 
 | Store | Workload | Baseline B/op | Candidate B/op | Change |
 | --- | --- | ---: | ---: | ---: |
@@ -61,12 +63,15 @@ about 0.9–1.2 ms in both versions, dominated by the WAL commit and noisy at th
 1. **Batched patch projection** (`TransitionStateProjector.Apply`). Each patch used to call `WithField`, which
    rebuilt an `ImmutableSortedDictionary` along its path. Patches are now checked in order against pending
    assignments, and the candidate is built once with `WithFields`. If a later read targets an ancestor of a
-   pending assignment, pending assignments are folded into the candidate first. Differential tests compare
-   overlapping ancestor/descendant sequences and Null-then-Set chains with the sequential reference.
-2. **Direct-field `WithFields`.** When every assignment addresses a direct field, the object is copied once into
-   owned storage instead of building the nested assignment tree. Arrays, segments, immutable arrays and lists
-   are read without an enumerator. Nested paths keep the existing algorithm. Tests compare five receiver
-   storages and five enumerable forms with sequential `WithField`.
+   pending assignment, pending assignments are folded into the candidate first. Nested patch paths check their
+   ancestors at their own patch, so a scalar-traversal failure is still reported before any later patch's
+   evidence mismatch, with the same exception and message as sequential `WithField`. Differential tests compare
+   overlapping ancestor/descendant sequences, Null-then-Set chains and error ordering with the sequential reference.
+2. **One `WithFields` core with a direct-field path.** Every enumerable form goes through one span-based
+   implementation. Arrays, segments, immutable arrays and lists are read in place; other sequences are buffered
+   once into pooled storage. When every assignment addresses a direct field, the object is copied once into owned
+   storage instead of building the nested assignment tree. Nested paths keep the existing algorithm. Tests compare
+   five receiver storages and five enumerable forms with sequential `WithField`.
 3. **One owned candidate dictionary.** `EntityDefinition.BuildEntityState` transfers its freshly normalized
    dictionary to the observation instead of snapshotting it again.
 4. **No LINQ on candidate reads.** The reference interpreter's `ReadCandidate` finds the nearest written
@@ -78,13 +83,21 @@ about 0.9–1.2 ms in both versions, dominated by the WAL commit and noisy at th
    reflection on every projected value, including scalars. That fact is now prepared once per type.
 7. **No Cosmos write copy.** `CosmosObservationContainerDocument.Observation` is typed as
    `IReadOnlyDictionary`. Immutable observation storage is serialized directly, instead of being copied into a
-   new `Dictionary` on every entity write and outbox payload. The Cosmos emulator was not run; the serialized
-   shape is unchanged because both types serialize as JSON objects in the same enumeration order.
+   new `Dictionary` on every entity write and outbox payload. A shape test asserts byte-identical JSON against the
+   former copy for five storage kinds, plus a round trip. The Cosmos suite (464 tests) was run against the local
+   `vnext-EN20260810` emulator: 461 pass, and the same 3 `CosmosRelationQueryCompilerTests` artifact tests fail
+   on unchanged `main` with this emulator. The change-feed reader still snapshots deserialized items, because its
+   iterator is injectable and the caller may still own them.
 
 The same changes also reduce `ObservationHostedQueryTests.WarmForwardingDoesNotAllocateWithPayloadSize`'s typed
 forwarding of 1,024 strings from 189,968 B to 42,256 B. That path previously made a reflection attribute query for
 every projected element. Observation forwarding went from 704 B to 640 B. The test's relative margin was lowered
-accordingly; its absolute observation-forwarding ceilings are unchanged.
+from 128 KB to 16 KB, and a 64 KB upper bound on typed forwarding now guards the cached-reflection gain.
+
+`TransitionAllocationTests` guards the transition path itself. For a 13-field entity with one guard and three
+updates, warm decision and candidate preparation measure about 11,000 B and 4,192 B, against ceilings of 12,800 B
+and 4,800 B. Before this change they were about 13,400 B and 5,500 B, so a regression to the per-patch copies or
+the LINQ candidate reads fails the test.
 
 ## What remains
 

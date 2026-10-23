@@ -358,6 +358,8 @@ internal sealed class CosmosMaterializationChangeFeedReader : ICosmosMaterializa
         }
     }
 
+    // Items may come from an injected iterator whose caller still owns them, so the mutable deserialized
+    // dictionary is snapshotted. Entity writes, by contrast, serialize immutable observation storage directly.
     static CosmosObservationContainerDocument? Clone(CosmosObservationContainerDocument? document)
     {
         if (document is null)

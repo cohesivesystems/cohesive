@@ -58,6 +58,18 @@ public sealed class TransitionStateProjectionTests
         AssertMatchesSequential(state, nullThenSet, """{"a":{"x":4}}""");
     }
 
+    [Fact]
+    public void Scalar_traversal_fails_at_its_own_patch_before_later_evidence_checks()
+    {
+        var state = Parse("""{"a":1}""");
+        var decision = Decision(
+            Set(Path("a", "x"), PortableValue.Absent(AnyInt), Concrete(AnyInt, "2")),
+            Set(Path("b"), Concrete(AnyInt, "99"), Concrete(AnyInt, "3")));
+        var sequential = Assert.Throws<InvalidOperationException>(() => state.WithField(Path("a", "x"), ObservationValue.FromInt64(2)));
+        var batched = Assert.Throws<InvalidOperationException>(() => TransitionStateProjector.Apply(state, decision));
+        Assert.Equal(sequential.Message, batched.Message);
+    }
+
     static void AssertMatchesSequential(ObservationValue state, TransitionDecision decision, string expectedJson)
     {
         var expected = state;
