@@ -39,10 +39,10 @@ public sealed partial class OrderStorageIntegrationTests
                 builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
                 builder.Services.AddKeyedSingleton<NpgsqlDataSource>(resource, database);
                 builder.Services.AddKeyedSingleton<IDocumentStore>(resource, store);
-                builder.Services.AddCohesiveServices(model.Endpoints, model.Storage);
+                builder.Services.AddCohesiveServices(model);
                 await using var app = builder.Build();
                 app.UseRequestOperationContext(); app.UseAuthorization();
-                await app.MapServicesAsync<OrderEndpoints>();
+                await app.MapServicesAsync();
                 app.Urls.Add("http://127.0.0.1:0");
                 await app.StartAsync();
                 using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };

@@ -219,6 +219,17 @@ public abstract class ApplicationModel
 {
     PreparedApplicationModel? composition;
     internal void Attach(PreparedApplicationModel value) => composition = value;
+    /// <summary>Returns only components explicitly exposed by this root, in ordinal member-name order.</summary>
+    /// <typeparam name="T">Requested contribution contract.</typeparam>
+    /// <returns>Completed direct components; incidental transitive dependencies do not contribute.</returns>
+    public IReadOnlyList<T> Components<T>() where T : class
+    {
+        _ = Composition;
+        return GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property => property.Name != nameof(Composition) && property.GetIndexParameters().Length == 0)
+            .OrderBy(property => property.Name, StringComparer.Ordinal)
+            .Select(property => property.GetValue(this)).OfType<T>().Distinct<T>(ReferenceEqualityComparer.Instance).ToArray();
+    }
     /// <summary>Validated declarations; available after ModelActivator returns, never during constructors.</summary>
     public PreparedApplicationModel Composition => composition ?? throw new InvalidOperationException("Activate the application before inspecting its composition.");
 }

@@ -1,3 +1,4 @@
+using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Infra;
 using System.Collections.Immutable;
 using Microsoft.Extensions.DependencyInjection;
@@ -18,18 +19,17 @@ public static class PostgresComposedServiceExtensions
 {
     /// <summary>Prepares a composite storage model using each source's canonical acquisition declaration.</summary>
     /// <param name="bindings">Local native database mappings and receipt policy.</param>
-    /// <param name="plan">Endpoint requirements, including consistency.</param>
     /// <param name="sources">Exact native contributions declared by the storage model.</param>
     /// <param name="policy">Explicit bounded query policy.</param>
     /// <param name="authority">Runtime authority; defaults to the canonical database identity.</param>
     /// <returns>One preparation for infrastructure evidence and DI runtime binding.</returns>
     public static PostgresComposedStorageComposition ComposeServices(this PostgresPersistenceBindings bindings,
-        ServiceImplementationPlan plan, IEnumerable<IEntityStorageBinding> sources,
+        IEnumerable<IEntityStorageBinding> sources,
         Func<int, long, PostgresRelationQueryComposedPolicy> policy, string? authority = null)
     {
         ArgumentNullException.ThrowIfNull(sources);
         var selected = sources.ToImmutableArray();
-        return new(bindings, PrepareCore(bindings, plan, new(selected.Select(source => source.Source)), policy), selected, authority);
+        return new(bindings, selected, policy, authority);
     }
 
     /// <summary>Derives source acquisition requirements and bounded evaluation requirements from actual physical preparation.</summary>
@@ -41,16 +41,16 @@ public static class PostgresComposedServiceExtensions
         ServiceImplementationPlan plan, EntityRelationQuerySourceCatalog sources,
         Func<int, long, PostgresRelationQueryComposedPolicy> policy)
     {
-        return PrepareCore(bindings, plan, sources, policy);
+        return PrepareCore(bindings, plan.QueryDependencies.Queries, sources, policy);
     }
 
-    static PostgresComposedServicePreparation PrepareCore(PostgresPersistenceBindings bindings,
-        ServiceImplementationPlan plan, EntityRelationQuerySourceCatalog sources,
+    internal static PostgresComposedServicePreparation PrepareCore(PostgresPersistenceBindings bindings,
+        IEnumerable<ServiceQuerySelection> selections, EntityRelationQuerySourceCatalog sources,
         Func<int, long, PostgresRelationQueryComposedPolicy> policy)
     {
-        ArgumentNullException.ThrowIfNull(bindings); ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(bindings); ArgumentNullException.ThrowIfNull(selections);
         ArgumentNullException.ThrowIfNull(sources); ArgumentNullException.ThrowIfNull(policy);
-        var queries = plan.QueryDependencies.Queries.Select(selection =>
+        var queries = selections.Select(selection =>
         {
             if (selection.Consistency != RelationQueryConsistency.IndependentSources)
                 throw new ServiceBindingValidationException(new([new(ServiceBindingDiagnosticCodes.QueryPlacementUnsupported, DiagnosticSeverity.Error,
@@ -72,7 +72,7 @@ public static class PostgresComposedServiceExtensions
 public sealed class PostgresComposedServicePreparation
 {
     readonly PostgresPersistenceBindings bindings;
-    readonly Dictionary<object, (ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries;
+    readonly Dictionary<RelationQueryPlanComponentFingerprint, (ServiceQuerySelection Selection, PostgresComposedQueryPreparation Prepared)> queries;
     /// <summary>Local database acquisition requirements and evidence.</summary>
     public ComposedQueryResourceEvidence Postgres { get; }
     /// <summary>Remote acquisition requirements keyed by canonical source identity.</summary>
@@ -87,7 +87,7 @@ public sealed class PostgresComposedServicePreparation
     {
         if (queries.IsEmpty) throw new ArgumentException("At least one selected query is required.", nameof(queries));
         this.bindings = bindings;
-        this.queries = queries.ToDictionary(item => (object)item.Selection.Request, ReferenceEqualityComparer.Instance);
+        this.queries = queries.ToDictionary(item => QueryKey(item.Selection.Request));
         List<InfrastructureCapabilityEvidence> local = [], execution = [];
         Dictionary<RelationQuerySourceInstanceId, List<InfrastructureCapabilityEvidence>> remote = [];
         foreach (var (selection, prepared) in queries)
@@ -191,6 +191,13 @@ public sealed class PostgresComposedServicePreparation
         return persistence.BindComposed(query, entry.Prepared, sources);
     }
 
+    static RelationQueryPlanComponentFingerprint QueryKey(RelationQueryCompilationRequest request)
+    {
+        var compiled = RelationQueryStaticCompiler.Compile(request);
+        if (!compiled.IsSuccessful) throw new RelationQueryPreparationException("composed selection", compiled);
+        return RelationQueryCompiledPlanReferenceFingerprinter.Compute(RelationQueryCompiledPlanReference.From(compiled.Plan!));
+    }
+
     void RequirePersistence(PostgresPersistenceRegistration persistence)
     {
         ArgumentNullException.ThrowIfNull(persistence);
@@ -202,7 +209,7 @@ public sealed class PostgresComposedServicePreparation
         RelationQuery<TInput, TResult> query, int rows, long bytes)
     {
         ArgumentNullException.ThrowIfNull(query);
-        if (!queries.TryGetValue(query.CompilationRequest, out var entry)
+        if (!queries.TryGetValue(QueryKey(query.CompilationRequest), out var entry)
             || entry.Selection.MaximumRows != rows || entry.Selection.MaximumBytes != bytes)
             throw new ServiceBindingValidationException(new([new(ServiceBindingDiagnosticCodes.QueryUnselected, DiagnosticSeverity.Error,
                 "Query authority and bounds must match the prepared endpoint selection.", "/bindings/queries")]));

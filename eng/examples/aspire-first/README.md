@@ -186,9 +186,11 @@ to those plans without rediscovering the split or recompiling the physical remai
 ## Storage preparation and native resource ownership
 
 `StorageModel` owns native mappings, receipt/history/outbox configuration and a single offline composition. The PostgreSQL
-example composes its endpoint plan with `PostgresStorageComposition`; the mixed example uses
-`ComposeServices` with its declared Cosmos source. Infrastructure consumes this same preparation through
-`RequireComposition<T>()`. There is no extra `Preparation` property or application-owned mixed-store `Bind` recipe.
+example declares `PostgresStorageComposition` from entity mappings; the mixed example uses
+`ComposeServices(nativeSources, policy)` with its declared Cosmos source. Neither storage constructor
+depends on endpoint models. Application admission routes queries from all modules by entity placement
+and prepares their declared consistency before native initialization. Infrastructure uses the same
+offline `PrepareEvidence` operation on the selected queries; no application-owned mixed-store `Bind` recipe is needed.
 
 The workers register keyed native singleton clients using the **existing Aspire connection names** (`orders`
 and `inventory-cosmos`). No additional resource catalog is introduced. A PostgreSQL data source owns its pool;
@@ -270,3 +272,12 @@ Authority selection is shared by AppHost and worker through an explicitly regist
 expectations and isolated state/event databases. The mixed example uses the optional
 `Cohesive.Adapters.Aspire.Cosmos` association to validate native account, database, container
 and partition path against its prepared storage source before accepting evidence.
+
+The workers register their activated application with `AddCohesiveServices(model)` and map
+it with `MapServicesAsync()`. Public root properties supply API bindings and storage models;
+Program does not pair a single endpoint catalog with a single store. Native clients are still
+registered explicitly under the existing resource identities. Additional application modules
+can expose endpoint and storage models on the root; a new query module over the same entities
+requires no edit to the existing storage declaration. Incidental transitive models are excluded.
+Preparation follows ordinal root member names. Missing/ambiguous placement and missing process
+dependencies fail before native preparation; cross-store queries still need explicit composed policy.

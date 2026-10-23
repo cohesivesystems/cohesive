@@ -10,6 +10,7 @@ namespace AspireFirst.PostgresCosmos;
 /// <summary>Separate native host: PostgreSQL orders plus Cosmos inventory, with no distributed snapshot claim.</summary>
 public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureModel
 {
+    readonly PostgresComposedServicePreparation prepared;
     /// <summary>Canonical shared application workload identity.</summary>
     public static InfrastructureNodeId Worker { get; } = new("workloads/orders");
 
@@ -25,13 +26,13 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
     public PostgresCosmosFulfillmentInfrastructure(PostgresCosmosApplication model)
     {
         Application = model;
+        prepared = model.Storage.RequireComposition<PostgresComposedStorageComposition>().PrepareEvidence(model.Endpoints.Plan.QueryDependencies.Queries);
         Define(
             id: new("example/orders-postgres-cosmos"),
             revision: new("1"),
             bindingProfileId: new("example/orders-postgres-cosmos/bindings"),
             infra =>
             {
-                var prepared = model.Storage.RequireComposition<PostgresComposedStorageComposition>().Preparation;
                 infra.Resource(Orders).Persistent().Prepared(prepared.Postgres);
                 infra.Resource(Inventory).Persistent().Prepared(prepared.Sources[model.Storage.Inventory.Query.Binding.Source.Id]);
                 var worker = infra.Workload(Worker).Requires(AspireInfrastructure.DotNetProjectExecution)
@@ -65,7 +66,6 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
             variant: new("development"),
             associations =>
             {
-                var prepared = Application.Storage.RequireComposition<PostgresComposedStorageComposition>().Preparation;
                 associations.Resource(Orders, orders, prepared.Postgres.ForSource(orders.Resource.DatabaseName), new("aspire/example/orders"));
                 associations.Resource(Inventory, inventory, Application.Storage.Inventory, new("aspire/example/inventory"));
                 associations.Workload(Worker, worker, executionEvidence: prepared.ExecutionEvidence);

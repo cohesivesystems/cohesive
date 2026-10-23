@@ -18,11 +18,11 @@ builder.Services.AddKeyedSingleton<CosmosClient>(PostgresCosmosStorage.CosmosAcc
     new CosmosClient(builder.Configuration.GetConnectionString(PostgresCosmosStorage.CosmosAccount)
         ?? throw new InvalidOperationException("The Aspire Cosmos account reference is required."),
         new CosmosClientOptions { Serializer = new Cohesive.Adapters.Cosmos.CosmosSystemTextJsonSerializer(), ConnectionMode = ConnectionMode.Gateway, LimitToEndpoint = true, RequestTimeout = TimeSpan.FromSeconds(10) }));
-builder.Services.AddCohesiveServices(model.Endpoints, model.Storage);
+builder.Services.AddCohesiveServices(model);
 
 await using var app = builder.Build();
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
 app.UseAuthorization();
-await app.MapServicesAsync<OrderEndpoints>();
+await app.MapServicesAsync();
 await app.RunAsync();

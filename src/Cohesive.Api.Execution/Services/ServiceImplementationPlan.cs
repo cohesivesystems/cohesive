@@ -1,4 +1,5 @@
 using Cohesive.Relations.Execution;
+using Cohesive.Relations.Compilation;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -16,6 +17,12 @@ public sealed class ServiceImplementationPlan
     readonly AuthoringState<ApiDefinition> state;
     ServiceDependencies queries = new();
     int contributionDepth;
+    System.Collections.Immutable.ImmutableHashSet<ValueContract> repositories = [];
+    /// <summary>Exact entity dependencies selected by entity endpoints and process bindings.</summary>
+    public IReadOnlyCollection<ValueContract> RepositoryRequirements { get { _ = Definition; return repositories; } }
+    /// <summary>Records repositories needed by an implementation contribution.</summary>
+    /// <param name="observations">Canonical observation contracts.</param>
+    public void RequireRepositories(IEnumerable<ValueContract> observations) => state.Edit(() => { repositories = repositories.Union(observations); return this; });
 
     /// <summary>Starts an empty portable implementation plan.</summary>
     public ServiceImplementationPlan() => state = new(() =>
@@ -46,6 +53,7 @@ public sealed class ServiceImplementationPlan
             var previousDefinitions = definitions.ToArray();
             var previousSupplied = supplied.ToArray();
             var previousQueries = queries;
+            var previousRepositories = repositories;
             contributionDepth++;
             try { Declare(definition); configure(); }
             catch
@@ -53,6 +61,7 @@ public sealed class ServiceImplementationPlan
                 definitions.Clear(); definitions.AddRange(previousDefinitions);
                 supplied.Clear(); supplied.UnionWith(previousSupplied);
                 queries = previousQueries;
+                repositories = previousRepositories;
                 throw;
             }
             finally { contributionDepth--; }
@@ -93,9 +102,12 @@ public sealed class ServiceImplementationPlan
     public void Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes, RelationQueryConsistency consistency) =>
         state.Edit(() =>
         {
-            var existing = queries.Queries.FirstOrDefault(item => ReferenceEquals(item.Request, query.CompilationRequest));
+            var reference = ServiceQueryBinding.GetReference(revision, query.CompilationRequest);
+            var existing = queries.Queries.FirstOrDefault(item => item.Reference.DefinitionId == reference.DefinitionId);
             if (existing is null) queries = queries.Query(query, revision, rows, bytes, consistency);
-            else if (existing.Reference.RevisionId != revision || existing.MaximumRows != rows || existing.MaximumBytes != bytes || existing.Consistency != consistency)
+            else if (existing.Reference != reference
+                || RelationQueryCompilationRequestReference.From(existing.Request) != RelationQueryCompilationRequestReference.From(query.CompilationRequest)
+                || existing.MaximumRows != rows || existing.MaximumBytes != bytes || existing.Consistency != consistency)
                 throw Error("services.api.querySelectionMismatch", "One query authority must have one revision, preparation bound and consistency requirement.");
             return this;
         });

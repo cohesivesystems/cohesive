@@ -489,3 +489,46 @@ are borrowed from the final host provider and remain under their original DI own
 request/tenant state and transaction lifetimes must not be captured in its singleton result. Use keyed singleton
 SDK registrations under existing infrastructure connection names. The original explicit `Build` and
 `MapServices` APIs remain available for callers that prepare native persistence themselves.
+
+### Application-wide service composition
+
+```csharp
+builder.Services.AddCohesiveServices(model); // activated ApplicationModel
+await using var app = builder.Build();
+await app.MapServicesAsync();
+```
+
+The application overload collects `ApiBindingModel` and `StorageModel` components exposed by
+public properties on the activated root. Incidental transitive dependencies do not contribute.
+Properties are visited in ordinal member-name order, independent of DI factory resolution;
+that order also controls preparation across stores. Expose each contributing module on the root.
+
+Storage owns entity placement, not a list of API queries. Admission compiles each selected
+query offline and routes it to the one composition covering all source and traversal shapes.
+Two independent API modules can add queries over an unchanged Postgres storage model.
+A query spanning stores requires an explicitly composed storage declaration; selection never
+probes providers or weakens a snapshot requirement to independent-source execution.
+
+Repository ownership uses canonical observation contracts. Query ownership uses canonical
+compilation fingerprints (including definition, shapes, relationships and demand), with exact
+query ID/revision and bounds checked across modules. Rebuilt equivalent requests are accepted.
+Missing process dependencies, missing ownership and competing ownership fail before native
+preparation. Ownership diagnostics are collected together and name contracts and contributing
+models. Provider query planning also finishes before any client is resolved. Route attachment
+remains atomic after preparation.
+
+Each distinct storage composition is prepared once per host. Repeated references share it;
+competing compositions cannot claim the same entity or native binding. Native clients retain
+their existing keyed DI ownership; there is no second resource catalog.
+
+The explicit `AddCohesiveServices(bindings, storage)` overload applies the same ownership
+admission across all explicit registrations and shares their preparation. A failed registration
+does not change that set. Its shared storage task uses host-shutdown cancellation; each caller
+can cancel its own wait without canceling another module's preparation. A canceled API mapping
+still fails that binding's retained preparation: rebuild the host to retry it. The callback overload
+is the deliberate escape hatch: caller-owned persistence has no placement metadata to validate.
+
+Application registration cannot overlap explicit registration. Initial application cancellation
+or preparation failure is retained without automatic retry. Schema writes already completed by
+a provider are not rolled back across stores. Disposal releases process lifetimes; native clients
+remain DI-owned. Starting without mapping all registered bindings fails host admission.
