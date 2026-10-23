@@ -23,7 +23,14 @@ public static class TransitionStateProjector
             throw new ArgumentException("Transition state projection requires a concrete object value.", nameof(state));
         }
 
+        if (decision.Patch.IsDefaultOrEmpty)
+            return state;
+
+        // Assignments are applied in one copy at the end. Before-value evidence is still checked in patch order
+        // against the candidate produced by every earlier patch: reads consult pending assignments first.
         var candidate = state;
+        var pending = new KeyValuePair<FieldPath, ObservationValue>[decision.Patch.Length];
+        var pendingCount = 0;
         for (var index = 0; index < decision.Patch.Length; index++)
         {
             var patch = decision.Patch[index];
@@ -31,8 +38,8 @@ public static class TransitionStateProjector
                 if (segment.Kind != SegmentKind.Field)
                     throw new TransitionStatePreparationException("transition.state.pathUnsupported",
                         $"/decision/patch/{index}/path", "State projection does not support collection-element navigation.");
-            var observed = Read(candidate, patch.Path, patch.Before.Contract);
-            if (observed != patch.Before)
+            var observed = ReadCandidate(ref candidate, pending, ref pendingCount, patch.Path);
+            if (!MatchesEvidence(patch.Before, observed))
             {
                 throw new TransitionStatePreparationException(
                     "transition.state.beforeMismatch", $"/decision/patch/{index}/before",
@@ -40,20 +47,61 @@ public static class TransitionStateProjector
                     + $"'{patch.Path}' does not match its before-value evidence.");
             }
 
-            candidate = patch.After.State switch
+            pending[pendingCount++] = new(patch.Path, patch.After.State switch
             {
-                PortableValueState.Concrete => candidate.WithField(patch.Path, patch.After.Value!.Value),
-                PortableValueState.Null => candidate.WithField(patch.Path, ObservationValue.Null),
-                PortableValueState.Absent => candidate.WithoutField(patch.Path),
+                PortableValueState.Concrete => patch.After.Value!.Value,
+                PortableValueState.Null => ObservationValue.Null,
+                // WithFields removes the terminal field and empty object ancestors, as WithoutField does.
+                PortableValueState.Absent => ObservationValue.Undefined,
                 _ => throw new TransitionStatePreparationException(
                     "transition.state.valueNotCommittable", $"/decision/patch/{index}/after",
                     $"Transition patch '{patch.Node.Value}' produced non-committable value state "
                     + $"'{patch.After.State}'.")
-            };
+            });
         }
 
-        return candidate;
+        return candidate.WithFields(new ArraySegment<KeyValuePair<FieldPath, ObservationValue>>(pending, 0, pendingCount));
     }
+
+    // Resolves a path against base state plus ordered pending assignments. The latest assignment to the path or an
+    // ancestor wins. A later assignment beneath the path cannot be read from one value, so pending work is folded first.
+    static ObservationValue ReadCandidate(
+        ref ObservationValue candidate,
+        KeyValuePair<FieldPath, ObservationValue>[] pending,
+        ref int pendingCount,
+        FieldPath path)
+    {
+        for (var index = pendingCount - 1; index >= 0; index--)
+        {
+            var assigned = pending[index].Key;
+            if (assigned.IsPrefixOf(path))
+            {
+                var value = pending[index].Value;
+                if (assigned.Segments.Length == path.Segments.Length)
+                    return value;
+                return value.TryGetFieldSegments(path.Segments.AsSpan()[assigned.Segments.Length..], out var nested)
+                    ? nested
+                    : ObservationValue.Undefined;
+            }
+
+            if (path.IsPrefixOf(assigned))
+            {
+                candidate = candidate.WithFields(new ArraySegment<KeyValuePair<FieldPath, ObservationValue>>(pending, 0, pendingCount));
+                pendingCount = 0;
+                break;
+            }
+        }
+
+        return candidate.TryGetField(path, out var current) ? current : ObservationValue.Undefined;
+    }
+
+    // Equivalent to comparing with the PortableValue that Read would construct under the evidence's own contract.
+    static bool MatchesEvidence(PortableValue before, ObservationValue value) => value.Kind switch
+    {
+        ObservationValueKind.Undefined => before.State == PortableValueState.Absent,
+        ObservationValueKind.Null => before.State == PortableValueState.Null,
+        _ => before.State == PortableValueState.Concrete && before.Value!.Value.Equals(value)
+    };
 
     /// <summary>Prepares one entity candidate from a canonical decision without committing or delivering effects.</summary>
     /// <param name="entity">Canonical entity authority used to validate the resulting observation.</param>
@@ -122,20 +170,5 @@ public static class TransitionStateProjector
                 current is null ? "/decision/evidence/initialObservation" : "/decision/candidateObservation",
                 exception.Message, exception);
         }
-    }
-
-    static PortableValue Read(ObservationValue state, FieldPath path, ValueContract contract)
-    {
-        if (!state.TryGetField(path, out var value) || value.Kind == ObservationValueKind.Undefined)
-        {
-            return PortableValue.Absent(contract);
-        }
-
-        if (value.Kind == ObservationValueKind.Null)
-        {
-            return PortableValue.Null(contract);
-        }
-
-        return PortableValue.Concrete(contract, value);
     }
 }

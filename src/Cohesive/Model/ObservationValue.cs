@@ -198,6 +198,13 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     public ObservationValue WithFields(IEnumerable<KeyValuePair<FieldPath, ObservationValue>> assignments)
     {
         ArgumentNullException.ThrowIfNull(assignments);
+        switch (assignments)
+        {
+            case KeyValuePair<FieldPath, ObservationValue>[] array: return WithFieldSpan(array);
+            case ArraySegment<KeyValuePair<FieldPath, ObservationValue>> segment: return WithFieldSpan(segment);
+            case ImmutableArray<KeyValuePair<FieldPath, ObservationValue>> immutable: return WithFieldSpan(immutable.AsSpan());
+            case List<KeyValuePair<FieldPath, ObservationValue>> list: return WithFieldSpan(CollectionsMarshal.AsSpan(list));
+        }
         using var enumerator = assignments.GetEnumerator();
         if (!enumerator.MoveNext()) return this;
         if (Kind is not (ObservationValueKind.Object or ObservationValueKind.Null or ObservationValueKind.Undefined))
@@ -209,6 +216,41 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             if (assignment.Key.Segments.IsDefaultOrEmpty) throw new ArgumentException("An object assignment requires a non-empty field path.", "path");
             root.Set(assignment.Key, 0, assignment.Value);
         } while (enumerator.MoveNext());
+        return root.Freeze();
+    }
+
+    // Array-backed assignments are read without an enumerator. Direct fields need no assignment tree: one owned
+    // copy receives the ordered updates. Nested paths prepare each touched object once. The span is not retained.
+    ObservationValue WithFieldSpan(ReadOnlySpan<KeyValuePair<FieldPath, ObservationValue>> assignments)
+    {
+        if (assignments.IsEmpty) return this;
+        if (Kind is not (ObservationValueKind.Object or ObservationValueKind.Null or ObservationValueKind.Undefined))
+            throw new InvalidOperationException($"Value kind '{Kind}' cannot be updated as an object.");
+        var direct = true;
+        foreach (var assignment in assignments)
+            if (!assignment.Key.TryGetDirectFieldName(out var name) || string.IsNullOrWhiteSpace(name)) { direct = false; break; }
+        if (direct)
+        {
+            var fields = Kind == ObservationValueKind.Object ? Fields : null;
+            var owned = new Dictionary<string, ObservationValue>((fields?.Count ?? 0) + assignments.Length, StringComparer.Ordinal);
+            if (fields is OwnedObservationFields ownedFields)
+                foreach (var (key, value) in ownedFields) owned.Add(key, value);
+            else if (fields is not null)
+                foreach (var (key, value) in fields) owned.Add(key, value);
+            foreach (var assignment in assignments)
+            {
+                assignment.Key.TryGetDirectFieldName(out var name);
+                if (assignment.Value.Kind == ObservationValueKind.Undefined) owned.Remove(name);
+                else owned[name] = assignment.Value;
+            }
+            return FromOwnedObjectInOrdinalOrder(owned);
+        }
+        var root = new AssignmentObject(this);
+        foreach (var assignment in assignments)
+        {
+            if (assignment.Key.Segments.IsDefaultOrEmpty) throw new ArgumentException("An object assignment requires a non-empty field path.", "path");
+            root.Set(assignment.Key, 0, assignment.Value);
+        }
         return root.Freeze();
     }
 
@@ -901,11 +943,16 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         return FromDouble(value);
     }
 
+    // Reflection facts only; every projected value is still converted per call.
+    static readonly WeakPreparationCache<Type, bool> DeclaredJsonConversionByType = new();
+
     static bool TryProjectJsonConvertedValue(object value, out ObservationValue observed)
     {
         var type = value.GetType();
-        if (type.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is null
-            && !PortableJsonValueAttribute.TryGetKind(type, out _))
+        var declared = DeclaredJsonConversionByType.Get(type, static owner =>
+            owner.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is not null
+            || PortableJsonValueAttribute.TryGetKind(owner, out _));
+        if (!declared)
         {
             observed = default;
             return false;

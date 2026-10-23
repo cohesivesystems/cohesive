@@ -11,6 +11,10 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
 
 ## Benchmark groups
 
+- `EntityTransitionEndToEndBenchmarks` and `--entity-transition-allocations` measure one entity API transition from
+  request bytes to response bytes through the ASP.NET binding, over in-memory and SQLite repositories, with a stage
+  partition; see [results](../../docs/performance/entity-transition-end-to-end.md).
+
 - `TypedDocumentCanonicalizationBenchmarks` compares immutable typed strict JSON canonicalization
   with mutable node expansion; see [evidence and contract](../../docs/performance/typed-document-canonicalization/README.md).
 

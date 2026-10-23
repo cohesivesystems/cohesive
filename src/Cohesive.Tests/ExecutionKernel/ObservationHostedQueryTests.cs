@@ -105,7 +105,9 @@ public sealed class ObservationHostedQueryTests(ITestOutputHelper output)
         output.WriteLine($"Typed forwarding: {baseline}; observation forwarding: {direct}; large observation forwarding: {large} B.");
         Assert.InRange(direct, 0, 4096);
         Assert.InRange(large, 0, 4096);
-        Assert.True(baseline > direct + 128 * 1024, $"Typed {baseline}, direct {direct}.");
+        // Typed forwarding still decodes and re-projects every element (about 42 KB for 1,024 strings once
+        // per-value reflection was cached); observation forwarding stays constant across payload sizes.
+        Assert.True(baseline > direct + 16 * 1024, $"Typed {baseline}, direct {direct}.");
     }
 
     static long Measure(DeterministicHostedQueryBinding binding, PortableValue input)

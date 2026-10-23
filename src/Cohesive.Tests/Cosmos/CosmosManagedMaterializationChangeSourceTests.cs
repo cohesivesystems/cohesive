@@ -1299,7 +1299,7 @@ public sealed class CosmosManagedMaterializationChangeSourceTests
         ObservationType: observationType ?? EntityShape.ShapeId.Value,
         ObservationId: identity,
         ObservationVersion: 1,
-        Observation: new(StringComparer.Ordinal)
+        Observation: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
         {
             ["name"] = ObservationValue.FromString(string.Concat("Name ", identity))
         },
@@ -1315,7 +1315,7 @@ public sealed class CosmosManagedMaterializationChangeSourceTests
         ObservationType: EntityShape.ShapeId.Value,
         ObservationId: "load-a",
         ObservationVersion: 7,
-        Observation: new(StringComparer.Ordinal)
+        Observation: new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
         {
             ["name"] = ObservationValue.FromString("Load A")
         },
