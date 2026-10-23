@@ -1,0 +1,110 @@
+[
+  {
+    "variant": "baseline",
+    "run": 1,
+    "stops": 2,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 297816 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 2959072 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "candidate",
+    "run": 1,
+    "stops": 2,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 121344 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 2959072 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "baseline",
+    "run": 1,
+    "stops": 16,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 539240 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 5663592 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "candidate",
+    "run": 1,
+    "stops": 16,
+    "stderr": "Retained heap delta with 32 wire outputs alive: -919040 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 5671808 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "baseline",
+    "run": 1,
+    "stops": 64,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 710336 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 10403992 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "candidate",
+    "run": 1,
+    "stops": 64,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 5242600 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 10390920 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "candidate",
+    "run": 2,
+    "stops": 2,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 249688 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 2959072 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "baseline",
+    "run": 2,
+    "stops": 2,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 249688 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 2959072 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "candidate",
+    "run": 2,
+    "stops": 16,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 541160 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 5663592 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "baseline",
+    "run": 2,
+    "stops": 16,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 541184 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 5671808 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "candidate",
+    "run": 2,
+    "stops": 64,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 4920136 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 10395104 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "baseline",
+    "run": 2,
+    "stops": 64,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 1801872 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 10410440 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "baseline",
+    "run": 3,
+    "stops": 2,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 235264 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 2959072 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "candidate",
+    "run": 3,
+    "stops": 2,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 116048 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 2959072 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "baseline",
+    "run": 3,
+    "stops": 16,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 540512 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 5663592 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "candidate",
+    "run": 3,
+    "stops": 16,
+    "stderr": "Retained heap delta with 32 wire outputs alive: -372992 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 5671808 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "baseline",
+    "run": 3,
+    "stops": 64,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 4870384 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 10424400 bytes; includes surviving runtime caches, excludes native memory.\n"
+  },
+  {
+    "variant": "candidate",
+    "run": 3,
+    "stops": 64,
+    "stderr": "Retained heap delta with 32 wire outputs alive: 4868704 bytes; includes surviving runtime caches, excludes native memory.\nRetained heap delta with 32 parsed observations alive: 10395104 bytes; includes surviving runtime caches, excludes native memory.\n"
+  }
+]

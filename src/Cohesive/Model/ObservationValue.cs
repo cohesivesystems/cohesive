@@ -1892,7 +1892,7 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         var count = element.GetPropertyCount();
         if (count == 0) return FromObject(EmptyObjectValues);
-        if (count <= 8) return FromObject(SmallObservationFields.Read(element, count, names, rejectDuplicates));
+        if (count <= SmallObservationFields.JsonFieldLimit) return FromObject(SmallObservationFields.Read(element, count, names, rejectDuplicates));
         var values = new Dictionary<string, ObservationValue>(count, StringComparer.Ordinal);
         foreach (var property in element.EnumerateObject())
         {

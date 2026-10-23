@@ -122,6 +122,30 @@ public static class StrictDocumentJson
         return CanonicalJsonWriter.GetCanonicalSequenceBytes(document.RootElement);
     }
 
+    /// <summary>Gets canonical JSON text without an intermediate owned canonical byte array.</summary>
+    /// <typeparam name="T">Portable document contract.</typeparam>
+    /// <param name="value">Non-null document to serialize; neither modified nor retained.</param>
+    /// <param name="options">Serializer profile governing the typed document.</param>
+    /// <returns>Owned text whose UTF-8 bytes equal <see cref="GetCanonicalBytes{T}(T, JsonSerializerOptions)"/>.</returns>
+    /// <remarks>Strict profiles still materialize a temporary JSON document for canonical traversal.
+    /// Output staging is pooled, cleared on return and independent of the resulting string. Case-insensitive
+    /// profiles retain the existing node compatibility path and its collision behavior.</remarks>
+    /// <exception cref="ArgumentNullException">Either argument is null.</exception>
+    /// <exception cref="JsonException">The value violates its serializer contract.</exception>
+    /// <exception cref="NotSupportedException">A value has no serializer under the profile.</exception>
+    /// <exception cref="InvalidOperationException">The value has no canonical JSON representation.</exception>
+    /// <exception cref="ArgumentException">A converter emits colliding object property names.</exception>
+    public static string GetCanonicalText<T>(T value, JsonSerializerOptions options) where T : class
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.PropertyNameCaseInsensitive) return Encoding.UTF8.GetString(GetCanonicalBytes(value, options));
+        using var document = JsonSerializer.SerializeToDocument(value, typeof(T), options);
+        if (document.RootElement.ValueKind == JsonValueKind.Null)
+            throw new InvalidOperationException($"Failed to materialize {typeof(T).Name} JSON.");
+        return CanonicalJsonWriter.GetCanonicalSequenceText(document.RootElement);
+    }
+
     /// <summary>Computes SHA-256 over the exact canonical UTF-8 representation of a typed document.</summary>
     /// <remarks>
     /// The digest is identical to hashing <see cref="GetCanonicalBytes{T}(T, JsonSerializerOptions)"/>.

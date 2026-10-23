@@ -43,6 +43,7 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             [new(subjectParameter, HttpParameterSource.Route, typeof(string)),
              new(tokenHeader, HttpParameterSource.Header, typeof(string))], new(typeof(TInput))));
         var contract = runtime.InputContract(operationId);
+        var readOutcome = ObservationMaterializer.PrepareJsonValue<TOutcome>(OutcomeJson, ObservationBytesJsonEncoding.Base64String);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
             var subject = http.Request.RouteValues[subjectParameter]?.ToString();
@@ -66,7 +67,7 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             var status = projection.Operation.Results.Single(candidate => candidate.Kind == result.Kind).Http!.StatusCode;
             if (result.Kind is ApiResultKind.Success or ApiResultKind.DomainError)
                 return Results.Json(result.Outcome?.Value is { } value
-                    ? value.Deserialize<TOutcome>(OutcomeJson, ObservationBytesJsonEncoding.Base64String)
+                    ? readOutcome(value)
                     : default, statusCode: status);
             if (result.Kind == ApiResultKind.ValidationFailed)
                 return Results.Json(new ApiValidationProblem("services.validation.failed", "Invocation validation failed.",
@@ -347,6 +348,7 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(project);
         var projection = ServiceApiProjection.ProjectEphemeralProcess<TRequest, TResponse, TInput, TOutput>(
             declaration, operationId, process, http, scopePolicies);
+        var readOutput = ObservationMaterializer.PrepareJsonValue<TOutput>(OutcomeJson, ObservationBytesJsonEncoding.Base64String);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext request) =>
         {
             var body = await HttpRequestBindingSupport.ReadOperationBodyAsync(request, projection.Operation, context.CancellationToken).ConfigureAwait(false);
@@ -360,7 +362,7 @@ public static partial class ServiceEndpointRouteBuilderExtensions
                 {
                     var value = result.Outcome?.Decision.State.Terminal.Detail?.Value?.Value
                         ?? throw new InvalidOperationException("Completed Process returned no public value.");
-                    return Results.Json(project(value.Deserialize<TOutput>(OutcomeJson, ObservationBytesJsonEncoding.Base64String)!),
+                    return Results.Json(project(readOutput(value)!),
                         statusCode: projection.Operation.Results.Single(item => item.Kind == ApiResultKind.Success).Http!.StatusCode);
                 }
                 // Failed execution carries internal evidence; classifier rejections contain only selected public diagnostics.

@@ -1,0 +1,600 @@
+{
+  "total": 7961,
+  "selected": 7289,
+  "offsets": [
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0330",
+      "Value": 1
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0334",
+      "Value": 7
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|034C",
+      "Value": 68
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0350",
+      "Value": 1
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0354",
+      "Value": 216
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0370",
+      "Value": 54
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0374",
+      "Value": 1
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0378",
+      "Value": 334
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0384",
+      "Value": 35
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0390",
+      "Value": 8
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|03A4",
+      "Value": 26
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0498",
+      "Value": 48
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|049C",
+      "Value": 42
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|04A4",
+      "Value": 8
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|04D0",
+      "Value": 118
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|04D4",
+      "Value": 2
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|04D8",
+      "Value": 8
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|04E0",
+      "Value": 105
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|04EC",
+      "Value": 17
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|04FC",
+      "Value": 8
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0508",
+      "Value": 1
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0524",
+      "Value": 15
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0544",
+      "Value": 23
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|055C",
+      "Value": 47
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0560",
+      "Value": 3
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0564",
+      "Value": 269
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0568",
+      "Value": 65
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|057C",
+      "Value": 3
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0580",
+      "Value": 7
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0584",
+      "Value": 5
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|058C",
+      "Value": 2
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0594",
+      "Value": 32
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|05A0",
+      "Value": 23
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0634",
+      "Value": 23
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0650",
+      "Value": 45
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0658",
+      "Value": 167
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|09D8",
+      "Value": 2
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|09F8",
+      "Value": 34
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0A00",
+      "Value": 35
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0A14",
+      "Value": 10
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0A30",
+      "Value": 3
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0A38",
+      "Value": 37
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0A44",
+      "Value": 8
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0A50",
+      "Value": 1
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0A5C",
+      "Value": 16
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0A84",
+      "Value": 3
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0A9C",
+      "Value": 67
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0AA4",
+      "Value": 52
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0AA8",
+      "Value": 7
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0AC0",
+      "Value": 5
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0AF0",
+      "Value": 2
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0AF8",
+      "Value": 6
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0B48",
+      "Value": 3
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject|OptimizedTier1|0B50",
+      "Value": 3
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadValueCore|OptimizedTier1|0078",
+      "Value": 79
+    }
+  ],
+  "versions": [
+    {
+      "start": 4506369416,
+      "size": 132,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader.ReadValue",
+      "tier": "QuickJitted"
+    },
+    {
+      "start": 4506369584,
+      "size": 900,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadValueCore",
+      "tier": "QuickJitted"
+    },
+    {
+      "start": 4506370552,
+      "size": 700,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject",
+      "tier": "QuickJitted"
+    },
+    {
+      "start": 4506372496,
+      "size": 464,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.RequireToken",
+      "tier": "QuickJitted"
+    },
+    {
+      "start": 4506372984,
+      "size": 372,
+      "name": "Cohesive.Model.ObservationJsonPropertyNames\u002BTokenScope.Get",
+      "tier": "QuickJitted"
+    },
+    {
+      "start": 4506373392,
+      "size": 540,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedArray",
+      "tier": "QuickJitted"
+    },
+    {
+      "start": 4506395896,
+      "size": 52,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.Dispose",
+      "tier": "QuickJitted"
+    },
+    {
+      "start": 4506395976,
+      "size": 92,
+      "name": "Cohesive.Model.ObservationJsonPropertyNames\u002BTokenScope.Dispose",
+      "tier": "QuickJitted"
+    },
+    {
+      "start": 4506685088,
+      "size": 468,
+      "name": "Cohesive.Model.ObservationJsonPropertyNames\u002BTokenScope.Get",
+      "tier": "QuickJittedInstrumented"
+    },
+    {
+      "start": 4506693824,
+      "size": 1060,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadValueCore",
+      "tier": "QuickJittedInstrumented"
+    },
+    {
+      "start": 4506698816,
+      "size": 464,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.RequireToken",
+      "tier": "QuickJittedInstrumented"
+    },
+    {
+      "start": 4506709424,
+      "size": 700,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject",
+      "tier": "QuickJittedInstrumented"
+    },
+    {
+      "start": 4506746880,
+      "size": 1660,
+      "name": "Cohesive.Model.ObservationJsonPropertyNames\u002BTokenScope.Get",
+      "tier": "OptimizedTier1"
+    },
+    {
+      "start": 4506757896,
+      "size": 52,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.Dispose",
+      "tier": "QuickJittedInstrumented"
+    },
+    {
+      "start": 4506757976,
+      "size": 124,
+      "name": "Cohesive.Model.ObservationJsonPropertyNames\u002BTokenScope.Dispose",
+      "tier": "QuickJittedInstrumented"
+    },
+    {
+      "start": 4506761896,
+      "size": 164,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader.ReadValue",
+      "tier": "QuickJittedInstrumented"
+    },
+    {
+      "start": 4506762424,
+      "size": 540,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedArray",
+      "tier": "QuickJittedInstrumented"
+    },
+    {
+      "start": 4506769152,
+      "size": 1120,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadValueCore",
+      "tier": "OptimizedTier1"
+    },
+    {
+      "start": 4506774320,
+      "size": 636,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.RequireToken",
+      "tier": "OptimizedTier1"
+    },
+    {
+      "start": 4506783552,
+      "size": 3700,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject",
+      "tier": "OptimizedTier1"
+    },
+    {
+      "start": 4506814304,
+      "size": 1284,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.Dispose",
+      "tier": "OptimizedTier1"
+    },
+    {
+      "start": 4506815648,
+      "size": 1280,
+      "name": "Cohesive.Model.ObservationJsonPropertyNames\u002BTokenScope.Dispose",
+      "tier": "OptimizedTier1"
+    },
+    {
+      "start": 4506823936,
+      "size": 1384,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader.ReadValue",
+      "tier": "OptimizedTier1"
+    },
+    {
+      "start": 4506825664,
+      "size": 4760,
+      "name": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedArray",
+      "tier": "OptimizedTier1"
+    }
+  ],
+  "self": [
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject(value class System.Text.Json.Utf8JsonReader\u0026)",
+      "Value": 2131
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumeNextToken(unsigned int8)",
+      "Value": 911
+    },
+    {
+      "Key": "System.Collections.Generic.Dictionary\u00602[System.__Canon,Cohesive.Model.ObservationValue].TryInsert(!0,!1,value class System.Collections.Generic.InsertionBehavior)",
+      "Value": 907
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumeNumber()",
+      "Value": 796
+    },
+    {
+      "Key": "System.Threading.Thread.\u003CPollGC\u003Eg__PollGCWorker|67_0()",
+      "Value": 576
+    },
+    {
+      "Key": "System.Text.Unicode.Utf8Utility.TranscodeToUtf16(unsigned int8*,int32,wchar*,int32,unsigned int8*\u0026,wchar*\u0026)",
+      "Value": 337
+    },
+    {
+      "Key": "System.Text.Json.JsonReaderHelper.TranscodeHelper(value class System.ReadOnlySpan\u00601\u003Cunsigned int8\u003E)",
+      "Value": 336
+    },
+    {
+      "Key": "System.SpanHelpers.SequenceEqual(unsigned int8\u0026,unsigned int8\u0026,unsigned int)",
+      "Value": 274
+    },
+    {
+      "Key": "System.Text.Unicode.Utf8Utility.GetPointerToFirstInvalidByte(unsigned int8*,int32,int32\u0026,int32\u0026)",
+      "Value": 221
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.TryGetInt64(int64\u0026)",
+      "Value": 206
+    },
+    {
+      "Key": "Cohesive.Relations.Benchmarks.ObservationJsonParseProfile.Measure(class Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks,value class System.TimeSpan)",
+      "Value": 159
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumeValue(unsigned int8)",
+      "Value": 105
+    },
+    {
+      "Key": "System.SpanHelpers.NonPackedIndexOfValueType(!!0\u0026,!!0,int32)",
+      "Value": 93
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadValueCore(value class System.Text.Json.Utf8JsonReader\u0026)",
+      "Value": 79
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumePropertyName()",
+      "Value": 43
+    },
+    {
+      "Key": "System.Collections.Generic.Dictionary\u00602[System.__Canon,Cohesive.Model.ObservationValue]..ctor(int32,class System.Collections.Generic.IEqualityComparer\u00601\u003C!0\u003E)",
+      "Value": 30
+    },
+    {
+      "Key": "System.SpanHelpers.ClearWithoutReferences(unsigned int8\u0026,unsigned int)",
+      "Value": 26
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ReadSingleSegment()",
+      "Value": 15
+    },
+    {
+      "Key": "System.Runtime.CompilerServices.CastHelpers.ChkCastAny(void*,class System.Object)",
+      "Value": 14
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumeZero(value class System.ReadOnlySpan\u00601\u003Cunsigned int8\u003E\u0026,int32\u0026)",
+      "Value": 13
+    },
+    {
+      "Key": "System.Collections.HashHelpers.GetPrime(int32)",
+      "Value": 12
+    },
+    {
+      "Key": "Cohesive.Model.ObservationValue.FromOwnedObject(class System.Collections.Generic.Dictionary\u00602\u003Cclass System.String,value class Cohesive.Model.ObservationValue\u003E)",
+      "Value": 2
+    },
+    {
+      "Key": "System.Collections.Generic.NonRandomizedStringEqualityComparer\u002BOrdinalComparer.GetHashCode(class System.String)",
+      "Value": 1
+    },
+    {
+      "Key": "System.String.GetNonRandomizedHashCode()",
+      "Value": 1
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.GetString()",
+      "Value": 1
+    }
+  ],
+  "inclusive": [
+    {
+      "Key": "Cohesive.Relations.Benchmarks.ObservationJsonParseProfile.Measure(class Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks,value class System.TimeSpan)",
+      "Value": 7289
+    },
+    {
+      "Key": "Cohesive.Relations.Benchmarks.ObservationJsonParseProfile.Run(class System.String[])",
+      "Value": 7289
+    },
+    {
+      "Key": "Program.\u003CMain\u003E$(class System.String[])",
+      "Value": 7289
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadValueCore(value class System.Text.Json.Utf8JsonReader\u0026)",
+      "Value": 6554
+    },
+    {
+      "Key": "Cohesive.Model.Serialization.ObservationJsonReader\u002BReadScope.ReadUntypedObject(value class System.Text.Json.Utf8JsonReader\u0026)",
+      "Value": 6475
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ReadSingleSegment()",
+      "Value": 1976
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumeNextToken(unsigned int8)",
+      "Value": 911
+    },
+    {
+      "Key": "System.Collections.Generic.Dictionary\u00602[System.__Canon,Cohesive.Model.ObservationValue].TryInsert(!0,!1,value class System.Collections.Generic.InsertionBehavior)",
+      "Value": 909
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumeNumber()",
+      "Value": 902
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.GetString()",
+      "Value": 895
+    },
+    {
+      "Key": "System.Text.Json.JsonReaderHelper.TranscodeHelper(value class System.ReadOnlySpan\u00601\u003Cunsigned int8\u003E)",
+      "Value": 894
+    },
+    {
+      "Key": "System.Threading.Thread.\u003CPollGC\u003Eg__PollGCWorker|67_0()",
+      "Value": 576
+    },
+    {
+      "Key": "System.Diagnostics.Stopwatch.get_ElapsedTimeSpanTicks()",
+      "Value": 576
+    },
+    {
+      "Key": "System.Text.Unicode.Utf8Utility.TranscodeToUtf16(unsigned int8*,int32,wchar*,int32,unsigned int8*\u0026,wchar*\u0026)",
+      "Value": 337
+    },
+    {
+      "Key": "System.SpanHelpers.SequenceEqual(unsigned int8\u0026,unsigned int8\u0026,unsigned int)",
+      "Value": 274
+    },
+    {
+      "Key": "System.Text.Unicode.Utf8Utility.GetPointerToFirstInvalidByte(unsigned int8*,int32,int32\u0026,int32\u0026)",
+      "Value": 221
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.TryGetInt64(int64\u0026)",
+      "Value": 206
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumeValue(unsigned int8)",
+      "Value": 105
+    },
+    {
+      "Key": "System.SpanHelpers.NonPackedIndexOfValueType(!!0\u0026,!!0,int32)",
+      "Value": 93
+    },
+    {
+      "Key": "System.Collections.Generic.Dictionary\u00602[System.__Canon,Cohesive.Model.ObservationValue]..ctor(int32,class System.Collections.Generic.IEqualityComparer\u00601\u003C!0\u003E)",
+      "Value": 56
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumePropertyName()",
+      "Value": 43
+    },
+    {
+      "Key": "System.SpanHelpers.ClearWithoutReferences(unsigned int8\u0026,unsigned int)",
+      "Value": 26
+    },
+    {
+      "Key": "System.Runtime.CompilerServices.CastHelpers.ChkCastAny(void*,class System.Object)",
+      "Value": 14
+    },
+    {
+      "Key": "System.Text.Json.Utf8JsonReader.ConsumeZero(value class System.ReadOnlySpan\u00601\u003Cunsigned int8\u003E\u0026,int32\u0026)",
+      "Value": 13
+    },
+    {
+      "Key": "System.Collections.HashHelpers.GetPrime(int32)",
+      "Value": 12
+    },
+    {
+      "Key": "Cohesive.Relations.Benchmarks.ObservationValuePipelineBenchmarks.ParseDirect()",
+      "Value": 6
+    },
+    {
+      "Key": "System.Diagnostics.Stopwatch.get_ElapsedTicks()",
+      "Value": 4
+    },
+    {
+      "Key": "Cohesive.Model.ObservationValue.FromOwnedObject(class System.Collections.Generic.Dictionary\u00602\u003Cclass System.String,value class Cohesive.Model.ObservationValue\u003E)",
+      "Value": 2
+    },
+    {
+      "Key": "System.Collections.Generic.Dictionary\u00602[System.__Canon,Cohesive.Model.ObservationValue].Initialize(int32)",
+      "Value": 1
+    },
+    {
+      "Key": "System.Collections.Generic.NonRandomizedStringEqualityComparer\u002BOrdinalComparer.GetHashCode(class System.String)",
+      "Value": 1
+    },
+    {
+      "Key": "System.String.GetNonRandomizedHashCode()",
+      "Value": 1
+    }
+  ]
+}

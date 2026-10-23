@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <TraceEventDirectory Condition="'$(TraceEventDirectory)' == ''">$(HOME)/.nuget/packages/microsoft.diagnostics.tracing.traceevent/3.2.8/lib/netstandard2.0</TraceEventDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <Using Remove="Cohesive.Prelude" />
+    <Using Remove="Cohesive.Domain" />
+  </ItemGroup>
+  <!-- Analysis-only use of an already-installed diagnostics library; no package download. -->
+  <ItemGroup>
+    <Reference Include="Microsoft.Diagnostics.Tracing.TraceEvent" HintPath="$(TraceEventDirectory)/Microsoft.Diagnostics.Tracing.TraceEvent.dll" />
+    <Reference Include="Microsoft.Diagnostics.FastSerialization" HintPath="$(TraceEventDirectory)/Microsoft.Diagnostics.FastSerialization.dll" />
+  </ItemGroup>
+  <Target Name="ValidateInstalledDiagnostics" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(TraceEventDirectory)/Microsoft.Diagnostics.Tracing.TraceEvent.dll') Or !Exists('$(TraceEventDirectory)/Microsoft.Diagnostics.FastSerialization.dll')"
+           Text="Set TraceEventDirectory to an installed TraceEvent directory containing both diagnostics DLLs. This tool does not download dependencies." />
+  </Target>
+</Project>

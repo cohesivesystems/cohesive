@@ -375,11 +375,16 @@ public static class CanonicalJsonWriter
         return Encoding.UTF8.GetString(output.WrittenSpan);
     }
 
-    static Utf8JsonWriter CreateElementWriter(IBufferWriter<byte> output) => new(output, new JsonWriterOptions
+    internal static string GetCanonicalSequenceText(JsonElement element) =>
+        GetCanonicalSequenceText(element, CanonicalJsonSequenceProfile.ExactDecimalRational, ElementWriterOptions);
+
+    static Utf8JsonWriter CreateElementWriter(IBufferWriter<byte> output) => new(output, ElementWriterOptions);
+
+    static JsonWriterOptions ElementWriterOptions => new()
     {
         Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         Indented = false
-    });
+    };
 
     internal static void WriteCanonicalSequence(Utf8JsonWriter writer, JsonElement element) =>
         WriteCanonicalSequence(writer, element, CanonicalJsonSequenceProfile.ExactDecimalRational);

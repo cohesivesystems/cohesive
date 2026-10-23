@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
@@ -33,6 +32,18 @@ public static class ProcessCheckpointJsonDiagnosticCodes
 /// <summary>Strict canonical JSON serialization and recovery admission for durable Process checkpoints.</summary>
 public static class ProcessDurableCheckpointJsonSerializer
 {
+    // Fixed framework metadata, never checkpoint content. Caller-customizable options still
+    // come from CreateOptions; internal operations share frozen profiles after first use.
+    static readonly JsonSerializerOptions CompactOptions = CreateFrozenOptions(PortableDocumentJsonFormatting.Compact);
+    static readonly JsonSerializerOptions IndentedOptions = CreateFrozenOptions(PortableDocumentJsonFormatting.Indented);
+
+    static JsonSerializerOptions CreateFrozenOptions(PortableDocumentJsonFormatting formatting)
+    {
+        var options = CreateOptions(formatting);
+        options.MakeReadOnly(populateMissingResolver: true);
+        return options;
+    }
+
     /// <summary>Maximum JSON nesting of durable Process state, including tagged values and storage envelopes.</summary>
     /// <remarks>
     /// Tagged portable values add two JSON containers per object/array level. The bounded storage profile
@@ -68,8 +79,9 @@ public static class ProcessDurableCheckpointJsonSerializer
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
         return formatting == PortableDocumentJsonFormatting.Compact
-            ? Encoding.UTF8.GetString(GetCanonicalBytes(checkpoint))
-            : JsonSerializer.Serialize(checkpoint, CreateOptions(formatting));
+            ? StrictDocumentJson.GetCanonicalText(checkpoint, CompactOptions)
+            : JsonSerializer.Serialize(checkpoint, formatting == PortableDocumentJsonFormatting.Indented
+                ? IndentedOptions : throw new ArgumentOutOfRangeException(nameof(formatting), formatting, "Unsupported JSON formatting mode."));
     }
 
     /// <summary>Gets deterministic canonical UTF-8 JSON for one durable Process checkpoint.</summary>
@@ -82,7 +94,7 @@ public static class ProcessDurableCheckpointJsonSerializer
     public static byte[] GetCanonicalBytes(ProcessDurableCheckpoint checkpoint)
     {
         ArgumentNullException.ThrowIfNull(checkpoint);
-        return StrictDocumentJson.GetCanonicalBytes(checkpoint, CreateOptions());
+        return StrictDocumentJson.GetCanonicalBytes(checkpoint, CompactOptions);
     }
 
     /// <summary>Deserializes and admits a checkpoint against one exact compiled Process definition.</summary>
@@ -119,7 +131,7 @@ public static class ProcessDurableCheckpointJsonSerializer
         ArgumentNullException.ThrowIfNull(plan);
         if (!StrictDocumentJson.TryReadCanonicalObject(
                 json,
-                CreateOptions(),
+                CompactOptions,
                 "durable Process checkpoint",
                 out checkpoint,
                 out var error))

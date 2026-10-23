@@ -1,0 +1,46 @@
+[
+  {
+    "args": [
+      "--json-parse-profile"
+    ],
+    "exit_code": 2,
+    "stdout": "",
+    "stderr": "--json-parse-profile <flat|nested|collection|large> <seconds:1..60> [warmup-workload]"
+  },
+  {
+    "args": [
+      "--json-parse-profile",
+      "flat",
+      "0"
+    ],
+    "exit_code": 2,
+    "stdout": "",
+    "stderr": "--json-parse-profile <flat|nested|collection|large> <seconds:1..60> [warmup-workload]"
+  },
+  {
+    "args": [
+      "--json-parse-profile",
+      "flat",
+      "1",
+      "unknown"
+    ],
+    "exit_code": 2,
+    "stdout": "",
+    "stderr": "--json-parse-profile <flat|nested|collection|large> <seconds:1..60> [warmup-workload]"
+  },
+  {
+    "args": [
+      "--json-parse-profile",
+      "flat",
+      "1"
+    ],
+    "exit_code": 0,
+    "stdout": "workload=flat,warmup=flat,operations=1681408,elapsed_ns=1000414200,allocated_bytes=2824765440,checksum=10088448",
+    "stderr": ""
+  },
+  {
+    "tool": "trace-analyzer",
+    "args": [],
+    "exit_code": 2
+  }
+]

@@ -1,0 +1,118 @@
+{
+  "control": {
+    "Workload=collection": [
+      {
+        "mean_ns": 1099421.7285714285,
+        "allocated_bytes": 157136
+      },
+      {
+        "mean_ns": 960906.7729166667,
+        "allocated_bytes": 158073
+      },
+      {
+        "mean_ns": 1421647.4578125,
+        "allocated_bytes": 158073
+      }
+    ],
+    "Workload=flat": [
+      {
+        "mean_ns": 56495.96168478262,
+        "allocated_bytes": 37534
+      },
+      {
+        "mean_ns": 59187.3880904103,
+        "allocated_bytes": 37535
+      },
+      {
+        "mean_ns": 57150.829527243586,
+        "allocated_bytes": 37535
+      }
+    ],
+    "Workload=large": [
+      {
+        "mean_ns": 26109036.133333333,
+        "allocated_bytes": 7140389
+      },
+      {
+        "mean_ns": 26298024.875,
+        "allocated_bytes": 6190691
+      },
+      {
+        "mean_ns": 27692255.285714287,
+        "allocated_bytes": 6556178
+      }
+    ],
+    "Workload=nested": [
+      {
+        "mean_ns": 104586.54166666667,
+        "allocated_bytes": 47308
+      },
+      {
+        "mean_ns": 103729.2158203125,
+        "allocated_bytes": 47306
+      },
+      {
+        "mean_ns": 110737.8331117021,
+        "allocated_bytes": 47307
+      }
+    ]
+  },
+  "candidate": {
+    "Workload=collection": [
+      {
+        "mean_ns": 944977.1205357143,
+        "allocated_bytes": 173056
+      },
+      {
+        "mean_ns": 1310584.2421874998,
+        "allocated_bytes": 158011
+      },
+      {
+        "mean_ns": 1450007.8703125,
+        "allocated_bytes": 158011
+      }
+    ],
+    "Workload=flat": [
+      {
+        "mean_ns": 58451.674215823965,
+        "allocated_bytes": 37231
+      },
+      {
+        "mean_ns": 56129.80375339674,
+        "allocated_bytes": 37230
+      },
+      {
+        "mean_ns": 57555.20801147004,
+        "allocated_bytes": 37231
+      }
+    ],
+    "Workload=large": [
+      {
+        "mean_ns": 26616127.777777776,
+        "allocated_bytes": 7492628
+      },
+      {
+        "mean_ns": 26939477.43055556,
+        "allocated_bytes": 6556141
+      },
+      {
+        "mean_ns": 26135072.90277778,
+        "allocated_bytes": 6672397
+      }
+    ],
+    "Workload=nested": [
+      {
+        "mean_ns": 103610.62777777777,
+        "allocated_bytes": 45716
+      },
+      {
+        "mean_ns": 105223.24532738095,
+        "allocated_bytes": 45718
+      },
+      {
+        "mean_ns": 103927.12152777778,
+        "allocated_bytes": 45716
+      }
+    ]
+  }
+}

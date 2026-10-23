@@ -1,0 +1,10 @@
+{
+  "archive_sha256": "dea2c9706c49118b6d755631dcac833ab0a13c2b8394bf2ab15a21f10094f032",
+  "files": [
+    {"path": "candidate-checkpoint.json", "bytes": 114920, "sha256": "33d06d976756f39e1d024e15e21ea7e221fdd50ec5e47c0776b0fde73a35d409"},
+    {"path": "candidate-payload.json", "bytes": 122109, "sha256": "55c155e8c5dc167a4b9db4cc254bfee184f6525f7b1bd68211a52af3c4562027"},
+    {"path": "control-checkpoint.json", "bytes": 111053, "sha256": "27cb53a1673f738aa0e9efa9fc3c35f7084711bec9a6f007022db2908443f7b3"},
+    {"path": "control-payload.json", "bytes": 121530, "sha256": "75c06144151cf319c3f795c15e6f9cb32446674a186e2c81139677eba2f5f6ff"},
+    {"path": "prepared-response.json", "bytes": 139210, "sha256": "578cae4c5c9f415b1b94ff1a5e5e016c99557135e1d0127b7f7d934f35fc2514"}
+  ]
+}

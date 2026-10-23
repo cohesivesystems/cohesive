@@ -1,0 +1,145 @@
+{
+  "date": "2026-10-18",
+  "baseline": "First increment candidate, identified in ../observation-values-stage1/manifest.json; Storage baseline has no boundary edits.",
+  "measurement": "Identical benchmark DLL, isolated closures, sequential runs, no concurrent builds/tests/tracing. BDN in-process emit, warmupCount=3, iterationCount=5, iterationTime=250ms.",
+  "benchmark_libraries": {
+    "control": {
+      "Cohesive.dll": "6727400c8240d258de73a213ac99b97b5880dd808a46cb360ff06446b43f99e9",
+      "Cohesive.Relations.dll": "b62874490a0399f474492b2f63863d5137fa04be9f435e2a22c787bcbfe187c0",
+      "Cohesive.Storage.dll": "9a133320902830818e5a5d489ee837dadf9036a6b427df178bdc4a29cde8fe6b",
+      "Cohesive.Relations.Benchmarks.dll": "c968c27066f136583f9f06f1b269fac6cc9a68de2262842e8322ad270eb90411"
+    },
+    "candidate": {
+      "Cohesive.dll": "28d01fcf34ee0d089b4f8a4585c30356ab9ba697d9182022e3ed90cf34b536e4",
+      "Cohesive.Relations.dll": "00477e8fb52f227c183eeeb09c29eb2634d33288cc421f6f7beab0b9cb1dbfbe",
+      "Cohesive.Storage.dll": "0e2b65b88bb644c50eb7a4f2e588054ad96927fd3ab354029823a041be56b234",
+      "Cohesive.Relations.Benchmarks.dll": "c968c27066f136583f9f06f1b269fac6cc9a68de2262842e8322ad270eb90411"
+    }
+  },
+  "consumer_libraries": {
+    "edi": {
+      "control": {
+        "Cohesive.dll": "6727400c8240d258de73a213ac99b97b5880dd808a46cb360ff06446b43f99e9",
+        "Cohesive.Relations.dll": "b62874490a0399f474492b2f63863d5137fa04be9f435e2a22c787bcbfe187c0",
+        "Cohesive.Storage.dll": "79e5effc54fc2aaf02a944abb97b7477bcfe6c6ecbf909662a808546be04f70d",
+        "EdiDataPlane.dll": "991c6fa51313905d8145873866f03a77192f47d9aafbd4c0d325baf1641bffab"
+      },
+      "candidate": {
+        "Cohesive.dll": "28d01fcf34ee0d089b4f8a4585c30356ab9ba697d9182022e3ed90cf34b536e4",
+        "Cohesive.Relations.dll": "00477e8fb52f227c183eeeb09c29eb2634d33288cc421f6f7beab0b9cb1dbfbe",
+        "Cohesive.Storage.dll": "79e5effc54fc2aaf02a944abb97b7477bcfe6c6ecbf909662a808546be04f70d",
+        "EdiDataPlane.dll": "991c6fa51313905d8145873866f03a77192f47d9aafbd4c0d325baf1641bffab"
+      }
+    },
+    "protocol": {
+      "control": {
+        "Cohesive.dll": "6727400c8240d258de73a213ac99b97b5880dd808a46cb360ff06446b43f99e9",
+        "Cohesive.Relations.dll": "b62874490a0399f474492b2f63863d5137fa04be9f435e2a22c787bcbfe187c0",
+        "Cohesive.Storage.dll": "79e5effc54fc2aaf02a944abb97b7477bcfe6c6ecbf909662a808546be04f70d",
+        "ProtocolPreparation.dll": "30f2a3833f64940d881ac538194518c03b77fe0e22f61ff4c6d64434e673a6a1"
+      },
+      "candidate": {
+        "Cohesive.dll": "28d01fcf34ee0d089b4f8a4585c30356ab9ba697d9182022e3ed90cf34b536e4",
+        "Cohesive.Relations.dll": "00477e8fb52f227c183eeeb09c29eb2634d33288cc421f6f7beab0b9cb1dbfbe",
+        "Cohesive.Storage.dll": "79e5effc54fc2aaf02a944abb97b7477bcfe6c6ecbf909662a808546be04f70d",
+        "ProtocolPreparation.dll": "30f2a3833f64940d881ac538194518c03b77fe0e22f61ff4c6d64434e673a6a1"
+      }
+    }
+  },
+  "consumer_boundary": "Only Core/Relations substituted. Prebuilt Ari uses an older Storage constructor ABI; current Storage was excluded after a diagnostic attempt failed before measurement. Rebuilt whole-checkpoint benchmark qualifies current Storage.",
+  "verification": {
+    "core_passed": 4991,
+    "core_skipped": 54,
+    "relations_passed": 1141,
+    "core_collection_parallelism": false,
+    "focused_checks_passed": 28,
+    "checkpoint_bytes_and_hashes_equal": true,
+    "edi_output_hashes_equal": true,
+    "protocol_fingerprints_equal": true,
+    "final_affected_tests_passed": 75
+  },
+  "commands": "See eng/runtime-performance/observation-values/README.md. Consumer comparisons: runs=3, EDI iterations=4, stops=2,16,64.",
+  "ari_artifacts": {
+    "datasets/ari/edi-transportation/acceptance/204-004010-ecf/v1/inputs/original.edi": "75a39672108191f5677417b9a9f8a25cfb46e21b1b78a035bac2d607670d428e",
+    "src/Ari.Training.Seeding/Definitions/edi-204-canonical.shape.json": "99fefe13b99537de09526003d28b7920814e32096e547f93cedd54f090e88b11",
+    "src/Ari.Training.Scenarios/Transportation/Definitions/edi-204-v4010-to-canonical.relation.generated.json": "44e6ee3e34a964516d5c50587a1fd66c264e6227961b7c1ee2a3c665c5fc12cb"
+  },
+  "measurement_source_files": {
+    "eng/runtime-performance/observation-values/EdiDataPlane.csproj": "bbe35bc993fbde01a7aec37e1109ba4c7b24f2af09737819d042d14a3d462818",
+    "eng/runtime-performance/observation-values/Program.cs": "78212866aabb786bd42a491a9b8024ab5db365a2438a3683bf422e5edce8f782",
+    "eng/runtime-performance/observation-values/compare.py": "885b4ebee1783581e3d633faf5ad5f2df04419f562b57aaf8c797c74babfdc9e",
+    "src/Cohesive.Relations.Benchmarks/ObservationBoundaryConversionBenchmarks.cs": "10fad41c8b59b1edd46e2c00f7885712d92f3b4ec0147d064cd1d866e1c2c1d9",
+    "src/Cohesive.Relations.Benchmarks/ObservationCheckpointBenchmarks.cs": "3aca43ef24ce496260bf4c2c6d06c9975645ff48b73fc08179fb79b6011f7844",
+    "src/Cohesive.Relations.Benchmarks/ObservationValuePipelineBenchmarks.cs": "c1468345270921652a1e361ad021a527218e07736798188b3f70e38273c2566c",
+    "src/Cohesive.Relations.Benchmarks/PreparedObservationResponseBenchmarks.cs": "b3968d2f04439fde705d92a6d65b9c4a54b52cea7b29f00af1dee020c5e45746",
+    "src/Cohesive.Relations.Benchmarks/Program.cs": "8a44886f838e47b4692d1daa8eb97f575deb1c772bc54071887ba9fe90775bc8",
+    "src/Cohesive.Relations.Tests/ObservationAggregateOptimizationTests.cs": "ca9a05b96d14782d31462e15d26097f670c71f6f516f6f09ee80972145b818a9",
+    "src/Cohesive.Relations/Execution/RelationQueryExpressionEvaluator.cs": "502800f7cbee9e15e8e1e48f3b6e86244c2448ff933b43d793b8bac9f490979d",
+    "src/Cohesive.Storage/Processes/ProcessDurableCheckpointJsonSerializer.cs": "86c0345ba6cea2fc77a5de9000b2fd43be17b59d1e98ce7bbc1d9e54cb154ceb",
+    "src/Cohesive.Tests/ExecutionKernel/PortableValueStreamingReadTests.cs": "890c636b8f535466dfac149702d58d14480c94df0ffb640dcea018f4d8a20d80",
+    "src/Cohesive.Tests/ExecutionKernel/ProcessDurableCheckpointContractTests.cs": "a95e9cc88240a11cce02d39dfbbf2af076202dfda850ad9b45b70e55e2d08861",
+    "src/Cohesive.Tests/Model/CanonicalDocumentTextTests.cs": "bce7dac2d4b4e17df89c0545376ac636d54cd6a0058bf613711f50a3a24430b9",
+    "src/Cohesive.Tests/Model/ObservationJsonReaderConformanceTests.cs": "3f83a420263238057a55593b2b112f0165fe04ab8c75d07e82e9649df748c67b",
+    "src/Cohesive.Tests/Model/ObservationValueSemanticContractTests.cs": "bb3b5890cad03b37b8f372ae0f5b925109cb0327fa5aa64b9826237c41c35498",
+    "src/Cohesive.Tests/Model/PreparedJsonProfileTests.cs": "7b868c1a2fca073ed6d72c980a904ab557e92c595fea1edeead0e1b36ad431f3",
+    "src/Cohesive/Execution/PortableValueJsonConverter.cs": "df296da70f201db94543dbb624a2078c8ad261d9b1c22e43f99122eea9d5e376",
+    "src/Cohesive/Model/Annotations.cs": "ae6c47e2b0af2874d2345aac3c73f2237b25c199fd2c3d557124e0bb217c72c4",
+    "src/Cohesive/Model/DefaultObservationValueConverterCache.cs": "f3047edc68cb06d946220dbb3defbc0b186113863d6e09f777122c7117c64a9f",
+    "src/Cohesive/Model/ObservationMaterializer.cs": "1d036b0b742a6fbbf66becf2e7cd357698b6be723b963b29d26f7deb7d343123",
+    "src/Cohesive/Model/ObservationValue.cs": "8304d57aef57d801e7414099e6b79949463986c0e5956a8f26ad57557fb1efd5",
+    "src/Cohesive/Model/PreparedDeclaredObservationProjection.cs": "0671075eb9788639a0481c31ff6cb75a99ffd25f2d6427d149675e3006ae1e59",
+    "src/Cohesive/Model/Serialization/CanonicalJsonWriter.cs": "f002902ac0d61d1a165eda2a3adddefd5d437d27aab52a06b80d432c843da145",
+    "src/Cohesive/Model/Serialization/ObservationJsonContainers.cs": "2ea7948baa2c47aed9305911effa91cd6a106b976e9c511f561664856a498b61",
+    "src/Cohesive/Model/Serialization/ObservationJsonReader.cs": "dafbd07417babd0462b8e50901ae38a69b427b21ab433fbc1b5b9c938da9c1b7",
+    "src/Cohesive/Model/Serialization/StrictDocumentJson.cs": "f96568e39fe78c2ef5e73957eb7d3a3064d7d47096d2685fc9d301d6d026c83f",
+    "src/Cohesive/Model/SmallObservationFields.cs": "f7332a4605469ae0c0cc336cb8d3b77a0dd0040bca4bd8656ec19966b0c1d012",
+    "src/Cohesive/Prelude/StringExtensions.cs": "081d78aca4b9703199dbf943966c61cc314049e83e147e7d32ba0383dcd7db9c",
+    "src/adapters/Cohesive.Adapters.AspNet/Services/ServiceEndpointRouteBuilderExtensions.cs": "10d4c0894dc2c52e1293ca2773fee79881873dd9ffdd1ef76723bb53b1eb4595"
+  },
+  "final_source_files": {
+    "eng/runtime-performance/observation-values/EdiDataPlane.csproj": "bbe35bc993fbde01a7aec37e1109ba4c7b24f2af09737819d042d14a3d462818",
+    "eng/runtime-performance/observation-values/Program.cs": "78212866aabb786bd42a491a9b8024ab5db365a2438a3683bf422e5edce8f782",
+    "eng/runtime-performance/observation-values/compare.py": "885b4ebee1783581e3d633faf5ad5f2df04419f562b57aaf8c797c74babfdc9e",
+    "src/Cohesive.Relations.Benchmarks/ObservationBoundaryConversionBenchmarks.cs": "10fad41c8b59b1edd46e2c00f7885712d92f3b4ec0147d064cd1d866e1c2c1d9",
+    "src/Cohesive.Relations.Benchmarks/ObservationCheckpointBenchmarks.cs": "3aca43ef24ce496260bf4c2c6d06c9975645ff48b73fc08179fb79b6011f7844",
+    "src/Cohesive.Relations.Benchmarks/ObservationValuePipelineBenchmarks.cs": "c1468345270921652a1e361ad021a527218e07736798188b3f70e38273c2566c",
+    "src/Cohesive.Relations.Benchmarks/PreparedObservationResponseBenchmarks.cs": "b3968d2f04439fde705d92a6d65b9c4a54b52cea7b29f00af1dee020c5e45746",
+    "src/Cohesive.Relations.Benchmarks/Program.cs": "8a44886f838e47b4692d1daa8eb97f575deb1c772bc54071887ba9fe90775bc8",
+    "src/Cohesive.Relations.Tests/ObservationAggregateOptimizationTests.cs": "ca9a05b96d14782d31462e15d26097f670c71f6f516f6f09ee80972145b818a9",
+    "src/Cohesive.Relations/Execution/RelationQueryExpressionEvaluator.cs": "502800f7cbee9e15e8e1e48f3b6e86244c2448ff933b43d793b8bac9f490979d",
+    "src/Cohesive.Storage/Processes/ProcessDurableCheckpointJsonSerializer.cs": "86c0345ba6cea2fc77a5de9000b2fd43be17b59d1e98ce7bbc1d9e54cb154ceb",
+    "src/Cohesive.Tests/ExecutionKernel/PortableValueStreamingReadTests.cs": "8595f2aea8b95bf545f33f986711b7120a4fff25158ea14ca7b7ca7a278a4b0b",
+    "src/Cohesive.Tests/ExecutionKernel/ProcessDurableCheckpointContractTests.cs": "a95e9cc88240a11cce02d39dfbbf2af076202dfda850ad9b45b70e55e2d08861",
+    "src/Cohesive.Tests/Model/CanonicalDocumentTextTests.cs": "bce7dac2d4b4e17df89c0545376ac636d54cd6a0058bf613711f50a3a24430b9",
+    "src/Cohesive.Tests/Model/ObservationJsonReaderConformanceTests.cs": "3f83a420263238057a55593b2b112f0165fe04ab8c75d07e82e9649df748c67b",
+    "src/Cohesive.Tests/Model/ObservationValueSemanticContractTests.cs": "bb3b5890cad03b37b8f372ae0f5b925109cb0327fa5aa64b9826237c41c35498",
+    "src/Cohesive.Tests/Model/PreparedJsonProfileTests.cs": "7b868c1a2fca073ed6d72c980a904ab557e92c595fea1edeead0e1b36ad431f3",
+    "src/Cohesive/Execution/PortableValueJsonConverter.cs": "bf2f5ca9a4a2fac4f9351f5a7800d76e6bced24f1c791013eb1b56404329f0e8",
+    "src/Cohesive/Model/Annotations.cs": "ae6c47e2b0af2874d2345aac3c73f2237b25c199fd2c3d557124e0bb217c72c4",
+    "src/Cohesive/Model/DefaultObservationValueConverterCache.cs": "f3047edc68cb06d946220dbb3defbc0b186113863d6e09f777122c7117c64a9f",
+    "src/Cohesive/Model/ObservationMaterializer.cs": "1d036b0b742a6fbbf66becf2e7cd357698b6be723b963b29d26f7deb7d343123",
+    "src/Cohesive/Model/ObservationValue.cs": "8304d57aef57d801e7414099e6b79949463986c0e5956a8f26ad57557fb1efd5",
+    "src/Cohesive/Model/PreparedDeclaredObservationProjection.cs": "0671075eb9788639a0481c31ff6cb75a99ffd25f2d6427d149675e3006ae1e59",
+    "src/Cohesive/Model/Serialization/CanonicalJsonWriter.cs": "f002902ac0d61d1a165eda2a3adddefd5d437d27aab52a06b80d432c843da145",
+    "src/Cohesive/Model/Serialization/ObservationJsonContainers.cs": "2ea7948baa2c47aed9305911effa91cd6a106b976e9c511f561664856a498b61",
+    "src/Cohesive/Model/Serialization/ObservationJsonReader.cs": "dafbd07417babd0462b8e50901ae38a69b427b21ab433fbc1b5b9c938da9c1b7",
+    "src/Cohesive/Model/Serialization/StrictDocumentJson.cs": "f96568e39fe78c2ef5e73957eb7d3a3064d7d47096d2685fc9d301d6d026c83f",
+    "src/Cohesive/Model/SmallObservationFields.cs": "f7332a4605469ae0c0cc336cb8d3b77a0dd0040bca4bd8656ec19966b0c1d012",
+    "src/Cohesive/Prelude/StringExtensions.cs": "081d78aca4b9703199dbf943966c61cc314049e83e147e7d32ba0383dcd7db9c",
+    "src/adapters/Cohesive.Adapters.AspNet/Services/ServiceEndpointRouteBuilderExtensions.cs": "10d4c0894dc2c52e1293ca2773fee79881873dd9ffdd1ef76723bb53b1eb4595"
+  },
+  "post_measurement_change": {
+    "description": "Restored JsonException wrapping for ArgumentException while decoding invalid failure diagnostic evidence; valid measured concrete payload paths unchanged. Added regression; 75 affected tests passed. Error-only adjustment not rebenchmarked.",
+    "files": [
+      "src/Cohesive/Execution/PortableValueJsonConverter.cs",
+      "src/Cohesive.Tests/ExecutionKernel/PortableValueStreamingReadTests.cs"
+    ],
+    "verification_binaries": {
+      "Cohesive.dll": "0e30a87f78f9819400aecede1378ebe20bdab7883fad02d21fd4a7c39f58f9a2",
+      "Cohesive.Relations.dll": "00477e8fb52f227c183eeeb09c29eb2634d33288cc421f6f7beab0b9cb1dbfbe",
+      "Cohesive.Storage.dll": "0e2b65b88bb644c50eb7a4f2e588054ad96927fd3ab354029823a041be56b234",
+      "Cohesive.Adapters.AspNet.dll": "686044c52d0d00d4392c6918a3d90db2cee888470eaa181807b61e537d70b04b",
+      "Cohesive.Tests.dll": "dab81c344ddc7dcd367e708ede335bbd50b8c98139a1e4a6c59779e1f82e4bc6"
+    }
+  }
+}
