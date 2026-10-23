@@ -72,8 +72,8 @@ is checked against the explicit logical partition and its selected native source
 
 Configure `.TransitionReceipts(new PostgresTransitionReceiptOptions(...))` on offline
 `PostgresPersistenceBindings`. `PostgresStorageComposition` validates that table when binding the data source
-registered under `Bindings.Database.Value`. `ComposeServices(plan, nativeSources, policy)` provides the equivalent
-mixed-source preparation and exposes the same infrastructure evidence. Both implement `IServiceStorageComposition`.
+registered under `Bindings.Database.Value`. `ComposeServices(nativeSources, policy)` provides the equivalent
+mixed-source declaration. Application admission supplies query selections later through placement; `PrepareEvidence` supplies infrastructure evidence from those selections without IO. Both implement `IServiceStorageComposition`.
 
 Native Npgsql and Cosmos clients remain owned by their DI registrations or external callers. Schema creation is
 explicit; composition binding runs only the model-selected schema policies and native callbacks. Optional Marten history and direct outbox attachments
@@ -86,7 +86,7 @@ preparation is not published. Parameters, reads and results are never cached. Di
 not share native artifacts.
 
 `PrepareComposedService` produces offline query evidence and explicit native binding only. DI hosts instead use
-`ComposeServices`, whose `PostgresComposedStorageComposition` owns all native source declarations and exposes
+`ComposeServices`, whose `PostgresComposedStorageComposition` owns all native source declarations and prepares
 that same evidence as `Preparation`. Offline preparation does not implement the storage composition interface,
 so `StorageModelBuilder.Compose` cannot accept it. No throwing getter selects a mode at runtime.
 

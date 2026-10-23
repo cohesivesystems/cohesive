@@ -15,10 +15,10 @@ public sealed class ServicePersistenceTests
     {
         var model = TestModels.Fulfillment();
         Assert.Equal("di/orders", model.Storage.RequireComposition<PostgresStorageComposition>().Authority);
-        Assert.Equal("host/explicit", new PostgresStorageComposition(model.Storage.Bindings, model.Endpoints.Plan, "host/explicit").Authority);
+        Assert.Equal("host/explicit", new PostgresStorageComposition(model.Storage.Bindings, "host/explicit").Authority);
         var mixed = ModelActivator.Create<AspireFirst.PostgresCosmos.PostgresCosmosApplication>();
         Assert.Equal("di/orders", mixed.Storage.RequireComposition<PostgresComposedStorageComposition>().Authority);
-        Assert.Equal("host/explicit", mixed.Storage.PostgresBindings.ComposeServices(mixed.Endpoints.Plan,
+        Assert.Equal("host/explicit", mixed.Storage.PostgresBindings.ComposeServices(
             [mixed.Storage.Inventory], AspireFirst.PostgresCosmos.PostgresCosmosStorage.Policy, "host/explicit").Authority);
     }
 
@@ -43,7 +43,7 @@ public sealed class ServicePersistenceTests
             .TransitionReceipts(new("public", "receipts", "local"), PostgresSchemaInitialization.CreateIfMissing));
         await using var provider = new ServiceCollection().AddKeyedSingleton("orders", database)
             .AddKeyedSingleton<global::Marten.IDocumentStore>("orders", history).BuildServiceProvider();
-        var composition = new PostgresStorageComposition(bindings, model.Endpoints.Plan);
+        var composition = new PostgresStorageComposition(bindings);
         await Assert.ThrowsAsync<ArgumentException>(() => composition.BindAsync(provider).AsTask());
         Assert.Equal(0, calls);
     }
@@ -87,7 +87,7 @@ public sealed class ServicePersistenceTests
             .Entity(model.Domain.Orders, model.Storage.Bindings.Mapping(model.Domain.Orders))
             .Entity(model.Domain.Inventory, model.Storage.Bindings.Mapping(model.Domain.Inventory))
             .Entity(model.Domain.Reservations, model.Storage.Bindings.Mapping(model.Domain.Reservations)));
-        var composition = new PostgresStorageComposition(bindings, model.Endpoints.Plan);
+        var composition = new PostgresStorageComposition(bindings);
         Assert.Equal(0, calls);
         Assert.Throws<InvalidOperationException>(() => bindings.SchemaPreparation((_, _) => Task.CompletedTask));
         await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=unused;Username=unused");

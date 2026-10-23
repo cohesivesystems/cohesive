@@ -17,7 +17,13 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class ApplicationServiceCompositionTests
 {
     public sealed record Detail(string Id);
-    sealed class App : ApplicationModel { }
+    sealed class App : ApplicationModel
+    {
+        public required ApiBindingModel First { get; init; }
+        public required ApiBindingModel Second { get; init; }
+        public required StorageModel StoreA { get; init; }
+        public required StorageModel StoreB { get; init; }
+    }
     sealed class Api : ApiModel
     {
         public Api(string id) => Detail = Endpoints.Query(id).Route("GET", "/" + id + "/{id}")
@@ -43,15 +49,21 @@ public sealed class ApplicationServiceCompositionTests
     {
         public int Calls;
         public Exception? Failure;
+        public Task? Wait;
+        public Action? OnPrepare;
         public ImmutableArray<object> Bindings { get; } = [new object()];
         public ImmutableArray<ValueContract> Observations { get; init; } = [];
-        public ImmutableArray<RelationQueryCompilationRequest> Queries { get; } = [.. queries];
-        public ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)
+        public ImmutableArray<QualifiedShapeId> Shapes { get; init; } = [.. queries.SelectMany(request =>
+            RelationQueryStaticCompiler.Compile(request).Plan!.InputContract.Sources.Select(source => source.Shape)).Distinct()];
+        public IServiceStorageComposition PrepareQueries(ImmutableArray<ServiceQuerySelection> selections) => this;
+        public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)
         {
             Calls++;
+            OnPrepare?.Invoke();
+            if (Wait is not null) await Wait.WaitAsync(cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (Failure is not null) throw Failure;
-            return ValueTask.FromResult<IServicePersistence>(new Persistence());
+            return new Persistence();
         }
     }
     sealed class Persistence : IServicePersistence
@@ -67,27 +79,27 @@ public sealed class ApplicationServiceCompositionTests
         public RelationQuery<string, Detail?> Definition => query;
         public Task<Detail?> ReadAsync(string input, CancellationToken cancellationToken = default) => Task.FromResult<Detail?>(new(input));
     }
-    static RelationQuery<string, Detail?> Query(string id)
+    static RelationQuery<string, Detail?> Query(string id, bool changed = false)
     {
         var query = RelationQuery.Expression();
         var parameter = query.Parameter<string>("id");
         var rows = query.Where(query.Source(query.Clr.Shape<Detail>()), item => item.Id == parameter.Value);
+        if (changed) rows = query.Where(rows, item => item.Id != "excluded");
         return query.BuildQuery(new(id), new(id), rows, parameter, values => values.Count == 0 ? null : values[0]);
     }
     static App Activate(First first, Second second, Composition a, Composition b)
     {
-        var declarations = new ServiceCollection().AddSingleton(new App()).AddSingleton(first).AddSingleton(second)
+        var declarations = new ServiceCollection().AddSingleton(new App { First = first, Second = second, StoreA = new StoreA(a), StoreB = new StoreB(b) }).AddSingleton(first).AddSingleton(second)
             .AddSingleton(new StoreA(a)).AddSingleton(new StoreB(b));
         return new ApplicationModelBuilder(declarations).Build().Get<App>();
     }
 
     [Theory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
+        [InlineData(true, false)]
     [InlineData(true, true)]
     public async Task Multiple_endpoint_and_storage_models_map_with_once_per_host_preparation(bool shared, bool sharedQuery)
     {
-        var first = Query("first"); var second = sharedQuery ? first : Query("second");
+        var first = Query("first"); var second = sharedQuery ? Query("first") : Query("second");
         var a = new Composition(shared && !sharedQuery ? [first.CompilationRequest, second.CompilationRequest] : [first.CompilationRequest]);
         var b = shared ? a : new Composition(second.CompilationRequest);
         var model = Activate(new(first), new(second), a, b);
@@ -113,12 +125,13 @@ public sealed class ApplicationServiceCompositionTests
         var first = Query("first"); var second = Query("second");
         foreach (var ambiguous in new[] { false, true })
         {
-            var a = new Composition(first.CompilationRequest);
-            var b = new Composition(ambiguous ? first.CompilationRequest : Query("unused").CompilationRequest);
+            var a = new Composition(ambiguous ? [first.CompilationRequest] : []);
+            var b = new Composition(ambiguous ? [second.CompilationRequest] : []);
             var model = Activate(new(first), new(second), a, b);
             var services = new ServiceCollection();
             var error = Assert.Throws<ServiceBindingValidationException>(() => services.AddCohesiveServices(model));
-            Assert.Equal(ambiguous ? "services.storage.ambiguousQuery" : "services.storage.queryMissing", Assert.Single(error.Validation.Diagnostics).Code);
+            Assert.Equal(2, error.Validation.Diagnostics.Length);
+            Assert.All(error.Validation.Diagnostics, diagnostic => Assert.Equal(ambiguous ? "services.storage.ambiguousQuery" : "services.storage.queryMissing", diagnostic.Code));
             Assert.Empty(services); Assert.Equal(0, a.Calls); Assert.Equal(0, b.Calls);
         }
     }
@@ -129,7 +142,7 @@ public sealed class ApplicationServiceCompositionTests
         var contract = new ValueContract();
         var a = new Composition { Observations = [contract] };
         var b = new Composition { Observations = [contract] };
-        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceStorageComposition([a, b]));
+        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceStorageComposition([a, b]).Validate([]));
         Assert.Equal("services.storage.ambiguousRepository", Assert.Single(error.Validation.Diagnostics).Code);
     }
 
@@ -151,7 +164,7 @@ public sealed class ApplicationServiceCompositionTests
     public void Duplicate_endpoint_ids_fail_before_registering_or_preparing_resources()
     {
         var query = Query("first"); var storage = new Composition(query.CompilationRequest);
-        var declarations = new ServiceCollection().AddSingleton(new App()).AddSingleton(new First(query))
+        var declarations = new ServiceCollection().AddSingleton(new App { First = new First(query), Second = new Duplicate(query), StoreA = new Store(storage), StoreB = new Store(storage) }).AddSingleton(new First(query))
             .AddSingleton(new Duplicate(query)).AddSingleton(new Store(storage));
         var model = new ApplicationModelBuilder(declarations).Build().Get<App>();
         var services = new ServiceCollection();
@@ -230,4 +243,67 @@ public sealed class ApplicationServiceCompositionTests
         await app.MapServicesAsync<First>(); await app.MapServicesAsync<Second>();
         Assert.Equal(1, composition.Calls);
     }
+    [Fact]
+    public void Explicit_registration_rejects_missing_and_competing_placement_before_IO()
+    {
+        var query = Query("first"); var empty = new Composition();
+        var services = new ServiceCollection();
+        Assert.Throws<ServiceBindingValidationException>(() => services.AddCohesiveServices(new First(query), new Store(empty)));
+        Assert.Empty(services); Assert.Equal(0, empty.Calls);
+        var first = new Composition(query.CompilationRequest); var second = new Composition(query.CompilationRequest);
+        services.AddCohesiveServices(new First(query), new StoreA(first));
+        var count = services.Count;
+        var error = Assert.Throws<ServiceBindingValidationException>(() => services.AddCohesiveServices(new Second(query), new StoreB(second)));
+        Assert.Contains(error.Validation.Diagnostics, item => item.Code == "services.storage.ambiguousQuery"
+            && item.Message.Contains(nameof(StoreA)) && item.Message.Contains(nameof(StoreB)));
+        Assert.Equal(count, services.Count); Assert.Equal(0, first.Calls); Assert.Equal(0, second.Calls);
+    }
+
+    [Fact]
+    public async Task Canceling_one_explicit_waiter_does_not_cancel_shared_preparation()
+    {
+        var query = Query("first");
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var composition = new Composition(query.CompilationRequest) { Wait = completion.Task };
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddCohesiveServices(new First(query), new Store(composition));
+        builder.Services.AddCohesiveServices(new Second(query), new Store(composition));
+        await using var app = builder.Build();
+        using var canceled = new CancellationTokenSource();
+        var first = app.MapServicesAsync<First>(canceled.Token);
+        Assert.Equal(1, composition.Calls);
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => first);
+        var second = app.MapServicesAsync<Second>();
+        completion.SetResult();
+        await second;
+        Assert.Equal(1, composition.Calls);
+    }
+
+    [Fact]
+    public async Task Root_member_order_controls_preparation_not_resolution_order()
+    {
+        var query = Query("first"); var order = new List<string>();
+        var a = new Composition(query.CompilationRequest) { OnPrepare = () => order.Add("a") };
+        var b = new Composition { OnPrepare = () => order.Add("b") };
+        var root = new App { First = new First(query), Second = new Second(query), StoreA = new StoreA(a), StoreB = new StoreB(b) };
+        var model = new ApplicationModelBuilder(new ServiceCollection().AddSingleton((StoreB)root.StoreB).AddSingleton((StoreA)root.StoreA)
+            .AddSingleton(root)).Build().Get<App>();
+        var builder = WebApplication.CreateBuilder(); builder.Services.AddCohesiveServices(model);
+        await using var app = builder.Build(); await app.MapServicesAsync();
+        Assert.Equal(new[] { "a", "b" }, order);
+    }
+
+    [Fact]
+    public void Same_query_revision_with_different_canonical_inputs_is_rejected_before_IO()
+    {
+        var first = Query("same"); var changed = Query("same", changed: true);
+        var storage = new Composition(first.CompilationRequest);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => new ServiceCollection()
+            .AddCohesiveServices(Activate(new(first), new(changed), storage, storage)));
+        Assert.Contains(error.Validation.Diagnostics, item => item.Code == "services.storage.querySelectionMismatch"
+            && item.Message.Contains("same@1"));
+        Assert.Equal(0, storage.Calls);
+    }
+
 }

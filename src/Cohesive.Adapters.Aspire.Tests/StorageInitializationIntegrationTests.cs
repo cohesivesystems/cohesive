@@ -195,7 +195,7 @@ public sealed partial class OrderStorageIntegrationTests
                 await using var remove = database.CreateCommand($"DROP TABLE {productSchema}.cohesive_orders");
                 await remove.ExecuteNonQueryAsync();
             }
-            var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(bindings, Model.Endpoints.Plan);
+            var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(bindings);
             var failure = await Assert.ThrowsAsync<PostgresSchemaValidationException>(async () =>
             {
                 if (direct) await bindings.PrepareAsync(provider, database, "test");
@@ -470,7 +470,7 @@ public sealed partial class OrderStorageIntegrationTests
             recording = false;
             Assert.Equal(1, batches);
             Assert.Equal(0, commands);
-            var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(validate, Model.Endpoints.Plan);
+            var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(validate);
             batches = commands = 0;
             recording = true;
             await composition.BindAsync(provider);

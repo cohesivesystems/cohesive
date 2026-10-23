@@ -42,7 +42,10 @@ public sealed partial class PostgresPersistenceRegistration
         PostgresComposedQueryPreparation prepared, EntityRelationQuerySourceCatalog remote)
     {
         ArgumentNullException.ThrowIfNull(prepared);
-        if (!ReferenceEquals(query.CompilationRequest, prepared.Request))
+        var compiled = RelationQueryStaticCompiler.Compile(query.CompilationRequest);
+        if (!compiled.IsSuccessful) throw new RelationQueryPreparationException("composed binding", compiled);
+        if (RelationQueryCompilationRequestReference.From(RelationQueryCompiledPlanReference.From(compiled.Plan!))
+            != RelationQueryCompilationRequestReference.From(RelationQueryCompiledPlanReference.From(RelationQueryStaticCompiler.Compile(prepared.Request).Plan!)))
             throw new ArgumentException("The prepared query authority must match exactly.", nameof(query));
         var readers = prepared.Sources.Select(binding =>
         {

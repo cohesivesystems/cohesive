@@ -498,25 +498,37 @@ await using var app = builder.Build();
 await app.MapServicesAsync();
 ```
 
-The application overload collects registered `ApiBindingModel` and `StorageModel` instances
-from `model.Composition`. Multiple API groups can share a store, or use separate stores.
-Storage adapters declare their exact observation contracts and prepared query requests;
-selection never probes providers or falls back by registration order. Duplicate endpoint IDs,
-competing storage ownership and missing entity/query selections fail before native preparation.
-The complete route set is staged and validated before attachment to ASP.NET.
+The application overload collects `ApiBindingModel` and `StorageModel` components exposed by
+public properties on the activated root. Incidental transitive dependencies do not contribute.
+Properties are visited in ordinal member-name order, independent of DI factory resolution;
+that order also controls preparation across stores. Expose each contributing module on the root.
 
-Each distinct storage composition is prepared once in the host, before requests. Repeated
-references to the same composition share its preparation. Different compositions claiming the
-same entity, query or native binding are rejected: sharing a native client does not make two
-storage policies interchangeable. Independent contributions still borrow keyed DI clients;
-no second resource catalog or client ownership is introduced. Query consistency and bounds
-continue through the selected adapter without weakening.
+Storage owns entity placement, not a list of API queries. Admission compiles each selected
+query offline and routes it to the one composition covering all source and traversal shapes.
+Two independent API modules can add queries over an unchanged Postgres storage model.
+A query spanning stores requires an explicitly composed storage declaration; selection never
+probes providers or weakens a snapshot requirement to independent-source execution.
 
-`AddCohesiveServices(bindings, storage)` and `MapServicesAsync<TBindings>()` remain available
-for an explicitly selected subset. Multiple explicit binding models share preparation when
-passed the same storage composition. Application-wide registration cannot overlap explicit
-registrations in one host. Model instances remain host-bound; activate a separate application
-for another host. Initial cancellation or preparation failure is retained for that host, with
-no automatic retry; schema writes already completed by a provider are not rolled back across
-stores. Disposal releases process lifetimes, while native clients remain DI-owned. Starting a
-host without mapping its registered services fails admission.
+Repository ownership uses canonical observation contracts. Query ownership uses canonical
+compilation fingerprints (including definition, shapes, relationships and demand), with exact
+query ID/revision and bounds checked across modules. Rebuilt equivalent requests are accepted.
+Missing process dependencies, missing ownership and competing ownership fail before native
+preparation. Ownership diagnostics are collected together and name contracts and contributing
+models. Provider query planning also finishes before any client is resolved. Route attachment
+remains atomic after preparation.
+
+Each distinct storage composition is prepared once per host. Repeated references share it;
+competing compositions cannot claim the same entity or native binding. Native clients retain
+their existing keyed DI ownership; there is no second resource catalog.
+
+The explicit `AddCohesiveServices(bindings, storage)` overload applies the same ownership
+admission across all explicit registrations and shares their preparation. A failed registration
+does not change that set. Its shared storage task uses host-shutdown cancellation; each caller
+can cancel its own wait without canceling another module's preparation. A canceled API mapping
+still fails that binding's retained preparation: rebuild the host to retry it. The callback overload
+is the deliberate escape hatch: caller-owned persistence has no placement metadata to validate.
+
+Application registration cannot overlap explicit registration. Initial application cancellation
+or preparation failure is retained without automatic retry. Schema writes already completed by
+a provider are not rolled back across stores. Disposal releases process lifetimes; native clients
+remain DI-owned. Starting without mapping all registered bindings fails host admission.

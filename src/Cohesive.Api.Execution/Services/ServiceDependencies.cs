@@ -41,7 +41,8 @@ public sealed class ServiceDependencies
     public ImmutableArray<ValueContract> RepositoryRequirements(ProcessDefinition process)
     {
         var required = Required(process);
-        return [.. required.Transitions.Concat(required.Queries).Where(observations.ContainsKey).Select(reference => observations[reference]).Distinct()];
+        RequireDependencies(required);
+        return [.. required.Transitions.Concat(required.Queries).Select(reference => observations[reference]).Distinct()];
     }
 
     /// <summary>Explicit relational query roots selected for this service's transports.</summary>

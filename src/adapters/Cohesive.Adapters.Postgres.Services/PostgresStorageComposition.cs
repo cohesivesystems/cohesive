@@ -7,31 +7,37 @@ using Cohesive.Storage;
 
 namespace Cohesive.Adapters.Postgres.Services;
 
-/// <summary>One native database's endpoint preparation and model-owned persistence policy.</summary>
+/// <summary>One native database's entity placement and model-owned persistence policy, independent of API modules.</summary>
 public sealed class PostgresStorageComposition : IServiceStorageComposition
 {
     readonly PostgresPersistenceBindings bindings;
     /// <inheritdoc />
     public ImmutableArray<Cohesive.Model.ValueContract> Observations { get; }
     /// <inheritdoc />
-    public ImmutableArray<Cohesive.Relations.Compilation.RelationQueryCompilationRequest> Queries { get; }
+    public ImmutableArray<Cohesive.Model.QualifiedShapeId> Shapes { get; }
     /// <summary>Stable runtime provenance authority, defaulting to di/ plus the database identity.</summary>
     public string Authority { get; }
-    /// <summary>Prepares native evidence from exact endpoint selections without opening a connection.</summary>
+    /// <summary>Declares native placement without selecting any API queries or opening a connection.</summary>
     /// <param name="bindings">Declared mappings, receipt, history and outbox policy.</param>
-    /// <param name="plan">Canonical endpoint query requirements.</param>
     /// <param name="authority">Native runtime authority; defaults to di/ followed by the declared database identity.</param>
-    public PostgresStorageComposition(PostgresPersistenceBindings bindings, ServiceImplementationPlan plan, string? authority = null)
+    public PostgresStorageComposition(PostgresPersistenceBindings bindings, string? authority = null)
     {
         this.bindings = bindings ?? throw new ArgumentNullException(nameof(bindings));
         Observations = bindings.Observations;
-        Queries = [.. plan.QueryDependencies.Queries.Select(query => query.Request)];
+        Shapes = bindings.Shapes;
         Authority = authority ?? "di/" + bindings.Database.Value;
         ArgumentException.ThrowIfNullOrWhiteSpace(Authority);
-        Evidence = bindings.PrepareService(plan, new InfrastructureTargetFacilityId("postgres/" + bindings.Database.Value + "/implementation"));
     }
     /// <summary>Native evidence shared with infrastructure association.</summary>
-    public PostgresPreparedQueryEvidence Evidence { get; }
+    /// <param name="queries">Selections routed to this database.</param><returns>Offline native evidence.</returns>
+    public PostgresPreparedQueryEvidence PrepareEvidence(IEnumerable<ServiceQuerySelection> queries) =>
+        bindings.PrepareService(queries, new InfrastructureTargetFacilityId("postgres/" + bindings.Database.Value + "/implementation"));
+    /// <inheritdoc />
+    public IServiceStorageComposition PrepareQueries(ImmutableArray<ServiceQuerySelection> queries)
+    {
+        if (!queries.IsEmpty) _ = PrepareEvidence(queries);
+        return this;
+    }
     /// <inheritdoc />
     public ImmutableArray<object> Bindings => [bindings];
     /// <inheritdoc />

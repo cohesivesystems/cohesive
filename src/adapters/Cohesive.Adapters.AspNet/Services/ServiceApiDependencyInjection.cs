@@ -13,7 +13,7 @@ namespace Cohesive.Adapters.AspNet.Services;
 /// <summary>Prepares model-owned storage and API bindings from the application's existing DI container.</summary>
 public static class ServiceApiDependencyInjection
 {
-    /// <summary>Collects every API binding and storage model in a completed application graph.</summary>
+    /// <summary>Collects API binding and storage models exposed by public properties on the activated root.</summary>
     /// <param name="services">Host services owning native clients.</param>
     /// <param name="model">Activated application with explicit API and storage contributions.</param>
     /// <returns>The same collection; no native resource is resolved at registration.</returns>
@@ -25,9 +25,9 @@ public static class ServiceApiDependencyInjection
         if (services.Any(item => item.ServiceType == typeof(ServiceApiRuntime) ||
             item.ServiceType.IsGenericType && item.ServiceType.GetGenericTypeDefinition() == typeof(ServiceApiRuntime<>)))
             throw new InvalidOperationException("Application service bindings must be registered once, without overlapping explicit registrations.");
-        var endpoints = model.Composition.GetAll<ApiBindingModel>();
-        var storage = new ServiceStorageComposition(model.Composition.GetAll<StorageModel>()
-            .Select(item => item.RequireComposition<IServiceStorageComposition>()));
+        var endpoints = model.Components<ApiBindingModel>();
+        var storage = new ServiceStorageComposition(model.Components<StorageModel>()
+            .Select(item => (item.GetType().FullName!, item.RequireComposition<IServiceStorageComposition>())));
         // Validate the complete surface before installing DI registrations or resolving any clients.
         var ids = new HashSet<Cohesive.Api.ApiEndpointId>();
         foreach (var endpoint in endpoints.SelectMany(item => item.Plan.Definition.Endpoints))
@@ -65,9 +65,18 @@ public static class ServiceApiDependencyInjection
         TBindings bindings, StorageModel storage) where TBindings : ApiBindingModel
     {
         ArgumentNullException.ThrowIfNull(storage);
-        var composition = storage.RequireComposition<IServiceStorageComposition>();
+        ArgumentNullException.ThrowIfNull(services); ArgumentNullException.ThrowIfNull(bindings);
+        var group = services.FirstOrDefault(item => item.ServiceType == typeof(ExplicitStorageRegistrations))?.ImplementationInstance
+            as ExplicitStorageRegistrations ?? new();
+        var entries = group.Entries.Append((Bindings: (ApiBindingModel)bindings, Storage: storage)).ToArray();
+        var admission = new ServiceStorageComposition(entries.Select(item =>
+            (item.Storage.GetType().FullName!, item.Storage.RequireComposition<IServiceStorageComposition>())));
+        admission.Validate(entries.Select(item => item.Bindings.Plan));
         services.AddCohesiveServices(bindings, (provider, token) =>
-            new(provider.GetRequiredService<ServiceStorageRuntimeCache>().Prepare(composition, provider, token)));
+            new(provider.GetRequiredService<ServiceStorageRuntimeCache>().Prepare(group.Admission!, provider, token)));
+        group.Entries = entries;
+        group.Admission = admission;
+        services.TryAddSingleton(group);
         services.TryAddSingleton<ServiceStorageRuntimeCache>();
         return services;
     }
@@ -165,10 +174,16 @@ internal sealed class ServiceStorageRuntimeCache
         lock (prepared)
         {
             if (!prepared.TryGetValue(composition, out var result))
-                prepared.Add(composition, result = Bind(composition, provider, token));
-            return result;
+                prepared.Add(composition, result = Bind(composition, provider, provider.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));
+            return result.WaitAsync(token);
         }
     }
     static async Task<IServicePersistence> Bind(IServiceStorageComposition composition, IServiceProvider provider, CancellationToken token) =>
         await composition.BindAsync(provider, token).ConfigureAwait(false);
+}
+
+internal sealed class ExplicitStorageRegistrations
+{
+    public (ApiBindingModel Bindings, StorageModel Storage)[] Entries = [];
+    public ServiceStorageComposition? Admission;
 }

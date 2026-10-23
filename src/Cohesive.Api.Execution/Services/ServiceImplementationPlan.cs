@@ -1,4 +1,5 @@
 using Cohesive.Relations.Execution;
+using Cohesive.Relations.Compilation;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -101,9 +102,12 @@ public sealed class ServiceImplementationPlan
     public void Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes, RelationQueryConsistency consistency) =>
         state.Edit(() =>
         {
-            var existing = queries.Queries.FirstOrDefault(item => ReferenceEquals(item.Request, query.CompilationRequest));
+            var reference = ServiceQueryBinding.GetReference(revision, query.CompilationRequest);
+            var existing = queries.Queries.FirstOrDefault(item => item.Reference.DefinitionId == reference.DefinitionId);
             if (existing is null) queries = queries.Query(query, revision, rows, bytes, consistency);
-            else if (existing.Reference.RevisionId != revision || existing.MaximumRows != rows || existing.MaximumBytes != bytes || existing.Consistency != consistency)
+            else if (existing.Reference != reference
+                || RelationQueryCompilationRequestReference.From(existing.Request) != RelationQueryCompilationRequestReference.From(query.CompilationRequest)
+                || existing.MaximumRows != rows || existing.MaximumBytes != bytes || existing.Consistency != consistency)
                 throw Error("services.api.querySelectionMismatch", "One query authority must have one revision, preparation bound and consistency requirement.");
             return this;
         });
