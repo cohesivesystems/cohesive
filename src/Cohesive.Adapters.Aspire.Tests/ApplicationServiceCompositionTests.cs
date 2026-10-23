@@ -242,6 +242,7 @@ public sealed class ApplicationServiceCompositionTests
         await using var app = builder.Build();
         await app.MapServicesAsync<First>(); await app.MapServicesAsync<Second>();
         Assert.Equal(1, composition.Calls);
+        await Assert.ThrowsAsync<ServiceMappingException>(() => app.MapServicesAsync<First>());
     }
     [Fact]
     public void Explicit_registration_rejects_missing_and_competing_placement_before_IO()

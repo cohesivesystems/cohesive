@@ -11,10 +11,34 @@ namespace Cohesive.Adapters.AspNet.Services;
 /// <summary>Prepared host bindings for one complete API surface; native resources remain caller-owned.</summary>
 public sealed class ServiceApiBindings
 {
-    internal static ServiceApiBindings Combine(IEnumerable<ServiceApiBindings> bindings)
+    internal static ServiceApiBindings Combine(IReadOnlyList<ServiceApiBindings> bindings)
     {
-        var selected = bindings.ToArray();
-        return new(ApiDefinition.Combine(selected.Select(item => item.Definition)), selected.SelectMany(item => item.contributions).ToArray());
+        ArgumentNullException.ThrowIfNull(bindings);
+        // Share immutable preparation, but keep the combined surface's mapping guard independent.
+        if (bindings.Count == 1)
+            return new(bindings[0].Definition, bindings[0].contributions);
+
+        var endpointCount = 0;
+        var contributionCount = 0;
+        for (var index = 0; index < bindings.Count; index++)
+        {
+            endpointCount = checked(endpointCount + bindings[index].Definition.Endpoints.Count);
+            contributionCount = checked(contributionCount + bindings[index].contributions.Length);
+        }
+        var endpoints = new ApiEndpoint[endpointCount];
+        var contributions = new PreparedApiContribution[contributionCount];
+        var endpointOffset = 0;
+        var contributionOffset = 0;
+        for (var index = 0; index < bindings.Count; index++)
+        {
+            var binding = bindings[index];
+            var selectedEndpoints = binding.Definition.Endpoints;
+            for (var endpointIndex = 0; endpointIndex < selectedEndpoints.Count; endpointIndex++)
+                endpoints[endpointOffset++] = selectedEndpoints[endpointIndex];
+            binding.contributions.CopyTo(contributions, contributionOffset);
+            contributionOffset += binding.contributions.Length;
+        }
+        return new(new ApiDefinition(endpoints), contributions);
     }
     readonly PreparedApiContribution[] contributions;
     int mappingStarted;

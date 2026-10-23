@@ -145,7 +145,10 @@ internal class ServiceApiRuntime(IServiceProvider provider, IReadOnlyList<ApiBin
             token.ThrowIfCancellationRequested();
             var persistence = await prepareStorage(provider, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
-            return ServiceApiBindings.Combine(bindings.Select(binding => binding.Builder.Build(lifetime, persistence)));
+            var preparedBindings = new ServiceApiBindings[bindings.Count];
+            for (var index = 0; index < bindings.Count; index++)
+                preparedBindings[index] = bindings[index].Builder.Build(lifetime, persistence);
+            return ServiceApiBindings.Combine(preparedBindings);
         }
         catch { lifetime.Dispose(); throw; }
     }
