@@ -73,6 +73,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | [`Cohesive.Adapters.Postgres.Services`](src/adapters/Cohesive.Adapters.Postgres.Services/README.md) | Shared service query selections for native readers and infrastructure evidence. |
 | [`Cohesive.Relations.Infra`](src/Cohesive.Relations.Infra/README.md) | Provider-neutral versioned query snapshot requirements. |
 | [`Cohesive.Adapters.Aspire.Postgres`](src/adapters/Cohesive.Adapters.Aspire.Postgres/README.md) | Native database affinity checks for prepared query evidence. |
+| [`Cohesive.Adapters.Aspire.Cosmos`](src/adapters/Cohesive.Adapters.Aspire.Cosmos/README.md) | Native container and partition affinity checks for prepared Cosmos source evidence. |
 | `Cohesive.Adapters.Postgres` | PostgreSQL relation/query and materialization integrations plus a durable Process distribution ledger. |
 | [`Cohesive.Adapters.SQLite`](src/adapters/Cohesive.Adapters.SQLite/README.md) | SQLite entity repositories with optimistic concurrency and atomic batches, exact scalar encodings, and module migrations. |
 | `Cohesive.Adapters.TypeScript` | TypeScript emitters for shapes, API clients, constants, and test mocks. |

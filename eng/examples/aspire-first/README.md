@@ -264,3 +264,9 @@ schemas need their own reviewed migration. Marten history format migrations rema
 inherit that backend. Native clients remain DI-owned. The embedded native additions run through the model's
 `SchemaPreparation` declaration in one transaction under the schema advisory lock, including in integration tests. Built-in creation serializes competing host
 bootstraps with a transaction advisory lock; custom native-addition callbacks still own their coordination. These callbacks cannot repair projected-schema drift: run reviewed migrations before host preparation.
+
+Authority selection is shared by AppHost and worker through an explicitly registered
+`FulfillmentHistoryPolicy`. See [state authority](STATE-AUTHORITY.md) for native schema
+expectations and isolated state/event databases. The mixed example uses the optional
+`Cohesive.Adapters.Aspire.Cosmos` association to validate native account, database, container
+and partition path against its prepared storage source before accepting evidence.

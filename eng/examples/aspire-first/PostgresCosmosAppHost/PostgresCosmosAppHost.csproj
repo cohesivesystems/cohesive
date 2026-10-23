@@ -10,6 +10,7 @@
     <UserSecretsId>cohesive-postgres-cosmos-example</UserSecretsId>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Aspire.Cosmos/Cohesive.Adapters.Aspire.Cosmos.csproj" IsAspireProjectResource="false" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres.Services/Cohesive.Adapters.Postgres.Services.csproj" IsAspireProjectResource="false" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Cosmos/Cohesive.Adapters.Cosmos.csproj" IsAspireProjectResource="false" />
     <ProjectReference Include="../Orders.Model/Orders.Model.csproj" IsAspireProjectResource="false" />

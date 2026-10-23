@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Aspire.Cosmos;
 using Cohesive.Adapters.Postgres.Services;
 using AspireFirst.Orders;
 using Aspire.Hosting;
@@ -53,7 +54,7 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
         var cosmos = builder.AddAzureCosmosDB(PostgresCosmosStorage.CosmosAccount).RunAsPreviewEmulator();
 #pragma warning restore ASPIRECOSMOSDB001
         var database = cosmos.AddCosmosDatabase(PostgresCosmosStorage.InventoryDatabase);
-        var inventory = database.AddContainer(PostgresCosmosStorage.InventoryContainer, PostgresCosmosStorage.PartitionPath);
+        var inventory = database.AddContainer(PostgresCosmosStorage.InventoryContainer, Application.Storage.Inventory.PartitionKeyPath);
         var worker = builder.AddProject<Projects.PostgresCosmosWorker>("worker")
             .WithHttpEndpoint(env: "ASPNETCORE_HTTP_PORTS").WithReference(orders).WithReference(cosmos)
             .WaitFor(orders).WaitFor(inventory);
@@ -65,14 +66,8 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
             associations =>
             {
                 var prepared = Application.Storage.RequireComposition<PostgresComposedStorageComposition>().Preparation;
-                var source = Application.Storage.Inventory.Query;
-                // Native names are shared with the source declaration; no account endpoint is invented offline.
-                if (cosmos.Resource.Name != source.Account || database.Resource.DatabaseName != source.Database
-                    || inventory.Resource.ContainerName != source.Container
-                    || inventory.Resource.PartitionKeyPath != PostgresCosmosStorage.PartitionPath)
-                    throw new InvalidOperationException("Cosmos resource differs from the prepared acquisition binding.");
                 associations.Resource(Orders, orders, prepared.Postgres.ForSource(orders.Resource.DatabaseName), new("aspire/example/orders"));
-                associations.Resource(Inventory, inventory, prepared.Sources[source.Binding.Source.Id].ForSource(source.Binding.Source.Id.Value), new("aspire/example/inventory"));
+                associations.Resource(Inventory, inventory, Application.Storage.Inventory, new("aspire/example/inventory"));
                 associations.Workload(Worker, worker, executionEvidence: prepared.ExecutionEvidence);
             });
         if (!association.Deployment.IsComplete) throw new InvalidOperationException(string.Join("; ", association.Deployment.Diagnostics.Select(item => item.Code + ": " + item.Message)));
