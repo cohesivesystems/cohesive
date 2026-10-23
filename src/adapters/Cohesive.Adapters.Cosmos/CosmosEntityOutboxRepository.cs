@@ -581,7 +581,8 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             ObservationId: observation.EntityId.Value,
             ObservationVersion: observation.Version,
             EntityConcurrencyToken: Guid.NewGuid().ToString("N"),
-            Observation: observation.Observation.Fields as Dictionary<string, ObservationValue> ?? new Dictionary<string, ObservationValue>(observation.Observation.Fields, StringComparer.Ordinal),
+            // Immutable observation storage is serialized directly; the document never mutates it.
+            Observation: observation.Observation.Fields,
             StreamName: null,
             SubjectType: null,
             SubjectId: null,
@@ -1009,13 +1010,12 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
             $"A direct Transition outbox cannot persist envelope kind '{envelope.GetType().Name}'.")
     };
 
-    static Dictionary<string, ObservationValue> ProjectPayload(PortableValue payload)
+    static IReadOnlyDictionary<string, ObservationValue> ProjectPayload(PortableValue payload)
     {
         if (payload.Value is { Kind: ObservationValueKind.Object, Fields: { } fields })
-            return fields as Dictionary<string, ObservationValue>
-                ?? new Dictionary<string, ObservationValue>(fields, StringComparer.Ordinal);
+            return fields;
 
-        return new(StringComparer.Ordinal)
+        return new Dictionary<string, ObservationValue>(StringComparer.Ordinal)
         {
             ["valueState"] = ObservationValue.FromString(payload.State.ToString()),
             ["value"] = payload.Value ?? ObservationValue.Null

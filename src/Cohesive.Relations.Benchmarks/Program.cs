@@ -37,6 +37,9 @@ if (args is ["--prepared-result-allocations", .. var resultArgs])
 if (args is ["--field-assignment-allocations", .. var assignmentArgs])
     return Cohesive.Relations.Benchmarks.FieldAssignmentAllocationBenchmark.Run(assignmentArgs);
 
+if (args is ["--entity-transition-allocations", .. var transitionArgs])
+    return Cohesive.Relations.Benchmarks.EntityTransitionAllocationBenchmark.Run(transitionArgs);
+
 if (args is ["--strict-read-allocations", .. var strictArgs])
     return Cohesive.Relations.Benchmarks.StrictReadAllocationBenchmark.Run(strictArgs);
 

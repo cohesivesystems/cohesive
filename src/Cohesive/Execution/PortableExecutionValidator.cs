@@ -155,14 +155,18 @@ public static class PortableExecutionValidator
     {
         public bool RequiresJsonRoundTrip { get; private set; }
         const int MaximumValueCompatibilityDepth = 64;
-        public Location Root { get; } = new([], 0);
+        // Most validations succeed over small contracts. The location cursor is pre-sized for typical depth;
+        // diagnostics and recursive-type state are allocated only when first needed.
+        public Location Root { get; } = new(new(capacity: 8), 0);
 
-        readonly List<DocumentValidationDiagnostic> diagnostics = [];
-        readonly HashSet<TypeId> activeTypeDefinitions = [];
+        List<DocumentValidationDiagnostic>? diagnostics;
+        HashSet<TypeId>? activeTypeDefinitions;
         int namedTypeReferences;
 
+        int DiagnosticCount => diagnostics?.Count ?? 0;
+
         public DocumentValidationResult ToResult() =>
-            DocumentValidationResult.FromDiagnostics(diagnostics);
+            diagnostics is null ? DocumentValidationResult.Valid : DocumentValidationResult.FromDiagnostics(diagnostics);
 
         public void ValidatePortableValue(PortableValue value, Location location)
         {
@@ -280,7 +284,7 @@ public static class PortableExecutionValidator
 
             var reusable = type is ObjectTypeRef or ArrayTypeRef or EnumTypeRef;
             if (reusable && PortableInlineTypes.TryGet(type, out _)) return;
-            var diagnosticStart = diagnostics.Count;
+            var diagnosticStart = DiagnosticCount;
             var namedStart = namedTypeReferences;
 
             switch (type)
@@ -347,7 +351,7 @@ public static class PortableExecutionValidator
                     break;
             }
 
-            if (reusable && diagnostics.Count == diagnosticStart && namedTypeReferences == namedStart)
+            if (reusable && DiagnosticCount == diagnosticStart && namedTypeReferences == namedStart)
                 PortableInlineTypes.Get(type, static _ => true);
         }
 
@@ -620,7 +624,7 @@ public static class PortableExecutionValidator
 
         void ValidateTypeDefinition(TypeDefinition definition, Location location)
         {
-            if (!activeTypeDefinitions.Add(definition.Id))
+            if (!(activeTypeDefinitions ??= []).Add(definition.Id))
                 return;
 
             try
@@ -654,7 +658,7 @@ public static class PortableExecutionValidator
             }
             finally
             {
-                activeTypeDefinitions.Remove(definition.Id);
+                activeTypeDefinitions!.Remove(definition.Id);
             }
         }
 
@@ -963,7 +967,7 @@ public static class PortableExecutionValidator
                 ApplyJsonRequirements(prepared, depth);
                 return prepared;
             }
-            var start = diagnostics.Count;
+            var start = DiagnosticCount;
             var structure = new ObservationStructure(-1,
                 value.Kind == ObservationValueKind.Bytes
                 || value.Kind == ObservationValueKind.String && RequiresJsonNormalization(value.String), 1);
@@ -1038,7 +1042,7 @@ public static class PortableExecutionValidator
                     break;
             }
             ApplyJsonRequirements(structure, depth);
-            if (owner is not null && structure.Nodes >= MinimumPreparedObservationNodes && diagnostics.Count == start)
+            if (owner is not null && structure.Nodes >= MinimumPreparedObservationNodes && DiagnosticCount == start)
                 ObservationStructures.Publish(owner, structure);
             return structure;
         }
@@ -1069,10 +1073,10 @@ public static class PortableExecutionValidator
                 while (fields.MoveNext())
                 {
                     var field = fields.Current;
-                    var start = diagnostics.Count;
+                    var start = DiagnosticCount;
                     structure = structure.Include(ValidateObservationField(field, location, depth));
-                    if (!canonical && diagnostics.Count != start)
-                        (failures ??= []).Add((field.Key, start, diagnostics.Count - start));
+                    if (!canonical && DiagnosticCount != start)
+                        (failures ??= []).Add((field.Key, start, DiagnosticCount - start));
                 }
                 if (failures is { Count: > 1 })
                     OrderObservationFailures(failures);
@@ -1086,7 +1090,7 @@ public static class PortableExecutionValidator
             // Order only diagnostic groups, never revisit invalid subtrees. Each group's nested
             // diagnostics already have depth-first ordering and rendered, independent locations.
             var start = failures[0].Start;
-            var count = diagnostics.Count - start;
+            var count = DiagnosticCount - start;
             failures.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Name, right.Name));
             var ordered = ArrayPool<DocumentValidationDiagnostic>.Shared.Rent(count);
             try
@@ -1094,9 +1098,9 @@ public static class PortableExecutionValidator
                 var next = 0;
                 foreach (var group in failures)
                     for (var index = 0; index < group.Count; index++)
-                        ordered[next++] = diagnostics[group.Start + index];
+                        ordered[next++] = diagnostics![group.Start + index];
                 for (var index = 0; index < count; index++)
-                    diagnostics[start + index] = ordered[index];
+                    diagnostics![start + index] = ordered[index];
             }
             finally
             {
@@ -1366,7 +1370,7 @@ public static class PortableExecutionValidator
         };
 
         void Error(string code, string message, Location location) =>
-            diagnostics.Add(new(code, DiagnosticSeverity.Error, message, location.ToString()));
+            (diagnostics ??= []).Add(new(code, DiagnosticSeverity.Error, message, location.ToString()));
 
         static Location Child(Location location, string segment) => location.Append(new(segment, 0));
         static Location Index(Location location, int index) => location.Append(new(null, index));
