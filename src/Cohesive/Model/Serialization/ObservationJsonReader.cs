@@ -139,10 +139,24 @@ public static class ObservationJsonReader
     // Disposing the scope returns all temporary reference storage, including on parse failure.
     ref struct ReadScope
     {
-        ObservationJsonPropertyNames.TokenScope strings;
-        ObservationJsonIngestionPlan? ingestion;
+        // Consecutive exact-name misses per private layout before that layout stops speculating for this input.
+        // One stray spelling costs a single fallback; a consistently differently-cased batch stops after a few rows.
+        const byte NestedMissLimit = 4;
 
-        internal ReadScope(ObservationJsonIngestionPlan? ingestion) { strings = default; this.ingestion = ingestion; }
+        ObservationJsonPropertyNames.TokenScope strings;
+        readonly ObservationJsonIngestionPlan? ingestion;
+        byte[]? nestedMisses;
+
+        internal ReadScope(ObservationJsonIngestionPlan? ingestion) { strings = default; this.ingestion = ingestion; nestedMisses = null; }
+
+        readonly bool TryGetNestedLayout(TypeRef type, [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ObservationLayout? layout, out int index)
+        {
+            if (ingestion is not null && ingestion.TryGetLayout(type, out layout, out index)
+                && (nestedMisses is null || nestedMisses[index] < NestedMissLimit))
+                return true;
+            layout = null; index = -1;
+            return false;
+        }
 
         internal void Dispose() => strings.Dispose();
 
@@ -289,8 +303,8 @@ public static class ObservationJsonReader
             if (reader.TokenType != JsonTokenType.StartObject)
                 return ReadValueCore(ref reader);
 
-            if (ingestion is not null && ingestion.TryGetLayout(objectType, out var layout)
-                && TryReadNested(ref reader, layout, graph, out var nested)) return nested;
+            if (TryGetNestedLayout(objectType, out var layout, out var layoutIndex)
+                && TryReadNested(ref reader, layout, layoutIndex, graph, out var nested)) return nested;
 
             var values = new ObservationJsonObjectBuilder();
             while (reader.Read())
@@ -328,8 +342,8 @@ public static class ObservationJsonReader
             if (reader.TokenType != JsonTokenType.StartObject)
                 return ReadValueCore(ref reader);
 
-            if (ingestion is not null && ingestion.TryGetLayout(named, out var layout)
-                && TryReadNested(ref reader, layout, graph, out var nested)) return nested;
+            if (TryGetNestedLayout(named, out var layout, out var layoutIndex)
+                && TryReadNested(ref reader, layout, layoutIndex, graph, out var nested)) return nested;
 
             var values = new ObservationJsonObjectBuilder();
             while (reader.Read())
@@ -359,11 +373,11 @@ public static class ObservationJsonReader
             throw new JsonException("The JSON object is incomplete.");
         }
 
-        // A speculative exact-name record borrows scratch only. On the first spelling/unknown
-        // miss, restore the token cursor and use the original typed reader for this object and
-        // the remainder of the input. Completed ancestors/earlier records stay immutable and
-        // validation uses bindings only where their exact private layout still matches.
-        bool TryReadNested(ref Utf8JsonReader reader, ObservationLayout layout, ShapeGraph graph, out ObservationValue value)
+        // A speculative exact-name record borrows scratch only. On a spelling/unknown miss, restore the
+        // token cursor and use the original typed reader for this object. The miss counts against this
+        // layout only; an exact read resets it. Completed records stay immutable, and validation uses
+        // bindings only where their exact private layout still matches.
+        bool TryReadNested(ref Utf8JsonReader reader, ObservationLayout layout, int layoutIndex, ShapeGraph graph, out ObservationValue value)
         {
             var checkpoint = reader;
             var slots = ArrayPool<ObservationValue>.Shared.Rent(layout.Count);
@@ -376,7 +390,7 @@ public static class ObservationJsonReader
                 {
                     if (reader.TokenType == JsonTokenType.EndObject)
                     {
-                        IReadOnlyDictionary<string, ObservationValue> storage;
+                        IOrdinalObservationStorage storage;
                         if (layout.Count > SmallObservationFields.JsonFieldLimit && count <= layout.Count / 2)
                             storage = CompactOrdinalObservationFields.Create(layout, slots.AsSpan(0, layout.Count));
                         else
@@ -385,12 +399,14 @@ public static class ObservationJsonReader
                             storage = new OrdinalObservationFields(layout, ImmutableCollectionsMarshal.AsImmutableArray(owned), count);
                         }
                         value = ObservationValue.FromObject(new ObservationNestedFields(storage));
+                        if (nestedMisses is not null) nestedMisses[layoutIndex] = 0;
                         return true;
                     }
                     RequireToken(reader.TokenType, JsonTokenType.PropertyName);
                     if (!layout.TryGetJsonOrdinal(ref reader, out var ordinal))
                     {
-                        ingestion = null;
+                        nestedMisses ??= new byte[ingestion!.LayoutCount];
+                        nestedMisses[layoutIndex]++;
                         reader = checkpoint;
                         return false;
                     }

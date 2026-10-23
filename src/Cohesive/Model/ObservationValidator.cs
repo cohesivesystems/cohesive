@@ -1205,13 +1205,8 @@ public static class ObservationValidator
         internal ObjectFieldLookup(IReadOnlyDictionary<string, ObservationValue> fields, ObservationValidationPlan? plan)
         {
             Fields = fields;
-            var storage = fields is ObservationNestedFields nested ? nested.Storage : fields;
-            ordinal = storage switch
-            {
-                OrdinalObservationFields dense when ReferenceEquals(plan?.BoundLayout, dense.Layout) => dense,
-                CompactOrdinalObservationFields packed when ReferenceEquals(plan?.BoundLayout, packed.Layout) => packed,
-                _ => null
-            };
+            var storage = ObservationFieldStorage.Of(fields).Fields!;
+            ordinal = storage is IOrdinalObservationStorage bound && ReferenceEquals(plan?.BoundLayout, bound.Layout) ? bound : null;
             ordinals = ordinal is null ? default : plan!.BoundOrdinals;
             insensitive = null;
         }

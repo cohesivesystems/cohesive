@@ -7,13 +7,26 @@ namespace Cohesive.Model;
 // own semantics; these private layouts are only token dispatch, storage order and lookup evidence.
 internal sealed class ObservationJsonIngestionPlan
 {
-    readonly Dictionary<TypeRef, ObservationLayout> layouts;
+    readonly Dictionary<TypeRef, (ObservationLayout Layout, int Index)> layouts;
     internal ObservationValidationPlan?[] ValidationPlans { get; }
 
     ObservationJsonIngestionPlan(Dictionary<TypeRef, ObservationLayout> layouts, ObservationValidationPlan?[] plans)
-    { this.layouts = layouts; ValidationPlans = plans; }
+    {
+        var indexed = new Dictionary<TypeRef, (ObservationLayout, int)>(layouts.Count, ReferenceEqualityComparer.Instance);
+        foreach (var (type, layout) in layouts) indexed.Add(type, (layout, indexed.Count));
+        this.layouts = indexed;
+        ValidationPlans = plans;
+    }
 
-    internal bool TryGetLayout(TypeRef type, [NotNullWhen(true)] out ObservationLayout? layout) => layouts.TryGetValue(type, out layout);
+    // Dense indexes let a traversal keep per-layout state in one small array.
+    internal int LayoutCount => layouts.Count;
+
+    internal bool TryGetLayout(TypeRef type, [NotNullWhen(true)] out ObservationLayout? layout, out int index)
+    {
+        if (layouts.TryGetValue(type, out var entry)) { layout = entry.Layout; index = entry.Index; return true; }
+        layout = null; index = -1;
+        return false;
+    }
 
     internal static ObservationJsonIngestionPlan? Create(ObservationLayout root)
     {

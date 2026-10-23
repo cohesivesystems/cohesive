@@ -8,7 +8,7 @@ The original graph, type definitions, typed JSON reader and validator remain sem
 
 Private nested layouts reuse `ObservationLayout`'s dispatch/order mechanism without constructing synthetic domain graphs or registering new shape identities. Their qualified identity is owning-root provenance only. `ObservationNestedFields` exposes an immutable dictionary view, **not** a shape-qualified reader; nested physical storage cannot escape as a claimed domain shape. The wrapper reuses dense or packed ordinal storage and canonical traversal unwraps it through the existing mechanism. Records through the existing eight-field inline boundary keep the original typed reader. Eligible wider, more-than-half-full records use dense vectors; wider at-most-half-full records use packed values. This threshold is inherited from the measured experiment, not a universal optimum.
 
-Exact decoded property names use ordinal storage, with exact decoded nested duplicates keeping the last value. On a spelling/unknown-name miss, parsing restores that object's reader checkpoint and uses the original typed reader for the object and the remainder of that input. Earlier completed records and ancestors can keep their immutable layouts. Validation uses ordinal bindings only where exact private layout identity proves them applicable; generic storage retains original lookup semantics. Ambiguous case-insensitive declarations are not bound. Union discriminator exceptions retain the original validator behavior. This replaces the experiment's whole-input retry with a local typed-reader retry; observable outcomes, spelling and diagnostics are preserved by differential checks.
+Exact decoded property names use ordinal storage, with exact decoded nested duplicates keeping the last value. On a spelling/unknown-name miss, parsing restores that object's reader checkpoint and uses the original typed reader for that object. Misses count per private layout. An exact read resets the count, and four consecutive misses stop speculation for that layout for the rest of the input. One stray spelling early in a batch costs a single fallback rather than disabling the fast path for every later row, while a consistently differently-cased batch stops speculating after four rows. Earlier completed records and ancestors keep their immutable layouts. Validation uses ordinal bindings only where exact private layout identity proves them applicable; generic storage retains original lookup semantics. Ambiguous case-insensitive declarations are not bound. Union discriminator exceptions retain the original validator behavior. This replaces the experiment's whole-input retry with a local typed-reader retry; observable outcomes, spelling and diagnostics are preserved by differential checks.
 
 Failures rerun the original unbound diagnostic interpreter. Strict root names, decoded duplicate/unknown-root rejection, complete-input framing, admission-before-trailing-content error precedence, missing-member policy, serializer customization and converter ordering are unchanged. Caller input is borrowed only for the call. Scratch arrays are cleared on return, completed values own their storage, mutable CLR projections remain independent, and the shared plan is immutable; fallback state belongs to the individual traversal.
 
@@ -42,6 +42,19 @@ Median of three fresh-process means; times are μs, allocation is B/complete ing
 | large | 1131.035 | 1129.895 | 1.00× | 1019598 | 1019711 | +0.0% |
 | joined-128 | 225.388 | 163.334 | 1.38× | 236136 | 141136 | -40.2% |
 | joined-large | 11895.203 | 10267.625 | 1.16× | 7367388 | 4419160 | -40.0% |
+
+## Storage classification follow-up
+
+`ObservationFieldStorage` is now the single classification of physical object storage. It unwraps nested views and
+says which storage is owned and immutable and which is already in ordinal key order. Retention, traversal,
+validation binding and canonical ordering all use it. Previously, five separate checks had drifted: canonical
+ordering unwrapped nested views but did not recognize packed sparse storage. Canonical JSON, hashing and tagged
+`PortableValue` writing therefore rented and sorted a field buffer for every sparse nested row. They now enumerate
+packed storage in place. In a 128-row sparse batch with 4 of 16 fields present, canonical writing went from about
+230 to 213 µs, with no managed allocation in either version, because pooled buffers were already reused.
+
+`ObservationNestedFields` requires `IOrdinalObservationStorage`, so wrapping unsupported storage fails at
+construction. Its enumerator moves to the next present ordinal through the presence bitmap and reads each value once.
 
 ## First-integration allocation finding
 

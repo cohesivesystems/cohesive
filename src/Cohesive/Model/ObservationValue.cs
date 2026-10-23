@@ -351,7 +351,8 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         if (fields is null)
             return null;
-        if (fields is OrdinalObservationFields or SmallObservationFields or OwnedObservationFields or CompactOrdinalObservationFields or ObservationNestedFields)
+        // Retain owned immutable storage, including nested views over it, exactly as supplied.
+        if (ObservationFieldStorage.Of(fields).IsOwnedImmutable)
             return fields;
         if (fields.Count == 0)
             return EmptyObjectValues;
