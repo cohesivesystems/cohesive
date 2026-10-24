@@ -36,6 +36,18 @@ public abstract class DomainModel : IAuthoringModel
     /// <exception cref="ArgumentException">An entity identity is duplicated.</exception>
     protected void Discover(DomainDiscovery discovery) => definition.Edit(() => builder.Discover(discovery));
 
+    /// <summary>Registers discovery and assigns a caller-selected group of typed handles.</summary>
+    /// <typeparam name="TResult">Projected handle group.</typeparam>
+    /// <param name="discovery">Scoped catalog.</param>
+    /// <param name="select">Setup-only projection with no builder mutation access.</param>
+    /// <returns>The projected domain-owned handles.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">Registration conflicts or selection requests an excluded type.</exception>
+    /// <exception cref="InvalidOperationException">The model is frozen.</exception>
+    /// <remarks>If selection throws, the entities remain registered.</remarks>
+    protected TResult Discover<TResult>(DomainDiscovery discovery, Func<DiscoveredDomainEntities, TResult> select) =>
+        definition.Edit(() => builder.Discover(discovery, select));
+
     /// <summary>Verifies discovered state-shape coverage when this model freezes.</summary>
     /// <param name="discovery">Prepared discovery catalog.</param>
     /// <param name="coverage">Whether explicit additional entities are allowed.</param>

@@ -21,11 +21,8 @@ public sealed class FulfillmentDomain : DomainModel
     /// <summary>Declares the shared entities and their canonical references.</summary>
     public FulfillmentDomain() : base(revision: "3")
     {
-        var entities = DomainDiscovery.For<FulfillmentDomain>();
-        Discover(entities);
-        Orders = Entity<Order>();
-        Inventory = Entity<InventoryItem>();
-        Reservations = Entity<Reservation>();
+        (Orders, Inventory, Reservations) = Discover(DomainDiscovery.For<FulfillmentDomain>(),
+            entities => (entities.Entity<Order>(), entities.Entity<InventoryItem>(), entities.Entity<Reservation>()));
         ReservationOrder = Reservations.References(reservation => reservation.OrderId, Orders);
         ReservationItem = Reservations.References(reservation => reservation.Sku, Inventory);
         OrderTransitions = new(Orders);

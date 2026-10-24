@@ -65,8 +65,9 @@ public sealed class DomainDiscovery
     {
         this.declarations = declarations;
         Exclusions = exclusions;
-        Entities = [.. declarations.Where(pair => !exclusions.ContainsKey(pair.Key))
-            .Select(pair => pair.Value).OrderBy(entity => entity.Name.Value, StringComparer.Ordinal)];
+        IncludedDeclarations = [.. declarations.Where(pair => !exclusions.ContainsKey(pair.Key))
+            .OrderBy(pair => pair.Value.Name.Value, StringComparer.Ordinal)];
+        Entities = [.. IncludedDeclarations.Select(pair => pair.Value)];
     }
     /// <summary>Canonical entity shapes in ordinal semantic-name order.</summary>
     public ImmutableArray<EntityDefinition> Entities { get; }
@@ -81,9 +82,7 @@ public sealed class DomainDiscovery
     [RequiresUnreferencedCode("Domain discovery inspects attributed types and their public properties. Preserve them or use explicit entity registration.")]
     public static DomainDiscovery For<TModule>() => Cache<TModule>.Value.Value;
 
-    internal IEnumerable<KeyValuePair<Type, EntityDefinition>> IncludedDeclarations =>
-        declarations.Where(pair => !Exclusions.ContainsKey(pair.Key))
-            .OrderBy(pair => pair.Value.Name.Value, StringComparer.Ordinal);
+    internal ImmutableArray<KeyValuePair<Type, EntityDefinition>> IncludedDeclarations { get; }
 
     /// <summary>Creates a catalog with an intentional omission, without modifying the cached catalog.</summary>
     /// <typeparam name="TEntity">A discovered declaration to omit.</typeparam>

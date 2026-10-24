@@ -59,11 +59,15 @@ public sealed class DomainModelBuilder
     /// <typeparam name="T">Canonical state authoring type.</typeparam>
     /// <param name="name">Stable semantic name, independent of the CLR type name.</param>
     /// <returns>A handle retaining the exact definition included in Build.</returns>
-    /// <exception cref="ArgumentException">The entity name is already declared or invalid.</exception>
+    /// <exception cref="ArgumentException">The entity name is already declared, invalid, or differs from its discovered name.</exception>
     public DomainEntity<T> Entity<T>(string name) where T : notnull
     {
-        if (discovered.TryGetValue(typeof(T), out var adopted) && adopted.Name.Value == name)
+        if (discovered.TryGetValue(typeof(T), out var adopted))
+        {
+            if (adopted.Name.Value != name)
+                throw new ArgumentException($"Discovered entity '{typeof(T)}' is named '{adopted.Name.Value}', not '{name}'.", nameof(name));
             return new(adopted);
+        }
         if (entityNames.Contains(name))
             throw new ArgumentException($"Entity '{name}' is already declared.", nameof(name));
         var definition = ObjectEntityDefinition.For<T>(new(name));
@@ -102,10 +106,11 @@ public sealed class DomainModelBuilder
     public DomainModelBuilder Discover(DomainDiscovery discovery)
     {
         ArgumentNullException.ThrowIfNull(discovery);
-        foreach (var entity in discovery.Entities)
+        var declarations = discovery.IncludedDeclarations;
+        foreach (var (_, entity) in declarations)
             if (entityNames.Contains(entity.Name.Value))
                 throw new ArgumentException($"Entity '{entity.Name}' is already declared.", nameof(discovery));
-        foreach (var (type, template) in discovery.IncludedDeclarations)
+        foreach (var (type, template) in declarations)
         {
             // Retain immutable shape preparation, but preserve domain-local authority for native bindings.
             var entity = template with { };
@@ -114,6 +119,24 @@ public sealed class DomainModelBuilder
             entities.Add(entity);
         }
         return this;
+    }
+
+    /// <summary>Registers a catalog and projects its domain-owned typed handles in one call.</summary>
+    /// <typeparam name="TResult">Caller-selected handle group, typically a tuple.</typeparam>
+    /// <param name="discovery">Catalog to register.</param>
+    /// <param name="select">Setup-only projection; its scope cannot mutate the builder.</param>
+    /// <returns>The projected handles.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <exception cref="ArgumentException">Registration conflicts or selection requests an excluded type.</exception>
+    /// <remarks>Registration completes before selection. If the callback throws, the entities remain registered.</remarks>
+    public TResult Discover<TResult>(DomainDiscovery discovery, Func<DiscoveredDomainEntities, TResult> select)
+    {
+        ArgumentNullException.ThrowIfNull(select);
+        Discover(discovery);
+        var selected = ImmutableDictionary.CreateBuilder<Type, EntityDefinition>();
+        foreach (var (type, _) in discovery.IncludedDeclarations)
+            selected.Add(type, discovered[type]);
+        return select(new(selected.ToImmutable()));
     }
 
     /// <summary>Schedules coverage verification at Build, independent of registration order.</summary>

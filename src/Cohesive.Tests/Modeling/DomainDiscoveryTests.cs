@@ -123,6 +123,30 @@ public sealed class DomainDiscoveryTests
     }
 
     [Fact]
+    public void Discovered_type_cannot_be_registered_under_a_different_name()
+    {
+        var builder = new DomainModelBuilder().Discover(DomainDiscovery.For<Module>());
+        var error = Assert.Throws<ArgumentException>(() => builder.Entity<Order>("renamed"));
+        Assert.Contains("order", error.Message);
+        Assert.Contains("renamed", error.Message);
+        Assert.Equal(2, builder.Build().Entities.Length);
+        Assert.Same(builder.Entity<Order>().Definition, builder.Entity<Order>("order").Definition);
+    }
+
+    [Fact]
+    public void Composable_selection_keeps_domain_ownership_and_exclusion_scope()
+    {
+        var catalog = DomainDiscovery.For<Module>().Exclude<Customer>("Separate service");
+        var first = new DomainModelBuilder();
+        var (order, scope) = first.Discover(catalog, entities => (entities.Entity<Order>(), entities));
+        var second = new DomainModelBuilder().Discover(catalog, entities => entities.Entity<Order>());
+        Assert.Same(Assert.Single(first.Build().Entities), order.Definition);
+        Assert.NotSame(order.Definition, second.Definition);
+        Assert.Throws<ArgumentException>(() => scope.Entity<Customer>());
+        Assert.Same(order.Definition, scope.Entity<Order>().Definition);
+    }
+
+    [Fact]
     public void Activation_verifies_before_exposing_the_domain()
     {
         var error = Assert.Throws<DomainDiscoveryException>(() => ModelActivator.Create<InvalidDomain>());

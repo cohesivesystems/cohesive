@@ -231,3 +231,16 @@ its first access can throw `DomainDiscoveryException` and caches that failure.
 Discovered shapes are cached, but each domain owns distinct entity definitions. `Entity<T>()`
 resolves an included discovered entity; `Entity<T>(name)` also adopts it when type and name match.
 Storage bindings still reject handles from a different domain instance.
+
+For instance models, discovery and property assignment can be one expression:
+
+```csharp
+(Orders, Inventory, Reservations) = Discover(DomainDiscovery.For<FulfillmentDomain>(),
+    entities => (entities.Entity<Order>(), entities.Entity<InventoryItem>(), entities.Entity<Reservation>()));
+```
+
+The builder exposes the same projection overload. Selection receives a read-only, domain-owned
+scope containing only this catalog's included declarations. It cannot escape the model's freeze
+rules by retaining a mutable builder. The callback runs after registration; if it fails, the
+registration remains. A discovered CLR type cannot be re-registered under a different semantic
+name: `Entity<Order>("different-name")` fails without changing the domain.
