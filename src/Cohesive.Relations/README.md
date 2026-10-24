@@ -124,15 +124,19 @@ correlation, or another capability-compatible realization. The relation itself d
 
 ## How execution stays honest
 
-The canonical relation/query document is the semantic authority. An invocation selects results and parameters;
+The canonical relation/query document, lowered from source, is the semantic authority that every interpretation
+consumes. An invocation selects results and parameters;
 compilation derives the exact fields and operations it needs. A target must prove those requirements against its
 capabilities and operating boundaries. Unsupported semantics and incomplete source evidence produce structured
 diagnostics rather than a weakened query or a misleading empty result.
 
-The expression API is the normal application surface. Source is the authoritative artifact, and the canonical IR is
-always derived from it by lowering. Direct IR construction is limited to compiler tests and internal tooling.
-Importers and generators emit source so their output is reviewed like any other change: the canonical C# projection
-for now, which lowers to exactly the IR they intend, and a dedicated Cohesive syntax once it exists.
+The expression API is the normal application surface, and `author.Structural` is its escape hatch. Both are source:
+they are what people and agents edit and review, and both lower to the same canonical document, which is never edited
+by hand. Constructing the document directly is reserved for the lowering pipeline, document serialization and
+persistence (`RelationQueryJsonSerializer`), and compiler tests. Importers and generators emit source through either
+API, so their output is reviewed like any other change. `CanonicalEnrichedRelationConformanceTests` checks that
+expression and structural authoring of the same relation produce identical serialized documents and fingerprints.
+A canonical projection from the document back to C#, and a dedicated Cohesive syntax, do not exist yet.
 
 ## Continue
 
