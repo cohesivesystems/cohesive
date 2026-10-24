@@ -11,6 +11,7 @@ public sealed class DomainModelBuilder
     readonly List<EntityDefinition> entities = [];
     ImmutableDictionary<AnnotationKey, AnnotationValue>.Builder? annotations;
     string? version;
+    readonly List<(DomainDiscovery Discovery, DomainDiscoveryCoverage Coverage)> verifications = [];
 
     /// <summary>
     /// Sets a model version string.
@@ -66,6 +67,42 @@ public sealed class DomainModelBuilder
     /// <summary>
     /// Materializes the immutable domain model definition.
     /// </summary>
-    public DomainModelDefinition Build() =>
-        new(entities: [..entities], version: version, annotations: annotations?.ToImmutable());
+    public DomainModelDefinition Build()
+    {
+        var model = new DomainModelDefinition(entities: [..entities], version: version, annotations: annotations?.ToImmutable());
+        var diagnostics = verifications.SelectMany(check => check.Discovery.Verify(model, check.Coverage).Diagnostics).ToImmutableArray();
+        if (!diagnostics.IsEmpty)
+            throw new DomainDiscoveryException(new(diagnostics));
+        return model;
+    }
+
+    /// <summary>Adds a scoped discovery catalog through the ordinary canonical entity path.</summary>
+    /// <param name="discovery">Immutable, explicitly scoped declarations.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">The catalog is null.</exception>
+    /// <exception cref="ArgumentException">An identity is already registered; no entities are added.</exception>
+    public DomainModelBuilder Discover(DomainDiscovery discovery)
+    {
+        ArgumentNullException.ThrowIfNull(discovery);
+        foreach (var entity in discovery.Entities)
+            if (entities.Any(existing => existing.Name == entity.Name))
+                throw new ArgumentException($"Entity '{entity.Name}' is already declared.", nameof(discovery));
+        entities.AddRange(discovery.Entities);
+        return this;
+    }
+
+    /// <summary>Schedules coverage verification at Build, independent of registration order.</summary>
+    /// <param name="discovery">Scoped declarations to compare.</param>
+    /// <param name="coverage">Whether explicit additional entities are allowed.</param>
+    /// <returns>This builder.</returns>
+    /// <exception cref="ArgumentNullException">The catalog is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The coverage mode is unknown.</exception>
+    public DomainModelBuilder VerifyDiscovery(DomainDiscovery discovery,
+        DomainDiscoveryCoverage coverage = DomainDiscoveryCoverage.DiscoveredEntities)
+    {
+        ArgumentNullException.ThrowIfNull(discovery);
+        if (!Enum.IsDefined(coverage)) throw new ArgumentOutOfRangeException(nameof(coverage));
+        verifications.Add((discovery, coverage));
+        return this;
+    }
 }
