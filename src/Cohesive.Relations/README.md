@@ -130,7 +130,10 @@ compilation derives the exact fields and operations it needs. A target must prov
 capabilities and operating boundaries. Unsupported semantics and incomplete source evidence produce structured
 diagnostics rather than a weakened query or a misleading empty result.
 
-The expression API is the normal application surface, and `author.Structural` is its escape hatch. Both are source:
+The expression API is the normal application surface, and the structural core (`RelationQueryAuthoringCore`) is its
+escape hatch. There is one core with two entry points: `RelationQuery.Structural()` starts a standalone structural
+definition, and `author.Structural` exposes the core underneath an expression session, so expression authoring can
+resume over structural nodes. Both are source:
 they are what people and agents edit and review, and both lower to the same canonical document, which is never edited
 by hand. Constructing the document directly is reserved for the lowering pipeline, document serialization and
 persistence (`RelationQueryJsonSerializer`), and compiler tests. Importers and generators emit source through either
