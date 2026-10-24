@@ -48,5 +48,5 @@ The guarantee applies to collection storage; it does not make an arbitrary refer
 Relations definitions and logical query nodes, outside the assembly that declares them. Source is the authoring
 authority and the IR is derived from it, so other code obtains these types from an authoring API or a serializer.
 Lowering pipelines, serializers, and test, fixture, or benchmark assemblies declare `[assembly: IrProducer(reason)]`;
-this repository applies it to test, fixture, and benchmark projects through `Directory.Build.targets`. See
-[COHIR001](docs/COHIR001.md).
+in this repository each such project sets `<CohesiveIrProducer>reason</CohesiveIrProducer>` explicitly. The rule
+covers `new` and `with`, not reflection or generic `new T()`. See [COHIR001](docs/COHIR001.md).

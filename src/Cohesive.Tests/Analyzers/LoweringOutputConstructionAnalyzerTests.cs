@@ -82,6 +82,25 @@ public sealed class LoweringOutputConstructionAnalyzerTests
     }
 
     [Fact]
+    public async Task Every_construction_is_reported_when_types_share_a_cached_marked_base()
+    {
+        var diagnostics = await AnalyzeConsumerAsync("""
+            using Sample.IR;
+            public static class Consumer
+            {
+                public static Node[] Build() =>
+                [
+                    new FilterNode("n1", "a"),
+                    new FilterNode("n2", "b"),
+                    new FilterNode("n3", "c"),
+                ];
+            }
+            """);
+
+        Assert.Equal(3, diagnostics.Count(static diagnostic => diagnostic.Id == "COHIR001"));
+    }
+
+    [Fact]
     public async Task Target_typed_construction_is_reported()
     {
         var diagnostics = await AnalyzeConsumerAsync("""

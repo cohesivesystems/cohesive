@@ -5,7 +5,8 @@ namespace Cohesive.Prelude;
 /// </summary>
 /// <remarks>
 /// Reserved for lowering pipelines, IR serialization and persistence, and compiler tests, fixtures, and benchmarks.
-/// The repository applies it to test, fixture, and benchmark projects through <c>Directory.Build.targets</c>.
+/// In this repository a project opts in explicitly by setting <c>CohesiveIrProducer</c> to the reason in its project
+/// file, which <c>Directory.Build.targets</c> turns into this attribute.
 /// Importers, generators, and application code emit source instead.
 /// </remarks>
 [AttributeUsage(validOn: AttributeTargets.Assembly, AllowMultiple = false, Inherited = false)]

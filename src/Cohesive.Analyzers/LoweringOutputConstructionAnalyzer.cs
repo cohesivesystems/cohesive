@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.Diagnostics;
@@ -59,6 +60,10 @@ public sealed class LoweringOutputConstructionAnalyzer : DiagnosticAnalyzer
             return;
 
         var assembly = context.Compilation.Assembly;
+
+        // Marking is resolved once per type definition per compilation, so repeated constructions of the same type,
+        // and shared base types, do not re-read attributes along the base chain.
+        var markedTypes = new ConcurrentDictionary<INamedTypeSymbol, INamedTypeSymbol?>(SymbolEqualityComparer.Default);
         context.RegisterOperationAction(
             operationContext => Analyze(operationContext, ((IObjectCreationOperation)operationContext.Operation).Type),
             OperationKind.ObjectCreation);
@@ -68,7 +73,7 @@ public sealed class LoweringOutputConstructionAnalyzer : DiagnosticAnalyzer
 
         void Analyze(OperationAnalysisContext operationContext, ITypeSymbol? type)
         {
-            var marked = FindMarkedType(type, loweringOutput);
+            var marked = type is INamedTypeSymbol named ? FindMarkedType(named, loweringOutput, markedTypes) : null;
             if (marked is null || SymbolEqualityComparer.Default.Equals(marked.ContainingAssembly, assembly))
                 return;
 
@@ -81,15 +86,22 @@ public sealed class LoweringOutputConstructionAnalyzer : DiagnosticAnalyzer
 
     // Returns the nearest type in the base chain that carries the marker, so a node declared in the Relations
     // assembly is checked against Relations even when the constructed type derives from it elsewhere.
-    static INamedTypeSymbol? FindMarkedType(ITypeSymbol? type, INamedTypeSymbol loweringOutput)
+    static INamedTypeSymbol? FindMarkedType(
+        INamedTypeSymbol type,
+        INamedTypeSymbol loweringOutput,
+        ConcurrentDictionary<INamedTypeSymbol, INamedTypeSymbol?> cache)
     {
-        for (var current = type as INamedTypeSymbol; current is not null; current = current.BaseType)
-        {
-            if (HasAttribute(current.OriginalDefinition.GetAttributes(), loweringOutput))
-                return current.OriginalDefinition;
-        }
+        var definition = type.OriginalDefinition;
+        if (cache.TryGetValue(definition, out var cached))
+            return cached;
 
-        return null;
+        var marked = HasAttribute(definition.GetAttributes(), loweringOutput)
+            ? definition
+            : definition.BaseType is { } baseType
+                ? FindMarkedType(baseType, loweringOutput, cache)
+                : null;
+        cache.TryAdd(definition, marked);
+        return marked;
     }
 
     static bool HasAttribute(ImmutableArray<AttributeData> attributes, INamedTypeSymbol attributeType)

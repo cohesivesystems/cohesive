@@ -9,18 +9,33 @@
     <ProjectReference Include="$(MSBuildThisFileDirectory)src/Cohesive.Analyzers/Cohesive.Analyzers.csproj"
                       OutputItemType="Analyzer"
                       ReferenceOutputAssembly="false"
-                      PrivateAssets="all" />
+                      PrivateAssets="all"
+                      CohesiveImplicitAnalyzer="true" />
   </ItemGroup>
 
   <!--
-    Compiler tests, fixtures, and benchmarks construct canonical IR directly by design (see COHIR001).
+    Projects that receive the analyzers only through this file keep their previous union-diagnostic behavior:
+    COHDU100 (catch-all arm in a union switch) stays off there until its existing sites are fixed, so new COHIR001
+    reports are not lost in pre-existing noise. Set at execution time because the condition depends on items.
   -->
-  <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'
-                        and ($(MSBuildProjectName.EndsWith('.Tests'))
-                             or $(MSBuildProjectName.EndsWith('.TestFixtures'))
-                             or $(MSBuildProjectName.EndsWith('.Benchmarks')))">
+  <Target Name="CohesiveSuppressImplicitUnionDiagnostics"
+          BeforeTargets="CoreCompile"
+          Condition="'@(ProjectReference->WithMetadataValue('CohesiveImplicitAnalyzer', 'true'))' != ''">
+    <PropertyGroup>
+      <NoWarn>$(NoWarn);COHDU100</NoWarn>
+    </PropertyGroup>
+  </Target>
+
+
+  <!--
+    A project that constructs canonical IR directly by design (a lowering pipeline, an IR serializer, or a compiler
+    test, fixture, or benchmark) opts in explicitly with the reason, for example:
+      <CohesiveIrProducer>compiler tests</CohesiveIrProducer>
+    The reason becomes [assembly: IrProducer(reason)], which exempts the assembly from COHIR001.
+  -->
+  <ItemGroup Condition="'$(MSBuildProjectExtension)' == '.csproj' and '$(CohesiveIrProducer)' != ''">
     <AssemblyAttribute Include="Cohesive.Prelude.IrProducerAttribute">
-      <_Parameter1>compiler tests, fixtures, and benchmarks</_Parameter1>
+      <_Parameter1>$(CohesiveIrProducer)</_Parameter1>
     </AssemblyAttribute>
   </ItemGroup>
 </Project>

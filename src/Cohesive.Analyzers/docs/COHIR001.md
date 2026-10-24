@@ -22,11 +22,27 @@ offset page).
 
 ## When the assembly is a legitimate producer
 
-An assembly that is itself a lowering pipeline, an IR serializer or persistence layer, or a test, fixture, or
-benchmark project declares:
+A project that is itself a lowering pipeline, an IR serializer or persistence layer, or a compiler test, fixture,
+or benchmark opts in explicitly in its project file, with the reason:
 
-```csharp
-[assembly: IrProducer("compiler tests")]
+```xml
+<PropertyGroup>
+  <CohesiveIrProducer>Relations compiler tests over hand-built IR</CohesiveIrProducer>
+</PropertyGroup>
 ```
 
-Test, fixture, and benchmark projects in this repository receive the declaration from `Directory.Build.targets`.
+`Directory.Build.targets` turns the property into `[assembly: IrProducer(reason)]`. Outside this repository, declare
+the attribute directly. There is no exemption by project name: every producer is listed, and
+`git grep CohesiveIrProducer` shows them all.
+
+## What the rule does not cover
+
+COHIR001 makes the supported route the easy one; it does not make other routes impossible. It reports `new`
+(including target-typed `new`) and `with` on a marked type or a type derived from one. It does not see:
+
+- generic construction through a type parameter (`new T()`);
+- reflection or `Activator.CreateInstance`;
+- deserializing hand-written IR documents;
+- frontends in languages other than C#.
+
+Inside the declaring assembly the rule does not apply at all, since that assembly owns lowering and serialization.
