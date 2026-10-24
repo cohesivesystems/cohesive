@@ -129,8 +129,10 @@ compilation derives the exact fields and operations it needs. A target must prov
 capabilities and operating boundaries. Unsupported semantics and incomplete source evidence produce structured
 diagnostics rather than a weakened query or a misleading empty result.
 
-The expression API is the normal application surface. Structural authoring and direct IR construction remain
-available for importers, generators, persistence tooling, and compiler tests.
+The expression API is the normal application surface. Source is the authoritative artifact, and the canonical IR is
+always derived from it by lowering. Direct IR construction is limited to compiler tests and internal tooling.
+Importers and generators emit source so their output is reviewed like any other change: the canonical C# projection
+for now, which lowers to exactly the IR they intend, and a dedicated Cohesive syntax once it exists.
 
 ## Continue
 
