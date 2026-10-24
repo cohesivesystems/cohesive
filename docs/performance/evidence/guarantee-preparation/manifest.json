@@ -45,12 +45,12 @@
       "ari_engine",
       "native_recovery_fact"
     ],
-    "raw_artifacts": "/tmp/guarantee-review"
+    "raw_artifacts": "/tmp/guarantee-review",
+    "ari_source_tree": "ee17df5b74c025bb87f40cc29fb1b845af495abf",
+    "native_recovery_elapsed": "00:06:17.0994611"
   },
   "current_validation_scope": [
     "relations",
-    "768 original X12 cases",
-    "12 fresh traces",
     "four pinned focused digests"
   ],
   "normal_original_x12_cases": 768,
@@ -62,5 +62,11 @@
   "source_sha256": "ca1c46c8dc79396dbd311d2db28493b0765606b7c5e8402b3d88a5e6a20ac371",
   "normal_counters_sha256": "1a7f59a00e11e659034e656b1b653bed8b5213a2c78c371b663f5cfc4779e481",
   "allocation_guards": "All four fail on alpha.157; the three new cases fail on original PR tip c1f76081. All four pinned digests match both parents.",
-  "limits": "Decimal MB. Three alternating fresh-process pairs/source, 64 cases/process. Warm is process median of cases 33-64, then median across three processes. No owned builds/tests ran during untraced counters or trace collection. Instrumented timings are not workflow CPU evidence. CPU improvement is inconclusive; no retained-heap claim."
+  "limits": "Decimal MB. Three alternating fresh-process pairs/source, 64 cases/process. Warm is process median of cases 33-64, then median across three processes. No owned builds/tests ran during untraced counters or trace collection. Instrumented timings are not workflow CPU evidence. CPU improvement is inconclusive; no retained-heap claim.",
+  "ari_source_tree": "ee17df5b74c025bb87f40cc29fb1b845af495abf",
+  "measurement_cohesive_tip": "25240c5f23c62381dd1470f341cf5ac29f470582",
+  "measurement_validation_scope": [
+    "768 original X12 cases",
+    "12 fresh traces"
+  ]
 }

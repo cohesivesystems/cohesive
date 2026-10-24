@@ -701,19 +701,19 @@ public static class RelationQueryRealizationCompiler
         {
             var missing = required.Except(proof.Guarantees).ToImmutableArray();
             if (missing.IsDefaultOrEmpty)
-                return new([proof], [], null);
+                return GuaranteePreparation.Success([proof]);
             if (!proof.Rules.IsDefaultOrEmpty)
-                return new([], missing, null);
+                return GuaranteePreparation.ComposedFailure(missing);
 
             var guaranteed = ImmutableArray.Create(proof);
             foreach (var guarantee in missing)
             {
                 var evidence = NativeGuaranteeProofs(guarantee);
                 if (evidence.IsDefaultOrEmpty)
-                    return new([], [], guarantee);
+                    return GuaranteePreparation.NativeFailure(guarantee);
                 guaranteed = Combine(guaranteed, evidence);
             }
-            return new(guaranteed, [], null);
+            return GuaranteePreparation.Success(guaranteed);
         }
 
         ImmutableArray<Proof> NativeGuaranteeProofs(RelationQueryGuaranteeCapabilityKind guarantee)
@@ -733,9 +733,27 @@ public static class RelationQueryRealizationCompiler
             return prepared;
         }
 
-        readonly record struct GuaranteePreparation(ImmutableArray<Proof> Proofs,
-            ImmutableArray<RelationQueryGuaranteeCapabilityKind> MissingComposedGuarantees,
-            RelationQueryGuaranteeCapabilityKind? UnavailableNativeGuarantee);
+        readonly struct GuaranteePreparation
+        {
+            private GuaranteePreparation(ImmutableArray<Proof> proofs,
+                ImmutableArray<RelationQueryGuaranteeCapabilityKind> missingComposedGuarantees,
+                RelationQueryGuaranteeCapabilityKind? unavailableNativeGuarantee)
+            {
+                Proofs = proofs;
+                MissingComposedGuarantees = missingComposedGuarantees;
+                UnavailableNativeGuarantee = unavailableNativeGuarantee;
+            }
+
+            public ImmutableArray<Proof> Proofs { get; }
+            public ImmutableArray<RelationQueryGuaranteeCapabilityKind> MissingComposedGuarantees { get; }
+            public RelationQueryGuaranteeCapabilityKind? UnavailableNativeGuarantee { get; }
+
+            public static GuaranteePreparation Success(ImmutableArray<Proof> proofs) => new(proofs, [], null);
+            public static GuaranteePreparation ComposedFailure(
+                ImmutableArray<RelationQueryGuaranteeCapabilityKind> missing) => new([], missing, null);
+            public static GuaranteePreparation NativeFailure(
+                RelationQueryGuaranteeCapabilityKind missing) => new([], [], missing);
+        }
 
         sealed class GuaranteeProofComparer : IEqualityComparer<(
             Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required)>
