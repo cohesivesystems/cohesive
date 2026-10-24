@@ -68,8 +68,18 @@ public static class PostgresServiceExtensions
         ServiceDependencies service, InfrastructureTargetFacilityId implementation)
     {
         ArgumentNullException.ThrowIfNull(bindings); ArgumentNullException.ThrowIfNull(service);
-        foreach (var query in service.Queries) RequireNative(query);
-        return PostgresInfrastructure.Prepare(implementation, bindings, service.Queries.Select(query =>
+        return PrepareService(bindings, service.Queries, implementation);
+    }
+
+    /// <summary>Prepares routed selections from any number of independent API modules, without IO.</summary>
+    /// <param name="bindings">Native entity placement.</param><param name="queries">Routed selections.</param>
+    /// <param name="implementation">Target identity.</param><returns>Validated native evidence.</returns>
+    public static PostgresPreparedQueryEvidence PrepareService(this PostgresPersistenceBindings bindings,
+        IEnumerable<ServiceQuerySelection> queries, InfrastructureTargetFacilityId implementation)
+    {
+        var selected = queries.ToArray();
+        foreach (var query in selected) RequireNative(query);
+        return PostgresInfrastructure.Prepare(implementation, bindings, selected.Select(query =>
             new QuerySnapshotRequirement(query.Reference.DefinitionId.Value, query.Reference.RevisionId.Value, query.Request)).ToArray());
     }
 

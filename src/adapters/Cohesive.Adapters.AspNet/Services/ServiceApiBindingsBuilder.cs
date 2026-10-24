@@ -178,6 +178,7 @@ public sealed class ServiceApiImplementation<TApi>
         ArgumentNullException.ThrowIfNull(entity); ArgumentNullException.ThrowIfNull(configure);
         var binding = new TypedEntityApiBindings<TEntity>(entity.Definition, partition);
         configure(api, binding);
+        model.Plan.RequireRepositories([ValueContract.FromShape(entity.Definition.Shape)]);
         foreach (var endpoint in binding.BoundEndpoints) model.Plan.Implement(definition, endpoint);
         model.Add(persistence =>
         {
@@ -304,6 +305,7 @@ public sealed class ServiceApiImplementation<TApi>
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "Host binding requires exact process references and host-owned admission.");
         model.Plan.Contribute(definition, () =>
         {
+            model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
             model.Plan.Implement(definition, start);
             model.Plan.Implement(definition, result);
             var policies = authorizationPolicyResolver;
@@ -341,6 +343,7 @@ public sealed class ServiceApiImplementation<TApi>
         if (operations.Length != 1 || operations[0].Id != endpoint.OperationId)
             throw ServiceImplementationPlan.Error("services.api.operationMismatch", "This finite host requires the endpoint's single declared service operation.");
         var http = endpoint.Operation.Http ?? throw ServiceImplementationPlan.Error("services.api.httpMissing", "Process endpoint requires HTTP binding.");
+        model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
         model.Plan.Implement(definition, endpoint);
         model.Add(persistence =>
         {

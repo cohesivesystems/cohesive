@@ -23,11 +23,11 @@ builder.Services.AddKeyedSingleton<IDocumentStore>(policy.DatabaseName, (service
     options.Connection(services.GetRequiredKeyedService<NpgsqlDataSource>(policy.DatabaseName));
     policy.History.Configure(options);
 }));
-builder.Services.AddCohesiveServices(model.Endpoints, model.Storage);
+builder.Services.AddCohesiveServices(model);
 
 await using var app = builder.Build();
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
 app.UseAuthorization();
-await app.MapServicesAsync<OrderEndpoints>();
+await app.MapServicesAsync();
 await app.RunAsync();

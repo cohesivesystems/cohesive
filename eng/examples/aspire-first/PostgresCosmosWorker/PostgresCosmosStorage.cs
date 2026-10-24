@@ -20,9 +20,8 @@ public sealed class PostgresCosmosStorage : StorageModel
     public const string PartitionPath = "/partitionKey";
     /// <summary>Places orders in SQL and defines bounded inventory acquisition.</summary>
     /// <param name="domain">Shared entity declarations.</param>
-    /// <param name="endpoints">Portable query selections and consistency requirements.</param>
     /// <param name="mappings">Native table mappings, independent of placement.</param>
-    public PostgresCosmosStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints)
+    public PostgresCosmosStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings)
     {
         PostgresBindings = Storage.Define(() => PostgresPersistenceBindings.Define(new(FulfillmentStoragePolicy.OrdersDatabaseName), storage => storage
             .Schema(PostgresSchemaInitialization.CreateIfMissing, mappings.ConfigureOrderSchema)
@@ -37,7 +36,7 @@ public sealed class PostgresCosmosStorage : StorageModel
             logicalPartition: new(FulfillmentStoragePolicy.LogicalPartition),
             partitionKey: FulfillmentStoragePolicy.LocalPartition, partitionField: FulfillmentDomain.PartitionField,
             maximumEnumerationRows: 1000, maximumKeysPerQuery: 100, maximumQueryChunks: 10, maximumSdkPageSize: 100));
-        Storage.Compose(() => PostgresBindings.ComposeServices(endpoints.Plan, [Inventory], Policy));
+        Storage.Compose(() => PostgresBindings.ComposeServices([Inventory], Policy));
     }
     /// <summary>PostgreSQL placement of orders and reservations only.</summary>
     public PostgresPersistenceBindings PostgresBindings { get; }
