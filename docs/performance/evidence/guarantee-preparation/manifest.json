@@ -18,7 +18,7 @@
   },
   "validation": {
     "relations": {
-      "passed": 1159,
+      "passed": 1165,
       "failed": 0,
       "skipped": 0
     },
@@ -68,5 +68,7 @@
   "measurement_validation_scope": [
     "768 original X12 cases",
     "12 fresh traces"
-  ]
+  ],
+  "current_validation_artifacts": "/tmp/guarantee-factory-tests",
+  "current_source_sha256": "6a27382da708ef39b0051b8741449f40330209b767a64c9af4bcd06be2e75d44"
 }

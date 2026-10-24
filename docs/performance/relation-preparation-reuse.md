@@ -57,7 +57,9 @@ for their requirement. Preparation records the full missing set for composed pro
 the first unavailable native guarantee; only preparation classifies the proof strategy. A private
 constructor and an outcome-specific factory for success, composed failure and native failure prevent
 callers from populating both failure fields. The consumer rejects a default struct before reading
-any outcome, using the default proofs array as the uninitialized sentinel. Requirement-specific boundary facts and measurements are always validated
+any outcome, using the default proofs array as the uninitialized sentinel. Factories reject empty
+or default proof/missing-guarantee arrays and unknown native guarantees. Direct private-boundary
+tests pin these failures without widening production visibility. Requirement-specific boundary facts and measurements are always validated
 independently. A five-row page-size proof cannot admit a later 40-row demand against a 25-row boundary.
 Overrides keep their existing validation and diagnostics. Final report validation is unchanged.
 
@@ -110,7 +112,7 @@ tests intentionally pass on the unchanged parent: they protect independent bound
 guarantee sets and requirement-specific native/composed failure messages. Allocation guards prove
 that preparation reuse actually occurs. No timing threshold was added to CI.
 
-Current revision: 1,159 Relations tests and all four pinned report fingerprints pass. The 768 normal
+Current revision: 1,165 Relations tests and all four pinned report fingerprints pass. The 768 normal
 X12 workflow cases and 12 fresh traces above were measured at `25240c5f`, before the outcome-factory
 encapsulation; the struct retains the same fields and preparation behavior. Broader qualification at preceding tip `d4920f3f` passed
 5,175 Core tests with 60 existing gated skips, 1,009 merged-Ari Engine tests with 18 existing gated

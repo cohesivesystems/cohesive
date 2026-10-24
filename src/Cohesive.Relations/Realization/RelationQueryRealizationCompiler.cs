@@ -670,8 +670,7 @@ public static class RelationQueryRealizationCompiler
                 prepared = PrepareGuarantees(proof, requirement.RequiredGuarantees);
                 guaranteedProofs.Add(key, prepared);
             }
-            if (prepared.Proofs.IsDefault)
-                throw new InvalidOperationException("Guarantee preparation must be initialized through an outcome factory.");
+            prepared.RequireInitialized();
             if (!prepared.MissingComposedGuarantees.IsDefaultOrEmpty)
             {
                 return new(
@@ -750,11 +749,34 @@ public static class RelationQueryRealizationCompiler
             public ImmutableArray<RelationQueryGuaranteeCapabilityKind> MissingComposedGuarantees { get; }
             public RelationQueryGuaranteeCapabilityKind? UnavailableNativeGuarantee { get; }
 
-            public static GuaranteePreparation Success(ImmutableArray<Proof> proofs) => new(proofs, [], null);
+            public void RequireInitialized()
+            {
+                if (Proofs.IsDefault)
+                    throw new InvalidOperationException("Guarantee preparation must be initialized through an outcome factory.");
+            }
+
+            public static GuaranteePreparation Success(ImmutableArray<Proof> proofs)
+            {
+                if (proofs.IsDefaultOrEmpty)
+                    throw new ArgumentException("Successful guarantee preparation requires at least one proof.", nameof(proofs));
+                return new(proofs, [], null);
+            }
+
             public static GuaranteePreparation ComposedFailure(
-                ImmutableArray<RelationQueryGuaranteeCapabilityKind> missing) => new([], missing, null);
+                ImmutableArray<RelationQueryGuaranteeCapabilityKind> missing)
+            {
+                if (missing.IsDefaultOrEmpty)
+                    throw new ArgumentException("Composed failure requires at least one missing guarantee.", nameof(missing));
+                return new([], missing, null);
+            }
+
             public static GuaranteePreparation NativeFailure(
-                RelationQueryGuaranteeCapabilityKind missing) => new([], [], missing);
+                RelationQueryGuaranteeCapabilityKind missing)
+            {
+                if (!Enum.IsDefined(missing))
+                    throw new ArgumentOutOfRangeException(nameof(missing));
+                return new([], [], missing);
+            }
         }
 
         sealed class GuaranteeProofComparer : IEqualityComparer<(

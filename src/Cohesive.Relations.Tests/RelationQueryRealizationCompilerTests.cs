@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Reflection;
 using System.Text.Json;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
@@ -14,6 +15,42 @@ public sealed class RelationQueryRealizationCompilerTests
         RelationQueryPrimitiveCapabilityKind.KeyExtraction);
     static readonly PrimitiveRelationQueryCapability BatchedLookup = new(
         RelationQueryPrimitiveCapabilityKind.BatchedKeyLookup);
+
+    // These invariants have no public entry point: keep the matcher implementation private.
+    static Type GuaranteePreparationType => typeof(RelationQueryRealizationCompiler)
+        .GetNestedType("Matcher", BindingFlags.NonPublic)!
+        .GetNestedType("GuaranteePreparation", BindingFlags.NonPublic)!;
+
+    [Fact]
+    public void DefaultGuaranteePreparationFailsBeforeConsumption()
+    {
+        var type = GuaranteePreparationType;
+        var exception = Assert.Throws<TargetInvocationException>(() => type.GetMethod("RequireInitialized")!
+            .Invoke(Activator.CreateInstance(type), null));
+        Assert.IsType<InvalidOperationException>(exception.InnerException);
+    }
+
+    [Theory]
+    [InlineData("Success", false)]
+    [InlineData("Success", true)]
+    [InlineData("ComposedFailure", false)]
+    [InlineData("ComposedFailure", true)]
+    public void GuaranteePreparationFactoriesRejectDefaultAndEmptyArrays(string factory, bool empty)
+    {
+        var method = GuaranteePreparationType.GetMethod(factory)!;
+        var arrayType = method.GetParameters()[0].ParameterType;
+        var value = empty ? arrayType.GetField("Empty")!.GetValue(null) : Activator.CreateInstance(arrayType);
+        var exception = Assert.Throws<TargetInvocationException>(() => method.Invoke(null, [value]));
+        Assert.IsType<ArgumentException>(exception.InnerException);
+    }
+
+    [Fact]
+    public void NativeGuaranteePreparationRejectsUnknownGuarantee()
+    {
+        var exception = Assert.Throws<TargetInvocationException>(() => GuaranteePreparationType
+            .GetMethod("NativeFailure")!.Invoke(null, [(RelationQueryGuaranteeCapabilityKind)(-1)]));
+        Assert.IsType<ArgumentOutOfRangeException>(exception.InnerException);
+    }
 
     [Theory]
     [InlineData(false)]
