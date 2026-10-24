@@ -136,7 +136,8 @@ definition, and `author.Structural` exposes the core underneath an expression se
 resume over structural nodes. Both are source:
 they are what people and agents edit and review, and both lower to the same canonical document, which is never edited
 by hand. Constructing the document directly is reserved for the lowering pipeline, document serialization and
-persistence (`RelationQueryJsonSerializer`), and compiler tests. Importers and generators emit source through either
+persistence (`RelationQueryJsonSerializer`), and compiler tests; the `COHIR001` analyzer reports direct
+construction anywhere else. Importers and generators emit source through either
 API, so their output is reviewed like any other change. `CanonicalEnrichedRelationConformanceTests` checks that
 expression and structural authoring of the same relation produce identical serialized documents and fingerprints.
 A canonical projection from the document back to C#, and a dedicated Cohesive syntax, do not exist yet.

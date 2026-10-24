@@ -68,6 +68,7 @@ public enum QueryNullPlacement
 [JsonDerivedType(typeof(AggregateQueryNode), RelationQueryWireNames.AggregateNode)]
 [JsonDerivedType(typeof(OrderQueryNode), RelationQueryWireNames.OrderNode)]
 [JsonDerivedType(typeof(PageQueryNode), RelationQueryWireNames.PageNode)]
+[LoweringOutput]
 public abstract record LogicalQueryNode
 {
     /// <summary>

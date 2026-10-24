@@ -183,6 +183,7 @@ public sealed record QueryParameterDefinition
 /// <summary>
 /// Portable logical node table shared by relation and query definitions.
 /// </summary>
+[LoweringOutput]
 public sealed record LogicalQueryDefinition
 {
     /// <summary>Creates a logical query definition.</summary>
@@ -250,6 +251,7 @@ public sealed record LogicalQueryDefinition
 [JsonPolymorphic(TypeDiscriminatorPropertyName = RelationQueryWireNames.DefinitionDiscriminator)]
 [JsonDerivedType(typeof(RelationDefinition), RelationQueryWireNames.RelationDefinition)]
 [JsonDerivedType(typeof(QueryDefinition), RelationQueryWireNames.QueryDefinition)]
+[LoweringOutput]
 public abstract record RelationQueryDefinition : IImmutableExecutionDefinition
 {
     /// <summary>Creates a relation/query definition.</summary>
