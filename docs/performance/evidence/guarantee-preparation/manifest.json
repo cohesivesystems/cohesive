@@ -1,24 +1,24 @@
 {
   "cohesive_parent": "857aefd873017faf0adac6e95ca7d7e303daa02f (published alpha.157)",
-  "ari_source": "eb906feb2b619d2ef30beeca619eb321b0067bf4 plus local seed-family commit 5c8e2ba74638edb33cc0671bdcc9e25c7f501081",
+  "ari_source": "merged Ari #249: eb906feb2b619d2ef30beeca619eb321b0067bf4; no local seed-family change",
   "qualification": "Source-qualified candidate; not published or adopted into production",
   "runtime": {
     "framework": ".NET 10.0.13",
     "architecture": "Arm64",
     "os": "macOS 27.0.1",
-    "entrypoint": "/private/tmp/guarantee-preparation-profile/candidate/ProtocolPreparation.dll",
-    "relationsAssembly": "/private/tmp/guarantee-preparation-profile/candidate/Cohesive.Relations.dll",
-    "relationsSha256": "2BB1541092D15974EDEC86E46C077D2F36FEBC25DF18AA924025AFB60F6AA9FA"
+    "entrypoint": "/private/tmp/guarantee-review/candidate/ProtocolPreparation.dll",
+    "relationsAssembly": "/private/tmp/guarantee-review/candidate/Cohesive.Relations.dll",
+    "relationsSha256": "57E0DCB04C9B936693A4EA779A2B3541C5A9009054472673AFFDE2351BFBB71C"
   },
   "changed_modules": {
     "Cohesive.Relations.dll": {
       "before": "fb1f343bf5058d209205b76931e42ac08b884afa9913acb4a6c163999d9c1d74",
-      "after": "2bb1541092d15974edec86e46c077d2f36febc25df18aa924025afb60f6aa9fa"
+      "after": "57e0dcb04c9b936693a4ea779a2b3541c5a9009054472673affde2351bfbb71c"
     }
   },
   "validation": {
     "relations": {
-      "passed": 1154,
+      "passed": 1159,
       "failed": 0,
       "skipped": 0
     },
@@ -28,7 +28,7 @@
       "skipped": 60
     },
     "ari_engine": {
-      "passed": 1013,
+      "passed": 1009,
       "failed": 0,
       "skipped": 18
     },
@@ -43,9 +43,11 @@
   "pinned_graph_fingerprints": "Both unchanged from published alpha.156/157",
   "cold_stage_processes": 12,
   "traces": 12,
-  "raw_artifacts": "/tmp/guarantee-preparation-profile",
-  "before_traces": "/tmp/cold-preview-profile/qualified",
-  "source_sha256": "14416961b74325af69e50f7216b6e4baca15818e088b22aa6e482787b7834256",
-  "normal_counters_sha256": "b28c58af262715778884faac455dfbe91127bf8360c0170c55423449ffcfa3f0",
-  "limits": "Decimal MB. Three alternating fresh-process pairs/source, 64 cases/process. Warm is process median of cases 33-64, then median across three processes. No owned builds/tests ran during untraced counters or trace collection. Instrumented timings are not workflow CPU evidence. CPU improvement is inconclusive; no retained-heap claim."
+  "raw_artifacts": "/tmp/guarantee-review",
+  "source_sha256": "0192889a11e7909e21d9df00c5491cacc9021a48ab359873cc987cfc832c619a",
+  "normal_counters_sha256": "406500b01a34720883be64ca2fccabbcab71afb40246601fef042658a2144a73",
+  "allocation_guards": "All four fail on alpha.157; the three new cases fail on original PR tip c1f76081. All four pinned digests match both parents.",
+  "limits": "Decimal MB. Three alternating fresh-process pairs/source, 64 cases/process. Warm is process median of cases 33-64, then median across three processes. No owned builds/tests ran during untraced counters or trace collection. Instrumented timings are not workflow CPU evidence. CPU improvement is inconclusive; no retained-heap claim.",
+  "ari_source_tree": "ee17df5b74c025bb87f40cc29fb1b845af495abf",
+  "native_recovery_elapsed": "00:06:17.0994611"
 }

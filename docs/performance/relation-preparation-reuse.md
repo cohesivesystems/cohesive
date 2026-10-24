@@ -41,57 +41,75 @@ These are allocation measurements of one end-to-end workload, not latency claims
 
 ## Matcher-scoped guarantee preparation (October 24, 2026)
 
-One realization can contain hundreds of requirements with the same capability proof and required
-semantic guarantees. `Resolve` already shared the capability proof, but `ValidateGuarantees` rebuilt
-its guarantee-evidence combinations, normalized arrays and ordering keys for each requirement.
-The matcher now retains successful combinations by proof identity and the normalized guarantee
-sequence. Separately allocated but equal guarantee sequences share preparation. The entries belong
-to one synchronous match and disappear with it; there is no global cache, weak table, lock, new
-public API or additional semantic authority.
+One realization can contain hundreds of requirements sharing semantic guarantees. `Resolve` already
+shared capability proofs, but `ValidateGuarantees` rebuilt their guarantee-evidence combinations,
+normalized arrays and ordering keys for each requirement. The matcher now prepares:
 
-The fixed target profile and compiler policy remain authoritative. Requirement-specific boundary facts,
-measurements and validation still run independently; failures are not cached, so their diagnostics keep
-the owning requirement identity. A page-size proof admitted for five rows cannot admit a later
-40-row demand against a 25-row boundary. Different guarantee sets and missing evidence remain
-independent. Override admission and final report validation are unchanged.
+- Combinations and pure missing-guarantee facts by proof identity and normalized guarantee sequence.
+  Separately allocated but equal guarantee sequences share preparation.
+- Native guarantee evidence by guarantee kind, including empty evidence. Different capability proofs
+  reuse the same immutable native evidence without repeating its filtering, grouping and sorting.
 
-This extends the existing Cohesive realization matcher. Ari uses its existing evaluator as-is; there
-is no Ari-local preparation bridge. Publication and Ari's package upgrade are subsequent deliverables.
+Entries belong to one synchronous match and disappear with it; there is no global cache, weak table,
+lock, new public API or additional semantic authority. The fixed target profile and compiler policy
+remain authoritative. Failure *facts* are reusable; diagnostic objects and messages are freshly built
+for their requirement. Requirement-specific boundary facts and measurements are always validated
+independently. A five-row page-size proof cannot admit a later 40-row demand against a 25-row boundary.
+Overrides keep their existing validation and diagnostics. Final report validation is unchanged.
+
+This extends the existing Cohesive realization matcher. Ari uses its existing evaluator as-is, with
+no Ari-local preparation bridge. Publication and Ari's package upgrade are subsequent deliverables.
 
 ### Measured allocation and CPU
 
-Apple arm64/macOS, .NET 10.0.13, Release. The Ari baseline is published alpha.157 plus the locally
-qualified seed-family change (`5c8e2ba`). Identical frozen harnesses and dependencies differ only in
-`Cohesive.Relations.dll`; the actual loaded module hashes are checked before measurement. Three
-alternating fresh-process pairs per source run 64 original workflow cases per process. Cold figures
-are medians across three processes. MB is decimal MB; cumulative allocation is not retained memory.
+Apple arm64/macOS, .NET 10.0.13, Release. The baseline is **merged Ari #249** (`eb906fe`) with official
+alpha.157 dependencies. It includes no unmerged seed-family change. The source worktree's tree hash
+matches that merge. Identical frozen harnesses and dependencies differ only in `Cohesive.Relations.dll`;
+the actual loaded module hashes are checked before measurement. Three alternating fresh-process pairs
+per source run 64 original workflow cases per process. Cold figures are medians across three processes.
+MB is decimal MB; cumulative allocation is not retained memory.
 
 | Original X12 workflow | Cold before | Cold after | Change | CPU before/after |
 |---|---:|---:|---:|---:|
-| 004010 | 117.246 MB | 112.150 MB | −5.096 MB (4.3%) | 1,583 / 1,551 ms |
-| 005030 | 118.150 MB | 113.166 MB | −4.984 MB (4.2%) | 1,589 / 1,572 ms |
+| 004010 | 140.178 MB | 135.073 MB | −5.105 MB (3.6%) | 1,514 / 1,503 ms |
+| 005030 | 141.257 MB | 136.191 MB | −5.067 MB (3.6%) | 1,549 / 1,546 ms |
 
-Cold process CPU differs by only 1–2% in these local samples; that is inconclusive. Warm allocation
-is effectively unchanged at about 3.5 MB; the workflow already prepares realization once per plan.
+CPU differences are below 1% in these local samples and remain inconclusive. Warm allocation is
+effectively unchanged at about 3.5 MB; the workflow already prepares realization once per plan.
 Warm timing varies with runtime warmup and is not attributed to this cold preparation change.
-Separate stage runs place about 1.1–1.4 MB of saving in preview and 3.3–3.7 MB in first durable
+Separate stage runs place about 1.3–1.5 MB of saving in preview and 3.5–3.6 MB in first durable
 execution. Do not interpret the entire saving as preview-only work.
 
 Three independent traces per source and variant attribute realization preparation at approximately
-18.4–18.5 MB before and 13.7–13.8 MB after. All traces report zero lost events and missing allocation
-or managed CPU stacks. These are sampled estimates of the entire cold workflow, not an additional
+18.4–18.5 MB before and 13.6 MB after. All traces report zero lost events and missing allocation or
+managed CPU stacks. These are sampled estimates of the entire cold workflow, not an additional
 saving to add to the untraced counters. Trace timing is not used for CPU claims.
 
-The focused public `Match` fixture (128 requirements, three repeated guarantees) allocates
-2,394,488 → 1,075,968 bytes per match, a 55% reduction, using the median of seven warm runs.
-Its 1.4 MB regression ceiling has about 30% headroom and fails against published alpha.157.
-The report's pinned fingerprint is identical on both versions. No timing threshold was added to CI.
+### Mechanism-specific guards
 
-Qualification: 1,154 Relations tests; 5,175 Core tests with 60 existing gated skips; 1,013 Ari Engine
-tests with 18 existing gated skips; native recovery across both X12 versions and FIX at three
-interruption points; 768 normal X12 workflow cases; unchanged pinned graph fingerprints. Native
-and Engine checks load the candidate from an isolated output directory. Official package caches
-are untouched. This is source qualification, not a published-package or deployment-latency claim.
+The public `Match` fixture uses 128 requirements and three required guarantees, taking the median
+of seven warmed runs. Its four report fingerprints were recorded from alpha.157 and also match the
+original PR tip `c1f76081`. Cases cover both shared and distinct capability proofs, with and without
+complete guarantee evidence.
+
+| Proofs / evidence | alpha.157 bytes | Original PR bytes | Updated bytes | Ceiling |
+|---|---:|---:|---:|---:|
+| Shared / complete | 2,394,488 | 1,075,968 | 1,076,216 | 1,400,000 |
+| Shared / missing | 1,659,712 | 1,659,800 | 753,992 | 1,000,000 |
+| Distinct / complete | 2,583,040 | 2,596,040 | 2,171,328 | 2,450,000 |
+| Distinct / missing | 1,945,680 | 1,945,768 | 1,622,416 | 1,850,000 |
+
+All four allocation guards fail against alpha.157. The three new scenarios fail against the original
+PR tip and pass after the review changes. Ceilings have approximately 13–33% headroom. The semantic
+tests intentionally pass on the unchanged parent: they protect independent boundary facts, different
+guarantee sets and requirement-specific native/composed failure messages. Allocation guards prove
+that preparation reuse actually occurs. No timing threshold was added to CI.
+
+Qualification: 1,159 Relations tests; 5,175 Core tests with 60 existing gated skips; 1,009 merged-Ari
+Engine tests with 18 existing gated skips; native recovery across both X12 versions and FIX at three
+interruption points; 768 normal X12 workflow cases; unchanged pinned graph fingerprints. Native and
+Engine checks load the candidate from an isolated output directory. Official package caches are
+untouched. This is source qualification, not a published-package or deployment-latency claim.
 
 [Manifest and module hashes](evidence/guarantee-preparation/manifest.json),
 [normal counters](evidence/guarantee-preparation/windows.csv),
@@ -99,8 +117,8 @@ are untouched. This is source qualification, not a published-package or deployme
 [focused allocation](evidence/guarantee-preparation/focused-allocation.csv),
 [realization attribution](evidence/guarantee-preparation/realization-attribution.csv) and
 [trace quality](evidence/guarantee-preparation/trace-quality.csv) retain the compact evidence.
-Large raw artifacts remain under `/tmp/guarantee-preparation-profile` and `/tmp/cold-preview-profile`.
-Reproduce the focused guard with:
+Raw artifacts remain under `/tmp/guarantee-review`. The earlier seed-dependent measurements are
+superseded; they are not the baseline of the current claim. Reproduce the focused guards with:
 
 ```sh
 dotnet test src/Cohesive.Relations.Tests/Cohesive.Relations.Tests.csproj -c Release --filter FullyQualifiedName~RepeatedGuaranteeRequirements

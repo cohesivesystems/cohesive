@@ -15,6 +15,28 @@ public sealed class RelationQueryRealizationCompilerTests
     static readonly PrimitiveRelationQueryCapability BatchedLookup = new(
         RelationQueryPrimitiveCapabilityKind.BatchedKeyLookup);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Match_ReusedMissingGuaranteeFactsFormatEachRequirementDiagnostic(bool composed)
+    {
+        var plan = PlanReference();
+        var requirements = new[] { "requirement/first", "requirement/second" }.Select(id => Requirement(
+            id, Join, requiredGuarantees: [RelationQueryGuaranteeCapabilityKind.JoinMembership])).ToImmutableArray();
+        var report = RelationQueryRealizationCompiler.Match(plan, requirements,
+            Profile(plan, [Evidence("evidence/base", composed ? KeyExtraction : Join)]),
+            Policy(rules: composed ? [new(new("rule/join"), Join, [KeyExtraction])] : []));
+        foreach (var requirement in requirements)
+        {
+            var decision = Assert.IsType<UnavailableRelationQueryRealizationDecision>(
+                Assert.Single(report.Decisions, d => d.Requirement == requirement.Id));
+            Assert.Equal(composed ? RelationQueryUnavailableReason.CompositionUnavailable
+                : RelationQueryUnavailableReason.CapabilityNotAdvertised, decision.Reason);
+            Assert.Contains(report.Diagnostics, d => d.Requirement == requirement.Id
+                && d.Message.Contains(requirement.Id.Value, StringComparison.Ordinal));
+        }
+    }
+
     [Fact]
     public void Match_ReusedGuaranteeEvidenceKeepsRequirementBoundaryFactsIndependent()
     {
