@@ -52,7 +52,7 @@ public static class ObjectEntityDefinition
     /// <returns>The materialized entity shape.</returns>
     /// <exception cref="ArgumentNullException">The CLR type is null.</exception>
     /// <exception cref="InvalidOperationException">The shape is empty or ambiguous.</exception>
-    public static EntityDefinition For(Type clrType, EntityTypeName name)
+    internal static EntityDefinition For(Type clrType, EntityTypeName name)
     {
         ArgumentNullException.ThrowIfNull(clrType);
         return Build(clrType, name, ClrTypeRefMapper);

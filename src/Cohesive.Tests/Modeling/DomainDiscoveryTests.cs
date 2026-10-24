@@ -1,4 +1,5 @@
 using Cohesive.Transitions.Authoring;
+using Cohesive.Host.Composition;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Tests.Modeling;
@@ -77,6 +78,64 @@ public sealed class DomainDiscoveryTests
         Assert.Equal(2, model.Definition.Entities.Length);
         Assert.Same(model.Definition, model.Definition);
         Assert.Throws<InvalidOperationException>(model.AddAgain);
+    }
+
+    [Fact]
+    public void Typed_handles_share_registered_definitions_and_reject_excluded_or_unknown_types()
+    {
+        var catalog = DomainDiscovery.For<Module>();
+        var builder = new DomainModelBuilder().Discover(catalog);
+        var model = builder.Build();
+        var order = builder.Entity<Order>();
+        Assert.Same(model.Entities.Single(entity => entity.Name.Value == "order"), order.Definition);
+        Assert.Same(order.Definition, builder.Entity<Order>("order").Definition);
+        var otherDomain = new DomainModelBuilder().Discover(catalog);
+        Assert.NotSame(order.Definition, otherDomain.Entity<Order>().Definition);
+        Assert.Equal(order.Definition.StateShape.QualifiedId,
+            order.QueryShape(RelationQuery.Expression()).Id);
+        Assert.Throws<ArgumentException>(() => builder.Entity<Other>());
+        Assert.Throws<ArgumentException>(() => new DomainModelBuilder().Discover(catalog.Exclude<Order>("separate service")).Entity<Order>());
+    }
+
+    [Theory]
+    [InlineData("id", "Count", false)] // renamed property
+    [InlineData("id", "Quantity", true)] // retyped property
+    [InlineData("Id", "Quantity", false)] // prior JsonPropertyName
+    public void Verification_detects_drift_in_prior_definition_of_the_same_entity(
+        string priorIdName, string priorQuantityName, bool priorQuantityWasText)
+    {
+        var catalog = DomainDiscovery.For<Module>().Exclude<Customer>("Not part of this check");
+        var prior = new DomainModelBuilder().Entity("order", entity => entity
+            .Field(priorIdName, DomainTypes.String())
+            .Field(priorQuantityName, priorQuantityWasText ? DomainTypes.String() : DomainTypes.Int32())).Build();
+        var diagnostic = Assert.Single(catalog.Verify(prior).Diagnostics);
+        Assert.Equal(DomainDiscoveryDiagnosticCodes.ShapeMismatch, diagnostic.Code);
+        Assert.Equal("/domain/entities/order", diagnostic.Location);
+    }
+
+    [Fact]
+    public void Duplicate_diagnostic_names_both_declarations()
+    {
+        var error = Assert.Throws<DomainDiscoveryException>(() => DomainDiscovery.For<DuplicateModule>());
+        var diagnostic = Assert.Single(error.Validation.Diagnostics);
+        Assert.Contains(typeof(First).ToString(), diagnostic.Message);
+        Assert.Contains(typeof(Second).ToString(), diagnostic.Message);
+    }
+
+    [Fact]
+    public void Activation_verifies_before_exposing_the_domain()
+    {
+        var error = Assert.Throws<DomainDiscoveryException>(() => ModelActivator.Create<InvalidDomain>());
+        Assert.Equal(DomainDiscoveryDiagnosticCodes.EntityMissing, Assert.Single(error.Validation.Diagnostics).Code);
+    }
+
+    public sealed class InvalidDomain : DomainModel
+    {
+        public InvalidDomain() : base("1")
+        {
+            VerifyDiscovery(DomainDiscovery.For<Module>());
+            Entity<Order>("order");
+        }
     }
 
     sealed class DiscoveredModel : DomainModel

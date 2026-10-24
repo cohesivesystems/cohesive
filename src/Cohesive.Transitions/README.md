@@ -187,9 +187,9 @@ sealed class SalesModule;
 public record Order(string Id, int Quantity);
 
 var declarations = DomainDiscovery.For<SalesModule>();
-var model = new DomainModelBuilder().Version("1")
-    .Discover(declarations)
-    .Build();
+var builder = new DomainModelBuilder().Version("1").Discover(declarations);
+var order = builder.Entity<Order>(); // Domain-owned handle; supports Transition/References/QueryShape.
+var model = builder.Build();
 ```
 
 Only attributed types belonging to the selected marker in **its own assembly** participate.
@@ -220,3 +220,14 @@ infer or verify behavioral invariants, transitions, relationship semantics, iden
 storage or infrastructure. Those remain explicit declarations. Exclusion reasons and CLR module
 membership are inspectable authoring metadata; only canonical entities enter the portable IR.
 This check detects registration omissions and shape drift, not independent proof of domain correctness.
+
+The running Aspire fulfillment domain uses discovery and typed handles for its order, inventory,
+and reservation entities; existing transitions, relationships, queries and storage all consume
+those same definitions. Discovery does not require re-registering an entity to attach behavior.
+Model activation calls `IAuthoringModel.Complete`, which performs scheduled verification before
+returning models to their consumers. For manual construction, request `Definition` during setup:
+its first access can throw `DomainDiscoveryException` and caches that failure.
+
+Discovered shapes are cached, but each domain owns distinct entity definitions. `Entity<T>()`
+resolves an included discovered entity; `Entity<T>(name)` also adopts it when type and name match.
+Storage bindings still reject handles from a different domain instance.

@@ -21,9 +21,11 @@ public sealed class FulfillmentDomain : DomainModel
     /// <summary>Declares the shared entities and their canonical references.</summary>
     public FulfillmentDomain() : base(revision: "3")
     {
-        Orders = Entity<Order>("example/order");
-        Inventory = Entity<InventoryItem>("example/inventory");
-        Reservations = Entity<Reservation>("example/reservation");
+        var entities = DomainDiscovery.For<FulfillmentDomain>();
+        Discover(entities);
+        Orders = Entity<Order>();
+        Inventory = Entity<InventoryItem>();
+        Reservations = Entity<Reservation>();
         ReservationOrder = Reservations.References(reservation => reservation.OrderId, Orders);
         ReservationItem = Reservations.References(reservation => reservation.Sku, Inventory);
         OrderTransitions = new(Orders);
@@ -55,6 +57,7 @@ public sealed class FulfillmentDomain : DomainModel
 /// <param name="Sku">Inventory observation identity.</param>
 /// <param name="Partition">Explicit local-demo partition.</param>
 /// <param name="Available">Current available quantity, guarded by the reservation transition.</param>
+[DomainEntity(typeof(FulfillmentDomain), "example/inventory")]
 public sealed record InventoryItem(
     [property: JsonPropertyName(FulfillmentDomain.InventoryIdField)] string Sku,
     [property: JsonPropertyName("partition")] string Partition,
@@ -66,6 +69,7 @@ public sealed record InventoryItem(
 /// <param name="OrderId">Referenced order observation identity.</param>
 /// <param name="Sku">Referenced inventory observation identity.</param>
 /// <param name="Quantity">Positive reserved quantity.</param>
+[DomainEntity(typeof(FulfillmentDomain), "example/reservation")]
 public sealed record Reservation(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("partition")] string Partition,
@@ -77,6 +81,7 @@ public sealed record Reservation(
 /// <param name="Id">Order identity, serialized under its stable canonical field name.</param>
 /// <param name="Status">Current lifecycle state.</param>
 /// <param name="Partition">Storage partition, not an authorization boundary.</param>
+[DomainEntity(typeof(FulfillmentDomain), "example/order")]
 public sealed record Order(
     [property: JsonPropertyName(FulfillmentDomain.OrderIdField)] string Id,
     [property: JsonPropertyName(FulfillmentDomain.PartitionField)] string Partition,

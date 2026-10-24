@@ -81,6 +81,10 @@ public sealed class DomainDiscovery
     [RequiresUnreferencedCode("Domain discovery inspects attributed types and their public properties. Preserve them or use explicit entity registration.")]
     public static DomainDiscovery For<TModule>() => Cache<TModule>.Value.Value;
 
+    internal IEnumerable<KeyValuePair<Type, EntityDefinition>> IncludedDeclarations =>
+        declarations.Where(pair => !Exclusions.ContainsKey(pair.Key))
+            .OrderBy(pair => pair.Value.Name.Value, StringComparer.Ordinal);
+
     /// <summary>Creates a catalog with an intentional omission, without modifying the cached catalog.</summary>
     /// <typeparam name="TEntity">A discovered declaration to omit.</typeparam>
     /// <param name="reason">Inspectable explanation of the omission.</param>
@@ -133,24 +137,24 @@ public sealed class DomainDiscovery
     static DomainDiscovery Discover(Type module)
     {
         var declarations = ImmutableDictionary.CreateBuilder<Type, EntityDefinition>();
-        var names = new HashSet<string>(StringComparer.Ordinal);
+        var names = new Dictionary<string, Type>(StringComparer.Ordinal);
         List<DocumentValidationDiagnostic> diagnostics = [];
         foreach (var type in module.Assembly.GetTypes().OrderBy(type => type.FullName, StringComparer.Ordinal))
         {
             var metadata = type.CustomAttributes.SingleOrDefault(attribute => attribute.AttributeType == typeof(DomainEntityAttribute));
             if (metadata is null || !Equals(metadata.ConstructorArguments[0].Value, module)) continue;
-            var attribute = type.GetCustomAttribute<DomainEntityAttribute>()!;
-            if (!names.Add(attribute.Name))
+            var name = Guard.RequireNotNullOrWhiteSpace((string?)metadata.ConstructorArguments[1].Value);
+            if (!names.TryAdd(name, type))
             {
-                diagnostics.Add(Error(DomainDiscoveryDiagnosticCodes.EntityDuplicate, attribute.Name, $"Multiple CLR declarations claim this identity; including '{type}'."));
+                diagnostics.Add(Error(DomainDiscoveryDiagnosticCodes.EntityDuplicate, name, $"CLR declarations '{names[name]}' and '{type}' both claim this identity."));
                 continue;
             }
             if (type.ContainsGenericParameters)
             {
-                diagnostics.Add(Error(DomainDiscoveryDiagnosticCodes.TypeUnsupported, attribute.Name, "Open generic declarations cannot be projected."));
+                diagnostics.Add(Error(DomainDiscoveryDiagnosticCodes.TypeUnsupported, name, "Open generic declarations cannot be projected."));
                 continue;
             }
-            declarations.Add(type, ObjectEntityDefinition.For(type, new(attribute.Name)));
+            declarations.Add(type, ObjectEntityDefinition.For(type, new(name)));
         }
         if (diagnostics.Count > 0) throw new DomainDiscoveryException(new([.. diagnostics]));
         if (declarations.Count == 0)

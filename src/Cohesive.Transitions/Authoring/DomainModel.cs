@@ -6,7 +6,9 @@ namespace Cohesive.Transitions.Authoring;
 /// <summary>Instance-owned domain authoring over the existing domain builder.</summary>
 /// <remarks>Declare entities during construction, then share the instance. First Definition access freezes
 /// authoring and caches either the immutable definition or its validation failure. No virtual method runs
-/// from the base constructor, and discovery is explicit and scoped.</remarks>
+/// from the base constructor, and discovery is explicit and scoped. Model activation invokes
+/// IAuthoringModel.Complete, including discovery verification, before exposing the model to consumers.
+/// Manually constructed models must read Definition during setup to surface validation failures.</remarks>
 public abstract class DomainModel : IAuthoringModel
 {
     void IAuthoringModel.Complete() => _ = Definition;
@@ -25,6 +27,7 @@ public abstract class DomainModel : IAuthoringModel
 
     /// <summary>The cached canonical domain definition; first access completes authoring.</summary>
     /// <exception cref="ArgumentException">The domain is empty or invalid.</exception>
+    /// <exception cref="DomainDiscoveryException">Scheduled discovery verification fails; failure is cached.</exception>
     public DomainModelDefinition Definition => definition.Value;
 
     /// <summary>Adds explicitly scoped discovered entities before this model freezes.</summary>
@@ -40,6 +43,13 @@ public abstract class DomainModel : IAuthoringModel
     protected void VerifyDiscovery(DomainDiscovery discovery,
         DomainDiscoveryCoverage coverage = DomainDiscoveryCoverage.DiscoveredEntities) =>
         definition.Edit(() => builder.VerifyDiscovery(discovery, coverage));
+
+    /// <summary>Resolves this domain's included discovered entity without repeating its semantic name.</summary>
+    /// <typeparam name="T">Discovered entity type.</typeparam>
+    /// <returns>A handle sharing this domain's exact definition.</returns>
+    /// <exception cref="ArgumentException">The entity has not been discovered or was excluded.</exception>
+    /// <exception cref="InvalidOperationException">The model is frozen.</exception>
+    protected DomainEntity<T> Entity<T>() where T : notnull => definition.Edit(() => builder.Entity<T>());
 
     /// <summary>Declares an entity through the same builder available to inline callers.</summary>
     /// <typeparam name="T">Canonical state authoring type.</typeparam>
