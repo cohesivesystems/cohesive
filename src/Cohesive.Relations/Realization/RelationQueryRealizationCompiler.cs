@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Observability;
 
@@ -226,6 +227,10 @@ public static class RelationQueryRealizationCompiler
         readonly ImmutableArray<RelationQueryTargetCapabilityEvidence> capabilityEvidence;
         readonly Dictionary<RelationQueryCapability, ImmutableArray<Proof>> proofs = [];
         readonly Dictionary<RelationQueryCapability, ImmutableArray<RelationQueryCapability>> missing = [];
+        // A capability proof and normalized guarantee set depend only on this match's fixed
+        // profile/policy. Boundary facts and failures remain specific to each requirement.
+        readonly Dictionary<(Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required),
+            ImmutableArray<Proof>> guaranteedProofs = new(GuaranteeProofComparer.Instance);
         readonly HashSet<RelationQueryCompositionRuleId> invalidRules = [];
         readonly ImmutableHashSet<RelationQueryOperatingBoundaryId> boundaryIds;
         readonly ImmutableDictionary<RelationQueryTargetCapabilityEvidenceId, RelationQueryTargetCapabilityEvidence>
@@ -658,11 +663,19 @@ public static class RelationQueryRealizationCompiler
             if (requirement.RequiredGuarantees.IsDefaultOrEmpty)
                 return new([proof], null);
 
+            var key = (proof, requirement.RequiredGuarantees);
+            if (guaranteedProofs.TryGetValue(key, out var prepared))
+                return new(prepared, null);
+
             var missingGuarantees = requirement.RequiredGuarantees
                 .Except(proof.Guarantees)
                 .ToImmutableArray();
             if (missingGuarantees.IsDefaultOrEmpty)
-                return new([proof], null);
+            {
+                ImmutableArray<Proof> satisfied = [proof];
+                guaranteedProofs.Add(key, satisfied);
+                return new(satisfied, null);
+            }
 
             if (!proof.Rules.IsDefaultOrEmpty)
             {
@@ -709,7 +722,27 @@ public static class RelationQueryRealizationCompiler
                 guaranteed = Combine(guaranteed, guaranteeProofs);
             }
 
+            guaranteedProofs.Add(key, guaranteed);
             return new(guaranteed, null);
+        }
+
+        sealed class GuaranteeProofComparer : IEqualityComparer<(
+            Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required)>
+        {
+            internal static readonly GuaranteeProofComparer Instance = new();
+
+            public bool Equals(
+                (Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required) x,
+                (Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required) y) =>
+                ReferenceEquals(x.Proof, y.Proof) && x.Required.AsSpan().SequenceEqual(y.Required.AsSpan());
+
+            public int GetHashCode((Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required) key)
+            {
+                var hash = new HashCode();
+                hash.Add(RuntimeHelpers.GetHashCode(key.Proof));
+                foreach (var guarantee in key.Required) hash.Add(guarantee);
+                return hash.ToHashCode();
+            }
         }
 
         ProofValidation ValidateBoundaries(

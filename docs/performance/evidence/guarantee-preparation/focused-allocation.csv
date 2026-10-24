@@ -1,0 +1,3 @@
+requirements,guarantees,variant,median_of_seven_allocated_bytes,report_fingerprint
+128,3,before,2394488,b762484114319ff2d72a1d286b9a8eca9996dfb71a53d78760b3d107778d92f5
+128,3,after,1075968,b762484114319ff2d72a1d286b9a8eca9996dfb71a53d78760b3d107778d92f5

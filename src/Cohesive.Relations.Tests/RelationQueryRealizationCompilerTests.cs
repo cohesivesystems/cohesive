@@ -16,6 +16,58 @@ public sealed class RelationQueryRealizationCompilerTests
         RelationQueryPrimitiveCapabilityKind.BatchedKeyLookup);
 
     [Fact]
+    public void Match_ReusedGuaranteeEvidenceKeepsRequirementBoundaryFactsIndependent()
+    {
+        var plan = PlanReference();
+        RelationQueryOperatingBoundaryId boundaryId = new("boundary/page");
+        var capability = new LogicalRelationQueryCapability(RelationQueryLogicalCapabilityKind.OffsetPaging);
+        var requirements = new[] { 5L, 40L, 10L }.Select((size, index) => Requirement(
+            $"requirement/{index}", capability,
+            requiredGuarantees: [RelationQueryGuaranteeCapabilityKind.MissingNullDistinction],
+            staticFacts: [new(RelationQueryRealizationStaticFactKind.PageSize, size)])).ToImmutableArray();
+        var report = RelationQueryRealizationCompiler.Match(plan, requirements,
+            Profile(plan, [Evidence("evidence/page", capability, [boundaryId]),
+                Evidence("evidence/null", new GuaranteeRelationQueryCapability(
+                    RelationQueryGuaranteeCapabilityKind.MissingNullDistinction))],
+                [new(boundaryId, RelationQueryOperatingBoundaryKind.MaximumPageSize, limit: 25)]),
+            Policy(constrained: RelationQueryConstrainedRealizationPolicy.AllowValidated));
+
+        var small = Assert.IsType<ConstrainedRelationQueryRealizationDecision>(report.Decisions[0]);
+        Assert.Equal(5, Assert.Single(small.BoundaryValidations).MeasuredValue);
+        Assert.IsType<UnavailableRelationQueryRealizationDecision>(report.Decisions[1]);
+        var other = Assert.IsType<ConstrainedRelationQueryRealizationDecision>(report.Decisions[2]);
+        Assert.Equal(10, Assert.Single(other.BoundaryValidations).MeasuredValue);
+        Assert.Contains(report.Diagnostics, d => d.Requirement == requirements[1].Id);
+    }
+
+    [Fact]
+    public void Match_KeepsDifferentGuaranteeSetsAndMissingEvidenceIndependent()
+    {
+        var plan = PlanReference();
+        var capability = new LogicalRelationQueryCapability(RelationQueryLogicalCapabilityKind.Filter);
+        var kinds = new[] { RelationQueryGuaranteeCapabilityKind.Ordering,
+            RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
+            RelationQueryGuaranteeCapabilityKind.Ordering,
+            RelationQueryGuaranteeCapabilityKind.StablePaging,
+            RelationQueryGuaranteeCapabilityKind.StablePaging };
+        var requirements = kinds.Select((kind, index) => Requirement($"requirement/{index}", capability,
+            requiredGuarantees: [kind])).ToImmutableArray();
+        var report = RelationQueryRealizationCompiler.Match(plan, requirements,
+            Profile(plan, [Evidence("evidence/filter", capability),
+                Evidence("evidence/order", new GuaranteeRelationQueryCapability(kinds[0])),
+                Evidence("evidence/null", new GuaranteeRelationQueryCapability(kinds[1]))]), Policy());
+
+        for (var i = 0; i < 3; i++)
+            Assert.Equal(kinds[i], Assert.Single(Assert.IsType<NativeRelationQueryRealizationDecision>(
+                report.Decisions[i]).PreservedGuarantees));
+        for (var i = 3; i < 5; i++)
+        {
+            Assert.IsType<UnavailableRelationQueryRealizationDecision>(report.Decisions[i]);
+            Assert.Contains(report.Diagnostics, d => d.Requirement == requirements[i].Id);
+        }
+    }
+
+    [Fact]
     public void Match_SelectsNativeEvidenceAndIsIndependentOfDeclarationOrder()
     {
         var plan = PlanReference();

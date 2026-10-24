@@ -181,6 +181,45 @@ public sealed class RealizationAllocationTests(ITestOutputHelper output)
         Assert.True(median < 1_150_000, $"Realization allocated {median} bytes.");
     }
 
+    [Fact]
+    public void RepeatedGuaranteeRequirementsHaveBoundedPreparationAllocations()
+    {
+        var plan = new RelationQueryCompiledPlanReference("compiler/test", "schema/v1",
+            new("sha256", "definition/v1", "definition"), new("sha256", "shapes/v1", "shapes"), null,
+            new("sha256", "demand/v1", "demand"), [new("input/test")]);
+        var capability = new LogicalRelationQueryCapability(RelationQueryLogicalCapabilityKind.Projection);
+        var guarantees = new[] { RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
+            RelationQueryGuaranteeCapabilityKind.Cardinality, RelationQueryGuaranteeCapabilityKind.OutputIdentity };
+        var requirements = Enumerable.Range(0, 128).Select(i => new RelationQueryRealizationRequirement(
+            new($"requirement/{i:D4}"), capability, requiredGuarantees: [.. guarantees])).ToImmutableArray();
+        var profile = new RelationQueryTargetCapabilityProfile(new("target/test"), new("target/test/v1"),
+            [plan.DefinitionSchemaVersion], [plan.CompilerProfile],
+            [new(new("evidence/projection"), capability),
+                .. guarantees.Select(g => new RelationQueryTargetCapabilityEvidence(
+                    new($"evidence/guarantee/{g}"), new GuaranteeRelationQueryCapability(g)))]);
+        var policy = new RelationQueryRealizationPolicy(new("policy/test"), "conventions/v1");
+        var expected = RelationQueryRealizationCompiler.Match(plan, requirements, profile, policy);
+        Assert.True(expected.IsRealizable);
+        Assert.Equal(128, expected.Decisions.Length);
+        // Recorded from the published alpha.157 implementation before preparation reuse.
+        Assert.Equal("b762484114319ff2d72a1d286b9a8eca9996dfb71a53d78760b3d107778d92f5",
+            expected.Fingerprint.Value);
+        Assert.All(expected.Decisions, d => Assert.Equal(4,
+            Assert.IsType<NativeRelationQueryRealizationDecision>(d).CapabilityEvidence.Length));
+        for (var i = 0; i < 4; i++) RelationQueryRealizationCompiler.Match(plan, requirements, profile, policy);
+        var samples = new long[7];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var actual = RelationQueryRealizationCompiler.Match(plan, requirements, profile, policy);
+            samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(expected.Fingerprint, actual.Fingerprint);
+        }
+        Array.Sort(samples);
+        output.WriteLine($"128 repeated guarantee requirements: {samples[3]} bytes (median of seven).");
+        Assert.True(samples[3] < 1_400_000, $"Realization allocated {samples[3]} bytes.");
+    }
+
     static string PreviousKey(IEnumerable<string?> values)
     {
         StringBuilder key = new();

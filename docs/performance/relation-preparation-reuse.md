@@ -39,10 +39,74 @@ Ari `main`. Cumulative allocated bytes per case; warm is the steady third/fourth
 
 These are allocation measurements of one end-to-end workload, not latency claims.
 
-## Remaining first-use cost
+## Matcher-scoped guarantee preparation (October 24, 2026)
 
-The largest remaining first-case cost is durable commit fingerprinting (`ProcessDurableCommitFingerprinter`),
-which serializes the entire checkpoint, including large payloads, for every commit. Canonical hashing needs
-the full document to order properties, so removing it requires composing the commit fingerprint from
-existing per-value content fingerprints. That changes the durable fingerprint format and needs a versioned
-profile, golden digests and a payload-size scaling benchmark first.
+One realization can contain hundreds of requirements with the same capability proof and required
+semantic guarantees. `Resolve` already shared the capability proof, but `ValidateGuarantees` rebuilt
+its guarantee-evidence combinations, normalized arrays and ordering keys for each requirement.
+The matcher now retains successful combinations by proof identity and the normalized guarantee
+sequence. Separately allocated but equal guarantee sequences share preparation. The entries belong
+to one synchronous match and disappear with it; there is no global cache, weak table, lock, new
+public API or additional semantic authority.
+
+The fixed target profile and compiler policy remain authoritative. Requirement-specific boundary facts,
+measurements and validation still run independently; failures are not cached, so their diagnostics keep
+the owning requirement identity. A page-size proof admitted for five rows cannot admit a later
+40-row demand against a 25-row boundary. Different guarantee sets and missing evidence remain
+independent. Override admission and final report validation are unchanged.
+
+This extends the existing Cohesive realization matcher. Ari uses its existing evaluator as-is; there
+is no Ari-local preparation bridge. Publication and Ari's package upgrade are subsequent deliverables.
+
+### Measured allocation and CPU
+
+Apple arm64/macOS, .NET 10.0.13, Release. The Ari baseline is published alpha.157 plus the locally
+qualified seed-family change (`5c8e2ba`). Identical frozen harnesses and dependencies differ only in
+`Cohesive.Relations.dll`; the actual loaded module hashes are checked before measurement. Three
+alternating fresh-process pairs per source run 64 original workflow cases per process. Cold figures
+are medians across three processes. MB is decimal MB; cumulative allocation is not retained memory.
+
+| Original X12 workflow | Cold before | Cold after | Change | CPU before/after |
+|---|---:|---:|---:|---:|
+| 004010 | 117.246 MB | 112.150 MB | −5.096 MB (4.3%) | 1,583 / 1,551 ms |
+| 005030 | 118.150 MB | 113.166 MB | −4.984 MB (4.2%) | 1,589 / 1,572 ms |
+
+Cold process CPU differs by only 1–2% in these local samples; that is inconclusive. Warm allocation
+is effectively unchanged at about 3.5 MB; the workflow already prepares realization once per plan.
+Warm timing varies with runtime warmup and is not attributed to this cold preparation change.
+Separate stage runs place about 1.1–1.4 MB of saving in preview and 3.3–3.7 MB in first durable
+execution. Do not interpret the entire saving as preview-only work.
+
+Three independent traces per source and variant attribute realization preparation at approximately
+18.4–18.5 MB before and 13.7–13.8 MB after. All traces report zero lost events and missing allocation
+or managed CPU stacks. These are sampled estimates of the entire cold workflow, not an additional
+saving to add to the untraced counters. Trace timing is not used for CPU claims.
+
+The focused public `Match` fixture (128 requirements, three repeated guarantees) allocates
+2,394,488 → 1,075,968 bytes per match, a 55% reduction, using the median of seven warm runs.
+Its 1.4 MB regression ceiling has about 30% headroom and fails against published alpha.157.
+The report's pinned fingerprint is identical on both versions. No timing threshold was added to CI.
+
+Qualification: 1,154 Relations tests; 5,175 Core tests with 60 existing gated skips; 1,013 Ari Engine
+tests with 18 existing gated skips; native recovery across both X12 versions and FIX at three
+interruption points; 768 normal X12 workflow cases; unchanged pinned graph fingerprints. Native
+and Engine checks load the candidate from an isolated output directory. Official package caches
+are untouched. This is source qualification, not a published-package or deployment-latency claim.
+
+[Manifest and module hashes](evidence/guarantee-preparation/manifest.json),
+[normal counters](evidence/guarantee-preparation/windows.csv),
+[cold stages](evidence/guarantee-preparation/cold-stages.csv),
+[focused allocation](evidence/guarantee-preparation/focused-allocation.csv),
+[realization attribution](evidence/guarantee-preparation/realization-attribution.csv) and
+[trace quality](evidence/guarantee-preparation/trace-quality.csv) retain the compact evidence.
+Large raw artifacts remain under `/tmp/guarantee-preparation-profile` and `/tmp/cold-preview-profile`.
+Reproduce the focused guard with:
+
+```sh
+dotnet test src/Cohesive.Relations.Tests/Cohesive.Relations.Tests.csproj -c Release --filter FullyQualifiedName~RepeatedGuaranteeRequirements
+```
+
+Ari's existing protocol-preparation harness supplies `--iterations 64`, independent stage counters
+through `ARI_COMPILATION_PROFILE_DIRECTORY`, runtime/module identity and EventPipe attribution.
+Next cold investigations should separate declaration/contract authoring and remaining provenance
+preparation from invocation work, preserving fresh persisted admission and contextual validation.

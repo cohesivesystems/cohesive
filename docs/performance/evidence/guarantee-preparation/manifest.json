@@ -1,0 +1,51 @@
+{
+  "cohesive_parent": "857aefd873017faf0adac6e95ca7d7e303daa02f (published alpha.157)",
+  "ari_source": "eb906feb2b619d2ef30beeca619eb321b0067bf4 plus local seed-family commit 5c8e2ba74638edb33cc0671bdcc9e25c7f501081",
+  "qualification": "Source-qualified candidate; not published or adopted into production",
+  "runtime": {
+    "framework": ".NET 10.0.13",
+    "architecture": "Arm64",
+    "os": "macOS 27.0.1",
+    "entrypoint": "/private/tmp/guarantee-preparation-profile/candidate/ProtocolPreparation.dll",
+    "relationsAssembly": "/private/tmp/guarantee-preparation-profile/candidate/Cohesive.Relations.dll",
+    "relationsSha256": "2BB1541092D15974EDEC86E46C077D2F36FEBC25DF18AA924025AFB60F6AA9FA"
+  },
+  "changed_modules": {
+    "Cohesive.Relations.dll": {
+      "before": "fb1f343bf5058d209205b76931e42ac08b884afa9913acb4a6c163999d9c1d74",
+      "after": "2bb1541092d15974edec86e46c077d2f36febc25df18aa924025afb60f6aa9fa"
+    }
+  },
+  "validation": {
+    "relations": {
+      "passed": 1154,
+      "failed": 0,
+      "skipped": 0
+    },
+    "core": {
+      "passed": 5175,
+      "failed": 0,
+      "skipped": 60
+    },
+    "ari_engine": {
+      "passed": 1013,
+      "failed": 0,
+      "skipped": 18
+    },
+    "native_recovery_fact": {
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "normal_original_x12_cases": 768,
+  "native_recovery_combinations": 9,
+  "pinned_graph_fingerprints": "Both unchanged from published alpha.156/157",
+  "cold_stage_processes": 12,
+  "traces": 12,
+  "raw_artifacts": "/tmp/guarantee-preparation-profile",
+  "before_traces": "/tmp/cold-preview-profile/qualified",
+  "source_sha256": "14416961b74325af69e50f7216b6e4baca15818e088b22aa6e482787b7834256",
+  "normal_counters_sha256": "b28c58af262715778884faac455dfbe91127bf8360c0170c55423449ffcfa3f0",
+  "limits": "Decimal MB. Three alternating fresh-process pairs/source, 64 cases/process. Warm is process median of cases 33-64, then median across three processes. No owned builds/tests ran during untraced counters or trace collection. Instrumented timings are not workflow CPU evidence. CPU improvement is inconclusive; no retained-heap claim."
+}
