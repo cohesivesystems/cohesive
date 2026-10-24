@@ -1,0 +1,15 @@
+{
+  "core_passed": 5172,
+  "core_skipped": 60,
+  "relations_passed": 1149,
+  "focused_storage_tests": 17,
+  "semantic_scenarios": 223,
+  "candidate_variants": 4,
+  "timing_processes": 168,
+  "guard_processes": 12,
+  "retained_processes": 44,
+  "tested_core_methods": 11886,
+  "tested_core_il_differences": 0,
+  "new_internal_core_storage": true,
+  "production_ingestion_selection_changed": false
+}

@@ -1,0 +1,21 @@
+{
+  "base_commit": "d1c0ad8ca6e54a7ee49076489144e81dcc57ab28",
+  "semantic_checks": 175,
+  "ownership_checks": "passed",
+  "allocation_128x16_bytes": 77944,
+  "allocation_budget_bytes": 86016,
+  "timing_processes": 159,
+  "fallback_followup_processes": 8,
+  "retained_processes": 22,
+  "core_il_methods": 11842,
+  "core_il_differences": 0,
+  "production_source_changes": false,
+  "program_sha256": "6ea6f3663da33c37168a4996a5d1d13e7eee0a856db6242a01cb1ba7561861b2",
+  "fallback_median_change_percent": 16.004897997327696,
+  "fallback_paired_change_percent": [
+    17.200231636578067,
+    17.855024501465678,
+    14.198674834290138,
+    13.77681064754308
+  ]
+}

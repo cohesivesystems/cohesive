@@ -1,0 +1,382 @@
+{
+  "existing": {
+    "total_samples": 7291,
+    "selected_measure_samples": 5799,
+    "gc_poll_self_samples": 2834,
+    "speculative_self_samples": 0,
+    "top_nonpoll_self": [
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&)",
+        "Value": 801
+      },
+      {
+        "Key": "System.Globalization.Ordinal.EqualsIgnoreCase_Scalar(wchar&,wchar&,int32)",
+        "Value": 423
+      },
+      {
+        "Key": "Cohesive.Model.Serialization.ObservationJsonReader+ReadScope.ReadFieldValue(value class System.Text.Json.Utf8JsonReader&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph)",
+        "Value": 418
+      },
+      {
+        "Key": "System.Collections.Generic.NonRandomizedStringEqualityComparer+OrdinalIgnoreCaseComparer.GetHashCode(class System.String)",
+        "Value": 265
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.ConsumeValue(unsigned int8)",
+        "Value": 174
+      },
+      {
+        "Key": "Cohesive.Model.Serialization.ObservationJsonObjectBuilder.Set(class System.String,value class Cohesive.Model.ObservationValue)",
+        "Value": 124
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.ConsumeNextToken(unsigned int8)",
+        "Value": 95
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateObjectField(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.TypeRef,value class Cohesive.Model.FieldCardinality,value class Cohesive.Model.FieldPresence,value class Cohesive.Model.FieldNullability,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 71
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.Read()",
+        "Value": 71
+      },
+      {
+        "Key": "System.String.Equals(class System.String,class System.String,value class System.StringComparison)",
+        "Value": 68
+      }
+    ],
+    "nested_native_versions": [
+      {
+        "start": 4418712000,
+        "size": 444,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ParseExisting",
+        "tier": "Optimized"
+      },
+      {
+        "start": 4418774176,
+        "size": 1016,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.Parse",
+        "tier": "Optimized"
+      },
+      {
+        "start": 4419034272,
+        "size": 2868,
+        "name": "Cohesive.Relations.Benchmarks.ObservationNestedLayoutBenchmarks.ParseExisting",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4432113440,
+        "size": 736,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure",
+        "tier": "OptimizedTier1OSR"
+      }
+    ]
+  },
+  "shared": {
+    "total_samples": 7379,
+    "selected_measure_samples": 5868,
+    "gc_poll_self_samples": 3485,
+    "speculative_self_samples": 4,
+    "top_nonpoll_self": [
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&)",
+        "Value": 747
+      },
+      {
+        "Key": "System.Globalization.Ordinal.EqualsIgnoreCase_Scalar(wchar&,wchar&,int32)",
+        "Value": 316
+      },
+      {
+        "Key": "Cohesive.Model.Serialization.ObservationJsonReader+ReadScope.ReadFieldValue(value class System.Text.Json.Utf8JsonReader&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph)",
+        "Value": 300
+      },
+      {
+        "Key": "System.String.GetNonRandomizedHashCodeOrdinalIgnoreCase()",
+        "Value": 155
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.ConsumeValue(unsigned int8)",
+        "Value": 109
+      },
+      {
+        "Key": "Cohesive.Model.Serialization.ObservationJsonObjectBuilder.Set(class System.String,value class Cohesive.Model.ObservationValue)",
+        "Value": 102
+      },
+      {
+        "Key": "System.Collections.Generic.NonRandomizedStringEqualityComparer+OrdinalIgnoreCaseComparer.GetHashCode(class System.String)",
+        "Value": 91
+      },
+      {
+        "Key": "System.Collections.Generic.NonRandomizedStringEqualityComparer+OrdinalComparer.GetHashCode(class System.String)",
+        "Value": 71
+      },
+      {
+        "Key": "System.String.Equals(class System.String,class System.String,value class System.StringComparison)",
+        "Value": 68
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateObjectField(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.TypeRef,value class Cohesive.Model.FieldCardinality,value class Cohesive.Model.FieldPresence,value class Cohesive.Model.FieldNullability,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 68
+      }
+    ],
+    "nested_native_versions": [
+      {
+        "start": 4543492544,
+        "size": 444,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ParseExisting",
+        "tier": "Optimized"
+      },
+      {
+        "start": 4543555744,
+        "size": 1016,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.Parse",
+        "tier": "Optimized"
+      },
+      {
+        "start": 4543809824,
+        "size": 20,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate+Node.get_Layout",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4543816552,
+        "size": 20,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate+Node.get_Element",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4543816608,
+        "size": 908,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.Read",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4543817568,
+        "size": 1784,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ReadRecord",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4543826016,
+        "size": 88,
+        "name": "Cohesive.Relations.Benchmarks.ObservationNestedLayoutBenchmarks.ParseShared",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4543826200,
+        "size": 20,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate+Node.get_Children",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4556892256,
+        "size": 748,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure",
+        "tier": "OptimizedTier1OSR"
+      }
+    ]
+  },
+  "forced": {
+    "total_samples": 7308,
+    "selected_measure_samples": 5813,
+    "gc_poll_self_samples": 2836,
+    "speculative_self_samples": 0,
+    "top_nonpoll_self": [
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&)",
+        "Value": 767
+      },
+      {
+        "Key": "Cohesive.Model.Serialization.ObservationJsonReader+ReadScope.ReadFieldValue(value class System.Text.Json.Utf8JsonReader&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph)",
+        "Value": 455
+      },
+      {
+        "Key": "System.Globalization.Ordinal.EqualsIgnoreCase_Scalar(wchar&,wchar&,int32)",
+        "Value": 404
+      },
+      {
+        "Key": "System.Collections.Generic.NonRandomizedStringEqualityComparer+OrdinalIgnoreCaseComparer.GetHashCode(class System.String)",
+        "Value": 215
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.ConsumeValue(unsigned int8)",
+        "Value": 188
+      },
+      {
+        "Key": "Cohesive.Model.Serialization.ObservationJsonObjectBuilder.Set(class System.String,value class Cohesive.Model.ObservationValue)",
+        "Value": 146
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.ConsumeNextToken(unsigned int8)",
+        "Value": 101
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.Read()",
+        "Value": 75
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateObjectField(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.TypeRef,value class Cohesive.Model.FieldCardinality,value class Cohesive.Model.FieldPresence,value class Cohesive.Model.FieldNullability,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 74
+      },
+      {
+        "Key": "System.String.Equals(class System.String,class System.String,value class System.StringComparison)",
+        "Value": 68
+      }
+    ],
+    "nested_native_versions": [
+      {
+        "start": 4513608128,
+        "size": 444,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ParseExisting",
+        "tier": "Optimized"
+      },
+      {
+        "start": 4513670304,
+        "size": 1016,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.Parse",
+        "tier": "Optimized"
+      },
+      {
+        "start": 4513966688,
+        "size": 2868,
+        "name": "Cohesive.Relations.Benchmarks.ObservationNestedLayoutBenchmarks.ParseForcedFallback",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4513969888,
+        "size": 1848,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ParseForcedFallback",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4513971776,
+        "size": 2820,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.Fallback",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4527017824,
+        "size": 736,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure",
+        "tier": "OptimizedTier1OSR"
+      }
+    ]
+  },
+  "separated": {
+    "total_samples": 6184,
+    "selected_measure_samples": 4924,
+    "gc_poll_self_samples": 2725,
+    "speculative_self_samples": 5,
+    "top_nonpoll_self": [
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateFieldValue(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph,!!0&)",
+        "Value": 722
+      },
+      {
+        "Key": "System.Globalization.Ordinal.EqualsIgnoreCase_Scalar(wchar&,wchar&,int32)",
+        "Value": 285
+      },
+      {
+        "Key": "Cohesive.Model.Serialization.ObservationJsonReader+ReadScope.ReadFieldValue(value class System.Text.Json.Utf8JsonReader&,class Cohesive.Model.FieldDefinition,class Cohesive.Model.ShapeGraph)",
+        "Value": 250
+      },
+      {
+        "Key": "System.String.GetNonRandomizedHashCodeOrdinalIgnoreCase()",
+        "Value": 115
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.ConsumeValue(unsigned int8)",
+        "Value": 105
+      },
+      {
+        "Key": "Cohesive.Model.Serialization.ObservationJsonObjectBuilder.Set(class System.String,value class Cohesive.Model.ObservationValue)",
+        "Value": 89
+      },
+      {
+        "Key": "Cohesive.Model.Serialization.ObservationJsonReader.TryReadShape(value class System.Text.Json.Utf8JsonReader&,value class Cohesive.Model.GraphShapeId,class Cohesive.Model.ObservationLayout,value class System.Span`1<value class Cohesive.Model.ObservationValue>,value class System.Span`1<unsigned int64>,class System.String&)",
+        "Value": 84
+      },
+      {
+        "Key": "System.Collections.Generic.NonRandomizedStringEqualityComparer+OrdinalComparer.GetHashCode(class System.String)",
+        "Value": 83
+      },
+      {
+        "Key": "System.Text.Json.Utf8JsonReader.ConsumeNextToken(unsigned int8)",
+        "Value": 57
+      },
+      {
+        "Key": "Cohesive.Model.ObservationValidator.TryValidateObjectField(value class Cohesive.Model.ObservationValue&,class Cohesive.Model.TypeRef,value class Cohesive.Model.FieldCardinality,value class Cohesive.Model.FieldPresence,value class Cohesive.Model.FieldNullability,class Cohesive.Model.ShapeGraph,int32,!!0&,class Cohesive.Model.ObservationValidationPlan)",
+        "Value": 56
+      }
+    ],
+    "nested_native_versions": [
+      {
+        "start": 4539431008,
+        "size": 444,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ParseExisting",
+        "tier": "Optimized"
+      },
+      {
+        "start": 4539494208,
+        "size": 1016,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.Parse",
+        "tier": "Optimized"
+      },
+      {
+        "start": 4539528128,
+        "size": 936,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.TryParseOnly",
+        "tier": "Optimized"
+      },
+      {
+        "start": 4539757488,
+        "size": 20,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate+Node.get_Layout",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4539763184,
+        "size": 20,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate+Node.get_Element",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4539763232,
+        "size": 908,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.Read",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4539764192,
+        "size": 1892,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ReadRecord",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4552787328,
+        "size": 2956,
+        "name": "Cohesive.Relations.Benchmarks.ObservationNestedLayoutBenchmarks.ParseSharedSeparated",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4552790624,
+        "size": 2928,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.ParseSeparated",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4552793600,
+        "size": 2820,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutCandidate.Fallback",
+        "tier": "OptimizedTier1"
+      },
+      {
+        "start": 4552845376,
+        "size": 932,
+        "name": "Cohesive.Relations.Benchmarks.NestedLayoutProfile.Measure",
+        "tier": "OptimizedTier1OSR"
+      }
+    ]
+  }
+}

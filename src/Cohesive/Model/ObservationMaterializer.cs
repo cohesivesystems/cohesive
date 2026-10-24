@@ -41,6 +41,7 @@ public sealed class ObservationMaterializer<T>
     readonly Func<IObservationFieldReader, T> materialize;
     readonly ObservationLayout? ordinalLayout;
     readonly Func<IOrdinalObservationFieldReader, T>? materializeByOrdinal;
+    readonly ObservationJsonIngestionPlan? jsonIngestion;
 
     internal ObservationMaterializer(
         QualifiedShapeId shapeId,
@@ -52,6 +53,7 @@ public sealed class ObservationMaterializer<T>
         this.materialize = Guard.RequireNotNull(materialize);
         this.ordinalLayout = ordinalLayout;
         this.materializeByOrdinal = materializeByOrdinal;
+        jsonIngestion = ordinalLayout is null ? null : ObservationJsonIngestionPlan.Create(ordinalLayout);
     }
 
     /// <summary>Gets the exact graph-qualified shape accepted by this materializer.</summary>
@@ -88,7 +90,10 @@ public sealed class ObservationMaterializer<T>
     /// bound layout supplies the graph and ordinals. Validation covers the whole record, including unmapped
     /// fields, before any converter executes. This strict entry point does not change ordinary JSON conversion
     /// or the behavior of <see cref="Materialize(IObservationFieldReader)"/> on already validated readers.
-    /// Serializer options configure CLR projection; they do not relax JSON shape admission.
+    /// Serializer options configure CLR projection; they do not relax JSON shape admission. Nested record
+    /// layouts and validation ordinals are prepared once at compilation. Exact names use owned ordinal
+    /// storage; case variants and unknown nested members retain the original typed-reader semantics.
+    /// These private physical layouts are never exposed as domain shape identities.
     /// </remarks>
     /// <exception cref="InvalidOperationException">The plan has no bound ordinal layout, a required mapped
     /// field is absent, conversion fails, or a converter returns null for a non-nullable target member.</exception>
@@ -109,7 +114,7 @@ public sealed class ObservationMaterializer<T>
             : (rented = ArrayPool<ulong>.Shared.Rent(wordCount)).AsSpan(0, wordCount);
         try
         {
-            if (!ObservationJsonReader.TryReadShape(utf8Json, shape, layout, values, presence, out var error))
+            if (!ObservationJsonReader.TryReadShape(utf8Json, shape, layout, values, presence, out var error, jsonIngestion))
                 throw new ArgumentException($"JSON observation does not adhere to shape '{ShapeId}': {error}", nameof(utf8Json));
             var count = 0;
             foreach (var word in presence) count += BitOperations.PopCount(word);

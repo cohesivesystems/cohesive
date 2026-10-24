@@ -6,9 +6,15 @@ namespace Cohesive.Model;
 // One owned value vector; names and ordinals are shared by all observations with this layout.
 // The dictionary interface is a view, not another field-value store.
 internal sealed class OrdinalObservationFields(ObservationLayout layout, ImmutableArray<ObservationValue> values, int count)
-    : IReadOnlyDictionary<string, ObservationValue>, IOrdinalObservationFieldReader
+    : IOrdinalObservationStorage
 {
     public ObservationLayout Layout => layout;
+    public int NextPresentOrdinal(int after)
+    {
+        for (var ordinal = after + 1; ordinal < values.Length; ordinal++)
+            if (values[ordinal].Kind != ObservationValueKind.Undefined) return ordinal;
+        return -1;
+    }
     public QualifiedShapeId ShapeId => layout.ShapeId;
     public int Count => count;
     public ObservationValue this[string key] => TryGetValue(key, out var value) ? value : throw new KeyNotFoundException(key);

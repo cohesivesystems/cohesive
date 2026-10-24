@@ -10,34 +10,26 @@ namespace Cohesive.Model.Serialization;
 // storage. Finish enumeration before disposal. Streaming frames transfer ownership by reference.
 internal ref struct OrderedObservationFields
 {
-    ImmutableSortedDictionary<string, ObservationValue>? sorted;
-    OrdinalObservationFields? ordinal;
-    SmallObservationFields? small;
+    ObservationFieldStorage canonical;
     ObservationFieldBuffer rental;
 
     internal OrderedObservationFields(IReadOnlyDictionary<string, ObservationValue>? fields, ArrayPool<KeyValuePair<string, ObservationValue>>? pool = null)
     {
         rental = default;
-        pool ??= ArrayPool<KeyValuePair<string, ObservationValue>>.Shared;
-        ordinal = fields as OrdinalObservationFields;
-        small = fields as SmallObservationFields;
-        if (ordinal is not null || small is not null)
+        // Storage that is already in ordinal key order, including packed sparse records, is enumerated in place.
+        var storage = ObservationFieldStorage.Of(fields);
+        if (storage.IsCanonicallyOrdered)
         {
-            sorted = null;
-        }
-        else if (fields is ImmutableSortedDictionary<string, ObservationValue> ordered
-            && ReferenceEquals(ordered.KeyComparer, StringComparer.Ordinal))
-        {
-            sorted = ordered;
+            canonical = storage;
         }
         else
         {
-            sorted = null;
-            rental = RentOrderedObservationProperties(fields, pool);
+            canonical = default;
+            rental = RentOrderedObservationProperties(storage.Fields, pool ?? ArrayPool<KeyValuePair<string, ObservationValue>>.Shared);
         }
     }
 
-    public Enumerator GetEnumerator() => new(sorted, ordinal, small, rental.Buffer, rental.Count);
+    public Enumerator GetEnumerator() => new(canonical, rental.Buffer, rental.Count);
 
     // Move the sole rental into an empty private streaming-stack slot.
     internal void MoveBufferTo(ref ObservationFieldBuffer target) => rental.MoveTo(ref target);
@@ -45,46 +37,29 @@ internal ref struct OrderedObservationFields
     public void Dispose()
     {
         rental.Dispose();
-        sorted = null;
-        ordinal = null;
-        small = null;
+        canonical = default;
     }
 
     internal struct Enumerator : IDisposable
     {
         readonly KeyValuePair<string, ObservationValue>[]? buffer;
         readonly int count;
-        readonly bool isSorted;
-        readonly OrdinalObservationFields? ordinal;
-        readonly SmallObservationFields? small;
-        OrdinalObservationFields.Enumerator ordinalEnumerator;
-        ImmutableSortedDictionary<string, ObservationValue>.Enumerator sorted;
+        readonly bool inPlace;
+        ObservationFieldStorage.CanonicalEnumerator storage;
         int index;
 
-        internal Enumerator(ImmutableSortedDictionary<string, ObservationValue>? fields,
-            OrdinalObservationFields? ordinal, SmallObservationFields? small, KeyValuePair<string, ObservationValue>[]? buffer, int count)
+        internal Enumerator(ObservationFieldStorage canonical, KeyValuePair<string, ObservationValue>[]? buffer, int count)
         {
-            this.ordinal = ordinal;
-            this.small = small;
-            ordinalEnumerator = ordinal is null ? default : ordinal.GetCanonicalEnumerator();
+            inPlace = canonical.IsCanonicallyOrdered;
+            storage = inPlace ? canonical.GetCanonicalEnumerator() : default;
             this.buffer = buffer;
-            this.count = small?.Count ?? count;
-            isSorted = fields is not null;
-            sorted = fields is null ? default : fields.GetEnumerator();
+            this.count = count;
             index = -1;
         }
 
-        public KeyValuePair<string, ObservationValue> Current => small is not null ? small.At(index) : ordinal is not null ? ordinalEnumerator.Current : isSorted ? sorted.Current : buffer![index];
-        public bool MoveNext()
-        {
-            if (ordinal is null)
-            {
-                if (isSorted) return sorted.MoveNext();
-                return ++index < count;
-            }
-            return ordinalEnumerator.MoveNext();
-        }
-        public void Dispose() { if (isSorted) sorted.Dispose(); }
+        public KeyValuePair<string, ObservationValue> Current => inPlace ? storage.Current : buffer![index];
+        public bool MoveNext() => inPlace ? storage.MoveNext() : ++index < count;
+        public void Dispose() { if (inPlace) storage.Dispose(); }
     }
 
     static ObservationFieldBuffer RentOrderedObservationProperties(
