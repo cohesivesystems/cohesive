@@ -17,7 +17,7 @@ public sealed class FulfillmentStorage : StorageModel
     public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints, FulfillmentHistoryPolicy history)
     {
         Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
-            new(FulfillmentStoragePolicy.OrdersDatabaseName), storage =>
+            new(history.DatabaseName), storage =>
             {
                 storage.Schema(PostgresSchemaInitialization.CreateIfMissing, schema =>
                 {
@@ -30,8 +30,7 @@ public sealed class FulfillmentStorage : StorageModel
                 storage.SchemaPreparation(typeof(FulfillmentStorage).Assembly, "Orders.schema.sql");
                 storage.TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition),
                 initialization: PostgresSchemaInitialization.CreateIfMissing);
-                storage.History(new MartenEntityHistoryConfiguration(history.Authority, history.Reconstitution,
-                    initialization: PostgresSchemaInitialization.CreateIfMissing));
+                storage.History(history.History);
                 storage.Outbox(new("public", "cohesive_transition_outbox"),
                     initialization: PostgresSchemaInitialization.CreateIfMissing);
                 storage.Entity(domain.Orders, mappings.Orders);
@@ -45,13 +44,4 @@ public sealed class FulfillmentStorage : StorageModel
     public PostgresPersistenceBindings Bindings { get; }
 
 
-}
-
-/// <summary>Demo environment selection; switching authority for existing data requires migration.</summary>
-public sealed class FulfillmentHistoryPolicy
-{
-    /// <summary>Authoritative entity representation.</summary>
-    public EntityStateAuthority Authority { get; init; } = EntityStateAuthority.State;
-    /// <summary>History read policy.</summary>
-    public EntityReconstitutionMode Reconstitution { get; init; } = EntityReconstitutionMode.CheckpointAndTail;
 }

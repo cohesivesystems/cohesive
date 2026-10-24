@@ -102,3 +102,12 @@ to check the selected range without decoding the entire stream. This adds bounde
 no write-throughput improvement is claimed. Read-side integrity and range bounds remain independently checked.
 Outbox byte-limited reads return a partial page with its last included sequence; an individually oversized
 or corrupt commit still fails rather than being silently skipped.
+
+### Model-owned native expectations
+
+`MartenEntityHistoryConfiguration` declares the document/event schema (`schemaName`, default
+`public`) as well as authority, reconstitution and initialization. Apply `Configure(options)`
+when constructing the native DI-owned store; the host still supplies its connection and lifetime.
+Preparation rejects mismatched schemas, automatic schema changes, stream identity or event
+registration before native I/O. Validation-only remains the default; `CreateIfMissing` must be
+explicit. Use a dedicated history store because native initialization covers its configured objects.

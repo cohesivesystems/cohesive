@@ -118,6 +118,8 @@ public sealed class ApplicationModelBuilder
                 foreach (var dependency in Dependencies(implementation)) Discover(dependency, visited);
             return;
         }
+        if (root.IsDefined(typeof(ExplicitModelRegistrationAttribute), inherit: true))
+            throw new InvalidOperationException($"Model policy '{root}' needs an explicit registration.");
         if (!root.IsClass || root.IsAbstract || root == typeof(string) || root.ContainsGenericParameters)
             throw new InvalidOperationException($"Model dependency '{root}' needs an explicit registration.");
         if (typeof(IDisposable).IsAssignableFrom(root) || typeof(IAsyncDisposable).IsAssignableFrom(root))

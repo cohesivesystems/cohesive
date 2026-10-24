@@ -118,3 +118,11 @@ It declares Host lifetime, never Durable. Request disconnects do not cancel admi
 receipt/result history. Capacity includes completed instances, with no eviction or automatic retry. For the
 HTTP composition, `BindHosted` prepares and registers this provider at ServiceApiBindingsBuilder.Build, leaving
 AppHost semantic inspection offline. See [the protocol](../../docs/design/accepted-process-api.md).
+
+### Explicit environment policies
+
+Mark environment-selected dependencies with `[ExplicitModelRegistration]` to prevent model
+auto-discovery from silently constructing defaults. Register an instance, factory or type in
+the activation services before `ModelActivator.Create`. Ordinary model dependencies still
+support constructor and required-init discovery. The marker validates registration, not the
+contents of a policy; its owner validates those values.

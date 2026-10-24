@@ -171,7 +171,7 @@ public sealed partial class OrderStorageIntegrationTests
             .Entity(Model.Domain.Reservations, Relocate(Model.Domain.Reservations))
             .Schema(initialization)
             .SchemaPreparation((_, _) => { callbacks++; return Task.CompletedTask; })
-            .History(new MartenEntityHistoryConfiguration(initialization: PostgresSchemaInitialization.CreateIfMissing)));
+            .History(new MartenEntityHistoryConfiguration(initialization: PostgresSchemaInitialization.CreateIfMissing, schemaName: historySchema)));
         using var store = DocumentStore.For(options =>
         {
             options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
@@ -557,8 +557,8 @@ public sealed partial class OrderStorageIntegrationTests
         });
         var services = new ServiceCollection().AddKeyedSingleton<IDocumentStore>("orders", store);
         await using var provider = services.BuildServiceProvider();
-        var validate = new MartenEntityHistoryConfiguration();
-        var create = new MartenEntityHistoryConfiguration(initialization: PostgresSchemaInitialization.CreateIfMissing);
+        var validate = new MartenEntityHistoryConfiguration(schemaName: schema);
+        var create = new MartenEntityHistoryConfiguration(initialization: PostgresSchemaInitialization.CreateIfMissing, schemaName: schema);
         await Assert.ThrowsAsync<Weasel.Core.Migrations.DatabaseValidationException>(() => validate.PrepareAsync(provider, "orders", database).AsTask());
         await Assert.ThrowsAsync<ArgumentException>(() => create.PrepareAsync(provider, "orders", other).AsTask());
         using var canceled = new CancellationTokenSource();
