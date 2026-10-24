@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.CompilerServices;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Observability;
 
@@ -226,6 +227,11 @@ public static class RelationQueryRealizationCompiler
         readonly ImmutableArray<RelationQueryTargetCapabilityEvidence> capabilityEvidence;
         readonly Dictionary<RelationQueryCapability, ImmutableArray<Proof>> proofs = [];
         readonly Dictionary<RelationQueryCapability, ImmutableArray<RelationQueryCapability>> missing = [];
+        // Preparation depends only on this match's fixed profile/policy. Cache failure facts,
+        // not diagnostics: messages and boundary validation still belong to each requirement.
+        readonly Dictionary<(Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required),
+            GuaranteePreparation> guaranteedProofs = new(GuaranteeProofComparer.Instance);
+        readonly Dictionary<RelationQueryGuaranteeCapabilityKind, ImmutableArray<Proof>> nativeGuaranteeProofs = [];
         readonly HashSet<RelationQueryCompositionRuleId> invalidRules = [];
         readonly ImmutableHashSet<RelationQueryOperatingBoundaryId> boundaryIds;
         readonly ImmutableDictionary<RelationQueryTargetCapabilityEvidenceId, RelationQueryTargetCapabilityEvidence>
@@ -658,13 +664,14 @@ public static class RelationQueryRealizationCompiler
             if (requirement.RequiredGuarantees.IsDefaultOrEmpty)
                 return new([proof], null);
 
-            var missingGuarantees = requirement.RequiredGuarantees
-                .Except(proof.Guarantees)
-                .ToImmutableArray();
-            if (missingGuarantees.IsDefaultOrEmpty)
-                return new([proof], null);
-
-            if (!proof.Rules.IsDefaultOrEmpty)
+            var key = (proof, requirement.RequiredGuarantees);
+            if (!guaranteedProofs.TryGetValue(key, out var prepared))
+            {
+                prepared = PrepareGuarantees(proof, requirement.RequiredGuarantees);
+                guaranteedProofs.Add(key, prepared);
+            }
+            prepared.RequireInitialized();
+            if (!prepared.MissingComposedGuarantees.IsDefaultOrEmpty)
             {
                 return new(
                     [],
@@ -672,44 +679,123 @@ public static class RelationQueryRealizationCompiler
                         RelationQueryUnavailableReason.CompositionUnavailable,
                         RelationQueryRealizationDiagnosticCodes.RequirementUnavailable,
                         $"Composed strategy for requirement '{requirement.Id.Value}' does not preserve guarantees: "
-                        + string.Join(", ", missingGuarantees),
+                        + string.Join(", ", prepared.MissingComposedGuarantees),
                         Boundary: null,
-                        [.. missingGuarantees.Select(static guarantee =>
+                        [.. prepared.MissingComposedGuarantees.Select(static guarantee =>
                             new GuaranteeRelationQueryCapability(guarantee))]));
             }
 
-            var guaranteed = ImmutableArray.Create(proof);
-            foreach (var guarantee in missingGuarantees)
+            if (prepared.UnavailableNativeGuarantee is { } missing)
             {
-                var capability = new GuaranteeRelationQueryCapability(guarantee);
-                var guaranteeProofs = capabilityEvidence
-                    .Where(item => Equals(item.Capability, capability))
-                    .GroupBy(
-                        static item => BoundaryKey(item.OperatingBoundaries),
-                        StringComparer.Ordinal)
-                    .OrderBy(static group => group.Key, StringComparer.Ordinal)
-                    .Select(static group => new Proof(
-                        [.. group.Select(static item => item.Id)],
-                        group.First().OperatingBoundaries,
-                        [],
-                        [((GuaranteeRelationQueryCapability)group.First().Capability).Kind]))
-                    .ToImmutableArray();
-                if (guaranteeProofs.IsDefaultOrEmpty)
-                {
-                    return new(
-                        [],
-                        new(
-                            RelationQueryUnavailableReason.CapabilityNotAdvertised,
-                            RelationQueryRealizationDiagnosticCodes.RequirementUnavailable,
-                            $"Native strategy for requirement '{requirement.Id.Value}' does not prove guarantee '{guarantee}'.",
-                            Boundary: null,
-                            [capability]));
-                }
+                return new([], new(
+                    RelationQueryUnavailableReason.CapabilityNotAdvertised,
+                    RelationQueryRealizationDiagnosticCodes.RequirementUnavailable,
+                    $"Native strategy for requirement '{requirement.Id.Value}' does not prove guarantee '{missing}'.",
+                    Boundary: null,
+                    [new GuaranteeRelationQueryCapability(missing)]));
+            }
+            return new(prepared.Proofs, null);
+        }
 
-                guaranteed = Combine(guaranteed, guaranteeProofs);
+        GuaranteePreparation PrepareGuarantees(Proof proof,
+            ImmutableArray<RelationQueryGuaranteeCapabilityKind> required)
+        {
+            var missing = required.Except(proof.Guarantees).ToImmutableArray();
+            if (missing.IsDefaultOrEmpty)
+                return GuaranteePreparation.Success([proof]);
+            if (!proof.Rules.IsDefaultOrEmpty)
+                return GuaranteePreparation.ComposedFailure(missing);
+
+            var guaranteed = ImmutableArray.Create(proof);
+            foreach (var guarantee in missing)
+            {
+                var evidence = NativeGuaranteeProofs(guarantee);
+                if (evidence.IsDefaultOrEmpty)
+                    return GuaranteePreparation.NativeFailure(guarantee);
+                guaranteed = Combine(guaranteed, evidence);
+            }
+            return GuaranteePreparation.Success(guaranteed);
+        }
+
+        ImmutableArray<Proof> NativeGuaranteeProofs(RelationQueryGuaranteeCapabilityKind guarantee)
+        {
+            if (nativeGuaranteeProofs.TryGetValue(guarantee, out var prepared))
+                return prepared;
+            var capability = new GuaranteeRelationQueryCapability(guarantee);
+            prepared = capabilityEvidence
+                .Where(item => Equals(item.Capability, capability))
+                .GroupBy(static item => BoundaryKey(item.OperatingBoundaries), StringComparer.Ordinal)
+                .OrderBy(static group => group.Key, StringComparer.Ordinal)
+                .Select(static group => new Proof(
+                    [.. group.Select(static item => item.Id)], group.First().OperatingBoundaries, [],
+                    [((GuaranteeRelationQueryCapability)group.First().Capability).Kind]))
+                .ToImmutableArray();
+            nativeGuaranteeProofs.Add(guarantee, prepared); // Empty evidence is also fixed for this match.
+            return prepared;
+        }
+
+        readonly struct GuaranteePreparation
+        {
+            private GuaranteePreparation(ImmutableArray<Proof> proofs,
+                ImmutableArray<RelationQueryGuaranteeCapabilityKind> missingComposedGuarantees,
+                RelationQueryGuaranteeCapabilityKind? unavailableNativeGuarantee)
+            {
+                Proofs = proofs;
+                MissingComposedGuarantees = missingComposedGuarantees;
+                UnavailableNativeGuarantee = unavailableNativeGuarantee;
             }
 
-            return new(guaranteed, null);
+            public ImmutableArray<Proof> Proofs { get; }
+            public ImmutableArray<RelationQueryGuaranteeCapabilityKind> MissingComposedGuarantees { get; }
+            public RelationQueryGuaranteeCapabilityKind? UnavailableNativeGuarantee { get; }
+
+            public void RequireInitialized()
+            {
+                if (Proofs.IsDefault)
+                    throw new InvalidOperationException("Guarantee preparation must be initialized through an outcome factory.");
+            }
+
+            public static GuaranteePreparation Success(ImmutableArray<Proof> proofs)
+            {
+                if (proofs.IsDefaultOrEmpty)
+                    throw new ArgumentException("Successful guarantee preparation requires at least one proof.", nameof(proofs));
+                return new(proofs, [], null);
+            }
+
+            public static GuaranteePreparation ComposedFailure(
+                ImmutableArray<RelationQueryGuaranteeCapabilityKind> missing)
+            {
+                if (missing.IsDefaultOrEmpty)
+                    throw new ArgumentException("Composed failure requires at least one missing guarantee.", nameof(missing));
+                return new([], missing, null);
+            }
+
+            public static GuaranteePreparation NativeFailure(
+                RelationQueryGuaranteeCapabilityKind missing)
+            {
+                if (!Enum.IsDefined(missing))
+                    throw new ArgumentOutOfRangeException(nameof(missing));
+                return new([], [], missing);
+            }
+        }
+
+        sealed class GuaranteeProofComparer : IEqualityComparer<(
+            Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required)>
+        {
+            internal static readonly GuaranteeProofComparer Instance = new();
+
+            public bool Equals(
+                (Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required) x,
+                (Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required) y) =>
+                ReferenceEquals(x.Proof, y.Proof) && x.Required.AsSpan().SequenceEqual(y.Required.AsSpan());
+
+            public int GetHashCode((Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required) key)
+            {
+                var hash = new HashCode();
+                hash.Add(RuntimeHelpers.GetHashCode(key.Proof));
+                foreach (var guarantee in key.Required) hash.Add(guarantee);
+                return hash.ToHashCode();
+            }
         }
 
         ProofValidation ValidateBoundaries(
