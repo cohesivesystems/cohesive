@@ -86,6 +86,28 @@ public sealed class CompositionModelTests
     }
 
     [Fact]
+    public void Storage_rejects_handle_escaped_from_failed_discovery_selection()
+    {
+        var builder = new Cohesive.Transitions.Authoring.DomainModelBuilder();
+        Cohesive.Transitions.Authoring.DomainEntity<Order>? escaped = null;
+        var catalog = Cohesive.Transitions.Authoring.DomainDiscovery.For<FulfillmentDomain>();
+        Assert.Throws<InvalidOperationException>(() => builder.Discover<int>(catalog, scope =>
+        {
+            escaped = scope.Entity<Order>();
+            throw new InvalidOperationException("Selection failed");
+        }));
+        Assert.NotNull(escaped);
+        var admitted = builder.Discover(catalog, scope => scope.Entity<Order>());
+        Assert.NotSame(escaped.Definition, admitted.Definition);
+        var model = TestModels.Fulfillment();
+        Assert.Equal(model.Domain.Orders.Definition.StateShape.QualifiedId, escaped.Definition.StateShape.QualifiedId);
+        var storage = Cohesive.Adapters.Postgres.PostgresPersistenceBindings.Define(new("orders"),
+            bindings => bindings.Entity(admitted, model.Storage.Bindings.Mapping(model.Domain.Orders)));
+        Assert.Throws<ArgumentException>(() => storage.Mapping(escaped));
+        Assert.NotNull(storage.Mapping(admitted));
+    }
+
+    [Fact]
     public void Independent_program_models_keep_typed_authorities_isolated_but_semantically_equal()
     {
         var appHost = TestModels.Fulfillment();

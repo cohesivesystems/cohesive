@@ -2,7 +2,7 @@
 
 ## Instance composition
 
-`DomainModel` offers optional instance authoring over `DomainModelBuilder`: declare entities in the derived constructor and use inherited `Definition`. First access freezes the builder and caches the exact immutable entity catalog; late additions fail. No reflection or virtual construction hook is used.
+`DomainModel` offers optional instance authoring over `DomainModelBuilder`: declare entities in the derived constructor and use inherited `Definition`. First access freezes the builder and caches the exact immutable entity catalog; late additions fail. Explicit authoring uses no reflection discovery or virtual construction hook. Optional scoped discovery uses the same POCO shape projection.
 
 `Cohesive.Transitions` models one entity change as portable, inspectable semantics: admission rules, branching,
 sparse updates, invariants, interactions, machine movements, and typed outcomes.
@@ -175,3 +175,85 @@ Domain entity handles expose `entity.Transition<TInput, TOutcome>(id, revision, 
 with the entity's exact declared shape and caller attribution; no parallel model or invocation-time
 compilation is introduced. Instance methods retain the entity type without repeating it as a method
 argument; generic extension receivers cannot partially infer explicit method type arguments here.
+
+## Scoped entity discovery and explicit-model verification
+
+Discovery is an opt-in authoring producer, not assembly-wide convention-based semantics:
+
+```csharp
+sealed class SalesModule;
+
+[DomainEntity(typeof(SalesModule), "sales/order")]
+public record Order(string Id, int Quantity);
+
+var declarations = DomainDiscovery.For<SalesModule>();
+var builder = new DomainModelBuilder().Version("1");
+var order = builder.Discover(declarations, entities => entities.Entity<Order>());
+var model = builder.Build();
+```
+
+Only attributed types belonging to the selected marker in **its own assembly** participate.
+No unrelated loaded assemblies, constructors or property getters are evaluated. Stable entity
+names are explicit; properties use the existing `ObjectEntityDefinition` projection, including
+serialized member names. Reflection metadata and definitions are prepared once per module.
+For trimmed/AOT applications, preserve the selected types and their public properties or use
+explicit registration; reflection discovery is annotated as requiring unreferenced code.
+
+An explicit model can verify discovery coverage at completion, regardless of registration order:
+
+```csharp
+var builder = new DomainModelBuilder().Version("1")
+    .VerifyDiscovery(declarations, DomainDiscoveryCoverage.ExactMembership);
+var order = builder.Entity<Order>("sales/order");
+var model = builder.Build();
+```
+
+The default `DiscoveredEntities` mode requires all discovered entities but allows additional
+explicit entities. `ExactMembership` also rejects extras. `declarations.Exclude<Order>("Owned by
+another service")` returns a new catalog retaining the omission reason; unknown exclusions fail.
+`DomainModel` subclasses expose the same protected `Discover` and `VerifyDiscovery` operations.
+`declarations.Verify(model)` returns structured diagnostics without throwing; builder completion
+raises `DomainDiscoveryException` with all failed coverage and state-shape checks.
+
+Verification compares canonical state-shape identity, not CLR reference identity. It does **not**
+infer or verify behavioral invariants, transitions, relationship semantics, identity policy,
+storage or infrastructure. Those remain explicit declarations. Exclusion reasons and CLR module
+membership are inspectable authoring metadata; only canonical entities enter the portable IR.
+This check detects registration omissions and shape drift, not independent proof of domain correctness.
+
+The running Aspire fulfillment domain uses discovery and typed handles for its order, inventory,
+and reservation entities; existing transitions, relationships, queries and storage all consume
+those same definitions. Discovery does not require re-registering an entity to attach behavior.
+Model activation calls `IAuthoringModel.Complete`, which performs scheduled verification before
+returning models to their consumers. For manual construction, request `Definition` during setup:
+its first access can throw `DomainDiscoveryException` and caches that failure.
+
+Discovered shapes are cached, but each domain owns distinct entity definitions. Prefer the
+projection overload below for discovery. Keep `Entity<T>(name)` for explicit declarations;
+matching named adoption remains supported for code shared between the two authoring modes.
+Storage bindings still reject handles from a different domain instance.
+
+For instance models, discovery and property assignment can be one expression:
+
+```csharp
+(Orders, Inventory, Reservations) = Discover(DomainDiscovery.For<FulfillmentDomain>(),
+    entities => (entities.Entity<Order>(), entities.Entity<InventoryItem>(), entities.Entity<Reservation>()));
+```
+
+The builder exposes the same projection overload. Selection receives a read-only, domain-owned
+scope containing only this catalog's included declarations. It cannot escape the model's freeze
+rules by retaining a mutable builder. The callback selects from staged definitions before
+registration. If it throws (including selection of an excluded type), discovery adds nothing,
+and the builder can be corrected and reused. External side effects performed by callbacks are
+not rolled back. Builder mutation and materialization through captured references are rejected
+while selection runs; the guard is cleared even when selection throws. Escaped handles from a
+failed selection are not registered and do not match a subsequent registration's storage authority.
+Plain discovery delegates to the same staged registration path as projected discovery. There is
+no separate allocation-optimized path or performance claim.
+
+A retained handle from a failed selector is not revoked: it still describes a valid immutable
+entity and can author transitions or relationships. It is not registered in the failed domain,
+and does not become the authority of a later successful registration. Storage bindings for that
+successful domain reject it, even if its canonical shape is identical. Discovery provides atomic
+registration, not a capability sandbox for caller-owned authoring objects. A discovered CLR type cannot be re-registered under a different semantic
+name: `Entity<Order>("different-name")` fails without changing the domain.
