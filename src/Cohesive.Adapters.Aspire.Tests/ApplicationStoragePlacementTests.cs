@@ -38,13 +38,16 @@ public sealed class ApplicationStoragePlacementTests
     sealed class NativeStore : StorageModel
     {
         public int Preparations;
-        public NativeStore(FulfillmentDomain domain, FulfillmentPostgresMappings mappings)
+        public NativeStore(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, string schema = "public")
         {
+            PostgresEntityRepositoryMapping Relocate(PostgresEntityRepositoryMapping mapping) =>
+                new(new Cohesive.Adapters.Sql.SqlQualifiedTable(schema, mapping.Table.TableName.Value),
+                    mapping.Fields, mapping.IdentityField, mapping.PartitionField, mapping.VersionColumn.Value);
             var bindings = Storage.Define(() => PostgresPersistenceBindings.Define(new("orders"), storage => storage
                 .Schema(PostgresSchemaInitialization.CreateIfMissing)
                 .SchemaPreparation((_, _) => { Preparations++; return Task.CompletedTask; })
-                .Entity(domain.Orders, mappings.Orders).Entity(domain.Reservations, mappings.Reservations)
-                .Entity(domain.Inventory, mappings.Inventory)));
+                .Entity(domain.Orders, Relocate(mappings.Orders)).Entity(domain.Reservations, Relocate(mappings.Reservations))
+                .Entity(domain.Inventory, Relocate(mappings.Inventory))));
             Storage.Compose(() => new PostgresStorageComposition(bindings));
         }
     }
@@ -55,27 +58,38 @@ public sealed class ApplicationStoragePlacementTests
     [OrderStorageIntegrationTests.PostgresFact]
     public async Task Independent_modules_share_unchanged_placement_and_prepare_database_once()
     {
-        var domain = new FulfillmentDomain();
-        var queries = new FulfillmentQueries(domain);
-        var storage = new NativeStore(domain, new FulfillmentPostgresMappings(domain));
-        var orders = new ReadModule<OrderDetails>("details", queries.OrderDetails);
-        var inventory = new ReadModule<ReservationAvailability[]>("availability", queries.ReservationAvailability);
-        var model = Root(orders, inventory, storage);
+        var schema = "module_placement_" + Guid.NewGuid().ToString("N");
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")!);
-        var builder = WebApplication.CreateBuilder();
-        builder.Services.AddKeyedSingleton<NpgsqlDataSource>("orders", database);
-        builder.Services.AddCohesiveServices(model);
-        Assert.Equal(0, storage.Preparations);
-        await using var app = builder.Build();
-        await app.MapServicesAsync();
-        Assert.Equal(1, storage.Preparations);
-        app.Urls.Add("http://127.0.0.1:0"); await app.StartAsync();
-        using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
-        var id = Guid.NewGuid().ToString("D");
-        Assert.Equal(System.Net.HttpStatusCode.NotFound, (await client.GetAsync("/details/" + id)).StatusCode);
-        Assert.Equal("[]", await client.GetStringAsync("/availability/" + id));
-        Assert.Equal(1, storage.Preparations);
-        await app.StopAsync();
+        try
+        {
+            await using (var create = database.CreateCommand($"CREATE SCHEMA {schema}"))
+                await create.ExecuteNonQueryAsync();
+            var domain = new FulfillmentDomain();
+            var queries = new FulfillmentQueries(domain);
+            var storage = new NativeStore(domain, new FulfillmentPostgresMappings(domain), schema);
+            var orders = new ReadModule<OrderDetails>("details", queries.OrderDetails);
+            var inventory = new ReadModule<ReservationAvailability[]>("availability", queries.ReservationAvailability);
+            var model = Root(orders, inventory, storage);
+            var builder = WebApplication.CreateBuilder();
+            builder.Services.AddKeyedSingleton<NpgsqlDataSource>("orders", database);
+            builder.Services.AddCohesiveServices(model);
+            Assert.Equal(0, storage.Preparations);
+            await using var app = builder.Build();
+            await app.MapServicesAsync();
+            Assert.Equal(1, storage.Preparations);
+            app.Urls.Add("http://127.0.0.1:0"); await app.StartAsync();
+            using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
+            var id = Guid.NewGuid().ToString("D");
+            Assert.Equal(System.Net.HttpStatusCode.NotFound, (await client.GetAsync("/details/" + id)).StatusCode);
+            Assert.Equal("[]", await client.GetStringAsync("/availability/" + id));
+            Assert.Equal(1, storage.Preparations);
+            await app.StopAsync();
+        }
+        finally
+        {
+            await using var cleanup = database.CreateCommand($"DROP SCHEMA IF EXISTS {schema} CASCADE");
+            await cleanup.ExecuteNonQueryAsync();
+        }
     }
 
     [Fact]
