@@ -126,12 +126,7 @@ public sealed class DomainModelBuilder
     /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
     public DomainModelBuilder Discover(DomainDiscovery discovery)
     {
-        RequireNotSelecting();
-        ArgumentNullException.ThrowIfNull(discovery);
-        var declarations = discovery.IncludedDeclarations;
-        RequireAvailable(declarations);
-        foreach (var (type, template) in declarations)
-            Register(type, template with { });
+        Discover(discovery, static _ => true);
         return this;
     }
 
@@ -150,7 +145,7 @@ public sealed class DomainModelBuilder
         ArgumentNullException.ThrowIfNull(discovery);
         ArgumentNullException.ThrowIfNull(select);
         var declarations = discovery.IncludedDeclarations;
-        RequireAvailable(declarations);
+        RequireAvailable(discovery);
         var selected = ImmutableDictionary.CreateBuilder<Type, EntityDefinition>();
         foreach (var (type, template) in declarations)
             // Share immutable shape preparation, but retain domain-local definition authority.
@@ -165,11 +160,11 @@ public sealed class DomainModelBuilder
         return result;
     }
 
-    void RequireAvailable(ImmutableArray<KeyValuePair<Type, EntityDefinition>> declarations)
+    void RequireAvailable(DomainDiscovery discovery)
     {
-        foreach (var (type, entity) in declarations)
+        foreach (var (type, entity) in discovery.IncludedDeclarations)
             if (entityNames.Contains(entity.Name.Value) || discovered.ContainsKey(type))
-                throw new ArgumentException($"Entity '{entity.Name}' is already declared.", "discovery");
+                throw new ArgumentException($"Entity '{entity.Name}' is already declared.", nameof(discovery));
     }
 
     void Register(Type type, EntityDefinition entity)

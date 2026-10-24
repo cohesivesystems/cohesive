@@ -5,7 +5,9 @@ namespace Cohesive.Transitions.Authoring;
 
 /// <summary>Read-only typed selection over one catalog registered into a particular domain.</summary>
 /// <remarks>Handles share the domain's exact definitions. The scope exposes no builder mutation,
-/// excludes omitted declarations, and remains valid after the domain freezes.</remarks>
+/// excludes omitted declarations, and remains valid after the domain freezes. If selection fails,
+/// retained handles remain usable for authoring but their definitions are not registered in the domain;
+/// they cannot stand in for a later registration's storage authority.</remarks>
 public sealed class DiscoveredDomainEntities
 {
     readonly ImmutableDictionary<Type, EntityDefinition> entities;

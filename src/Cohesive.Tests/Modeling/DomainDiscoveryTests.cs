@@ -207,6 +207,47 @@ public sealed class DomainDiscoveryTests
     }
 
     [Fact]
+    public void Every_public_builder_operation_except_handle_reads_is_guarded_during_selection()
+    {
+        var methods = typeof(DomainModelBuilder).GetMethods(System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
+        foreach (var definition in methods)
+        {
+            // This is the only read-only operation; new public APIs must exercise the guard or
+            // be deliberately classified as read-only here.
+            if (definition.Name == nameof(DomainModelBuilder.Entity) && definition.IsGenericMethodDefinition &&
+                definition.GetParameters().Length == 0) continue;
+            var method = definition.IsGenericMethodDefinition
+                ? definition.MakeGenericMethod(definition.Name == nameof(DomainModelBuilder.Entity) ? typeof(Order) : typeof(string))
+                : definition;
+            var arguments = method.GetParameters().Select(parameter => Argument(parameter.ParameterType)).ToArray();
+            var builder = new DomainModelBuilder();
+            builder.Entity<Other>("existing");
+            builder.Discover(DomainDiscovery.For<Module>(), _ =>
+            {
+                var wrapped = Assert.Throws<System.Reflection.TargetInvocationException>(() => method.Invoke(builder, arguments));
+                var rejected = Assert.IsType<InvalidOperationException>(wrapped.InnerException);
+                Assert.Contains("during discovery selection", rejected.Message);
+                return true;
+            });
+            Assert.Equal(3, builder.Build().Entities.Length);
+        }
+
+        static object Argument(Type type)
+        {
+            if (type == typeof(string)) return "test";
+            if (type == typeof(AnnotationValue)) return AnnotationValue.FromObject("value");
+            if (type == typeof(DomainDiscovery)) return DomainDiscovery.For<Module>();
+            if (type == typeof(DomainDiscoveryCoverage)) return DomainDiscoveryCoverage.ExactMembership;
+            if (type == typeof(Action<EntityBuilder>))
+                return (Action<EntityBuilder>)(entity => entity.Field("id", DomainTypes.String()));
+            if (type == typeof(Func<DiscoveredDomainEntities, string>))
+                return (Func<DiscoveredDomainEntities, string>)(_ => "selected");
+            throw new InvalidOperationException($"Provide valid guard-test input for new builder parameter type '{type}'.");
+        }
+    }
+
+    [Fact]
     public void Activation_verifies_before_exposing_the_domain()
     {
         var error = Assert.Throws<DomainDiscoveryException>(() => ModelActivator.Create<InvalidDomain>());

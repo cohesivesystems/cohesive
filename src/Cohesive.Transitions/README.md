@@ -248,6 +248,12 @@ and the builder can be corrected and reused. External side effects performed by 
 not rolled back. Builder mutation and materialization through captured references are rejected
 while selection runs; the guard is cleared even when selection throws. Escaped handles from a
 failed selection are not registered and do not match a subsequent registration's storage authority.
-Plain discovery skips the selector scope and staging dictionary, while retaining domain-local
-copies of definitions required for ownership isolation. A discovered CLR type cannot be re-registered under a different semantic
+Plain discovery delegates to the same staged registration path as projected discovery. There is
+no separate allocation-optimized path or performance claim.
+
+A retained handle from a failed selector is not revoked: it still describes a valid immutable
+entity and can author transitions or relationships. It is not registered in the failed domain,
+and does not become the authority of a later successful registration. Storage bindings for that
+successful domain reject it, even if its canonical shape is identical. Discovery provides atomic
+registration, not a capability sandbox for caller-owned authoring objects. A discovered CLR type cannot be re-registered under a different semantic
 name: `Entity<Order>("different-name")` fails without changing the domain.
