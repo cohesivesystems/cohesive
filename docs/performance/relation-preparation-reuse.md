@@ -56,7 +56,8 @@ remain authoritative. Failure *facts* are reusable; diagnostic objects and messa
 for their requirement. Preparation records the full missing set for composed proofs separately from
 the first unavailable native guarantee; only preparation classifies the proof strategy. A private
 constructor and an outcome-specific factory for success, composed failure and native failure prevent
-callers from populating both failure fields. Requirement-specific boundary facts and measurements are always validated
+callers from populating both failure fields. The consumer rejects a default struct before reading
+any outcome, using the default proofs array as the uninitialized sentinel. Requirement-specific boundary facts and measurements are always validated
 independently. A five-row page-size proof cannot admit a later 40-row demand against a 25-row boundary.
 Overrides keep their existing validation and diagnostics. Final report validation is unchanged.
 

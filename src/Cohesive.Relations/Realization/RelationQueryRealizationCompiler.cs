@@ -670,6 +670,8 @@ public static class RelationQueryRealizationCompiler
                 prepared = PrepareGuarantees(proof, requirement.RequiredGuarantees);
                 guaranteedProofs.Add(key, prepared);
             }
+            if (prepared.Proofs.IsDefault)
+                throw new InvalidOperationException("Guarantee preparation must be initialized through an outcome factory.");
             if (!prepared.MissingComposedGuarantees.IsDefaultOrEmpty)
             {
                 return new(
