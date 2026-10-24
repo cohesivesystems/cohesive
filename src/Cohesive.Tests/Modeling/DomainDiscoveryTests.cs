@@ -147,6 +147,46 @@ public sealed class DomainDiscoveryTests
     }
 
     [Fact]
+    public void Excluded_selection_leaves_builder_unchanged_and_can_be_corrected()
+    {
+        var builder = new DomainModelBuilder();
+        var existing = builder.Entity<Other>("existing");
+        var catalog = DomainDiscovery.For<Module>().Exclude<Customer>("Separate service");
+        Assert.Throws<ArgumentException>(() => builder.Discover(catalog, scope => scope.Entity<Customer>()));
+        Assert.Same(existing.Definition, Assert.Single(builder.Build().Entities));
+        Assert.Throws<ArgumentException>(() => builder.Entity<Order>());
+        var order = builder.Discover(catalog, scope => scope.Entity<Order>());
+        Assert.Equal(2, builder.Build().Entities.Length);
+        Assert.Same(order.Definition, builder.Entity<Order>().Definition);
+    }
+
+    [Fact]
+    public void Arbitrary_selector_failure_commits_no_staged_definitions()
+    {
+        var builder = new DomainModelBuilder();
+        builder.Entity<Other>("existing");
+        var failure = new InvalidOperationException("selection failed");
+        Assert.Same(failure, Assert.Throws<InvalidOperationException>(() =>
+            builder.Discover<int>(DomainDiscovery.For<Module>(), _ => throw failure)));
+        Assert.Single(builder.Build().Entities);
+        builder.Discover(DomainDiscovery.For<Module>());
+        Assert.Equal(3, builder.Build().Entities.Length);
+    }
+
+    [Fact]
+    public void Conflicting_callback_mutation_does_not_partially_commit_discovery()
+    {
+        var builder = new DomainModelBuilder();
+        Assert.Throws<ArgumentException>(() => builder.Discover(DomainDiscovery.For<Module>(), scope =>
+        {
+            builder.Entity<Order>("order"); // Explicit external callback side effect is not rolled back.
+            return scope.Entity<Customer>();
+        }));
+        Assert.Equal("order", Assert.Single(builder.Build().Entities).Name.Value);
+        Assert.Throws<ArgumentException>(() => builder.Entity<Customer>());
+    }
+
+    [Fact]
     public void Activation_verifies_before_exposing_the_domain()
     {
         var error = Assert.Throws<DomainDiscoveryException>(() => ModelActivator.Create<InvalidDomain>());

@@ -59,6 +59,8 @@ public sealed class DomainModelBuilder
     /// <typeparam name="T">Canonical state authoring type.</typeparam>
     /// <param name="name">Stable semantic name, independent of the CLR type name.</param>
     /// <returns>A handle retaining the exact definition included in Build.</returns>
+    /// <remarks>Use this overload for explicit declarations. For discovery, prefer the Discover projection
+    /// overload; matching named adoption is supported for shared explicit/discovery authoring code.</remarks>
     /// <exception cref="ArgumentException">The entity name is already declared, invalid, or differs from its discovered name.</exception>
     public DomainEntity<T> Entity<T>(string name) where T : notnull
     {
@@ -105,19 +107,7 @@ public sealed class DomainModelBuilder
     /// <exception cref="ArgumentException">An identity is already registered; no entities are added.</exception>
     public DomainModelBuilder Discover(DomainDiscovery discovery)
     {
-        ArgumentNullException.ThrowIfNull(discovery);
-        var declarations = discovery.IncludedDeclarations;
-        foreach (var (_, entity) in declarations)
-            if (entityNames.Contains(entity.Name.Value))
-                throw new ArgumentException($"Entity '{entity.Name}' is already declared.", nameof(discovery));
-        foreach (var (type, template) in declarations)
-        {
-            // Retain immutable shape preparation, but preserve domain-local authority for native bindings.
-            var entity = template with { };
-            discovered.Add(type, entity);
-            entityNames.Add(entity.Name.Value);
-            entities.Add(entity);
-        }
+        Discover(discovery, static _ => true);
         return this;
     }
 
@@ -128,15 +118,36 @@ public sealed class DomainModelBuilder
     /// <returns>The projected handles.</returns>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ArgumentException">Registration conflicts or selection requests an excluded type.</exception>
-    /// <remarks>Registration completes before selection. If the callback throws, the entities remain registered.</remarks>
+    /// <remarks>Selection runs on staged definitions. A failed selection registers nothing. Callbacks should not mutate the builder through captured references.</remarks>
     public TResult Discover<TResult>(DomainDiscovery discovery, Func<DiscoveredDomainEntities, TResult> select)
     {
+        ArgumentNullException.ThrowIfNull(discovery);
         ArgumentNullException.ThrowIfNull(select);
-        Discover(discovery);
+        var declarations = discovery.IncludedDeclarations;
+        RequireAvailable();
         var selected = ImmutableDictionary.CreateBuilder<Type, EntityDefinition>();
-        foreach (var (type, _) in discovery.IncludedDeclarations)
-            selected.Add(type, discovered[type]);
-        return select(new(selected.ToImmutable()));
+        foreach (var (type, template) in declarations)
+            // Share immutable shape preparation, but retain domain-local definition authority.
+            selected.Add(type, template with { });
+        var staged = selected.ToImmutable();
+        var result = select(new(staged));
+        // A captured builder may have changed during selection; never partially commit discovery.
+        RequireAvailable();
+        foreach (var (type, _) in declarations)
+        {
+            var entity = staged[type];
+            discovered.Add(type, entity);
+            entityNames.Add(entity.Name.Value);
+            entities.Add(entity);
+        }
+        return result;
+
+        void RequireAvailable()
+        {
+            foreach (var (type, entity) in declarations)
+                if (entityNames.Contains(entity.Name.Value) || discovered.ContainsKey(type))
+                    throw new ArgumentException($"Entity '{entity.Name}' is already declared.", nameof(discovery));
+        }
     }
 
     /// <summary>Schedules coverage verification at Build, independent of registration order.</summary>

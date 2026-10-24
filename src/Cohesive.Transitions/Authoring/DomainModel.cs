@@ -44,7 +44,7 @@ public abstract class DomainModel : IAuthoringModel
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ArgumentException">Registration conflicts or selection requests an excluded type.</exception>
     /// <exception cref="InvalidOperationException">The model is frozen.</exception>
-    /// <remarks>If selection throws, the entities remain registered.</remarks>
+    /// <remarks>Selection runs before registration; if it throws, no discovered entities are registered.</remarks>
     protected TResult Discover<TResult>(DomainDiscovery discovery, Func<DiscoveredDomainEntities, TResult> select) =>
         definition.Edit(() => builder.Discover(discovery, select));
 

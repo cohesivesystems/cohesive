@@ -187,8 +187,8 @@ sealed class SalesModule;
 public record Order(string Id, int Quantity);
 
 var declarations = DomainDiscovery.For<SalesModule>();
-var builder = new DomainModelBuilder().Version("1").Discover(declarations);
-var order = builder.Entity<Order>(); // Domain-owned handle; supports Transition/References/QueryShape.
+var builder = new DomainModelBuilder().Version("1");
+var order = builder.Discover(declarations, entities => entities.Entity<Order>());
 var model = builder.Build();
 ```
 
@@ -228,8 +228,9 @@ Model activation calls `IAuthoringModel.Complete`, which performs scheduled veri
 returning models to their consumers. For manual construction, request `Definition` during setup:
 its first access can throw `DomainDiscoveryException` and caches that failure.
 
-Discovered shapes are cached, but each domain owns distinct entity definitions. `Entity<T>()`
-resolves an included discovered entity; `Entity<T>(name)` also adopts it when type and name match.
+Discovered shapes are cached, but each domain owns distinct entity definitions. Prefer the
+projection overload below for discovery. Keep `Entity<T>(name)` for explicit declarations;
+matching named adoption remains supported for code shared between the two authoring modes.
 Storage bindings still reject handles from a different domain instance.
 
 For instance models, discovery and property assignment can be one expression:
@@ -241,6 +242,8 @@ For instance models, discovery and property assignment can be one expression:
 
 The builder exposes the same projection overload. Selection receives a read-only, domain-owned
 scope containing only this catalog's included declarations. It cannot escape the model's freeze
-rules by retaining a mutable builder. The callback runs after registration; if it fails, the
-registration remains. A discovered CLR type cannot be re-registered under a different semantic
+rules by retaining a mutable builder. The callback selects from staged definitions before
+registration. If it throws (including selection of an excluded type), discovery adds nothing,
+and the builder can be corrected and reused. External side effects performed by callbacks are
+not rolled back; callbacks should not mutate the builder through captured references. A discovered CLR type cannot be re-registered under a different semantic
 name: `Entity<Order>("different-name")` fails without changing the domain.
