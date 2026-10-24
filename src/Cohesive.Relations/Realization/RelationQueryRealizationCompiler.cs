@@ -670,10 +670,7 @@ public static class RelationQueryRealizationCompiler
                 prepared = PrepareGuarantees(proof, requirement.RequiredGuarantees);
                 guaranteedProofs.Add(key, prepared);
             }
-            if (prepared.Missing.IsDefaultOrEmpty)
-                return new(prepared.Proofs, null);
-
-            if (!proof.Rules.IsDefaultOrEmpty)
+            if (!prepared.MissingComposedGuarantees.IsDefaultOrEmpty)
             {
                 return new(
                     [],
@@ -681,19 +678,22 @@ public static class RelationQueryRealizationCompiler
                         RelationQueryUnavailableReason.CompositionUnavailable,
                         RelationQueryRealizationDiagnosticCodes.RequirementUnavailable,
                         $"Composed strategy for requirement '{requirement.Id.Value}' does not preserve guarantees: "
-                        + string.Join(", ", prepared.Missing),
+                        + string.Join(", ", prepared.MissingComposedGuarantees),
                         Boundary: null,
-                        [.. prepared.Missing.Select(static guarantee =>
+                        [.. prepared.MissingComposedGuarantees.Select(static guarantee =>
                             new GuaranteeRelationQueryCapability(guarantee))]));
             }
 
-            var missing = prepared.Missing[0];
-            return new([], new(
-                RelationQueryUnavailableReason.CapabilityNotAdvertised,
-                RelationQueryRealizationDiagnosticCodes.RequirementUnavailable,
-                $"Native strategy for requirement '{requirement.Id.Value}' does not prove guarantee '{missing}'.",
-                Boundary: null,
-                [new GuaranteeRelationQueryCapability(missing)]));
+            if (prepared.UnavailableNativeGuarantee is { } missing)
+            {
+                return new([], new(
+                    RelationQueryUnavailableReason.CapabilityNotAdvertised,
+                    RelationQueryRealizationDiagnosticCodes.RequirementUnavailable,
+                    $"Native strategy for requirement '{requirement.Id.Value}' does not prove guarantee '{missing}'.",
+                    Boundary: null,
+                    [new GuaranteeRelationQueryCapability(missing)]));
+            }
+            return new(prepared.Proofs, null);
         }
 
         GuaranteePreparation PrepareGuarantees(Proof proof,
@@ -701,19 +701,19 @@ public static class RelationQueryRealizationCompiler
         {
             var missing = required.Except(proof.Guarantees).ToImmutableArray();
             if (missing.IsDefaultOrEmpty)
-                return new([proof], []);
+                return new([proof], [], null);
             if (!proof.Rules.IsDefaultOrEmpty)
-                return new([], missing);
+                return new([], missing, null);
 
             var guaranteed = ImmutableArray.Create(proof);
             foreach (var guarantee in missing)
             {
                 var evidence = NativeGuaranteeProofs(guarantee);
                 if (evidence.IsDefaultOrEmpty)
-                    return new([], [guarantee]);
+                    return new([], [], guarantee);
                 guaranteed = Combine(guaranteed, evidence);
             }
-            return new(guaranteed, []);
+            return new(guaranteed, [], null);
         }
 
         ImmutableArray<Proof> NativeGuaranteeProofs(RelationQueryGuaranteeCapabilityKind guarantee)
@@ -734,7 +734,8 @@ public static class RelationQueryRealizationCompiler
         }
 
         readonly record struct GuaranteePreparation(ImmutableArray<Proof> Proofs,
-            ImmutableArray<RelationQueryGuaranteeCapabilityKind> Missing);
+            ImmutableArray<RelationQueryGuaranteeCapabilityKind> MissingComposedGuarantees,
+            RelationQueryGuaranteeCapabilityKind? UnavailableNativeGuarantee);
 
         sealed class GuaranteeProofComparer : IEqualityComparer<(
             Proof Proof, ImmutableArray<RelationQueryGuaranteeCapabilityKind> Required)>

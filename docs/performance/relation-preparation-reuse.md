@@ -53,7 +53,8 @@ normalized arrays and ordering keys for each requirement. The matcher now prepar
 Entries belong to one synchronous match and disappear with it; there is no global cache, weak table,
 lock, new public API or additional semantic authority. The fixed target profile and compiler policy
 remain authoritative. Failure *facts* are reusable; diagnostic objects and messages are freshly built
-for their requirement. Requirement-specific boundary facts and measurements are always validated
+for their requirement. Preparation records the full missing set for composed proofs separately from
+the first unavailable native guarantee; only preparation classifies the proof strategy. Requirement-specific boundary facts and measurements are always validated
 independently. A five-row page-size proof cannot admit a later 40-row demand against a 25-row boundary.
 Overrides keep their existing validation and diagnostics. Final report validation is unchanged.
 
@@ -71,17 +72,18 @@ MB is decimal MB; cumulative allocation is not retained memory.
 
 | Original X12 workflow | Cold before | Cold after | Change | CPU before/after |
 |---|---:|---:|---:|---:|
-| 004010 | 140.178 MB | 135.073 MB | −5.105 MB (3.6%) | 1,514 / 1,503 ms |
-| 005030 | 141.257 MB | 136.191 MB | −5.067 MB (3.6%) | 1,549 / 1,546 ms |
+| 004010 | 140.040 MB | 135.479 MB | −4.561 MB (3.3%) | 1,516 / 1,508 ms |
+| 005030 | 141.411 MB | 136.269 MB | −5.142 MB (3.6%) | 1,559 / 1,537 ms |
 
-CPU differences are below 1% in these local samples and remain inconclusive. Warm allocation is
+Cold CPU differences are 0.5–1.4% in these local samples and remain inconclusive. Warm allocation is
 effectively unchanged at about 3.5 MB; the workflow already prepares realization once per plan.
-Warm timing varies with runtime warmup and is not attributed to this cold preparation change.
-Separate stage runs place about 1.3–1.5 MB of saving in preview and 3.5–3.6 MB in first durable
+Warm CPU varies: 004010 is effectively unchanged, while 005030 measures 35.3 versus 38.9 ms.
+This preparation runs cold; these samples do not establish a warm CPU improvement.
+Separate stage runs place about 1.1–1.2 MB of saving in preview and 3.5–4.0 MB in first durable
 execution. Do not interpret the entire saving as preview-only work.
 
 Three independent traces per source and variant attribute realization preparation at approximately
-18.4–18.5 MB before and 13.6 MB after. All traces report zero lost events and missing allocation or
+18.4–18.5 MB before and 13.4–13.6 MB after. All traces report zero lost events and missing allocation or
 managed CPU stacks. These are sampled estimates of the entire cold workflow, not an additional
 saving to add to the untraced counters. Trace timing is not used for CPU claims.
 
@@ -94,22 +96,24 @@ complete guarantee evidence.
 
 | Proofs / evidence | alpha.157 bytes | Original PR bytes | Updated bytes | Ceiling |
 |---|---:|---:|---:|---:|
-| Shared / complete | 2,394,488 | 1,075,968 | 1,076,216 | 1,400,000 |
-| Shared / missing | 1,659,712 | 1,659,800 | 753,992 | 1,000,000 |
-| Distinct / complete | 2,583,040 | 2,596,040 | 2,171,328 | 2,450,000 |
-| Distinct / missing | 1,945,680 | 1,945,768 | 1,622,416 | 1,850,000 |
+| Shared / complete | 2,394,488 | 1,075,968 | 1,076,240 | 1,400,000 |
+| Shared / missing | 1,659,712 | 1,659,800 | 753,984 | 1,000,000 |
+| Distinct / complete | 2,583,040 | 2,596,040 | 2,174,128 | 2,300,000 |
+| Distinct / missing | 1,945,680 | 1,945,768 | 1,621,120 | 1,850,000 |
 
 All four allocation guards fail against alpha.157. The three new scenarios fail against the original
-PR tip and pass after the review changes. Ceilings have approximately 13–33% headroom. The semantic
+PR tip and pass after the review changes. Ceilings have approximately 6–33% headroom. The semantic
 tests intentionally pass on the unchanged parent: they protect independent boundary facts, different
 guarantee sets and requirement-specific native/composed failure messages. Allocation guards prove
 that preparation reuse actually occurs. No timing threshold was added to CI.
 
-Qualification: 1,159 Relations tests; 5,175 Core tests with 60 existing gated skips; 1,009 merged-Ari
-Engine tests with 18 existing gated skips; native recovery across both X12 versions and FIX at three
-interruption points; 768 normal X12 workflow cases; unchanged pinned graph fingerprints. Native and
-Engine checks load the candidate from an isolated output directory. Official package caches are
-untouched. This is source qualification, not a published-package or deployment-latency claim.
+Current revision: 1,159 Relations tests, 768 normal X12 workflow cases and all four pinned report
+fingerprints pass, with 12 fresh traces. Broader qualification at preceding tip `d4920f3f` passed
+5,175 Core tests with 60 existing gated skips, 1,009 merged-Ari Engine tests with 18 existing gated
+skips, and native recovery across both X12 versions and FIX at three interruption points. Those
+broader suites were not repeated for this internal result-field clarification. Native and Engine
+checks loaded the candidate from an isolated output directory; official package caches are untouched.
+This is source qualification, not a published-package or deployment-latency claim.
 
 [Manifest and module hashes](evidence/guarantee-preparation/manifest.json),
 [normal counters](evidence/guarantee-preparation/windows.csv),
@@ -117,7 +121,8 @@ untouched. This is source qualification, not a published-package or deployment-l
 [focused allocation](evidence/guarantee-preparation/focused-allocation.csv),
 [realization attribution](evidence/guarantee-preparation/realization-attribution.csv) and
 [trace quality](evidence/guarantee-preparation/trace-quality.csv) retain the compact evidence.
-Raw artifacts remain under `/tmp/guarantee-review`. The earlier seed-dependent measurements are
+Current raw artifacts remain under `/tmp/guarantee-result-profile`; historical broad qualification
+remains under `/tmp/guarantee-review`. The earlier seed-dependent measurements are
 superseded; they are not the baseline of the current claim. Reproduce the focused guards with:
 
 ```sh

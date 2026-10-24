@@ -184,7 +184,7 @@ public sealed class RealizationAllocationTests(ITestOutputHelper output)
     [Theory]
     [InlineData(false, false, 1_400_000, "b762484114319ff2d72a1d286b9a8eca9996dfb71a53d78760b3d107778d92f5")]
     [InlineData(false, true, 1_000_000, "ad2da17fc6f7b70a0eb4b152840848aa0af6d135ec2db6b137d3757b80bef4f3")]
-    [InlineData(true, false, 2_450_000, "42c8677735ef7dac150186d1c15837cb7e567fa3e3dbb3813a89b5d0263f100b")]
+    [InlineData(true, false, 2_300_000, "42c8677735ef7dac150186d1c15837cb7e567fa3e3dbb3813a89b5d0263f100b")]
     [InlineData(true, true, 1_850_000, "27ac74a7d4eb429a074114f8e5ebde09fd146de8254778ed96546b63d1e80ce0")]
     public void RepeatedGuaranteeRequirementsHaveBoundedPreparationAllocations(
         bool distinctProofs, bool missingEvidence, long allocationCeiling, string fingerprint)

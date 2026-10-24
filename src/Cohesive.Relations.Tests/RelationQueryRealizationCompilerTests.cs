@@ -22,7 +22,8 @@ public sealed class RelationQueryRealizationCompilerTests
     {
         var plan = PlanReference();
         var requirements = new[] { "requirement/first", "requirement/second" }.Select(id => Requirement(
-            id, Join, requiredGuarantees: [RelationQueryGuaranteeCapabilityKind.JoinMembership])).ToImmutableArray();
+            id, Join, requiredGuarantees: [RelationQueryGuaranteeCapabilityKind.JoinMembership,
+                RelationQueryGuaranteeCapabilityKind.Cardinality])).ToImmutableArray();
         var report = RelationQueryRealizationCompiler.Match(plan, requirements,
             Profile(plan, [Evidence("evidence/base", composed ? KeyExtraction : Join)]),
             Policy(rules: composed ? [new(new("rule/join"), Join, [KeyExtraction])] : []));
@@ -32,6 +33,11 @@ public sealed class RelationQueryRealizationCompilerTests
                 Assert.Single(report.Decisions, d => d.Requirement == requirement.Id));
             Assert.Equal(composed ? RelationQueryUnavailableReason.CompositionUnavailable
                 : RelationQueryUnavailableReason.CapabilityNotAdvertised, decision.Reason);
+            RelationQueryGuaranteeCapabilityKind[] expectedMissing = composed
+                ? [RelationQueryGuaranteeCapabilityKind.JoinMembership, RelationQueryGuaranteeCapabilityKind.Cardinality]
+                : [RelationQueryGuaranteeCapabilityKind.JoinMembership];
+            Assert.Equal(expectedMissing, decision.MissingCapabilities.Select(
+                c => Assert.IsType<GuaranteeRelationQueryCapability>(c).Kind));
             Assert.Contains(report.Diagnostics, d => d.Requirement == requirement.Id
                 && d.Message.Contains(requirement.Id.Value, StringComparison.Ordinal));
         }
