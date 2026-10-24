@@ -17,7 +17,7 @@ sealed record CosmosObservationContainerDocument(
     [property: JsonPropertyName("observationVersion")] long ObservationVersion,
     [property: JsonPropertyName("observation")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    Dictionary<string, ObservationValue>? Observation = null,
+    IReadOnlyDictionary<string, ObservationValue>? Observation = null,
     [property: JsonPropertyName("streamName")]
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     string? StreamName = null,

@@ -979,24 +979,31 @@ public static class TransitionReferenceInterpreter
             if (candidate.TryGetValue(path, out var exact))
                 return exact;
 
-            var ancestors = candidate
-                .Where(entry => IsPrefix(entry.Key, path))
-                .OrderByDescending(static entry => entry.Key.Segments.Length)
-                .ToArray();
-            if (ancestors.Length > 0)
+            // One pass finds the nearest written ancestor (keys are unique, so lengths cannot tie) and
+            // whether any descendant was written; only descendant reconstruction needs ordering.
+            KeyValuePair<FieldPath, PortableExpressionValue>? ancestor = null;
+            var hasDescendant = false;
+            foreach (var entry in candidate)
             {
-                var ancestor = ancestors[0];
-                return ancestor.Value.Project(Suffix(path, ancestor.Key.Segments.Length));
+                if (IsPrefix(entry.Key, path))
+                {
+                    if (ancestor is not { } nearest || entry.Key.Segments.Length > nearest.Key.Segments.Length)
+                        ancestor = entry;
+                }
+                else if (IsPrefix(path, entry.Key))
+                    hasDescendant = true;
             }
+            if (ancestor is { } written)
+                return written.Value.Project(Suffix(path, written.Key.Segments.Length));
 
             var original = ReadOriginal(TransitionObservationAccess.At(path), node);
+            if (!hasDescendant)
+                return original;
+
             var descendants = candidate
                 .Where(entry => IsPrefix(path, entry.Key))
                 .OrderBy(static entry => entry.Key, TransitionStructuralOrdering.FieldPaths)
                 .ToArray();
-            if (descendants.Length == 0)
-                return original;
-
             var aggregate = original.RequireObservation("candidate-state reconstruction");
             foreach (var descendant in descendants)
             {

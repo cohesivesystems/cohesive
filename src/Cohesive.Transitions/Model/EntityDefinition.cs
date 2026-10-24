@@ -398,7 +398,9 @@ public sealed record EntityDefinition
             throw new SemanticRuleViolationException($"{context} on entity type '{Name.Value}' does not satisfy expected type '{JsonTypeSemantics.DescribeType(type)}'.");
     }
 
-    EntityState BuildEntityState(EntityId entityId, IReadOnlyDictionary<string, ObservationValue> valuesByName, long version, EntityStateLineage? lineage = null)
+    // Callers transfer a freshly normalized dictionary; computed-field normalization returns either that
+    // dictionary or a new one, so the observation can own the result without another snapshot copy.
+    EntityState BuildEntityState(EntityId entityId, Dictionary<string, ObservationValue> valuesByName, long version, EntityStateLineage? lineage = null)
     {
         Observation observation;
         try
@@ -408,7 +410,9 @@ public sealed record EntityDefinition
                 valuesByName);
             observation = Observation.Create(
                 StateShape,
-                completeValues);
+                completeValues is Dictionary<string, ObservationValue> owned
+                    ? ObservationValue.FromOwnedObject(owned)
+                    : ObservationValue.FromObject(completeValues));
         }
         catch (ArgumentException exception)
         {
