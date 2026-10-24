@@ -6,6 +6,9 @@ namespace Cohesive.Transitions.Authoring;
 /// <summary>
 /// Fluent builder for top-level domain model definitions.
 /// </summary>
+/// <remarks>Single-threaded setup object. All mutations and Build throw InvalidOperationException
+/// during discovery selection, including calls through captured references. Read-only handle resolution
+/// remains available. A selector failure clears the guard and leaves registration unchanged.</remarks>
 public sealed class DomainModelBuilder
 {
     readonly List<EntityDefinition> entities = [];
@@ -13,13 +16,16 @@ public sealed class DomainModelBuilder
     readonly Dictionary<Type, EntityDefinition> discovered = [];
     ImmutableDictionary<AnnotationKey, AnnotationValue>.Builder? annotations;
     string? version;
+    bool selecting;
     readonly List<(DomainDiscovery Discovery, DomainDiscoveryCoverage Coverage)> verifications = [];
 
     /// <summary>
     /// Sets a model version string.
     /// </summary>
+    /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
     public DomainModelBuilder Version(string version)
     {
+        RequireNotSelecting();
         this.version = Guard.RequireNotNullOrWhiteSpace(value: version);
         return this;
     }
@@ -27,8 +33,10 @@ public sealed class DomainModelBuilder
     /// <summary>
     /// Adds an annotation entry at the model level.
     /// </summary>
+    /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
     public DomainModelBuilder Annotation(string key, AnnotationValue value)
     {
+        RequireNotSelecting();
         ArgumentNullException.ThrowIfNull(value);
         annotations ??= ImmutableDictionary.CreateBuilder<AnnotationKey, AnnotationValue>();
         annotations[new(key)] = value;
@@ -38,14 +46,20 @@ public sealed class DomainModelBuilder
     /// <summary>
     /// Adds an annotation entry at the model level from a CLR value or object graph.
     /// </summary>
-    public DomainModelBuilder Annotation<TValue>(string key, TValue value) =>
-        Annotation(key, AnnotationValue.FromObject(value));
+    /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
+    public DomainModelBuilder Annotation<TValue>(string key, TValue value)
+    {
+        RequireNotSelecting();
+        return Annotation(key, AnnotationValue.FromObject(value));
+    }
 
     /// <summary>
     /// Adds an entity definition.
     /// </summary>
+    /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
     public DomainModelBuilder Entity(string name, Action<EntityBuilder> configure)
     {
+        RequireNotSelecting();
         if (entityNames.Contains(name))
             throw new ArgumentException($"Entity '{name}' is already declared.", nameof(name));
         var builder = new EntityBuilder(name: new EntityTypeName(value: name));
@@ -62,8 +76,10 @@ public sealed class DomainModelBuilder
     /// <remarks>Use this overload for explicit declarations. For discovery, prefer the Discover projection
     /// overload; matching named adoption is supported for shared explicit/discovery authoring code.</remarks>
     /// <exception cref="ArgumentException">The entity name is already declared, invalid, or differs from its discovered name.</exception>
+    /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
     public DomainEntity<T> Entity<T>(string name) where T : notnull
     {
+        RequireNotSelecting();
         if (discovered.TryGetValue(typeof(T), out var adopted))
         {
             if (adopted.Name.Value != name)
@@ -91,8 +107,10 @@ public sealed class DomainModelBuilder
     /// </summary>
     /// <exception cref="DomainDiscoveryException">Scheduled discovery verification fails.</exception>
     /// <exception cref="ArgumentException">The domain is empty or invalid.</exception>
+    /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
     public DomainModelDefinition Build()
     {
+        RequireNotSelecting();
         var model = new DomainModelDefinition(entities: [..entities], version: version, annotations: annotations?.ToImmutable());
         var diagnostics = verifications.SelectMany(check => check.Discovery.Verify(model, check.Coverage).Diagnostics).ToImmutableArray();
         if (!diagnostics.IsEmpty)
@@ -105,9 +123,15 @@ public sealed class DomainModelBuilder
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException">The catalog is null.</exception>
     /// <exception cref="ArgumentException">An identity is already registered; no entities are added.</exception>
+    /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
     public DomainModelBuilder Discover(DomainDiscovery discovery)
     {
-        Discover(discovery, static _ => true);
+        RequireNotSelecting();
+        ArgumentNullException.ThrowIfNull(discovery);
+        var declarations = discovery.IncludedDeclarations;
+        RequireAvailable(declarations);
+        foreach (var (type, template) in declarations)
+            Register(type, template with { });
         return this;
     }
 
@@ -118,36 +142,47 @@ public sealed class DomainModelBuilder
     /// <returns>The projected handles.</returns>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ArgumentException">Registration conflicts or selection requests an excluded type.</exception>
-    /// <remarks>Selection runs on staged definitions. A failed selection registers nothing. Callbacks should not mutate the builder through captured references.</remarks>
+    /// <remarks>Selection runs on staged definitions. A failed selection registers nothing. Builder changes or materialization through captured references throw InvalidOperationException.</remarks>
+    /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
     public TResult Discover<TResult>(DomainDiscovery discovery, Func<DiscoveredDomainEntities, TResult> select)
     {
+        RequireNotSelecting();
         ArgumentNullException.ThrowIfNull(discovery);
         ArgumentNullException.ThrowIfNull(select);
         var declarations = discovery.IncludedDeclarations;
-        RequireAvailable();
+        RequireAvailable(declarations);
         var selected = ImmutableDictionary.CreateBuilder<Type, EntityDefinition>();
         foreach (var (type, template) in declarations)
             // Share immutable shape preparation, but retain domain-local definition authority.
             selected.Add(type, template with { });
         var staged = selected.ToImmutable();
-        var result = select(new(staged));
-        // A captured builder may have changed during selection; never partially commit discovery.
-        RequireAvailable();
+        TResult result;
+        selecting = true;
+        try { result = select(new(staged)); }
+        finally { selecting = false; }
         foreach (var (type, _) in declarations)
-        {
-            var entity = staged[type];
-            discovered.Add(type, entity);
-            entityNames.Add(entity.Name.Value);
-            entities.Add(entity);
-        }
+            Register(type, staged[type]);
         return result;
+    }
 
-        void RequireAvailable()
-        {
-            foreach (var (type, entity) in declarations)
-                if (entityNames.Contains(entity.Name.Value) || discovered.ContainsKey(type))
-                    throw new ArgumentException($"Entity '{entity.Name}' is already declared.", nameof(discovery));
-        }
+    void RequireAvailable(ImmutableArray<KeyValuePair<Type, EntityDefinition>> declarations)
+    {
+        foreach (var (type, entity) in declarations)
+            if (entityNames.Contains(entity.Name.Value) || discovered.ContainsKey(type))
+                throw new ArgumentException($"Entity '{entity.Name}' is already declared.", "discovery");
+    }
+
+    void Register(Type type, EntityDefinition entity)
+    {
+        discovered.Add(type, entity);
+        entityNames.Add(entity.Name.Value);
+        entities.Add(entity);
+    }
+
+    void RequireNotSelecting()
+    {
+        if (selecting)
+            throw new InvalidOperationException("Domain builder changes and materialization are not allowed during discovery selection. Use the supplied read-only entity scope.");
     }
 
     /// <summary>Schedules coverage verification at Build, independent of registration order.</summary>
@@ -156,9 +191,11 @@ public sealed class DomainModelBuilder
     /// <returns>This builder.</returns>
     /// <exception cref="ArgumentNullException">The catalog is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The coverage mode is unknown.</exception>
+    /// <exception cref="InvalidOperationException">Discovery selection is active on this builder.</exception>
     public DomainModelBuilder VerifyDiscovery(DomainDiscovery discovery,
         DomainDiscoveryCoverage coverage = DomainDiscoveryCoverage.DiscoveredEntities)
     {
+        RequireNotSelecting();
         ArgumentNullException.ThrowIfNull(discovery);
         if (!Enum.IsDefined(coverage)) throw new ArgumentOutOfRangeException(nameof(coverage));
         verifications.Add((discovery, coverage));

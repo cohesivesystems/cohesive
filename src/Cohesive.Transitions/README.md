@@ -245,5 +245,9 @@ scope containing only this catalog's included declarations. It cannot escape the
 rules by retaining a mutable builder. The callback selects from staged definitions before
 registration. If it throws (including selection of an excluded type), discovery adds nothing,
 and the builder can be corrected and reused. External side effects performed by callbacks are
-not rolled back; callbacks should not mutate the builder through captured references. A discovered CLR type cannot be re-registered under a different semantic
+not rolled back. Builder mutation and materialization through captured references are rejected
+while selection runs; the guard is cleared even when selection throws. Escaped handles from a
+failed selection are not registered and do not match a subsequent registration's storage authority.
+Plain discovery skips the selector scope and staging dictionary, while retaining domain-local
+copies of definitions required for ownership isolation. A discovered CLR type cannot be re-registered under a different semantic
 name: `Entity<Order>("different-name")` fails without changing the domain.

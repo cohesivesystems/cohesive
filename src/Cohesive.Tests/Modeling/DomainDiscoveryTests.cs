@@ -173,17 +173,37 @@ public sealed class DomainDiscoveryTests
         Assert.Equal(3, builder.Build().Entities.Length);
     }
 
-    [Fact]
-    public void Conflicting_callback_mutation_does_not_partially_commit_discovery()
+    public static TheoryData<Action<DomainModelBuilder>> SelectionMutations => new()
     {
-        var builder = new DomainModelBuilder();
-        Assert.Throws<ArgumentException>(() => builder.Discover(DomainDiscovery.For<Module>(), scope =>
+        builder => builder.Version("changed"),
+        builder => builder.Annotation("changed", "value"),
+        builder => builder.Annotation("changed", AnnotationValue.FromObject("value")),
+        builder => builder.Entity<Order>("order"),
+        builder => builder.Entity("order", entity => entity.Field("id", DomainTypes.String())),
+        builder => builder.Discover(DomainDiscovery.For<Module>()),
+        builder => builder.Discover(DomainDiscovery.For<Module>(), scope => scope.Entity<Order>()),
+        builder => builder.VerifyDiscovery(DomainDiscovery.For<Module>()),
+        builder => builder.Build()
+    };
+
+    [Theory]
+    [MemberData(nameof(SelectionMutations))]
+    public void Selection_rejects_captured_builder_changes_and_clears_guard(Action<DomainModelBuilder> mutate)
+    {
+        var builder = new DomainModelBuilder().Version("original");
+        var existing = builder.Entity<Other>("existing");
+        var error = Assert.Throws<InvalidOperationException>(() => builder.Discover(DomainDiscovery.For<Module>(), scope =>
         {
-            builder.Entity<Order>("order"); // Explicit external callback side effect is not rolled back.
-            return scope.Entity<Customer>();
+            mutate(builder);
+            return scope.Entity<Order>();
         }));
-        Assert.Equal("order", Assert.Single(builder.Build().Entities).Name.Value);
-        Assert.Throws<ArgumentException>(() => builder.Entity<Customer>());
+        Assert.Contains("during discovery selection", error.Message);
+        var unchanged = builder.Build();
+        Assert.Equal("original", unchanged.Version);
+        Assert.Empty(unchanged.Annotations);
+        Assert.Same(existing.Definition, Assert.Single(unchanged.Entities));
+        builder.Discover(DomainDiscovery.For<Module>());
+        Assert.Equal(3, builder.Build().Entities.Length);
     }
 
     [Fact]
