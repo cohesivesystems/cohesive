@@ -7,8 +7,8 @@ Source is the authoring authority in Cohesive, and the canonical IR is derived f
 - IR serialization and persistence;
 - compiler tests, fixtures, and benchmarks.
 
-This diagnostic is reported when another assembly constructs one of these types with `new`, or copies one with
-`with`.
+This diagnostic is an error by default. It is reported when another assembly constructs one of these types with
+`new`, or copies one with `with`.
 
 ## How to fix
 
@@ -22,8 +22,9 @@ offset page).
 
 ## When the assembly is a legitimate producer
 
-A project that is itself a lowering pipeline, an IR serializer or persistence layer, or a compiler test, fixture,
-or benchmark opts in explicitly in its project file, with the reason:
+A project that is itself a lowering pipeline, an IR serializer or persistence layer, an IR-native authoring
+workspace (for example an inference engine or relations workspace that owns persisted relation documents), or a
+compiler test, fixture, or benchmark opts in explicitly in its project file, with the reason:
 
 ```xml
 <PropertyGroup>

@@ -63,7 +63,7 @@ public sealed class LoweringOutputConstructionAnalyzerTests
 
         var diagnostic = Assert.Single(diagnostics);
         Assert.Equal("COHIR001", diagnostic.Id);
-        Assert.Equal(DiagnosticSeverity.Warning, diagnostic.Severity);
+        Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
         Assert.Contains("Definition", diagnostic.GetMessage());
     }
 

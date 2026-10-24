@@ -30,7 +30,7 @@ public sealed class LoweringOutputConstructionAnalyzer : DiagnosticAnalyzer
         messageFormat: "'{0}' is canonical IR produced by lowering source; build it through an authoring API or "
             + "a serializer instead of constructing it in this assembly",
         category: "Cohesive.IR",
-        defaultSeverity: DiagnosticSeverity.Warning,
+        defaultSeverity: DiagnosticSeverity.Error,
         isEnabledByDefault: true,
         description: "Source is the authoring authority and canonical IR is derived from it. Definition roots and "
             + "graph nodes are constructed only by lowering pipelines, IR serialization and persistence, and "
