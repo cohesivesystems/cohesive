@@ -354,6 +354,43 @@ public sealed class RelationQueryEvaluatorTests
         Assert.True(firstOutcome.IsSuccessful && secondOutcome.IsSuccessful);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void LiveCompilationRequestDoesNotRetainDiscardedEvaluatorOrSourceState(bool failPreparation)
+    {
+        var evaluation = CreateParameterizedQueryDocument().Evaluate(new("tests/evaluator-lifetime"),
+            LoadCustomerRelationFixture.ShapeGraphDocuments, LoadCustomerRelationFixture.RelationshipCatalogDocument)
+            .Set(LoadCustomerRelationFixture.StatusParameterId, ObservationValue.FromString("Open")).Build();
+        var discarded = EvaluateAndDiscard(evaluation, failPreparation);
+        for (var i = 0; i < 3; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+        }
+        Assert.False(discarded.Evaluator.IsAlive, "The live request retained a discarded evaluator.");
+        Assert.False(discarded.SourceState.IsAlive, "The live request retained source-reader state.");
+        GC.KeepAlive(evaluation);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    static (WeakReference Evaluator, WeakReference SourceState) EvaluateAndDiscard(
+        RelationQueryEvaluation evaluation, bool failPreparation)
+    {
+        var sourceState = new object();
+        var evaluator = CreateEvaluator(evaluation,
+            loadRows: [Load("load-1", "customer-1", "Open", 12m)],
+            customerRows: [Customer("customer-1", "Acme", "Priority")],
+            afterLoadRead: () => GC.KeepAlive(sourceState),
+            afterPlacement: failPreparation ? static () => throw new InvalidOperationException("preparation failed") : null);
+        if (failPreparation)
+            Assert.Throws<InvalidOperationException>(() => evaluator.EvaluateAsync(evaluation).GetAwaiter().GetResult());
+        else
+            Assert.True(evaluator.EvaluateAsync(evaluation).GetAwaiter().GetResult().IsSuccessful);
+        return (new(evaluator), new(sourceState));
+    }
+
     [Fact]
     public async Task EvaluateAsync_ReusesPreparationForTheExactCompilationRequestWithoutRetainingParameters()
     {

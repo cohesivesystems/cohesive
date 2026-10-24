@@ -234,6 +234,11 @@ not an automatic downgrade based on the number of databases.
 at runtime binding. Affinity checks preserve the exact semantic compilation, placement and policy; this
 never caches parameters, source observations or results.
 
+Evaluator-owned preparation must not retain the evaluator through a cache value: a shared request can
+outlive tenant-scoped evaluators and their source readers. Static compilation remains request-scoped;
+discarding an evaluator releases its physical context. The [lifetime qualification](../../docs/performance/relation-evaluator-lifetime/README.md)
+records the retaining cycle, collectability regressions and matched X12 heap measurements.
+
 ### Hosted typed query admission
 
 Hosted typed Query admission prepares the framework CLR contract once and reads ordinary envelopes directly

@@ -1,0 +1,116 @@
+{
+  "base_commit": "7aef15eb2e9085955c0886b2919eebfc62303e31",
+  "qualification": "local source-qualified Relations assembly comparison, not a published package or Ari adoption",
+  "changed_runtime_module": "Cohesive.Relations.dll",
+  "runtime_info": {
+    "control": {
+      "framework": ".NET 10.0.5",
+      "architecture": "Arm64",
+      "os": "macOS 27.0.1",
+      "entrypoint": "/private/tmp/projection-cache-lifetime/control/ProtocolPreparation.dll",
+      "relationsAssembly": "/private/tmp/projection-cache-lifetime/control/Cohesive.Relations.dll",
+      "relationsSha256": "FC0735C52567DD4E71C37E483C5A0C74CD5B88BACC8AAC8CD844A8B770B187AF"
+    },
+    "candidate": {
+      "framework": ".NET 10.0.5",
+      "architecture": "Arm64",
+      "os": "macOS 27.0.1",
+      "entrypoint": "/private/tmp/projection-cache-lifetime/candidate/ProtocolPreparation.dll",
+      "relationsAssembly": "/private/tmp/projection-cache-lifetime/candidate/Cohesive.Relations.dll",
+      "relationsSha256": "07AEF574AD1050894AD24BDF6FECEB5446CBE2D55103741D4CFB6DCD8743F5C7"
+    }
+  },
+  "source_files": {
+    "src/Cohesive.Relations/Execution/RelationQueryEvaluator.cs": "ab7c9c265234bd37ce9861ab755e996c951d63269769d8cf2771c1f02112e08f",
+    "src/Cohesive.Relations.Tests/RelationQueryEvaluatorTests.cs": "b3009e693b35b4056a8d855cf5de55021a4c383444511682f7ab143ce8acf6a7"
+  },
+  "baseline_regression": "Both new lifecycle cases fail before the fix and pass after it.",
+  "tests": {
+    "Relations": {
+      "passed": 1139,
+      "skipped": 0
+    },
+    "Cohesive.Tests": {
+      "passed": 5020,
+      "skipped": 60
+    }
+  },
+  "measurement": "3 alternating process pairs/source for 64-case retention; independent 1/64-case heap dumps; 3 alternating process pairs/source for normal 64-case counters; one 512-case forced-GC run/variant for 004010",
+  "graph_fingerprints": "control == candidate == published alpha.156; FIX smoke passed both variants",
+  "tools": {
+    "SDK": "10.0.402",
+    "gcdump": "10.0.750501",
+    "offline_root_reader_ClrMD": "4.2.751201"
+  },
+  "raw_root": "/tmp/projection-cache-lifetime",
+  "raw_sha256": {
+    "/tmp/projection-cache-lifetime/comparison/004010/1/candidate/retention.csv": "b8044d51ac424c422e049c144377bff7fe7ae23d8d5f6fde31e04b1dbf6616a4",
+    "/tmp/projection-cache-lifetime/comparison/004010/1/control/retention.csv": "ad7e9523952e72c61b1111219371ad5785f2ca0a017364c6bbba6f3e839b8854",
+    "/tmp/projection-cache-lifetime/comparison/004010/3/candidate/retention.csv": "0102b99753bddd2db08c272f45dbf45e3258f14e8829c182dda03c1f44c5d217",
+    "/tmp/projection-cache-lifetime/comparison/004010/3/control/retention.csv": "d54ceec3738a029096a49b0645dfa55eead2f5d9fb22f6c1e51d929669c2d59a",
+    "/tmp/projection-cache-lifetime/comparison/004010/2/candidate/retention.csv": "b06412e124e7d42c2231baaa735f6102a58c1917248fc4ba0610e524c02188df",
+    "/tmp/projection-cache-lifetime/comparison/004010/2/control/retention.csv": "7a56c0c10d537bed845f720181ece73824090be6d11b9ed415c1ae16db8b9fe3",
+    "/tmp/projection-cache-lifetime/comparison/005030/1/candidate/retention.csv": "4d2cf9ade2636308aa549ec5d64b13e67b5f60039c6d8bb8eaf91b0fa0690425",
+    "/tmp/projection-cache-lifetime/comparison/005030/1/control/retention.csv": "1bdb8fb9a9ea026a05a2721c00208ae60871e21ceb8441d8f11053f76e7c4104",
+    "/tmp/projection-cache-lifetime/comparison/005030/3/candidate/retention.csv": "6e583ea4b7d50924fed91edb972fb94f9831b66e25b8b7ae9df76ad38881a2b6",
+    "/tmp/projection-cache-lifetime/comparison/005030/3/control/retention.csv": "d08f66cd5d874789b27ff3649524cbaf3129d4729fec2ad624b89c1d41465c3b",
+    "/tmp/projection-cache-lifetime/comparison/005030/2/candidate/retention.csv": "89f4a439cd6a0e92c9ac878203ae58d6de447b5fa778075fd7c9206f6c5090bb",
+    "/tmp/projection-cache-lifetime/comparison/005030/2/control/retention.csv": "88c7e2005bdf4723ebcb0561a4513fd573121057a83b1fc521773a0e99a4941d",
+    "/tmp/projection-cache-lifetime/heaps/004010/1/candidate/heap.gcdump": "5bc573923df30700331c7bbfed25357f84d14c674b0695048d9a49c36054c0c9",
+    "/tmp/projection-cache-lifetime/heaps/004010/1/control/heap.gcdump": "46042b6c8ae8cf8b6d7f943df5b4deaa134bb7fa13da94edd84257de81980f73",
+    "/tmp/projection-cache-lifetime/heaps/004010/64/candidate/heap.gcdump": "7357a8ab20b5e17a0cc6a5f4d949ff54a8757b391544e18dd85e17f7e1f18832",
+    "/tmp/projection-cache-lifetime/heaps/004010/64/control/heap.gcdump": "0ca7f8d7dc8c09d27e7e688bb42d094272f092f0fe52c249e10f2ab472e4a999",
+    "/tmp/projection-cache-lifetime/heaps/005030/1/candidate/heap.gcdump": "d92e1dec30708c9fb0dc778ea1e9025cdfe6e47fff45439c298e582aafd093f0",
+    "/tmp/projection-cache-lifetime/heaps/005030/1/control/heap.gcdump": "5cf5f2d5aa7b4d76d9d1eb75cbabd8233b1ab05437efad1ffd95a99d6c3e2733",
+    "/tmp/projection-cache-lifetime/heaps/005030/64/candidate/heap.gcdump": "36f74ca959f330c7fd9990d2775cfd8eb9fd711a2e1a679334320a0c53d9ec9c",
+    "/tmp/projection-cache-lifetime/heaps/005030/64/control/heap.gcdump": "7d4dd3c436e053cadee091834ef456ea9ad834999389e09a28154ba39aff60b2",
+    "/tmp/projection-cache-lifetime/heaps/004010/1/candidate/types.csv": "f7bcd12287eb6fa7f3a1d67a268fe0b47592c1dd812ec0bbe0267bb9d3b04602",
+    "/tmp/projection-cache-lifetime/heaps/004010/1/control/types.csv": "9cd9da1db16d399b141b2b1aaae79f01587206df2b00b796030221f91b844a7e",
+    "/tmp/projection-cache-lifetime/heaps/004010/64/candidate/types.csv": "9a0b1a0d4ea524f1cdfb0b77d983912e1c0d6af0a6b363524b5990050b5b05c6",
+    "/tmp/projection-cache-lifetime/heaps/004010/64/control/types.csv": "a00ed4f4ba42cc74174e82796fcb002e985788eb51589d848c22f27ab02250fd",
+    "/tmp/projection-cache-lifetime/heaps/005030/1/candidate/types.csv": "7f71b6a159327c8e4aa7f60cba68bf2d40c517d6b972a0a9937322169a6d4449",
+    "/tmp/projection-cache-lifetime/heaps/005030/1/control/types.csv": "7cd007196f81e9c65d4da38a172d29c25952f11b65ae0b62b0388dd390b6436b",
+    "/tmp/projection-cache-lifetime/heaps/005030/64/candidate/types.csv": "114f00969640732b3722cbfc8906e979e2cafdabe344b2443dbb61ea381d656f",
+    "/tmp/projection-cache-lifetime/heaps/005030/64/control/types.csv": "9fec467803af575349a8d6a8868da781f1977f4e6d42cffb5e304d6a7bae3347",
+    "/tmp/projection-cache-lifetime/heaps/004010/1/candidate/heap.gcdump.paths.json": "724bef0f67e1e97c72931c5348c4c7b34e150d7d878bfbb98fc8da9c8f96ac9b",
+    "/tmp/projection-cache-lifetime/heaps/004010/1/control/heap.gcdump.paths.json": "573a1837e25e004d73749b46b94dc7425a38b54b48f62bf06a9aa3b99c1fecc2",
+    "/tmp/projection-cache-lifetime/heaps/004010/64/candidate/heap.gcdump.paths.json": "724bef0f67e1e97c72931c5348c4c7b34e150d7d878bfbb98fc8da9c8f96ac9b",
+    "/tmp/projection-cache-lifetime/heaps/004010/64/control/heap.gcdump.paths.json": "7bd1c2f02e87acefef97d26160803503f1e359242cef212594706b58a20e48f1",
+    "/tmp/projection-cache-lifetime/heaps/005030/1/candidate/heap.gcdump.paths.json": "ca80fd64dc6f82ce646d400e730683be6045d737eb54d8b9e323c29a3528ecb3",
+    "/tmp/projection-cache-lifetime/heaps/005030/1/control/heap.gcdump.paths.json": "66472773e4764a601fd1f93a4af97111d47bd27cfa01df38f5c7c2f986a8e611",
+    "/tmp/projection-cache-lifetime/heaps/005030/64/candidate/heap.gcdump.paths.json": "ca80fd64dc6f82ce646d400e730683be6045d737eb54d8b9e323c29a3528ecb3",
+    "/tmp/projection-cache-lifetime/heaps/005030/64/control/heap.gcdump.paths.json": "d718ef419e5ad3d0cb472370fdde5738a69493378749660e367ab14c1703f772",
+    "/tmp/projection-cache-lifetime/candidate-extended.csv": "0ec48e51d926e171982c9c4f0c54816d9f2aef725601e2003a928a63bc80d03c",
+    "/tmp/projection-cache-lifetime/control-extended.csv": "120031114dc96b7549478c8893924262395867fd789e4084e3788831a09f1a7c",
+    "/tmp/projection-cache-lifetime/normal-counters.csv": "3f2a6226824c7c0be10e9c182a7f373dce3f68d6dea34bfbf8bfa4f9a4006e12",
+    "/tmp/projection-cache-lifetime/candidate-runtime-info.json": "17ccee04001a08075266fbadf276a109ca5262844b0b7da160d712e5d21e8b80",
+    "/tmp/projection-cache-lifetime/control-runtime-info.json": "99a5baa78d3b0857d5ff6e04a52024e9e6588da58feb8307dca077b41eb00c08",
+    "/tmp/projection-cache-lifetime/control-fingerprints.csv": "3c307c3804d5d41f5e560ec28035355358ae9855925bc95c99951907a652213d",
+    "/tmp/projection-cache-lifetime/candidate-fingerprints.csv": "3c307c3804d5d41f5e560ec28035355358ae9855925bc95c99951907a652213d",
+    "/tmp/projection-cache-lifetime/control-fix-smoke.csv": "215f2909436ef3076900778efb809a6a570f7fc278dd811697aa5e9c8136c07e",
+    "/tmp/projection-cache-lifetime/candidate-fix-smoke.csv": "f0aa3ac20666715032b946f969e74cac09c48408ab029726f0d62650c4bb2fa9"
+  },
+  "runtime_module_sha256": {
+    "control": "fc0735c52567dd4e71c37e483c5a0c74cd5b88bacc8aac8cd844a8b770b187af",
+    "candidate": "07aef574ad1050894ad24bdf6feceb5446cbe2d55103741d4cfb6dcd8743f5c7"
+  },
+  "unchanged_module_manifest_sha256": "e801371a12e5a42a7e17bd03741a9d3ed3ccea3c6403c3dab09a307cfa37bbd7",
+  "notes": [
+    "Earlier runs with a symlinked entry assembly did not load the replacement DLL and are excluded.",
+    "Forced-GC live counters and heap graphs are distinct observations, not interchangeable absolute heap sizes.",
+    "Normal counter window is cases 33..64, not the older 1537..2048 steady-state window; no CPU or latency claim.",
+    "Framework caches remain weakly owned; no integrity, tenant, source fencing or validation checks were removed."
+  ],
+  "root_analysis": {
+    "ClrMD": "4.2.751201",
+    "baseline_root_chain_sha256": "8efb201eabb11722116d6f6a221d0f90f5819d05d2b255be3a37e92c126c2669",
+    "fixed_root_chain_sha256": "225e119628b3acbf7497ea31d28c6c7ddd7fbb7deb33b76447b9fc8ea80da220",
+    "fixed_has_request_evaluator_chain": false
+  },
+  "weak_owner_probe": {
+    "before": "128 captured owners/projections survive all six collection rounds",
+    "after": "four residual entries captured after workload; all owners/projections collected in the first collection round",
+    "baseline_log_sha256": "d5f1ab5d2c098c86e90dcfecf95e72cf078975832ad6b7a40c4eb7ecf6dc0e8f",
+    "fixed_log_sha256": "ecf29303d918dced8643cd47bdf0584e770367a515d8de1aa6e775051d7219ac"
+  }
+}
