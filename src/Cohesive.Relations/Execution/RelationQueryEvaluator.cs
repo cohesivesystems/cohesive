@@ -538,7 +538,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
     {
         var pending = preparations.GetValue(
             evaluation.Compilation,
-            request => new(this, request));
+            static request => new(request));
         var compilation = pending.Compilation;
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -564,7 +564,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
             }
         }
 
-        var preparation = pending.Preparation;
+        var preparation = pending.GetPreparation(this);
 
         cancellationToken.ThrowIfCancellationRequested();
         var realization = preparation.Realization!;
@@ -629,7 +629,9 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
         RelationQuerySourcePlacement? Placement = null,
         RelationQueryPhysicalPlanningResult? PhysicalPlanning = null);
 
-    sealed class PreparationCacheEntry(RelationQueryEvaluator evaluator, RelationQueryCompilationRequest request)
+    // The request can outlive this evaluator. A value-to-evaluator back-reference would keep the
+    // owning weak table and its source readers alive through the request's dependent handle.
+    sealed class PreparationCacheEntry(RelationQueryCompilationRequest request)
     {
         readonly PreparationSlot<RelationQueryCompilationResult> compilation =
             SharedCompilations.GetValue(request, static _ => new());
@@ -637,7 +639,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
         internal bool IsCompiled => compilation.IsPrepared;
         public RelationQueryCompilationResult Compilation => compilation.Get(request,
             static candidate => RelationQueryStaticCompiler.Compile(candidate));
-        public EvaluationPreparation Preparation => preparation.Get((evaluator, Compilation),
+        public EvaluationPreparation GetPreparation(RelationQueryEvaluator evaluator) => preparation.Get((evaluator, Compilation),
             static context => context.evaluator.Prepare(context.Compilation));
     }
 
