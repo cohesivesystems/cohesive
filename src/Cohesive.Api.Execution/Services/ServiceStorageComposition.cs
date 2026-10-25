@@ -98,8 +98,7 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
                 diagnostics.AddRange(compilation.Diagnostics);
                 continue;
             }
-            var planReference = RelationQueryCompiledPlanReference.From(compilation.Plan!);
-            var key = RelationQueryCompiledPlanReferenceFingerprinter.Compute(planReference);
+            var key = Key(compilation, out var planReference);
             var revision = (selection.Reference.DefinitionId.Value, selection.Reference.RevisionId.Value);
             if (revisions.TryGetValue(revision, out var priorKey) && priorKey != key)
             {
@@ -150,13 +149,16 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
             [.. repositoryOwners.OrderBy(pair => pair.Key.ToString(), StringComparer.Ordinal)
                 .Select(pair => new ServiceRepositoryPlacement(pair.Key, sources[pair.Value[0]].Name))]);
     }
-    static RelationQueryPlanComponentFingerprint Key(RelationQueryCompilationResult compilation) =>
-        RelationQueryCompiledPlanReferenceFingerprinter.Compute(RelationQueryCompiledPlanReference.From(compilation.Plan!));
+    static RelationQueryPlanComponentFingerprint Key(RelationQueryCompilationResult compilation, out RelationQueryCompiledPlanReference reference)
+    {
+        reference = RelationQueryCompiledPlanReference.From(compilation.Plan!);
+        return RelationQueryCompiledPlanReferenceFingerprinter.Compute(reference);
+    }
     static RelationQueryPlanComponentFingerprint Key(RelationQueryCompilationRequest request)
     {
         var compiled = RelationQueryStaticCompiler.Compile(request);
         if (!compiled.IsSuccessful) throw new RelationQueryPreparationException("storage ownership", compiled);
-        return Key(compiled);
+        return Key(compiled, out _);
     }
     /// <inheritdoc />
     public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)

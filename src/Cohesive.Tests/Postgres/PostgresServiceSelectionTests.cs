@@ -41,8 +41,8 @@ public sealed class PostgresServiceSelectionTests
         var api = new QueryApi();
         var plan = new ServiceImplementationPlan();
         plan.Declare(api.Definition);
-        plan.Implement(api.Definition, api.Read);
-        plan.Query(Query(), new("2"), 7, 1000, RelationQueryConsistency.SingleSnapshot);
+        var reference = plan.Query(Query(), new("2"), 7, 1000, RelationQueryConsistency.SingleSnapshot);
+        plan.Implement(api.Definition, api.Read, reference);
 
         var evidence = Bindings().PrepareService(plan, new("items/postgres"));
 

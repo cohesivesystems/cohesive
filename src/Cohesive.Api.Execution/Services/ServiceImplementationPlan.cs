@@ -87,12 +87,30 @@ public sealed class ServiceImplementationPlan
         state.Edit(() => { if (!definitions.Contains(definition)) definitions.Add(definition); return this; });
     }
 
-    /// <summary>Admits one implementation against its exact endpoint authority, without resolving storage.</summary>
-    /// <param name="definition">Declared API authority.</param><param name="endpoint">Original endpoint handle.</param>
-    /// <param name="execution">Exact query, process or service reference selected by the binding; null for entity-only or opaque bindings.</param>
-    /// <param name="repository">Canonical observation contract for an entity binding; null otherwise.</param>
-    /// <exception cref="ServiceBindingValidationException">The endpoint is foreign or already implemented.</exception>
-    public void Implement(ApiDefinition definition, ApiEndpoint endpoint, ExecutionDefinitionReference? execution = null, ValueContract? repository = null)
+    /// <summary>Admits an endpoint linked to an exact query, process or service authority.</summary>
+    /// <param name="definition">Declared API authority.</param><param name="endpoint">Original endpoint.</param>
+    /// <param name="execution">Required exact selected execution reference.</param>
+    /// <exception cref="ArgumentNullException">The execution reference is null.</exception>
+    /// <exception cref="ServiceBindingValidationException">Endpoint is foreign or already implemented.</exception>
+    public void Implement(ApiDefinition definition, ApiEndpoint endpoint, ExecutionDefinitionReference execution)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        ImplementCore(definition, endpoint, execution, null);
+    }
+
+    /// <summary>Admits an entity endpoint linked to its canonical repository observation contract.</summary>
+    /// <param name="definition">Declared API authority.</param><param name="endpoint">Original endpoint.</param>
+    /// <param name="repository">Required canonical entity observation contract.</param>
+    /// <exception cref="ArgumentNullException">The repository contract is null.</exception>
+    /// <exception cref="ServiceBindingValidationException">Endpoint is foreign or already implemented.</exception>
+    public void Implement(ApiDefinition definition, ApiEndpoint endpoint, ValueContract repository)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ImplementCore(definition, endpoint, endpoint.Operation.TransitionReference, repository);
+    }
+
+    void ImplementCore(ApiDefinition definition, ApiEndpoint endpoint, ExecutionDefinitionReference? execution, ValueContract? repository)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         state.Edit(() =>

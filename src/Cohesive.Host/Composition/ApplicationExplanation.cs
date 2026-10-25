@@ -1,9 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Execution;
-using Cohesive.Host.Composition;
 using Cohesive.Infra;
 using Cohesive.Infra.Realization;
 using Cohesive.Model;
@@ -12,23 +10,33 @@ using Cohesive.Storage;
 using Cohesive.Relations.Serialization;
 using Cohesive.Transitions.Authoring;
 
-namespace AspireFirst.Orders;
+namespace Cohesive.Host.Composition;
 
-/// <summary>Example presentation of the existing canonical artifacts and offline admission evidence.</summary>
+/// <summary>Reusable inspection of the existing canonical artifacts and offline admission evidence.</summary>
 /// <remarks>This report is not an executable system IR or a new fingerprint authority.</remarks>
-public static class FulfillmentExplanation
+public static class ApplicationExplanation
 {
     /// <summary>Explains an activated application and its compiled native association without starting a host.</summary>
     /// <param name="application">Same offline application instance used to declare infrastructure.</param>
     /// <param name="infrastructure">Canonical infrastructure authoring result.</param>
     /// <param name="deployment">Compiled association, not a live deployment.</param>
+    /// <param name="environmentName">Explicit target environment; not inferred from ambient configuration.</param>
+    /// <param name="deploymentSource">Explicit native deployment source attribution.</param>
+    /// <exception cref="ArgumentNullException">A required input is null.</exception>
+    /// <exception cref="ArgumentException">Deployment is incomplete, attribution is invalid, or the association is foreign.</exception>
+    /// <exception cref="ServiceBindingValidationException">Storage admission fails.</exception>
     /// <returns>JSON report containing exact canonical references and the original deployment artifact.</returns>
     public static JsonObject Create(ApplicationModel application, InfrastructureAuthoringResult infrastructure,
-        InfrastructureTargetDeploymentPlan deployment)
+        InfrastructureTargetDeploymentPlan deployment, string environmentName, SourceReference deploymentSource)
     {
+        ArgumentNullException.ThrowIfNull(application);
+        ArgumentNullException.ThrowIfNull(infrastructure);
+        ArgumentNullException.ThrowIfNull(deployment);
+        // Reject incomplete compilation before storage admission or report projection.
+        var artifact = InfrastructureDeploymentArtifact.Create(deployment, environmentName, deploymentSource);
         if (deployment.Manifest.Definition != infrastructure.Definition.ToReference())
             throw new ArgumentException("Association belongs to a different infrastructure definition.", nameof(deployment));
-        var plans = application.Components<ApiBindingModel>().Select(model => model.Plan).ToArray();
+        var plans = application.Components<IServiceImplementationModel>().Select(model => model.Plan).ToArray();
         var storage = new ServiceStorageComposition(application.Components<StorageModel>()
             .Select(model => (model.GetType().FullName!, model.RequireComposition<IServiceStorageComposition>())));
         storage.Validate(plans);
@@ -44,8 +52,6 @@ public static class FulfillmentExplanation
                 repository = item.Repository,
                 semanticReferences = item.Endpoint.SemanticReferences
             }).ToArray();
-        var artifact = InfrastructureDeploymentArtifact.Create(deployment, "development",
-            SourceReference.Create("example", infrastructure.Definition.Definition.Id.Value));
         return new()
         {
             ["scope"] = "Offline compilation and admission; no native IO or runtime readiness evidence.",

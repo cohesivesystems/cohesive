@@ -48,7 +48,8 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     /// <returns>Canonical artifacts plus the selected state/history policy.</returns>
     public System.Text.Json.Nodes.JsonObject Explain(AspireInfrastructureAssociation association)
     {
-        var report = FulfillmentExplanation.Create(application, Definition, association.Deployment);
+        var report = Cohesive.Host.Composition.ApplicationExplanation.Create(application, Definition, association.Deployment,
+            "development", SourceReference.Create("example", Definition.Definition.Definition.Id.Value));
         report["history"] = System.Text.Json.JsonSerializer.SerializeToNode(new
         {
             authority = policy.Authority.ToString(), reconstitution = policy.Reconstitution.ToString(), database = policy.DatabaseName

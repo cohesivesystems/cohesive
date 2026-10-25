@@ -298,7 +298,7 @@ public sealed class ServiceAcceptedProcessTests
         var fixture = new Fixture();
         var onlyPoll = new ApiDefinition([fixture.Api.Result]);
         var plan = new ServiceImplementationPlan();
-        plan.Contribute(onlyPoll, () => plan.Implement(onlyPoll, fixture.Api.Result));
+        plan.Contribute(onlyPoll, () => plan.Implement(onlyPoll, fixture.Api.Result, fixture.Api.Declaration.Reference));
         var error = Assert.Throws<ServiceBindingValidationException>(() => plan.Definition);
         Assert.Equal("services.api.resultLinkInvalid", Assert.Single(error.Validation.Diagnostics).Code);
     }

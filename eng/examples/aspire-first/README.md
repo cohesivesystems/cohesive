@@ -1,8 +1,11 @@
+# One fulfillment model, two storage compositions
+
 For state-authoritative versus event-authoritative PostgreSQL execution, see [State authority](STATE-AUTHORITY.md).
 
 ## Inspect the compiled system without running it
 
-The AppHosts can emit an offline report without building or starting the distributed
+Both AppHosts use `Cohesive.Host`’s `ApplicationExplainCommand` and
+`ApplicationExplanation.Create`. They can emit an offline report without building or starting the distributed
 application, opening native clients, initializing schemas, or running containers:
 
 ```sh
@@ -41,7 +44,6 @@ It proves neither schema readiness nor actual runtime isolation, durability, cre
 or successful execution. The existing integration tests qualify those separate boundaries.
 
 
-# One fulfillment model, two storage compositions
 
 Declare orders, reservations, inventory, their queries and transitions once. Attach native storage and
 Aspire resources to choose how the same HTTP API executes.

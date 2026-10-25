@@ -1,5 +1,7 @@
 using System.Text.Json.Nodes;
 using Aspire.Hosting;
+using Cohesive.Adapters.Aspire;
+using Cohesive.Adapters.Aspire.Postgres;
 using AspireFirst;
 using AspireFirst.Orders;
 using AspireFirst.PostgresCosmos;
@@ -15,6 +17,18 @@ public sealed class FulfillmentExplanationTests
         var model = TestModels.Infrastructure(authority);
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
         return model.Explain(model.Configure(builder));
+    }
+
+    [Fact]
+    public void Shared_report_entry_rejects_incomplete_native_association()
+    {
+        var model = TestModels.Infrastructure();
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
+        var database = builder.AddPostgres("postgres").AddDatabase("orders");
+        var incomplete = builder.AttachCohesive(model, new("test/incomplete"), new("development"),
+            associations => associations.Resource(FulfillmentInfrastructure.Store, database, authority: new("test")));
+        Assert.False(incomplete.Deployment.IsComplete);
+        Assert.Throws<ArgumentException>(() => model.Explain(incomplete));
     }
 
     [Fact]
@@ -73,7 +87,7 @@ public sealed class FulfillmentExplanationTests
         var model = ModelActivator.Create<PostgresCosmosFulfillmentInfrastructure>();
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
         var association = model.Configure(builder);
-        var report = FulfillmentExplanation.Create(model.Application, model.Definition, association.Deployment);
+        var report = model.Explain(association);
         Assert.All(report["storage"]!["queries"]!.AsArray(), query =>
             Assert.Equal(nameof(Cohesive.Relations.Execution.RelationQueryConsistency.IndependentSources), query!["consistency"]!.GetValue<string>()));
         Assert.Contains("resources/inventory", report["deployment"]!.ToJsonString());

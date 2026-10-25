@@ -6,7 +6,7 @@ namespace Cohesive.Adapters.AspNet.Services;
 
 /// <summary>Constructor-authored API implementation recipes; activation validates coverage without resolving storage.</summary>
 /// <remarks>Use ServiceApiBindingsBuilder directly when inheritance is unnecessary. Native preparation is explicit and host-owned.</remarks>
-public abstract class ApiBindingModel : IAuthoringModel
+public abstract class ApiBindingModel : IAuthoringModel, IServiceImplementationModel
 {
     /// <summary>Construction-only implementation builder, shared with direct authoring.</summary>
     protected ServiceApiBindingsBuilder Bindings { get; } = new();
