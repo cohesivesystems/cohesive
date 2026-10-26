@@ -4,7 +4,8 @@ For state-authoritative versus event-authoritative PostgreSQL execution, see [St
 
 ## Inspect the compiled system without running it
 
-Both AppHosts register `Cohesive.Application`’s `AddApplicationExplanation` on a `Cohesive.Cli.CliApplication`
+Both AppHosts use `Cohesive.Adapters.Aspire.Application.AspireApplication.RunAsync`, which registers
+the optional `Cohesive.Application.Cli` explain command on `Cohesive.Cli.CliApplication`
 and use `ApplicationExplanation.Create`. They can emit an offline report without building or starting the distributed
 application, opening native clients, initializing schemas, or running containers.
 

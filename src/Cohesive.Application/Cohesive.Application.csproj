@@ -9,7 +9,6 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../Cohesive.Api.Execution/Cohesive.Api.Execution.csproj" />
-    <ProjectReference Include="../Cohesive.Cli/Cohesive.Cli.csproj" />
     <ProjectReference Include="../Cohesive/Cohesive.csproj" />
     <ProjectReference Include="../Cohesive.Transitions/Cohesive.Transitions.csproj" />
     <ProjectReference Include="../Cohesive.Processes/Cohesive.Processes.csproj" />

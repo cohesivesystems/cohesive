@@ -1,18 +1,13 @@
 using System.Text;
-using Aspire.Hosting;
 using Cohesive.Application;
+using Cohesive.Application.Cli;
 using Cohesive.Cli;
 
-namespace Cohesive.Adapters.Aspire.Tests;
+namespace Cohesive.Tests;
 
 public sealed class ApplicationExplanationCliTests
 {
-    static ApplicationExplanationDocument Report()
-    {
-        var model = TestModels.Infrastructure();
-        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
-        return model.Explain(model.Configure(builder));
-    }
+    static ApplicationExplanationDocument Report() => ApplicationExplanationFixture.Report();
 
     [Fact]
     public async Task Explain_passes_native_arguments_and_writes_complete_typed_report()
@@ -94,8 +89,7 @@ public sealed class ApplicationExplanationCliTests
         var cli = new CliApplication("test").AddApplicationExplanation((_, _) => { calls++; return Report(); });
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        try { Assert.NotEqual(0, await cli.InvokeAsync(["explain"], CommandIo.Null(), cancelled.Token)); }
-        catch (OperationCanceledException) { }
+        Assert.Equal(1, await cli.InvokeAsync(["explain"], CommandIo.Null(), cancelled.Token));
         Assert.Equal(0, calls);
     }
     [Fact]
@@ -117,7 +111,7 @@ public sealed class ApplicationExplanationCliTests
     {
         var assembly = typeof(ModelActivator).Assembly;
         Assert.Equal("Cohesive.Application", assembly.GetName().Name);
-        Assert.DoesNotContain(assembly.GetReferencedAssemblies(), reference => reference.Name == "Cohesive.Host"
+        Assert.DoesNotContain(assembly.GetReferencedAssemblies(), reference => reference.Name is "Cohesive.Host" or "Cohesive.Cli" or "System.CommandLine"
             || reference.Name!.StartsWith("Microsoft.Extensions.Hosting", StringComparison.Ordinal));
         Assert.DoesNotContain(typeof(Cohesive.Host.Services.HostProcessWorker).Assembly.GetReferencedAssemblies(),
             reference => reference.Name == "Cohesive.Application");

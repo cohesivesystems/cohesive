@@ -7,7 +7,6 @@ native client or schema is started implicitly.
 
 ```csharp
 using Cohesive.Application;
-using Cohesive.Cli;
 
 var model = ModelActivator.Create<OrdersApplication>();
 ```
@@ -17,8 +16,9 @@ var model = ModelActivator.Create<OrdersApplication>();
 Reference `Cohesive.Application` and replace `using Cohesive.Host.Composition` with
 `using Cohesive.Application`. No forwarding facade is retained. Keep Host when using its runtime
 workers, scoped CLI host integration or failure logging. The custom `ApplicationExplainCommand`
-was removed: register `AddApplicationExplanation` on `CliApplication`, and replace `--explain`
-with `explain` (native arguments follow `--`). This package adds no dependency from Cli to Application.
+was removed: reference the optional `Cohesive.Application.Cli` package and register `AddApplicationExplanation`
+(`using Cohesive.Application.Cli`) on `CliApplication`, and replace `--explain`
+with `explain` (native arguments follow `--`). Application has no dependency on Cli or System.CommandLine. The optional integration depends on both.
 
 ## Offline application composition
 

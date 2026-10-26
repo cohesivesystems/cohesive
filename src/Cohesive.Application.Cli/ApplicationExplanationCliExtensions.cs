@@ -1,6 +1,6 @@
 using Cohesive.Cli;
 
-namespace Cohesive.Application;
+namespace Cohesive.Application.Cli;
 
 /// <summary>Offline application inspection registered through the shared CLI command machinery.</summary>
 public static class ApplicationExplanationCliExtensions
@@ -13,7 +13,8 @@ public static class ApplicationExplanationCliExtensions
     /// <exception cref="ArgumentNullException">Application or factory is null.</exception>
     /// <exception cref="InvalidOperationException">The command identity is already registered.</exception>
     /// <remarks>Invoke as explain -- [native arguments]. The complete report is serialized before output;
-    /// factory and serialization failures produce no partial report and follow CLI error handling.</remarks>
+    /// factory and serialization failures produce no partial report and follow CLI error handling.
+    /// A pre-cancelled CliApplication.InvokeAsync returns exit code 1 without calling the factory.</remarks>
     public static CliApplication AddApplicationExplanation(this CliApplication cli,
         Func<IReadOnlyList<string>, CancellationToken, ApplicationExplanationDocument> explain)
     {
