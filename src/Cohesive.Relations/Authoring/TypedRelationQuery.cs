@@ -161,4 +161,27 @@ public sealed partial class RelationQueryExpressionAuthoring
         var filtered = Filter(input.Node, predicate, input.Binding);
         return new(filtered, input.Binding, input.RelationRoot);
     }
+
+    /// <summary>
+    /// Limits a focused typed branch to its first <paramref name="count"/> rows, retaining its binding.
+    /// </summary>
+    /// <remarks>
+    /// Lowers to a canonical offset page with no offset, so callers do not construct page definitions directly.
+    /// </remarks>
+    /// <typeparam name="TNode">Input node type.</typeparam>
+    /// <typeparam name="T">Focused row type.</typeparam>
+    /// <param name="input">Branch owned by this session.</param>
+    /// <param name="count">Maximum number of rows the branch yields; must be positive.</param>
+    /// <returns>A paged branch retaining its typed binding.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="input"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is not positive.</exception>
+    /// <exception cref="ArgumentException">The branch belongs to another session.</exception>
+    public RelationQueryExpressionBoundNode<PageQueryNode, T> Take<TNode, T>(
+        RelationQueryExpressionBoundNode<TNode, T> input, int count)
+        where TNode : LogicalQueryNode where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        var paged = Page(input.Node, new OffsetPageDefinition(limit: count));
+        return new(paged, input.Binding, input.RelationRoot);
+    }
 }

@@ -322,6 +322,9 @@ public sealed record AmbiguousRelationDraftAssignmentResolution : RelationDraftA
 /// <summary>Canonical wire names for the portable relation-draft contract.</summary>
 public static class RelationDraftWireNames
 {
+    /// <summary>Terminal role recorded in authoring provenance for a relation draft.</summary>
+    public const string Draft = "relationDraft";
+
     /// <summary>Polymorphic assignment-resolution discriminator property.</summary>
     public const string ResolutionDiscriminator = "$resolution";
 
