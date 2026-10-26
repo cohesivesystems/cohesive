@@ -5,7 +5,7 @@ using Cohesive.Model;
 using Cohesive.Storage;
 using Cohesive.Transitions.Authoring;
 
-namespace Cohesive.Host.Composition;
+namespace Cohesive.Application;
 
 /// <summary>Reusable inspection of the existing canonical artifacts and offline admission evidence.</summary>
 /// <remarks>This report is not an executable system IR or a new fingerprint authority.</remarks>

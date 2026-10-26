@@ -1,4 +1,4 @@
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Host.Services;

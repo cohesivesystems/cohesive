@@ -1,5 +1,5 @@
 using Cohesive.Transitions.Authoring;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Tests.Modeling;

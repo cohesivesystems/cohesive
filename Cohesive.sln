@@ -224,6 +224,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Marten", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Aspire.Cosmos", "src\adapters\Cohesive.Adapters.Aspire.Cosmos\Cohesive.Adapters.Aspire.Cosmos.csproj", "{CD3B58B1-3051-492D-8E8E-EDB9614BABBD}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Application", "src\Cohesive.Application\Cohesive.Application.csproj", "{DAD864A8-78C3-4616-B7A5-3577D979EE5C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1470,6 +1472,18 @@ Global
 		{CD3B58B1-3051-492D-8E8E-EDB9614BABBD}.Release|x64.Build.0 = Release|Any CPU
 		{CD3B58B1-3051-492D-8E8E-EDB9614BABBD}.Release|x86.ActiveCfg = Release|Any CPU
 		{CD3B58B1-3051-492D-8E8E-EDB9614BABBD}.Release|x86.Build.0 = Release|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Debug|x64.Build.0 = Debug|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Debug|x86.Build.0 = Debug|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Release|x64.ActiveCfg = Release|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Release|x64.Build.0 = Release|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Release|x86.ActiveCfg = Release|Any CPU
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1546,5 +1560,6 @@ Global
 		{B6FAAFCD-2035-47B2-8245-06657A84F16A} = {CB5309FE-B147-B47F-CE5D-AC7BE1E38AE2}
 		{32F69926-2565-4C11-8122-F00F57D077F5} = {3E9C3776-17C9-28DE-3735-A8B9F121C183}
 		{CD3B58B1-3051-492D-8E8E-EDB9614BABBD} = {3E9C3776-17C9-28DE-3735-A8B9F121C183}
+		{DAD864A8-78C3-4616-B7A5-3577D979EE5C} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 	EndGlobalSection
 EndGlobal

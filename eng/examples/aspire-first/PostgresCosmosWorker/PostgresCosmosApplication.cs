@@ -1,5 +1,5 @@
 using AspireFirst.Orders;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 
 namespace AspireFirst.PostgresCosmos;
 

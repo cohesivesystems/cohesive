@@ -13,7 +13,6 @@
     <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
     <PackageReference Include="System.CommandLine" Version="2.0.5" />
-    <PackageReference Include="YamlDotNet" Version="15.1.2" />
   </ItemGroup>
 
   <ItemGroup>
@@ -21,10 +20,7 @@
     <ProjectReference Include="..\Cohesive.Cli\Cohesive.Cli.csproj" />
     <ProjectReference Include="..\Cohesive.Configuration\Cohesive.Configuration.csproj" />
     <ProjectReference Include="..\Cohesive\Cohesive.csproj" />
-    <ProjectReference Include="..\Cohesive.Transitions\Cohesive.Transitions.csproj" />
-    <ProjectReference Include="..\Cohesive.Relations\Cohesive.Relations.csproj" />
     <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />
-    <ProjectReference Include="..\Cohesive.Infra\Cohesive.Infra.csproj" />
     <ProjectReference Include="..\Cohesive.Storage\Cohesive.Storage.csproj" />
   </ItemGroup>
 

@@ -1,6 +1,6 @@
 using Cohesive.Adapters.Marten;
 using Cohesive.Adapters.Postgres;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Storage;
 using Microsoft.Extensions.Configuration;
 

@@ -1,6 +1,6 @@
 using Cohesive.Adapters.Marten;
 using Marten;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using AspireFirst;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;

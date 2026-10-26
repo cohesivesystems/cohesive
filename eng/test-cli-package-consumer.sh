@@ -19,7 +19,7 @@ dotnet run \
   --property:CohesivePackageVersion="$version" \
   --property:CohesivePackageFeed="$feed"
 
-for excluded_package in Cohesive.Host Cohesive.Relations Cohesive.Transitions Cohesive.Processes Cohesive.Storage; do
+for excluded_package in Cohesive.Host Cohesive.Application Cohesive.Relations Cohesive.Transitions Cohesive.Processes Cohesive.Storage; do
   if grep --fixed-strings --quiet "\"$excluded_package/" "$assets"; then
     echo "Cohesive.Cli package consumer unexpectedly acquired $excluded_package." >&2
     exit 1

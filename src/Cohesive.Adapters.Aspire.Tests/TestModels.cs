@@ -1,6 +1,6 @@
 using AspireFirst;
 using AspireFirst.Orders;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Storage;
 using Microsoft.Extensions.DependencyInjection;
 

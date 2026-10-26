@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using AspireFirst.Orders;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Execution;

@@ -21,4 +21,7 @@
     <ProjectReference Include="..\..\Cohesive.Storage\Cohesive.Storage.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="../../Cohesive.Application/Cohesive.Application.csproj" />
+  </ItemGroup>
 </Project>

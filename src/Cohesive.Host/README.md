@@ -21,12 +21,15 @@ using Cohesive.Cli;
 using Cohesive.Host.Cli;
 
 var app = new CliApplication(description: "Training jobs");
+app.UseHostContext<TrainCommand, CliCommandContext<TrainCommand>>(
+    _ => Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder().Build(),
+    context => context);
 
 app.Command<TrainCommand>("train", "Start a training run")
     .OnExecute(context =>
     {
         var command = context.Configuration;
-        Console.WriteLine($"Training {command.Model} on {command.Dataset}");
+        context.Io.WriteLine($"Training {command.Model} on {command.Dataset}");
         return 0;
     });
 
@@ -66,49 +69,6 @@ process; repeated starts while active do not duplicate delivery. This service li
 that every native host or its other hosted services support restarting. Generic-host tests cover startup,
 stop/start, disposal without stop, duplicate registration, disabled logging and independent hosts.
 
-## Offline application composition
-
-`ModelActivator.Create<T>()` discovers concrete constructor dependencies and prepares one offline graph.
-Public `required ... { get; init; }` properties also declare dependencies on every model declaration,
-including inherited required properties. Constructor and property injection may coexist on the same model.
-The optional callback
-accepts ordinary `IServiceCollection` singleton registrations for interfaces/factories.
-
-Both sets of dependencies complete before a model is constructed. The activator passes constructor
-dependencies, assigns required init properties, then completes authoring before exposing the model to consumers.
-Use constructor parameters when authoring in the constructor; use property dependencies during
-`IAuthoringModel.Complete()` or definition preparation triggered by completion.
-Reflection cannot prevent arbitrary constructor code from reading properties early: constructor failures
-report this initialization boundary and preserve the original exception. Constructors must not read init properties; use
-constructors for models that actively author declarations from dependencies. No partially populated model
-is exposed to resolve a cycle. Property metadata is retained only within the composition builder, and
-reflection-based assignment runs once during activation, never per invocation. No source generator,
-explicit Prepare call or runtime service container is required.
-
-```csharp
-public sealed class OrdersApplication : ApplicationModel
-{
-    public required OrdersDomain Domain { get; init; }
-    public required OrdersQueries Queries { get; init; }
-}
-```
-
-The direct builder still requires explicit registrations for all dependencies. Automatically constructed
-models resolve properties through the same singleton registry as constructor parameters. Explicit factory
-or instance registrations retain responsibility for initialization: their values are not overwritten, but
-null required components are rejected before model completion. Required fields, mutable setters,
-non-public accessors and value-type component properties are unsupported. Init modifiers are recognized
-by full metadata name, including library-local IsExternalInit polyfills.
-
-The underlying `ApplicationModelBuilder` also supports direct explicit registration. `Build()` returns
-`PreparedApplicationModel`, with shared instances and a validated canonical execution catalog. The optional
-`ApplicationModel` root exposes this through `Composition` after activation. DI handles construction and
-singleton sharing; `IAuthoringModel` completion and semantic validation remain a shared lifecycle concern.
-Missing interfaces, cycles, duplicate revisions, unsupported lifetimes and disposable resources fail at setup.
-Factories perform no IO and must not retain the temporary provider. Constructor selection is intentionally
-strict for discovery: one public constructor, or an explicit factory. Models and prepared values are scoped
-to one activation; failure caching belongs to the direct builder/authoring instance.
-
 ## Finite host-owned process execution
 
 `AddCohesiveHostProcessWorker(prepared, maximumExecutions)` attaches prepared native process bindings to the
@@ -119,31 +79,10 @@ receipt/result history. Capacity includes completed instances, with no eviction 
 HTTP composition, `BindHosted` prepares and registers this provider at ServiceApiBindingsBuilder.Build, leaving
 AppHost semantic inspection offline. See [the protocol](../../docs/design/accepted-process-api.md).
 
-### Explicit environment policies
 
-Mark environment-selected dependencies with `[ExplicitModelRegistration]` to prevent model
-auto-discovery from silently constructing defaults. Register an instance, factory or type in
-the activation services before `ModelActivator.Create`. Ordinary model dependencies still
-support constructor and required-init discovery. The marker validates registration, not the
-contents of a policy; its owner validates those values.
+## Package boundary
 
-## Offline application explanation
-
-`ApplicationExplanation.Create(application, infrastructure, deployment, environmentName, deploymentSource)`
-admits the application and returns an immutable `ApplicationExplanationDocument`. It rejects incomplete
-or foreign infrastructure associations and storage admission failures before producing a report.
-The document retains original canonical entities, portable endpoint implementation links, query and
-execution documents, and the validated deployment artifact. Existing documents retain their own
-fingerprint authority. `SchemaVersion` versions only the report structure; `Scope` is explicitly
-`OfflineAdmission`, never live readiness.
-
-History is collected from contributing native bindings implementing `IStorageHistoryBinding`.
-The PostgreSQL binding projects the authority and reconstitution of its declared history attachment,
-with its existing database identity. No clients, credentials, connections or native preparation are
-required. A composition without a history attachment contributes no history entry.
-
-`ApplicationExplainCommand.TryWrite(writer, () => report)` evaluates its typed factory only when
-`--explain` is supplied, serializes the complete report before writing, and leaves other host arguments
-untouched. `report.ToJson()` uses the existing portable document serializers directly; it does not
-serialize and parse embedded documents into mutable JSON trees. The output is an inspection report,
-not a supported application import format or an independent executable system IR.
+Offline model construction, activation and inspection live in [Cohesive.Application](../Cohesive.Application/README.md).
+Host owns generic .NET lifecycle: CLI invocation scopes, finite process workers and private failure logging.
+It does not depend on Application. Both packages deliberately use Microsoft.Extensions abstractions.
+The unused DomainModelExternalDsl JSON/YAML helper was removed; no production consumer was found.

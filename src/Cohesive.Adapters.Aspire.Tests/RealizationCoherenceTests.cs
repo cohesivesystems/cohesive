@@ -6,7 +6,7 @@ using AspireFirst.PostgresCosmos;
 using Cohesive.Adapters.Aspire.Cosmos;
 using Cohesive.Adapters.Cosmos;
 using Cohesive.Adapters.Marten;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Storage;
 using Marten;
 using Microsoft.Extensions.Configuration;

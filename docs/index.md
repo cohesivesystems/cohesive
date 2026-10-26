@@ -154,6 +154,7 @@ The principal package entry points are:
 - [Simulation xUnit integration](../src/Cohesive.Simulation.Xunit/README.md)
 - [Simulation CLI tool](../src/Cohesive.Simulation.Cli/README.md)
 - [Simulation external-process catalogs](../src/Cohesive.Simulation.ExternalProcess/README.md)
+- [Application composition](../src/Cohesive.Application/README.md)
 - [Host integration](../src/Cohesive.Host/README.md)
 - [OpenTelemetry adapter](../src/adapters/Cohesive.Adapters.OpenTelemetry/README.md)
 - [Frontend packages](../src/frontend/README.md)

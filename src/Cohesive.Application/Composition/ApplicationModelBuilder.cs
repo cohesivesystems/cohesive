@@ -6,7 +6,7 @@ using Cohesive.Model;
 using Cohesive.Prelude;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Cohesive.Host.Composition;
+namespace Cohesive.Application;
 
 /// <summary>Composes offline declarations by constructor dependencies and required init properties, then freezes them.</summary>
 /// <remarks>No runtime services or resources are created implicitly. Registrations and instances belong to this

@@ -39,6 +39,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Simulation.ExternalProcess` | Optional bounded imports of finite generation catalogs from another runtime. |
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |
 | `Cohesive.Cli` | Reusable typed command composition, configuration binding, validation, invocation, and testing helpers. |
+| `Cohesive.Application` | Offline application model composition, activation, validation and typed explanation. |
 | `Cohesive.Host` | Generic-host lifecycle, dependency-injection scope, and runtime binding helpers. |
 | `Cohesive.CodeGen.Cli` | Build-facing code generation for shapes, APIs, OpenAPI, GraphQL, and TypeScript artifacts. |
 | `Cohesive.Analyzers` | Roslyn analyzers and source generators for Cohesive authoring patterns. |
