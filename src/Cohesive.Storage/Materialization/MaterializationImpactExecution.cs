@@ -393,7 +393,7 @@ public sealed class RelationQueryMaterializationImpactRuntime : IMaterialization
         if (linkage.RelationPlan.Definition is not RelationDefinition relation
             || definition.Relation.Output.Kind != RelationQueryOutputReferenceKind.Relation
             || definition.Relation.Output.Relation != relation.Id
-            || (relation.Assembly is null && relation.Output.Mode is RelationOutputMode.ManyPerRoot or RelationOutputMode.Set))
+            || (relation.EffectiveOutputMode is RelationOutputMode.ManyPerRoot or RelationOutputMode.Set))
         {
             throw new ArgumentException(
                 "Incremental materialization hydration requires one complete one-per-root canonical Relation output.",
@@ -417,7 +417,7 @@ public sealed class RelationQueryMaterializationImpactRuntime : IMaterialization
 
         roots = builder.ToImmutable();
         this.rootResolver = rootResolver;
-        outputMode = relation.Assembly is null ? relation.Output.Mode : RelationOutputMode.ZeroOrOnePerRoot;
+        outputMode = relation.EffectiveOutputMode;
         ImpactPlan = impactPlan.Fingerprint;
     }
 

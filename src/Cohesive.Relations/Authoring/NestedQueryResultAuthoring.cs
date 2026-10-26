@@ -240,6 +240,14 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
             new(graph.Id, graph.Shapes[0].Id), RelationOutputMode.ManyPerRoot).Definition with { Assembly = assembly };
         var request = new RelationQueryCompilationRequest(RelationQueryDocument.FromDefinition(definition),
             [.. author.ShapeDocuments, ShapeGraphDocument.FromGraph(graph)], author.CreateRelationshipCatalogDocument());
+        var validation = RelationQueryDefinitionValidator.Validate(definition);
+        if (!validation.IsValid)
+            throw new ArgumentException(string.Join("; ", validation.Diagnostics.Select(diagnostic =>
+                $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}")), nameof(id));
+        var compilation = RelationQueryStaticCompiler.Compile(request);
+        if (!compilation.IsSuccessful)
+            throw new ArgumentException(string.Join("; ", compilation.Diagnostics.Select(diagnostic =>
+                $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}")), nameof(id));
         built = true;
         return new(request);
     }

@@ -371,6 +371,14 @@ public sealed record RelationDefinition : RelationQueryDefinition
     /// <summary>Relation output semantics.</summary>
     public RelationOutputDefinition Output { get; init; }
 
+    /// <summary>Per-root cardinality after optional nested-result assembly.</summary>
+    [JsonIgnore]
+    public RelationOutputMode EffectiveOutputMode => Assembly is null ? Output.Mode : RelationOutputMode.ZeroOrOnePerRoot;
+
+    /// <summary>Target shape after optional nested-result assembly.</summary>
+    [JsonIgnore]
+    public QualifiedShapeId ValueShape => Assembly?.Shape ?? Output.Shape;
+
     /// <summary>Invariants validated for relation outputs.</summary>
     public ImmutableArray<InvariantDefinition> Invariants { get; init; }
 }

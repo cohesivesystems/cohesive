@@ -1,3 +1,4 @@
+using Cohesive.Relations.IR;
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Control;
@@ -210,7 +211,7 @@ public sealed record MaterializationRelationReference
 
     /// <summary>Shape retained by the target after optional canonical per-root nested assembly.</summary>
     [JsonIgnore]
-    public QualifiedShapeId ValueShape => CompilationRequest.DefinitionDocument.Definition.Assembly?.Shape ?? Output.Shape;
+    public QualifiedShapeId ValueShape => CompilationRequest.DefinitionDocument.Definition is RelationDefinition relation ? relation.ValueShape : Output.Shape;
 
 
     /// <summary>Compiles one exact request and selects a canonical output by identity.</summary>
