@@ -5,7 +5,10 @@ using Cohesive.Relations.Physical;
 namespace Cohesive.Storage.Materialization;
 
 /// <summary>Auxiliary source-read interpretations of an admitted rooted hydration plan.</summary>
-/// <remarks>These plans authorize baseline and inverse-impact acquisition; they are not alternate semantic queries.</remarks>
+/// <remarks>These plans authorize baseline and inverse-impact acquisition; they are not alternate semantic queries.
+/// The impact plan is a bounded read envelope over declared inputs: enumeration, identity and predicate stages
+/// are available to the admitted resolver, including optional current-state enrichment. It is deliberately not
+/// a minimal per-route authorization proof. Semantic plan, source, partition and native bounds remain fenced.</remarks>
 public sealed record MaterializationRelationReadPlans
 {
     MaterializationRelationReadPlans(CompiledRelationQueryPhysicalPlan baseline, CompiledRelationQueryPhysicalPlan impact)
@@ -16,7 +19,7 @@ public sealed record MaterializationRelationReadPlans
     /// <summary>Bounded identity and relationship reads required by the compiled impact routes.</summary>
     public CompiledRelationQueryPhysicalPlan Impact { get; }
 
-    /// <summary>Derives read authorization from exact hydration placement and inverse-impact evidence.</summary>
+    /// <summary>Derives a bounded read envelope from exact hydration placement and inverse-impact evidence.</summary>
     /// <param name="plan">Canonical rooted relation plan.</param>
     /// <param name="hydration">Physical hydration with a supplied root.</param>
     /// <param name="impact">Impact routes linked to that relation.</param>

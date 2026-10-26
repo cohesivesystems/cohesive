@@ -78,6 +78,24 @@ public sealed class PostgresMaterializationStateStoreTests
     }
 
     [PostgresFact]
+    public async Task Operator_lease_releases_and_broken_unlock_does_not_mask_failure()
+    {
+        var connection = Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!;
+        var name = "lease-" + Guid.NewGuid().ToString("N");
+        await using var database = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(connection) { ApplicationName = name }.ConnectionString);
+        await using var admin = NpgsqlDataSource.Create(connection);
+        const long key = 394823419;
+        await using (var lease = await PostgresSessionLease.AcquireAsync(database, key))
+        {
+            await Assert.ThrowsAsync<InvalidOperationException>(() => PostgresSessionLease.AcquireAsync(database, key));
+            await using var terminate = admin.CreateCommand("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name=$1");
+            terminate.Parameters.AddWithValue(name);
+            await terminate.ExecuteNonQueryAsync();
+        }
+        await using var restored = await PostgresSessionLease.AcquireAsync(database, key);
+    }
+
+    [PostgresFact]
     public async Task Nested_document_survives_jsonb_reordering_but_rejects_content_changes()
     {
         await using var database = NpgsqlDataSource.Create(
@@ -96,8 +114,22 @@ public sealed class PostgresMaterializationStateStoreTests
                     json => System.Text.Json.Nodes.JsonNode.Parse(json)!,
                     node => node.ToJsonString(),
                     (node, _) => Task.FromResult((node, node)));
+            Assert.False(await new PostgresMaterializationStateStore(database, options).HasStoredStateAsync());
             Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(original, await Read()));
+            Assert.True(await new PostgresMaterializationStateStore(database, options).HasStoredStateAsync());
             Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(original, await Read()));
+            // Re-sign exactly the serialized loaded document using the legacy algorithm, then prove upgrade.
+            await using (var load = database.CreateCommand($"SELECT document::text FROM {options.QualifiedTable}"))
+            {
+                var loaded = System.Text.Json.Nodes.JsonNode.Parse((string)(await load.ExecuteScalarAsync())!)!.ToJsonString();
+                var legacy = "sha256-v1:" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(loaded)));
+                await using var old = database.CreateCommand($"UPDATE {options.QualifiedTable} SET document_fingerprint=$1");
+                old.Parameters.AddWithValue(legacy);
+                await old.ExecuteNonQueryAsync();
+            }
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(original, await Read()));
+            await using (var upgraded = database.CreateCommand($"SELECT document_fingerprint FROM {options.QualifiedTable}"))
+                Assert.StartsWith("sha256-canonical-v2:", (string)(await upgraded.ExecuteScalarAsync())!);
             await using var tamper = database.CreateCommand($$"""
                 UPDATE {{options.QualifiedTable}}
                 SET document = jsonb_set(document, '{sequence}', '[1,3,2]'::jsonb)

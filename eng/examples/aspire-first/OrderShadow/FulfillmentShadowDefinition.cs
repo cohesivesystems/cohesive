@@ -25,7 +25,7 @@ public sealed class FulfillmentShadowDefinition
         if (!compiled.IsSuccessful) throw new InvalidOperationException(string.Join("; ", compiled.Diagnostics));
         Plan = compiled.Plan!;
         Output = Plan.RequirementGraph.Outputs.Single(output => output.Field is null);
-        var declaration = Materialization.Define(new("fulfillment/order-details/shadow"), request, Output.Id)
+        var declaration = Materialization.Define(new("fulfillment/order-details/shadow"), queries.OrderDetailsRelation)
             .WithUpdatePolicy(new(MaterializationSynchronizationMode.All,
                 MaterializationConsistencyKind.BaselinePlusCatchUp,
                 MaterializationIdempotencyKind.StableOutputIdentityAndVersion))

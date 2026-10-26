@@ -78,3 +78,31 @@ The PostgreSQL ledger now uses canonical JSON fingerprints: `jsonb` property
 reordering must not corrupt prepared work. Legacy hashes are accepted only when
 their original check succeeds, then upgraded on a successful write. A legacy
 mismatch remains an integrity error; it is never silently re-signed.
+
+Native construction is owned by `PostgresMaterializationRelation.BindAsync`: the
+example supplies its borrowed pool, attested runtime, bounds and slot factory.
+`PostgresLogicalReplicationPreparation` owns explicit publication/slot setup and
+asks the configured state store about progress. `PostgresSessionLease` owns the
+operator lock lifetime. The shared rebuild compiler accepts caller provenance and
+capacity evidence and uses the declared scheduling limits.
+
+The auxiliary impact plan is a bounded read envelope over declared inputs,
+including optional current-state enrichment, rather than a minimal list of only
+operations taken by one impact route. Every actual read remains constrained by
+semantic-plan affinity, native mapping, partition and configured limits.
+
+The `shadow-materialization` GitHub workflow starts disposable PostgreSQL and
+Elasticsearch instances and runs this recovery test on pull requests, including
+stacked branches. It also verifies native ledger and Unicode keyset contracts.
+
+### Ledger representation cost
+
+A Release/.NET 10 warm allocation check measures 32 iterations of serializing a
+nested JSON ledger and hashing it, excluding database I/O and ledger replay. For
+1 KiB / 64 KiB / 256 KiB payloads on the local macOS test host, legacy hashing
+allocated 3,424 / 196,960 / 786,968 bytes per operation; canonical hashing allocated
+2,912 / 131,936 / 525,166. Approximate timings were 1.4 / 46 / 491 µs legacy versus
+3.2 / 67 / 425 µs canonical. These are diagnostic samples, not throughput claims.
+The canonical path still parses serialized JSON; it avoids the legacy full UTF-8
+hash input allocation by streaming canonical output. The regression bounds
+allocation growth, preserves array order and checks decimal/object equivalence.

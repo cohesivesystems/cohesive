@@ -832,7 +832,7 @@ public static class Program
                 output: semantics.Output,
                 sourceReaders: hydrationReaders);
             bindings.Add(new(
-                tenant: tenant,
+                partition: tenant,
                 logicalPartition: FreightOrderRebuildPlanCompiler.LogicalPartition(tenant),
                 rootRead: rootRead,
                 hydrator: hydrator,
@@ -962,7 +962,7 @@ public static class Program
                 physicalPlan: plan.ImpactPhysicalPlan,
                 sourceReaders: impactReaders);
             return new MaterializationPartitionBinding(
-                tenant: tenant,
+                partition: tenant,
                 logicalPartition: FreightOrderRebuildPlanCompiler.LogicalPartition(tenant),
                 rootRead: rootRead,
                 hydrator: hydrator,

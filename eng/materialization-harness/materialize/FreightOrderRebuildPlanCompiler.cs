@@ -55,7 +55,9 @@ public static class FreightOrderRebuildPlanCompiler
             new(MaximumPageItems, MaximumPageBytes, 16, MaximumPageBytes, 128,
                 MaterializationRebuildProcessFactory.MaximumStartsPerActivation, MaterializationRebuildProcessFactory.MaximumParallelism,
                 maximumChangeFeedsPerConvergenceActivation: 64),
-            provider, target, tenantBindings, impactPlan), storageRealization);
+            provider, target, tenantBindings, impactPlan,
+            new(new($"materialization-harness/{provider}/capacity"), 1, [$"materialization-harness/{provider}/local-compose/v1"]),
+            new(new("cohesive.materialization-harness", "1"), new($"eng/materialization/{provider}"))), storageRealization);
     }
     /// <summary>Returns the canonical logical partition identity for one freight tenant.</summary>
     /// <param name="tenant">Stable tenant identity.</param>

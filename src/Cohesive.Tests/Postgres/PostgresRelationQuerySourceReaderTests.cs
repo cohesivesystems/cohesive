@@ -1398,18 +1398,20 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         }
     }
 
-    [PostgresFact]
-    public async Task LocalPostgres_Unicode_keysets_use_native_C_order_without_claiming_CLR_order()
+    [PostgresTheory]
+    [InlineData("C")]
+    [InlineData("POSIX")]
+    public async Task LocalPostgres_Unicode_keysets_use_native_C_order_without_claiming_CLR_order(string collation)
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);
         var schema = $"unicode_{Guid.NewGuid():N}";
         var contracts = CreateContracts(schema, "items", identitySemantics:
-            new("C", PostgresRelationQueryTextEqualitySemantics.Ordinal));
+            new(collation, PostgresRelationQueryTextEqualitySemantics.Ordinal));
         try
         {
             await using var setup = database.CreateCommand($$"""
                 CREATE SCHEMA "{{schema}}";
-                CREATE TABLE "{{schema}}".items(id text COLLATE "C" PRIMARY KEY, name text, optional text, parent_id text COLLATE "C");
+                CREATE TABLE "{{schema}}".items(id text COLLATE "{{collation}}" PRIMARY KEY, name text, optional text, parent_id text COLLATE "C");
                 """);
             await setup.ExecuteNonQueryAsync();
             await using var insert = database.CreateCommand($"INSERT INTO \"{schema}\".items VALUES ($1,'first',NULL,'p'),($2,'second',NULL,'p')");
@@ -2718,6 +2720,15 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         CompiledRelationQueryPhysicalPlan PhysicalPlan,
         RelationQuerySourceInstanceId Source,
         PostgresRelationQueryStorageBinding Storage);
+
+    sealed class PostgresTheoryAttribute : TheoryAttribute
+    {
+        public PostgresTheoryAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")))
+                Skip = "Requires disposable PostgreSQL.";
+        }
+    }
 
     sealed class PostgresFactAttribute : FactAttribute
     {

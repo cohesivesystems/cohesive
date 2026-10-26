@@ -53,7 +53,7 @@ public sealed class FreightOrderRebuildPlanCompilerTests
         Assert.Equal(
             MaterializationRebuildPlanningJsonSerializer.GetCanonicalPlanSetBytes(forward.PlanSet),
             MaterializationRebuildPlanningJsonSerializer.GetCanonicalPlanSetBytes(reverse.PlanSet));
-        Assert.Equal(["tenant/acme", "tenant/northwind"], forward.Plan.Shards.Select(static shard => shard.Id.Value));
+        Assert.Equal(["partition/acme", "partition/northwind"], forward.Plan.Shards.Select(static shard => shard.Id.Value));
         Assert.Equal(8, forward.Plan.ChangeFeeds.Length);
         Assert.All(
             forward.Plan.ChangeFeeds.Where(feed => feed.Scope.Input == semantics.Root.Input.Id),
@@ -130,7 +130,7 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             semantics);
         var valid = Bindings(semantics, "postgres", physical, ["acme", "northwind"]);
         var mixed = new MaterializationPartitionBinding(
-            tenant: "acme",
+            partition: "acme",
             logicalPartition: FreightOrderRebuildPlanCompiler.LogicalPartition("acme"),
             rootRead: valid[1].RootRead,
             hydrator: valid[1].Hydrator,
@@ -261,7 +261,7 @@ public sealed class FreightOrderRebuildPlanCompilerTests
                         source: source);
                 }).ToImmutableArray();
                 return new MaterializationPartitionBinding(
-                    tenant: tenant,
+                    partition: tenant,
                     logicalPartition: FreightOrderRebuildPlanCompiler.LogicalPartition(tenant),
                     rootRead: Program.CreateRootRead(physical, semantics.Root),
                     hydrator: new TestHydrator(

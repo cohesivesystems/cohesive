@@ -56,6 +56,12 @@ public sealed class PostgresMaterializationStateStore :
     /// <exception cref="NpgsqlException">PostgreSQL rejects or cannot execute the DDL.</exception>
     public Task EnsureCreatedAsync(OperationContext context) => authority.EnsureCreatedAsync(context);
 
+    /// <summary>Checks for saved authority state using this store's configured schema and exact authority prefix.</summary>
+    /// <param name="cancellationToken">Cancels the metadata/read operation.</param>
+    /// <returns>False for an absent table or authority; true when any durable ledger exists.</returns>
+    public Task<bool> HasStoredStateAsync(CancellationToken cancellationToken = default) =>
+        authority.HasStoredStateAsync(cancellationToken);
+
     /// <inheritdoc />
     public Task<MaterializationProgressSnapshot?> LoadAsync(
         OperationContext context,

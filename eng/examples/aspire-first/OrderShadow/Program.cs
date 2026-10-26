@@ -34,11 +34,7 @@ foreach (var operation in new[] { "initialize", "rebuild", "catch-up" })
         var application = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(policy));
         await using var database = NpgsqlDataSource.Create(connection);
         using var elastic = new HttpClient { BaseAddress = new Uri(endpoint) };
-        await using var lease = await database.OpenConnectionAsync(ct);
-        await using var acquire = new NpgsqlCommand("SELECT pg_try_advisory_lock($1)", lease);
-        acquire.Parameters.AddWithValue(ShadowBootstrap.WriterLock);
-        if (!(bool)(await acquire.ExecuteScalarAsync(ct))!)
-            throw new InvalidOperationException("Another shadow command holds the writer lease.");
+        await using var lease = await PostgresSessionLease.AcquireAsync(database, ShadowBootstrap.WriterLock, ct);
         try
         {
             if (selected == "initialize")
@@ -89,13 +85,7 @@ foreach (var operation in new[] { "initialize", "rebuild", "catch-up" })
             context.Io.WriteLine($"CDC {error.FailureKind}: {error.Observation.EvidenceReference}");
             return 1;
         }
-        finally
-        {
-            // A pooled connection must not return with a session advisory lock held.
-            await using var release = new NpgsqlCommand("SELECT pg_advisory_unlock($1)", lease);
-            release.Parameters.AddWithValue(ShadowBootstrap.WriterLock);
-            await release.ExecuteNonQueryAsync(CancellationToken.None);
-        }
+
     });
 }
 return await cli.RunAsync(args);

@@ -28,6 +28,16 @@ internal sealed class PostgresMaterializationDocumentAuthority
         this.options = options ?? throw new ArgumentNullException(nameof(options));
     }
 
+    internal async Task<bool> HasStoredStateAsync(CancellationToken cancellationToken)
+    {
+        await using var exists = dataSource.CreateCommand("SELECT to_regclass($1) IS NOT NULL");
+        exists.Parameters.AddWithValue(options.QualifiedTable);
+        if (!(bool)(await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!) return false;
+        await using var progress = dataSource.CreateCommand($"SELECT EXISTS (SELECT 1 FROM {options.QualifiedTable} WHERE starts_with(authority_id, $1))");
+        progress.Parameters.AddWithValue(options.AuthorityId + "/");
+        return (bool)(await progress.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
+    }
+
     internal async Task EnsureCreatedAsync(OperationContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
@@ -176,7 +186,7 @@ internal sealed class PostgresMaterializationDocumentAuthority
         return result;
     }
 
-    static string Fingerprint(string document)
+    internal static string Fingerprint(string document)
     {
         using var json = JsonDocument.Parse(document);
         var digest = CanonicalJsonWriter.ComputeCanonicalSequenceSha256(

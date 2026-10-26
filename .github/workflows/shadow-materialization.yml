@@ -1,0 +1,46 @@
+name: shadow-materialization
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'eng/examples/aspire-first/**'
+      - '.github/workflows/shadow-materialization.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Start isolated native dependencies
+        run: |
+          docker run -d --name shadow-postgres -p 5432:5432 -e POSTGRES_PASSWORD=shadow-ci-only -e POSTGRES_DB=orders postgres:17 -c wal_level=logical -c max_replication_slots=16
+          docker run -d --name shadow-elastic -p 9200:9200 -e discovery.type=single-node -e xpack.security.enabled=false -e ES_JAVA_OPTS='-Xms512m -Xmx512m' docker.elastic.co/elasticsearch/elasticsearch:9.0.3
+          for attempt in $(seq 1 90); do
+            if docker exec shadow-postgres pg_isready -U postgres && curl -fsS http://localhost:9200/_cluster/health; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Prove rebuild recovery and nested CDC convergence
+        env:
+          COHESIVE_SHADOW_POSTGRES: Host=127.0.0.1;Port=5432;Database=orders;Username=postgres;Password=shadow-ci-only
+          COHESIVE_SHADOW_ELASTIC: http://127.0.0.1:9200
+        run: dotnet test src/Cohesive.Adapters.Aspire.Tests -c Release -m:1 --filter FullyQualifiedName~FulfillmentShadowTests --logger 'trx;LogFileName=shadow.trx'
+      - name: Verify native paging and durable ledger contracts
+        env:
+          COHESIVE_POSTGRES_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=orders;Username=postgres;Password=shadow-ci-only
+        run: dotnet test src/Cohesive.Tests -c Release -m:1 --filter 'FullyQualifiedName~PostgresMaterializationStateStoreTests|FullyQualifiedName~PostgresRelationQuerySourceReaderTests'
+      - name: Retain test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadow-native-results
+          path: src/Cohesive.Adapters.Aspire.Tests/TestResults/*.trx
+      - name: Clean up native dependencies
+        if: always()
+        run: docker rm -f shadow-postgres shadow-elastic

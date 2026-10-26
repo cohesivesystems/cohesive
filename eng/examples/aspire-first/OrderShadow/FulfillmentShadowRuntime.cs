@@ -59,51 +59,18 @@ public sealed class FulfillmentShadowRuntime
                 FulfillmentStoragePolicy.LocalPartition));
         var native = new PostgresNpgsqlRuntimeBinding(application.Storage.Bindings.Database, database, Authority,
             logicalReplicationConnectionFactory: () => new LogicalReplicationConnection(connectionString));
-        var hydrationReaders = prepared.Hydration.Placement.SourceInstances.Select(source =>
-            (IRelationQuerySourceReader)new PostgresRelationQuerySourceReader(prepared.Plan, prepared.Hydration,
-                source.Id, prepared.HydrationStorage, database, native, policy)).ToArray();
-        var readers = prepared.Reads.Impact.Placement.SourceInstances.Select(source =>
-            new PostgresRelationQuerySourceReader(prepared.Plan, prepared.Reads.Impact,
-                source.Id, prepared.ReadStorage, database, native, policy)).ToDictionary(reader => reader.Descriptor.Source);
-        var impactReader = new RelationQueryMaterializationImpactReader(prepared.Plan, prepared.Reads.Impact, readers.Values);
-        var readEvidence = prepared.Reads.Impact.Placement.Bindings.Select(binding =>
-            new PostgresMaterializationSource(readers[binding.Source], binding, authenticationKey.Span)).ToArray();
-        var root = prepared.Plan.InputContract.Sources.Single(source => source.Role == RelationQuerySourceInputRole.RelationRoot);
-        var baselineBinding = prepared.Reads.Baseline.Placement.Bindings.Single(binding => binding.Input == root.Input.Id);
-        var baselineReader = new PostgresRelationQuerySourceReader(prepared.Plan, prepared.Reads.Baseline,
-            baselineBinding.Source, prepared.BaselineStorage, database, native, policy);
-        var sources = new List<MaterializationPartitionSourceBinding>();
-        foreach (var impactBinding in prepared.Reads.Impact.Placement.Bindings)
-        {
-            var isRoot = impactBinding.Input == root.Input.Id;
-            var binding = isRoot ? baselineBinding : impactBinding;
-            var source = await PostgresLogicalReplicationMaterializationChangeSource.CreateAsync(isRoot ? baselineReader : readers[binding.Source], binding,
-                native, new(Publication, Slot(binding.Input), slotGeneration,
-                    expectedReplicaIdentity: new(PostgresLogicalReplicationReplicaIdentityKind.Full),
-                    beforeImageRequirement: PostgresLogicalReplicationBeforeImageRequirement.Required),
-                authenticationKey, policy: new(readInactivityTimeout: TimeSpan.FromSeconds(3)), cancellationToken: cancellationToken);
-            sources.Add(new(binding.Input, source.Scope, new PostgresMaterializationImpactSource(source, prepared.Reads, readEvidence,
-                isRoot
-                    ? definition.Document.Definition.Sources.Single(item => item.Input == binding.Input) : null,
-                isRoot ? impactReader.ReadAsync : null)));
-        }
-        var placed = baselineBinding;
-        var stage = prepared.Reads.Baseline.Stages.Single(candidate => candidate.PlacementBinding == placed.Id
-            && candidate.Kind == RelationQueryPhysicalStageKind.SourceRead);
-        var read = new RelationQuerySourceReadRequest(prepared.Reads.Baseline.Fingerprint, stage.Id, placed.Id,
-            placed.Source, placed.Shape, placed.Identity!.SourceSelector,
-            [.. placed.Fields.Select(field => new RelationQuerySourceReadField(field.Input, field.SemanticPath,
-                field.SourceSelector, RelationQuerySourceReadFieldPurpose.SemanticInput))], new RelationQueryBoundedEnumeration(1000), 1000);
-        var hydrator = new RelationQueryMaterializationRebuildHydrator(prepared.Plan, prepared.Hydration, prepared.Realization,
-            root.Input.Id, definition.Output, hydrationReaders);
-        var partition = new MaterializationPartitionBinding(FulfillmentStoragePolicy.LocalPartition, new(FulfillmentStoragePolicy.LogicalPartition), read, hydrator, sources,
-            impact => new RelationQueryMaterializationImpactRuntime(impact, definition.Document.Definition,
-                prepared.Hydration, prepared.Realization, hydrationReaders,
-                new MaterializationImpactRootExecutor(impact, definition.Document.Definition, impactReader.ReadAsync).ResolveRootsAsync));
+        var partition = await prepared.BindAsync(definition.Document, database, native, policy,
+            FulfillmentStoragePolicy.LocalPartition, authenticationKey,
+            input => new(Publication, Slot(input), slotGeneration,
+                expectedReplicaIdentity: new(PostgresLogicalReplicationReplicaIdentityKind.Full),
+                beforeImageRequirement: PostgresLogicalReplicationBeforeImageRequirement.Required),
+            new(readInactivityTimeout: TimeSpan.FromSeconds(3)), cancellationToken);
         var compilation = MaterializationPartitionedRebuildCompiler.Compile(definition.Document, prepared.Plan,
             new(100, FulfillmentShadowDefinition.MaximumBytes, 100, FulfillmentShadowDefinition.MaximumBytes, 128,
                 MaterializationRebuildProcessFactory.MaximumStartsPerActivation, MaterializationRebuildProcessFactory.MaximumParallelism, 16),
-            "fulfillment-shadow", target.Descriptor, [partition], definition.Impact);
+            "fulfillment-shadow", target.Descriptor, [partition], definition.Impact,
+            new(new("fulfillment-shadow/capacity"), 1, ["postgres-session-advisory-lock/order-shadow"]),
+            new(new("aspire-first/shadow", "1"), new("fulfillment/order-details/shadow")));
         return new(compilation, target, new(database, new(Authority)));
     }
 }
