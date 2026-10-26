@@ -2,7 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Adapters.Marten;
 using Marten;
 using JasperFx.Events;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using System.Net;
 using Cohesive.Host.Services;
 using System.Net.Http.Json;

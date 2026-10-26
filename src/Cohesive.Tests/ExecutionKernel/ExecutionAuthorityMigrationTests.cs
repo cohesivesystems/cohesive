@@ -1,6 +1,6 @@
 using Cohesive.Adapters.AspNet.Entities;
 using Cohesive.Api;
-using Cohesive.Host.Configuration;
+using Cohesive.Host.Services;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.IR;
@@ -78,7 +78,7 @@ public sealed class ExecutionAuthorityMigrationTests
             transitionAssembly.GetExportedTypes(),
             static type => type == typeof(TransitionDefinitionDocuments));
 
-        var hostAssembly = typeof(DomainModelExternalDsl).Assembly;
+        var hostAssembly = typeof(HostProcessWorker).Assembly;
         string[] retiredHostTypes =
         [
             "Cohesive.Host.Transitions.TelemetryEffectHandlerRegistration",

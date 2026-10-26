@@ -4,23 +4,25 @@ For state-authoritative versus event-authoritative PostgreSQL execution, see [St
 
 ## Inspect the compiled system without running it
 
-Both AppHosts use `Cohesive.Host`’s `ApplicationExplainCommand` and
-`ApplicationExplanation.Create`. They can emit an offline report without building or starting the distributed
+Both AppHosts use `Cohesive.Adapters.Aspire.Application.AspireApplication.RunAsync`, which registers
+the optional `Cohesive.Application.Cli` explain command on `Cohesive.Cli.CliApplication`
+and use `ApplicationExplanation.Create`. They can emit an offline report without building or starting the distributed
 application, opening native clients, initializing schemas, or running containers.
 
 The shared entry returns an immutable `ApplicationExplanationDocument`, reusing canonical entities,
 endpoint links, query/execution documents and deployment artifacts. `scope: OfflineAdmission`
 and `schemaVersion` describe the report, not runtime readiness or a new system fingerprint.
 History entries are derived from the native storage bindings (`history[].resource`, `authority`,
-`reconstitution`); neither AppHost appends JSON fields. The CLI serializes this typed report directly.
+`reconstitution`); neither AppHost appends JSON fields. The CLI serializes this typed report directly. `explain --help` displays help without constructing the
+model; normal startup arguments pass unchanged to Aspire via `RunOrFallbackAsync`.
 
 ```sh
 dotnet build eng/examples/aspire-first/AppHost
-dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/AppHost -- --explain > state.json
-dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/AppHost -- --explain --EntityState:Authority=Events > events.json
+dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/AppHost -- explain > state.json
+dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/AppHost -- explain -- --EntityState:Authority=Events > events.json
 
 dotnet build eng/examples/aspire-first/PostgresCosmosAppHost
-dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/PostgresCosmosAppHost -- --explain > mixed.json
+dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/PostgresCosmosAppHost -- explain > mixed.json
 ```
 
 Follow `Order.Details` in `endpoints`: its `execution` reference names

@@ -429,10 +429,10 @@ Before successful admission the property throws. These records are derived inspe
 views, not new semantic authorities or trusted provider capability evidence. Runtime
 readiness must be established separately.
 
-`Cohesive.Host.Composition.ApplicationExplanation.Create` collects root-exposed
+`Cohesive.Application.ApplicationExplanation.Create` collects root-exposed
 `IServiceImplementationModel`, `StorageModel` and `DomainModel` contributions and
 projects the shared report with explicit environment/source attribution. It rejects
-incomplete or foreign infrastructure compilation before admission. `ApplicationExplainCommand`
-handles the offline switch and writes a report only when requested; both native Aspire
-examples use this entry point. Application-specific history metadata is supplementary;
+incomplete or foreign infrastructure compilation before admission. the Application-owned `AddApplicationExplanation` extension on `CliApplication`
+registers the named offline command and writes a report only when requested; both native Aspire
+examples use this entry point. History metadata derives from the storage-owned declaration;
 a composition without a history attachment does not invent a history selection.

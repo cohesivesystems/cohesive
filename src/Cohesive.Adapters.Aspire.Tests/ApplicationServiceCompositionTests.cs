@@ -3,7 +3,7 @@ using System.Net.Http.Json;
 using Cohesive.Adapters.AspNet.Services;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;

@@ -1,6 +1,6 @@
 using Cohesive.Relations.Execution;
 using Cohesive.Adapters.Postgres;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres.Services;
 using Npgsql;

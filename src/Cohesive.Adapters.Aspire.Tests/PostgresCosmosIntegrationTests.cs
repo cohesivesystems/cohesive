@@ -3,7 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using AspireFirst.Orders;
 using AspireFirst.PostgresCosmos;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Model;

@@ -1,7 +1,7 @@
 using Cohesive.Adapters.Marten;
 using Marten;
 using JasperFx.Events;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Api.Execution.Services;
 using AspireFirst.Orders;
 using System.Diagnostics;

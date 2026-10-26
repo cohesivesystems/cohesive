@@ -9,7 +9,7 @@
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <ProjectReference Include="../Orders.Model/Orders.Model.csproj" />
-    <ProjectReference Include="../../../../src/Cohesive.Host/Cohesive.Host.csproj" />
+    <ProjectReference Include="../../../../src/Cohesive.Application/Cohesive.Application.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres.Services/Cohesive.Adapters.Postgres.Services.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Cosmos/Cohesive.Adapters.Cosmos.csproj" />
     <EmbeddedResource Include="schema.sql" LogicalName="Orders.PostgresCosmos.schema.sql" />

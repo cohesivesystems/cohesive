@@ -1,6 +1,6 @@
 using AspireFirst.Orders;
 using AspireFirst.PostgresCosmos;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
 using Microsoft.Azure.Cosmos;

@@ -10,7 +10,7 @@ using Cohesive.Relations.Serialization;
 using Cohesive.Storage;
 using Cohesive.Transitions.Model;
 
-namespace Cohesive.Host.Composition;
+namespace Cohesive.Application;
 
 /// <summary>Evidence boundary of an application explanation.</summary>
 public enum ApplicationExplanationScope

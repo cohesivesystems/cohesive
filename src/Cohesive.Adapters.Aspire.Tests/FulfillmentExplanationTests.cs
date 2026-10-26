@@ -5,7 +5,7 @@ using Cohesive.Adapters.Aspire.Postgres;
 using AspireFirst;
 using AspireFirst.Orders;
 using AspireFirst.PostgresCosmos;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Storage;
 
 namespace Cohesive.Adapters.Aspire.Tests;
@@ -122,19 +122,6 @@ public sealed class FulfillmentExplanationTests
         json["history"] = null;
         Assert.Single(report.History);
         Assert.NotNull(JsonNode.Parse(report.ToJson())!["history"]);
-    }
-
-    [Fact]
-    public void Explain_command_serializes_the_typed_report_once()
-    {
-        var report = Native(EntityStateAuthority.State);
-        var command = new ApplicationExplainCommand(["--explain", "--EntityState:Authority=State"]);
-        using var output = new StringWriter();
-        var calls = 0;
-        Assert.True(command.TryWrite(output, () => { calls++; return report; }));
-        Assert.Equal(1, calls);
-        Assert.Equal(["--EntityState:Authority=State"], command.Arguments);
-        Assert.Equal(report.ToJson() + output.NewLine, output.ToString());
     }
 
 }

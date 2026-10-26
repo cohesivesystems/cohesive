@@ -1,5 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Adapters.Postgres.Infra;
 using Cohesive.Adapters.Postgres.Services;
 using AspireFirst.Orders;

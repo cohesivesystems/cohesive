@@ -1,10 +1,10 @@
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Infra;
 using Cohesive.Infra.Realization;
 
 namespace Cohesive.Tests;
 
-public sealed class ApplicationExplainCommandTests
+internal static class ApplicationExplanationFixture
 {
     public sealed class EmptyApplication : ApplicationModel { }
 
@@ -22,30 +22,4 @@ public sealed class ApplicationExplainCommandTests
         return ApplicationExplanation.Create(ModelActivator.Create<EmptyApplication>(), definition, deployment, "test", new("test://deployment"));
     }
 
-    [Fact]
-    public void Typed_report_can_be_explained_without_an_orchestrator()
-    {
-        var report = Report();
-        var command = new ApplicationExplainCommand(["--explain"]);
-        using var output = new StringWriter();
-        Assert.True(command.TryWrite(output, () => report));
-        Assert.Equal(report.ToJson() + output.NewLine, output.ToString());
-    }
-
-    [Fact]
-    public void Normal_host_path_does_not_evaluate_report()
-    {
-        var command = new ApplicationExplainCommand(["--environment=local"]);
-        Assert.Equal(["--environment=local"], command.Arguments);
-        Assert.False(command.TryWrite(TextWriter.Null, () => throw new InvalidOperationException()));
-    }
-
-    [Fact]
-    public void Failed_projection_writes_no_partial_report()
-    {
-        using var output = new StringWriter();
-        var command = new ApplicationExplainCommand(["--explain"]);
-        Assert.Throws<ArgumentException>(() => command.TryWrite(output, () => throw new ArgumentException("invalid plan")));
-        Assert.Equal("", output.ToString());
-    }
 }

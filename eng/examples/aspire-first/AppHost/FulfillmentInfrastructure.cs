@@ -46,8 +46,8 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     /// <summary>Projects the same activated model and association into an offline inspection report.</summary>
     /// <param name="association">Association produced by Configure for this model.</param>
     /// <returns>Canonical artifacts plus the selected state/history policy.</returns>
-    public Cohesive.Host.Composition.ApplicationExplanationDocument Explain(AspireInfrastructureAssociation association) =>
-        Cohesive.Host.Composition.ApplicationExplanation.Create(application, Definition, association.Deployment,
+    public Cohesive.Application.ApplicationExplanationDocument Explain(AspireInfrastructureAssociation association) =>
+        Cohesive.Application.ApplicationExplanation.Create(application, Definition, association.Deployment,
             "development", SourceReference.Create("example", Definition.Definition.Definition.Id.Value));
 
     /// <summary>Starts with native resources, then associates only the resources governed by the requirements.</summary>

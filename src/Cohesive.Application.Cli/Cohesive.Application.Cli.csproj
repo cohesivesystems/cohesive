@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Optional CLI commands for offline Cohesive application inspection.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Cohesive.Application/Cohesive.Application.csproj" />
+    <ProjectReference Include="../Cohesive.Cli/Cohesive.Cli.csproj" />
+  </ItemGroup>
+</Project>

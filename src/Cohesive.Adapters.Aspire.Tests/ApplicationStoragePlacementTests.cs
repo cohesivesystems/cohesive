@@ -4,7 +4,7 @@ using Cohesive.Adapters.Postgres;
 using Cohesive.Adapters.Postgres.Services;
 using Cohesive.Api;
 using Cohesive.Api.Execution.Services;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Execution;
 using Cohesive.Storage;

@@ -3,7 +3,6 @@ global using Cohesive.Transitions.Authoring;
 global using Cohesive.Prelude;
 global using Cohesive.Model;
 global using Cohesive.Adapters.DurableTask;
-global using Cohesive.Host.Configuration;
 global using Cohesive.Relations.Authoring;
 global using Cohesive.Relations.Execution;
 global using Cohesive.Relations.Mapping;

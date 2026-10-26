@@ -1,4 +1,4 @@
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Prelude;
 using Cohesive.Execution;

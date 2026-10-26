@@ -4,7 +4,7 @@ using Cohesive.Relations.Execution;
 using Aspire.Hosting;
 using AspireFirst.Orders;
 using AspireFirst.PostgresCosmos;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Model;
 using Cohesive.Storage;
 using Cohesive.Adapters.Cosmos;
