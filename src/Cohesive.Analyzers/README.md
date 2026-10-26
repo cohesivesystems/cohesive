@@ -43,3 +43,10 @@ callers cannot recover and mutate the backing array or write through `IList`. Th
 authoritative, and the existing `IReadOnlyList` signatures, order, values and metadata are unchanged.
 This protects consumers that prepare deterministic interpretations of constant code-set metadata.
 The guarantee applies to collection storage; it does not make an arbitrary reference-valued code immutable.
+
+`COHIR001` reports direct construction (`new` or `with`) of canonical IR types marked `[LoweringOutput]`, such as
+Relations definitions and logical query nodes, outside the assembly that declares them. Source is the authoring
+authority and the IR is derived from it, so other code obtains these types from an authoring API or a serializer.
+Lowering pipelines, serializers, and test, fixture, or benchmark assemblies declare `[assembly: IrProducer(reason)]`;
+in this repository each such project sets `<CohesiveIrProducer>reason</CohesiveIrProducer>` explicitly. The rule
+covers `new` and `with`, not reflection or generic `new T()`. See [COHIR001](docs/COHIR001.md).

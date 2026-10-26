@@ -86,6 +86,7 @@ public sealed record HostedQueryDependency
 /// definition dependencies, and portable configuration. Executable handlers, repositories, credentials, ambient
 /// configuration, and runtime placement are deliberately excluded.
 /// </remarks>
+[LoweringOutput]
 public sealed record HostedQueryDefinition : IImmutableExecutionDefinition
 {
     /// <summary>Creates a canonical hosted-Query definition.</summary>
