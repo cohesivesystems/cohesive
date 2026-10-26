@@ -738,18 +738,8 @@ public sealed partial class RelationQueryAuthoringCore
         RequireBinding(root, nameof(root));
         RequireNode(output, nameof(output));
         invariants = NormalizeEntries(invariants, nameof(invariants), "Relation invariants");
-        if (!invariantSources.IsDefault && invariantSources.Length != invariants.Length)
-        {
-            throw new ArgumentException(
-                "Invariant source attribution must contain one entry per relation invariant.",
-                nameof(invariantSources));
-        }
-        var terminalExpressions = ImmutableArray.CreateBuilder<Expr>(invariants.Length + (key is null ? 0 : 1));
-        if (key is not null)
-            terminalExpressions.Add(key);
-        foreach (var invariant in invariants)
-            terminalExpressions.Add(invariant.Expression);
-        var selectedBody = CreateBody([output.Id], terminalExpressions.ToImmutable());
+        RequireInvariantSources(invariants, invariantSources);
+        var selectedBody = CreateBody([output.Id], TerminalExpressions(key, invariants));
         IRRelationDefinition definition = new(
             id,
             name,
@@ -758,32 +748,14 @@ public sealed partial class RelationQueryAuthoringCore
             new RelationOutputDefinition(output.Id, outputShape, mode, key),
             invariants);
         var validation = RelationQueryDefinitionValidator.Validate(definition);
-        List<RelationQueryAuthoringSourceDecision> terminalSources = [];
-        if (TerminalSource(RelationQueryWireNames.RelationDefinition, id.Value, source) is { } terminal)
-            terminalSources.Add(terminal);
-        var effectiveKeySource = keySource ?? source;
-        if (key is not null && effectiveKeySource is not null)
-        {
-            terminalSources.Add(new(
-                RelationQueryAuthoringDecisionKind.Expression,
-                id.Value,
-                effectiveKeySource,
-                "output/key"));
-        }
-        for (var index = 0; index < invariants.Length; index++)
-        {
-            var invariantSource = invariantSources.IsDefault
-                ? source
-                : invariantSources[index] ?? source;
-            if (invariantSource is not null)
-            {
-                terminalSources.Add(new(
-                    RelationQueryAuthoringDecisionKind.Expression,
-                    id.Value,
-                    invariantSource,
-                    $"invariants/{index}/expression"));
-            }
-        }
+        var terminalSources = TerminalSourceDecisions(
+            RelationQueryWireNames.RelationDefinition,
+            id.Value,
+            source,
+            key,
+            keySource,
+            invariants,
+            invariantSources);
 
         return new(
             definition,
@@ -1054,13 +1026,23 @@ public sealed partial class RelationQueryAuthoringCore
         IReadOnlySet<string> includedResults,
         IReadOnlySet<string> includedBodyTargets,
         params RelationQueryAuthoringSourceDecision?[] additionalSources) =>
+        CreateManifest(includedResults, includedBodyTargets, [], additionalSources);
+
+    // Terminal-owned identities (for example a draft projection that is not a node in this core) are appended to the
+    // identities selected from the authored body.
+    RelationQueryAuthoringManifest CreateManifest(
+        IReadOnlySet<string> includedResults,
+        IReadOnlySet<string> includedBodyTargets,
+        IEnumerable<RelationQueryAuthoringIdentityDecision> terminalIdentities,
+        IEnumerable<RelationQueryAuthoringSourceDecision?> additionalSources) =>
         new(
             [
                 .. identities.Where(decision => decision.Kind switch
                 {
                     RelationQueryAuthoringIdentityKind.Result => includedResults.Contains(decision.Value),
                     _ => includedBodyTargets.Contains(decision.Value)
-                })
+                }),
+                .. terminalIdentities
             ],
             [
                 .. sources.Where(decision => decision.Kind switch
@@ -1070,6 +1052,67 @@ public sealed partial class RelationQueryAuthoringCore
                 }),
                 .. additionalSources.Where(static decision => decision is not null)!
             ]);
+
+    // Expressions owned by a terminal rather than by a node; their parameters must be carried into the body.
+    static ImmutableArray<Expr> TerminalExpressions(
+        Expr? key,
+        ImmutableArray<InvariantDefinition> invariants,
+        IEnumerable<Expr>? leading = null)
+    {
+        var expressions = ImmutableArray.CreateBuilder<Expr>();
+        if (leading is not null)
+            expressions.AddRange(leading);
+        if (key is not null)
+            expressions.Add(key);
+        foreach (var invariant in invariants)
+            expressions.Add(invariant.Expression);
+        return expressions.ToImmutable();
+    }
+
+    static void RequireInvariantSources(
+        ImmutableArray<InvariantDefinition> invariants,
+        ImmutableArray<RelationQueryAuthoringSource?> invariantSources)
+    {
+        if (!invariantSources.IsDefault && invariantSources.Length != invariants.Length)
+        {
+            throw new ArgumentException(
+                "Invariant source attribution must contain one entry per relation invariant.",
+                nameof(invariantSources));
+        }
+    }
+
+    // Attribution for a terminal, its output key, and each invariant; a missing specific source falls back to the
+    // terminal source.
+    static List<RelationQueryAuthoringSourceDecision> TerminalSourceDecisions(
+        string role,
+        string target,
+        RelationQueryAuthoringSource? source,
+        Expr? key,
+        RelationQueryAuthoringSource? keySource,
+        ImmutableArray<InvariantDefinition> invariants,
+        ImmutableArray<RelationQueryAuthoringSource?> invariantSources)
+    {
+        List<RelationQueryAuthoringSourceDecision> decisions = [];
+        if (TerminalSource(role, target, source) is { } terminal)
+            decisions.Add(terminal);
+        var effectiveKeySource = keySource ?? source;
+        if (key is not null && effectiveKeySource is not null)
+            decisions.Add(new(RelationQueryAuthoringDecisionKind.Expression, target, effectiveKeySource, "output/key"));
+        for (var index = 0; index < invariants.Length; index++)
+        {
+            var invariantSource = invariantSources.IsDefault ? source : invariantSources[index] ?? source;
+            if (invariantSource is not null)
+            {
+                decisions.Add(new(
+                    RelationQueryAuthoringDecisionKind.Expression,
+                    target,
+                    invariantSource,
+                    $"invariants/{index}/expression"));
+            }
+        }
+
+        return decisions;
+    }
 
     static RelationQueryAuthoringSourceDecision? TerminalSource(
         string role,

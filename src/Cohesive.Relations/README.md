@@ -137,7 +137,9 @@ resume over structural nodes. Both are source:
 they are what people and agents edit and review, and both lower to the same canonical document, which is never edited
 by hand. Constructing the document directly is reserved for the lowering pipeline, document serialization and
 persistence (`RelationQueryJsonSerializer`), and compiler tests. Importers and generators emit source through either
-API, so their output is reviewed like any other change. `CanonicalEnrichedRelationConformanceTests` checks that
+API, so their output is reviewed like any other change. Draft producers, such as inference, author a draft through the
+structural core and finish with `BuildDraft`, which derives the draft's projection, slot, and candidate identities and
+returns a `RelationDraft` for review and later acceptance. `CanonicalEnrichedRelationConformanceTests` checks that
 expression and structural authoring of the same relation produce identical serialized documents and fingerprints.
 A canonical projection from the document back to C#, and a dedicated Cohesive syntax, do not exist yet.
 
