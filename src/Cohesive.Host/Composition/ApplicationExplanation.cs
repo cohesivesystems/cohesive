@@ -1,13 +1,8 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
 using Cohesive.Api.Execution.Services;
-using Cohesive.Execution;
 using Cohesive.Infra;
 using Cohesive.Infra.Realization;
 using Cohesive.Model;
-using Cohesive.Model.Serialization;
 using Cohesive.Storage;
-using Cohesive.Relations.Serialization;
 using Cohesive.Transitions.Authoring;
 
 namespace Cohesive.Host.Composition;
@@ -25,8 +20,8 @@ public static class ApplicationExplanation
     /// <exception cref="ArgumentNullException">A required input is null.</exception>
     /// <exception cref="ArgumentException">Deployment is incomplete, attribution is invalid, or the association is foreign.</exception>
     /// <exception cref="ServiceBindingValidationException">Storage admission fails.</exception>
-    /// <returns>JSON report containing exact canonical references and the original deployment artifact.</returns>
-    public static JsonObject Create(ApplicationModel application, InfrastructureAuthoringResult infrastructure,
+    /// <returns>Immutable report containing exact canonical references and the original deployment artifact.</returns>
+    public static ApplicationExplanationDocument Create(ApplicationModel application, InfrastructureAuthoringResult infrastructure,
         InfrastructureTargetDeploymentPlan deployment, string environmentName, SourceReference deploymentSource)
     {
         ArgumentNullException.ThrowIfNull(application);
@@ -37,38 +32,28 @@ public static class ApplicationExplanation
         if (deployment.Manifest.Definition != infrastructure.Definition.ToReference())
             throw new ArgumentException("Association belongs to a different infrastructure definition.", nameof(deployment));
         var plans = application.Components<IServiceImplementationModel>().Select(model => model.Plan).ToArray();
-        var storage = new ServiceStorageComposition(application.Components<StorageModel>()
-            .Select(model => (model.GetType().FullName!, model.RequireComposition<IServiceStorageComposition>())));
+        var compositions = application.Components<StorageModel>()
+            .Select(model => (Name: model.GetType().FullName!, Composition: model.RequireComposition<IServiceStorageComposition>())).ToArray();
+        var storage = new ServiceStorageComposition(compositions);
         storage.Validate(plans);
-        var options = StrictDocumentJson.CreateOptions(PortableDocumentJsonFormatting.Indented);
-        JsonNode? Node<T>(T value) => JsonSerializer.SerializeToNode(value, options);
-        var endpoints = plans.SelectMany(plan => plan.Implementations).OrderBy(item => item.Endpoint.Id.Value, StringComparer.Ordinal)
-            .Select(item => new
-            {
-                item.Endpoint.Id, item.Endpoint.Kind,
-                http = item.Endpoint.Http is { } http ? new { http.Method, http.Route } : null, item.Endpoint.ResultOf,
-                response = item.Endpoint.PrimaryResult.Kind,
-                execution = item.Execution ?? item.Endpoint.TransitionReference,
-                repository = item.Repository,
-                semanticReferences = item.Endpoint.SemanticReferences
-            }).ToArray();
-        return new()
-        {
-            ["scope"] = "Offline compilation and admission; no native IO or runtime readiness evidence.",
-            ["entities"] = Node(application.Components<DomainModel>().SelectMany(model => model.Definition.Entities)
-                .OrderBy(entity => entity.Name.Value, StringComparer.Ordinal)
-                .Select(entity => new { entity.Name, observation = ValueContract.FromShape(entity.Shape) }).ToArray()),
-            ["endpoints"] = Node(endpoints),
-            ["storage"] = Node(storage.Explanation),
-            ["queries"] = new JsonArray(plans.SelectMany(plan => plan.QueryDependencies.Queries)
+        return new(
+            entities: [.. application.Components<DomainModel>().SelectMany(model => model.Definition.Entities)
+                .OrderBy(entity => entity.Name.Value, StringComparer.Ordinal)],
+            endpoints: [.. plans.SelectMany(plan => plan.Implementations)
+                .OrderBy(item => item.Endpoint.Id.Value, StringComparer.Ordinal).Select(item => new ApplicationEndpointExplanation(item))],
+            storage: storage.Explanation,
+            history: [.. compositions.SelectMany(item => item.Composition.Bindings)
+                .Distinct(ReferenceEqualityComparer.Instance).OfType<IStorageHistoryBinding>()
+                .Select(binding => binding.HistoryDeclaration).OfType<StorageHistoryDeclaration>()
+                .Distinct().OrderBy(history => history.Resource, StringComparer.Ordinal)
+                .ThenBy(history => history.Authority).ThenBy(history => history.Reconstitution)],
+            queries: [.. plans.SelectMany(plan => plan.QueryDependencies.Queries)
                 .DistinctBy(query => query.Reference)
                 .OrderBy(query => query.Reference.DefinitionId.Value, StringComparer.Ordinal)
-                .Select(query => (JsonNode?)JsonNode.Parse(RelationQueryJsonSerializer.Serialize(query.Request.DefinitionDocument))).ToArray()),
-            ["executions"] = new JsonArray(application.Composition.Executions.Documents
-                .OrderBy(document => document.Metadata.DefinitionId.Value, StringComparer.Ordinal)
-                .Select(document => (JsonNode?)JsonNode.Parse(ExecutionDefinitionJsonSerializer.Serialize(document))).ToArray()),
-            ["infrastructure"] = Node(infrastructure.Definition),
-            ["deployment"] = JsonNode.Parse(artifact.ToJson())
-        };
+                .Select(query => query.Request.DefinitionDocument)],
+            executions: [.. application.Composition.Executions.Documents
+                .OrderBy(document => document.Metadata.DefinitionId.Value, StringComparer.Ordinal)],
+            infrastructure: infrastructure.Definition,
+            deployment: artifact);
     }
 }

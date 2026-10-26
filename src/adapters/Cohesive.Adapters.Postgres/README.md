@@ -390,3 +390,8 @@ Receipt conflict conformance includes an actual standalone-index violation: the 
 primary/creation constraints, a valid conditional write reaches the duplicate receipt insert, and PostgreSQL
 reports the standalone index name. The test observes that native error and verifies structured identity-conflict
 resolution, preserved replay evidence, and rollback of entity state and its concurrency token.
+
+Offline explanation reads `PostgresPersistenceBindings.HistoryDeclaration` through the portable
+`IStorageHistoryBinding` contract. It projects the existing database identity and the declared
+`IPostgresEntityHistoryConfiguration.Authority` and `Reconstitution`; it does not resolve a native
+client or claim live validation. Custom history configurations must expose these two policy getters.

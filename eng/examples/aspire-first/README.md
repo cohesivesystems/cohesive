@@ -6,7 +6,13 @@ For state-authoritative versus event-authoritative PostgreSQL execution, see [St
 
 Both AppHosts use `Cohesive.Host`’s `ApplicationExplainCommand` and
 `ApplicationExplanation.Create`. They can emit an offline report without building or starting the distributed
-application, opening native clients, initializing schemas, or running containers:
+application, opening native clients, initializing schemas, or running containers.
+
+The shared entry returns an immutable `ApplicationExplanationDocument`, reusing canonical entities,
+endpoint links, query/execution documents and deployment artifacts. `scope: OfflineAdmission`
+and `schemaVersion` describe the report, not runtime readiness or a new system fingerprint.
+History entries are derived from the native storage bindings (`history[].resource`, `authority`,
+`reconstitution`); neither AppHost appends JSON fields. The CLI serializes this typed report directly.
 
 ```sh
 dotnet build eng/examples/aspire-first/AppHost

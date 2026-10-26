@@ -12,7 +12,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class FulfillmentExplanationTests
 {
-    static JsonObject Native(EntityStateAuthority authority)
+    static ApplicationExplanationDocument Native(EntityStateAuthority authority)
     {
         var model = TestModels.Infrastructure(authority);
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
@@ -56,28 +56,29 @@ public sealed class FulfillmentExplanationTests
     {
         var state = Native(EntityStateAuthority.State);
         var events = Native(EntityStateAuthority.Events);
-        Assert.Equal("State", state["history"]!["authority"]!.GetValue<string>());
-        Assert.Equal("Events", events["history"]!["authority"]!.GetValue<string>());
-        Assert.Equal("orders_events", events["history"]!["database"]!.GetValue<string>());
-        Assert.True(JsonNode.DeepEquals(state["endpoints"], events["endpoints"]));
-        Assert.False(JsonNode.DeepEquals(state["deployment"], events["deployment"]));
-        Assert.NotEmpty(state["executions"]!.AsArray());
-        Assert.Equal(3, state["entities"]!.AsArray().Count);
-        Assert.Contains("Offline", state["scope"]!.GetValue<string>());
+        Assert.Equal(EntityStateAuthority.State, Assert.Single(state.History).Authority);
+        Assert.Equal(EntityStateAuthority.Events, Assert.Single(events.History).Authority);
+        Assert.Equal("orders_events", Assert.Single(events.History).Resource);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(state.ToJson())!["endpoints"],
+            JsonNode.Parse(events.ToJson())!["endpoints"]));
+        Assert.NotEqual(state.Deployment.Fingerprint, events.Deployment.Fingerprint);
+        Assert.NotEmpty(state.Executions);
+        Assert.Equal(3, state.Entities.Length);
+        Assert.Equal(ApplicationExplanationScope.OfflineAdmission, state.Scope);
     }
 
     [Fact]
     public void Report_is_deterministic_and_links_query_endpoints_to_admitted_storage()
     {
         var report = Native(EntityStateAuthority.State);
-        Assert.Equal(report.ToJsonString(), Native(EntityStateAuthority.State).ToJsonString());
-        var queries = report["storage"]!["queries"]!.AsArray();
-        Assert.Equal(2, queries.Count);
+        Assert.Equal(report.ToJson(), Native(EntityStateAuthority.State).ToJson());
+        var queries = report.Storage.Queries;
+        Assert.Equal(2, queries.Length);
         foreach (var query in queries)
         {
-            Assert.Contains(report["endpoints"]!.AsArray(), endpoint => JsonNode.DeepEquals(endpoint!["execution"], query!["query"]));
-            Assert.NotEmpty(query!["sources"]!.AsArray());
-            Assert.NotNull(query["plan"]);
+            Assert.Contains(report.Endpoints, endpoint => endpoint.Execution == query.Query);
+            Assert.NotEmpty(query.Sources);
+            Assert.NotNull(query.Plan);
         }
     }
 
@@ -88,8 +89,41 @@ public sealed class FulfillmentExplanationTests
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
         var association = model.Configure(builder);
         var report = model.Explain(association);
-        Assert.All(report["storage"]!["queries"]!.AsArray(), query =>
-            Assert.Equal(nameof(Cohesive.Relations.Execution.RelationQueryConsistency.IndependentSources), query!["consistency"]!.GetValue<string>()));
-        Assert.Contains("resources/inventory", report["deployment"]!.ToJsonString());
+        Assert.All(report.Storage.Queries, query =>
+            Assert.Equal(Cohesive.Relations.Execution.RelationQueryConsistency.IndependentSources, query.Consistency));
+        Assert.Contains("resources/inventory", report.Deployment.ToJson());
+        Assert.Empty(report.History);
     }
+    [Fact]
+    public void Json_boundary_preserves_embedded_canonical_documents()
+    {
+        var report = Native(EntityStateAuthority.Events);
+        var json = JsonNode.Parse(report.ToJson())!;
+        Assert.Equal(report.SchemaVersion, json["schemaVersion"]!.GetValue<string>());
+        foreach (var (document, index) in report.Queries.Select((document, index) => (document, index)))
+            Assert.True(JsonNode.DeepEquals(json["queries"]![index], JsonNode.Parse(
+                Cohesive.Relations.Serialization.RelationQueryJsonSerializer.Serialize(document))));
+        foreach (var (document, index) in report.Executions.Select((document, index) => (document, index)))
+            Assert.True(JsonNode.DeepEquals(json["executions"]![index], JsonNode.Parse(
+                Cohesive.Execution.ExecutionDefinitionJsonSerializer.Serialize(document))));
+        Assert.True(JsonNode.DeepEquals(json["deployment"], JsonNode.Parse(report.Deployment.ToJson())));
+        // Mutating a consumer's JSON cannot alter the admitted typed report.
+        json["history"] = null;
+        Assert.Single(report.History);
+        Assert.NotNull(JsonNode.Parse(report.ToJson())!["history"]);
+    }
+
+    [Fact]
+    public void Explain_command_serializes_the_typed_report_once()
+    {
+        var report = Native(EntityStateAuthority.State);
+        var command = new ApplicationExplainCommand(["--explain", "--EntityState:Authority=State"]);
+        using var output = new StringWriter();
+        var calls = 0;
+        Assert.True(command.TryWrite(output, () => { calls++; return report; }));
+        Assert.Equal(1, calls);
+        Assert.Equal(["--EntityState:Authority=State"], command.Arguments);
+        Assert.Equal(report.ToJson() + output.NewLine, output.ToString());
+    }
+
 }

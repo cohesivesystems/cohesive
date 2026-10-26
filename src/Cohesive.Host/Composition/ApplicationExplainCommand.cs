@@ -1,5 +1,3 @@
-using System.Text.Json.Nodes;
-
 namespace Cohesive.Host.Composition;
 
 /// <summary>Shared offline explain switch handling; native hosts receive only their remaining arguments.</summary>
@@ -24,12 +22,12 @@ public sealed class ApplicationExplainCommand
     /// <returns>True when a report was written and the host should exit without starting.</returns>
     /// <exception cref="ArgumentNullException">Output or factory is null.</exception>
     /// <remarks>Factory, serialization and writer exceptions propagate to the host.</remarks>
-    public bool TryWrite(TextWriter output, Func<JsonObject> explain)
+    public bool TryWrite(TextWriter output, Func<ApplicationExplanationDocument> explain)
     {
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(explain);
         if (!requested) return false;
-        var json = explain().ToJsonString(new() { WriteIndented = true });
+        var json = explain().ToJson();
         output.WriteLine(json);
         return true;
     }
