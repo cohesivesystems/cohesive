@@ -163,6 +163,7 @@ public sealed record RelationQueryDraftAssignment
             candidates = [];
         if (candidates.Any(static candidate => candidate is null))
             throw new ArgumentException("Draft candidates cannot contain null expressions.", nameof(candidates));
+        RequireDistinct(candidates, target);
         Target = target;
         Candidates = candidates;
         this.resolution = resolution;
@@ -186,7 +187,10 @@ public sealed record RelationQueryDraftAssignment
     /// <param name="source">Optional producer-source attribution.</param>
     /// <returns>A selected draft assignment.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="alternatives"/> contains a <see langword="null"/> entry.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="alternatives"/> contains a <see langword="null"/> entry, repeats an expression, or repeats
+    /// <paramref name="value"/>.
+    /// </exception>
     public static RelationQueryDraftAssignment Selected(
         FieldPath target,
         Expr value,
@@ -202,12 +206,24 @@ public sealed record RelationQueryDraftAssignment
     /// <param name="candidates">Competing candidate expressions.</param>
     /// <param name="source">Optional producer-source attribution.</param>
     /// <returns>An ambiguous draft assignment.</returns>
-    /// <exception cref="ArgumentException"><paramref name="candidates"/> contains a <see langword="null"/> entry.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="candidates"/> has fewer than two entries, contains a <see langword="null"/> entry, or repeats an
+    /// expression.
+    /// </exception>
     public static RelationQueryDraftAssignment Ambiguous(
         FieldPath target,
         ImmutableArray<Expr> candidates,
-        RelationQueryAuthoringSource? source = null) =>
-        new(target, candidates, ResolutionKind.Ambiguous, [], source);
+        RelationQueryAuthoringSource? source = null)
+    {
+        if (candidates.IsDefault || candidates.Length < 2)
+        {
+            throw new ArgumentException(
+                $"An ambiguous assignment to '{target}' needs at least two distinct candidates.",
+                nameof(candidates));
+        }
+
+        return new(target, candidates, ResolutionKind.Ambiguous, [], source);
+    }
 
     /// <summary>Creates an assignment that has no acceptable candidate yet.</summary>
     /// <param name="target">Target field path in the draft's result shape.</param>
@@ -215,25 +231,50 @@ public sealed record RelationQueryDraftAssignment
     /// <param name="candidates">Optional rejected or partial candidates kept for review.</param>
     /// <param name="source">Optional producer-source attribution.</param>
     /// <returns>An unresolved draft assignment.</returns>
-    /// <exception cref="ArgumentException"><paramref name="candidates"/> contains a <see langword="null"/> entry.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="reasons"/> is empty, contains an undefined value, or repeats a reason; or
+    /// <paramref name="candidates"/> contains a <see langword="null"/> entry or repeats an expression.
+    /// </exception>
     public static RelationQueryDraftAssignment Unresolved(
         FieldPath target,
         ImmutableArray<RelationDraftUnresolvedReason> reasons,
         ImmutableArray<Expr> candidates = default,
-        RelationQueryAuthoringSource? source = null) =>
-        new(target, candidates, ResolutionKind.Unresolved, reasons, source);
+        RelationQueryAuthoringSource? source = null)
+    {
+        if (reasons.IsDefaultOrEmpty)
+            throw new ArgumentException($"An unresolved assignment to '{target}' needs at least one reason.", nameof(reasons));
+        if (reasons.Any(static reason => !Enum.IsDefined(reason)))
+            throw new ArgumentException($"An unresolved assignment to '{target}' has an undefined reason.", nameof(reasons));
+        if (reasons.Distinct().Count() != reasons.Length)
+            throw new ArgumentException($"An unresolved assignment to '{target}' repeats a reason.", nameof(reasons));
+        return new(target, candidates, ResolutionKind.Unresolved, reasons, source);
+    }
 
     /// <summary>Creates an assignment that is deliberately left out of the accepted relation.</summary>
     /// <param name="target">Target field path in the draft's result shape.</param>
     /// <param name="candidates">Optional candidates kept for review.</param>
     /// <param name="source">Optional producer-source attribution.</param>
     /// <returns>An omitted draft assignment.</returns>
-    /// <exception cref="ArgumentException"><paramref name="candidates"/> contains a <see langword="null"/> entry.</exception>
+    /// <exception cref="ArgumentException">
+    /// <paramref name="candidates"/> contains a <see langword="null"/> entry or repeats an expression.
+    /// </exception>
     public static RelationQueryDraftAssignment Omitted(
         FieldPath target,
         ImmutableArray<Expr> candidates = default,
         RelationQueryAuthoringSource? source = null) =>
         new(target, candidates, ResolutionKind.Omitted, [], source);
+
+    // Two candidates are the same exactly when they would receive the same candidate identity, so duplicates are
+    // rejected here rather than surfacing later as duplicate-identity diagnostics from the draft validator.
+    static void RequireDistinct(ImmutableArray<Expr> candidates, FieldPath target)
+    {
+        HashSet<string> keys = new(StringComparer.Ordinal);
+        foreach (var candidate in candidates)
+        {
+            if (!keys.Add(RelationDraftIdentityConvention.CanonicalExpressionKey(candidate)))
+                throw new ArgumentException($"The assignment to '{target}' repeats a candidate expression.", "candidates");
+        }
+    }
 
     internal RelationDraftAssignmentSlot ToSlot(QualifiedShapeId resultShape)
     {
@@ -275,6 +316,25 @@ public sealed class RelationDraftAuthoringResult
 
     /// <summary>Result from the authoritative draft validator.</summary>
     public DocumentValidationResult Validation { get; }
+
+    /// <summary>Returns the draft, or throws when the draft validator reported diagnostics.</summary>
+    /// <remarks>
+    /// Use this unless the caller deliberately keeps invalid drafts, for example to show their diagnostics. Unresolved
+    /// and ambiguous slots are valid draft state and do not cause a failure; acceptance decides whether they block.
+    /// </remarks>
+    /// <returns>The validated <see cref="Draft"/>.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// <see cref="Validation"/> is not valid; the message lists each diagnostic code and message.
+    /// </exception>
+    public RelationDraft EnsureValid()
+    {
+        if (Validation.IsValid)
+            return Draft;
+
+        throw new InvalidOperationException(
+            $"Relation draft '{Draft.Id.Value}' is invalid: "
+            + string.Join("; ", Validation.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
+    }
 
     /// <summary>
     /// Identity and producer-source attribution for the draft's input graph, its projection node and result binding,

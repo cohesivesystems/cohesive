@@ -224,6 +224,77 @@ public sealed class RelationDraftAuthoringTests
             [IdAssignment(foreign.Binding.Field("Id"))]));
     }
 
+    [Fact]
+    public void Selected_rejects_a_value_repeated_among_its_alternatives()
+    {
+        var id = Expr.Field(new ValueBindingId("source"), "Id");
+
+        Assert.Throws<ArgumentException>(() =>
+            RelationQueryDraftAssignment.Selected(FieldPath.FromField("Id"), id, alternatives: [Expr.Field(new ValueBindingId("source"), "Id")]));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void Ambiguous_requires_at_least_two_candidates(int count)
+    {
+        var candidates = Enumerable.Range(0, count)
+            .Select(index => Expr.Field(new ValueBindingId("source"), $"F{index}"))
+            .ToImmutableArray();
+
+        Assert.Throws<ArgumentException>(() => RelationQueryDraftAssignment.Ambiguous(FieldPath.FromField("Id"), candidates));
+    }
+
+    [Fact]
+    public void Ambiguous_rejects_duplicate_candidates()
+    {
+        var binding = new ValueBindingId("source");
+
+        Assert.Throws<ArgumentException>(() => RelationQueryDraftAssignment.Ambiguous(
+            FieldPath.FromField("Id"),
+            [Expr.Field(binding, "Id"), Expr.Field(binding, "Id")]));
+    }
+
+    [Fact]
+    public void Unresolved_rejects_missing_undefined_or_repeated_reasons()
+    {
+        var target = FieldPath.FromField("Id");
+
+        Assert.Throws<ArgumentException>(() => RelationQueryDraftAssignment.Unresolved(target, []));
+        Assert.Throws<ArgumentException>(() => RelationQueryDraftAssignment.Unresolved(target, [(RelationDraftUnresolvedReason)999]));
+        Assert.Throws<ArgumentException>(() => RelationQueryDraftAssignment.Unresolved(
+            target,
+            [RelationDraftUnresolvedReason.NoCandidate, RelationDraftUnresolvedReason.NoCandidate]));
+    }
+
+    [Fact]
+    public void EnsureValid_returns_a_valid_draft_including_unresolved_slots()
+    {
+        var author = RelationQuery.Structural();
+        var source = author.Source(LoadShapeId);
+
+        var built = author.BuildDraft(
+            new("draft_loads"), new("rel_loads"), new("Loads"), source.Binding, source.Node, LoadDtoShapeId,
+            [RelationQueryDraftAssignment.Unresolved(FieldPath.FromField("Id"), [RelationDraftUnresolvedReason.NoCandidate])]);
+
+        Assert.Same(built.Draft, built.EnsureValid());
+    }
+
+    [Fact]
+    public void EnsureValid_throws_with_the_validator_diagnostics()
+    {
+        var author = RelationQuery.Structural();
+        var source = author.Source(LoadShapeId);
+
+        var built = author.BuildDraft(
+            new("draft_loads"), new("rel_loads"), new("Loads"), source.Binding, source.Node, LoadDtoShapeId,
+            [IdAssignment(source.Binding.Field("Id")), IdAssignment(source.Binding.Field("Status"))]);
+
+        Assert.False(built.Validation.IsValid);
+        var error = Assert.Throws<InvalidOperationException>(() => built.EnsureValid());
+        Assert.Contains(built.Validation.Diagnostics[0].Code, error.Message);
+    }
+
     // The direct construction Ari's inference compiler used before BuildDraft existed; BuildDraft must reproduce it.
     static RelationDraft HandBuiltDraft()
     {
