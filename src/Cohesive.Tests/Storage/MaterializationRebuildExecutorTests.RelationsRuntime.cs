@@ -50,13 +50,36 @@ public sealed partial class MaterializationRebuildExecutorTests
         Assert.Equal(original.Output.Shape, reference.Output.Shape);
     }
 
+    static Cohesive.Relations.Compilation.RelationQueryCompilationRequest NestedRequest()
+    {
+        var shape = new Cohesive.Relations.Authoring.RelationQueryClrAuthoringContext().Shape<NestedLoad>();
+        var original = (Cohesive.Relations.IR.RelationDefinition)FederatedLoadRelationFixture.RelationDocument.Definition;
+        var identity = FederatedLoadRelationFixture.SearchIdPath;
+        var customer = FederatedLoadRelationFixture.SearchCustomerNamePath;
+        var assembly = new Cohesive.Relations.IR.NestedQueryResultAssembly(new("rows"), shape.Id, identity,
+            [new(identity, FieldPath.FromField("Id"))],
+            [new(FieldPath.FromField("Customers"), customer, [new(customer, FieldPath.FromField("Name"))])]);
+        var relation = original with
+        {
+            Output = original.Output with { Mode = Cohesive.Relations.IR.RelationOutputMode.ManyPerRoot },
+            Assembly = assembly
+        };
+        var request = new Cohesive.Relations.Compilation.RelationQueryCompilationRequest(
+            Cohesive.Relations.Serialization.RelationQueryDocument.FromDefinition(relation),
+            [.. FederatedLoadRelationFixture.ShapeGraphDocuments, shape.Document],
+            FederatedLoadRelationFixture.RelationshipCatalogDocument);
+        return request;
+    }
+
     public sealed record NestedLoad(string Id, IReadOnlyList<NestedCustomer> Customers);
     public sealed record NestedCustomer(string Name);
 
-    [Fact]
-    public async Task ProductionRelationsRuntime_RebuildAndIncrementalHydrationRemainEquivalent()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProductionRelationsRuntime_RebuildAndIncrementalHydrationRemainEquivalent(bool nested)
     {
-        var fixture = CreateFixture();
+        var fixture = CreateFixture(request: nested ? NestedRequest() : null);
         var scenario = FederatedLoadConformanceData.CreatePhysicalScenario(
             fixture.Semantic,
             rootCount: 3,
