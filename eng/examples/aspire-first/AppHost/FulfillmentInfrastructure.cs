@@ -1,4 +1,5 @@
 using Aspire.Hosting;
+using Microsoft.Extensions.Configuration;
 using Cohesive.Adapters.Aspire;
 using Cohesive.Adapters.Aspire.Postgres;
 using Cohesive.Infra;
@@ -66,6 +67,26 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             .WithEnvironment("EntityState__Authority", policy.Authority.ToString())
             .WithEnvironment("EntityState__Reconstitution", policy.Reconstitution.ToString());
         _ = builder.AddContainer("native-only", "redis", "7.4");
+        if (builder.Configuration.GetValue<bool>("Shadow:Enabled"))
+        {
+            postgres.WithArgs("-c", "wal_level=logical", "-c", "max_replication_slots=16");
+            var elastic = builder.AddContainer("order-shadow-elastic", "docker.elastic.co/elasticsearch/elasticsearch", "9.0.3")
+                .WithEnvironment("discovery.type", "single-node")
+                .WithEnvironment("xpack.security.enabled", "false")
+                .WithEnvironment("ES_JAVA_OPTS", "-Xms512m -Xmx512m")
+                .WithHttpEndpoint(targetPort: 9200, name: "http")
+                .WithVolume("order-shadow-elastic", "/usr/share/elasticsearch/data");
+            // A separate operator process owns shadow writes; the HTTP worker keeps its existing native readers.
+            builder.AddProject<Projects.OrderShadow>("order-shadow")
+                .WithReference(database).WaitFor(worker).WaitFor(elastic)
+                .WithEnvironment("Shadow__Elasticsearch", elastic.GetEndpoint("http"))
+                .WithEnvironment("Shadow__PositionKey", builder.Configuration["Shadow:PositionKey"])
+                .WithEnvironment("Shadow__SlotGeneration", builder.Configuration["Shadow:SlotGeneration"])
+                .WithEnvironment("EntityState__Authority", policy.Authority.ToString())
+                .WithEnvironment("EntityState__Reconstitution", policy.Reconstitution.ToString())
+                .WithArgs(builder.Configuration.GetSection("Shadow:Arguments").Get<string[]>() ?? ["--help"]);
+        }
+
 
         // Associate existing Aspire resources with the canonical requirements and implementations.
         return builder.AttachCohesive(

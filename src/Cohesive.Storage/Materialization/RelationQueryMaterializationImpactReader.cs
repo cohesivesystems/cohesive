@@ -6,33 +6,38 @@ using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Physical;
-using Cohesive.Storage.Materialization;
 
-namespace Cohesive.MaterializationHarness.Materialize;
+namespace Cohesive.Storage.Materialization;
 
 /// <summary>
 /// Binds provider-neutral compiled affected-root reads to exact official Relations source readers.
 /// </summary>
-public sealed class FreightOrderMaterializationImpactReader
+public sealed class RelationQueryMaterializationImpactReader
 {
+    readonly JsonSerializerOptions serialization = MaterializationJsonSerializer.CreateOptions();
     readonly CompiledRelationQueryPlan plan;
     readonly CompiledRelationQueryPhysicalPlan physicalPlan;
     readonly ImmutableDictionary<RelationQuerySourceInstanceId, IRelationQuerySourceReader> readers;
     readonly ImmutableDictionary<RelationQueryInputId, InputContract> inputs;
 
     /// <summary>Creates one plan-, placement-, and logical-partition-fenced impact reader.</summary>
-    /// <param name="plan">Canonical compiled freight relation.</param>
+    /// <param name="plan">Canonical compiled relation.</param>
     /// <param name="physicalPlan">Auxiliary physical plan authorizing exact impact lookups.</param>
     /// <param name="sourceReaders">Official provider readers covering every impact placement source.</param>
     /// <exception cref="ArgumentNullException">A required reference or collection is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">Readers are absent, repeated, or belong to different logical partitions.</exception>
-    public FreightOrderMaterializationImpactReader(
+    public RelationQueryMaterializationImpactReader(
         CompiledRelationQueryPlan plan,
         CompiledRelationQueryPhysicalPlan physicalPlan,
         IEnumerable<IRelationQuerySourceReader> sourceReaders)
     {
+        serialization.MakeReadOnly(populateMissingResolver: true);
         this.plan = Guard.RequireNotNull(plan);
         this.physicalPlan = Guard.RequireNotNull(physicalPlan);
+        var semantic = RelationQueryCompiledPlanReferenceFingerprinter.Compute(RelationQueryCompiledPlanReference.From(plan));
+        if (semantic != RelationQueryCompiledPlanReferenceFingerprinter.Compute(physicalPlan.Plan)
+            || semantic != RelationQueryCompiledPlanReferenceFingerprinter.Compute(physicalPlan.Placement.Plan))
+            throw new ArgumentException("Impact placement belongs to another canonical relation.", nameof(physicalPlan));
         ArgumentNullException.ThrowIfNull(sourceReaders);
         var normalized = sourceReaders.ToArray();
         if (normalized.Any(static reader => reader is null)
@@ -117,7 +122,7 @@ public sealed class FreightOrderMaterializationImpactReader
             ?? throw new InvalidOperationException("The provider Relations reader returned no impact result.");
         var encodedBytes = JsonSerializer.SerializeToUtf8Bytes(
             result,
-            MaterializationJsonSerializer.CreateOptions()).LongLength;
+            serialization).LongLength;
         if (encodedBytes > request.MaximumBytes)
             throw new InvalidOperationException("The provider impact read exceeded its hard encoded-byte boundary.");
         return result;

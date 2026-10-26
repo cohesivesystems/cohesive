@@ -402,3 +402,23 @@ client or claim live validation. Custom history configurations must expose these
 Custom implementations must expose the same policies used by their history preparation;
 the built-in Marten configuration already does so. Conflicting policies for the same
 resource are rejected during offline service storage admission, before native preparation.
+
+### Rooted shadow materialization
+
+`PostgresMaterializationRelation` derives hydration, baseline and inverse-impact
+read bindings from an existing rooted relation and persistence mappings.
+`PostgresMaterializationImpactSource` combines preflighted pgoutput delivery with
+the capabilities of actual same-partition readers; optional current-state root
+enrichment is explicit and does not imply snapshot reconstruction. See the
+[Aspire shadow example](../../../eng/examples/aspire-first/OrderShadow/README.md).
+
+Materialization baseline continuation uses one native `C` text ordering for both
+SQL ordering and exclusive keyset predicates. It does not require or advertise
+CLR ordinal equivalence for arbitrary Unicode strings. Semantic query sorting
+continues to require its own declared ordering evidence.
+
+Durable ledger content uses `sha256-canonical-v2` over canonical JSON object order,
+exact decimal values and sequence-preserving arrays. PostgreSQL `jsonb` may
+reorder properties without breaking integrity. Valid legacy `sha256-v1` rows are
+verified with their original algorithm and upgraded on write; an already-invalid
+legacy row requires explicit recovery and is never silently re-signed.

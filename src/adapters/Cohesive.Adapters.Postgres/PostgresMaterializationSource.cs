@@ -55,7 +55,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
     /// <exception cref="ArgumentNullException"><paramref name="reader"/> or <paramref name="placement"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// Placement affinity conflicts, the table lacks a unique identity, or its identity cannot prove canonical
-    /// durable keyset order. Initial v2 keyset support is exact ordinal text and UUID identity, or
+    /// durable keyset order. Text uses native PostgreSQL C byte order (not .NET ordinal order); UUID uses native UUID order, or
     /// <paramref name="continuationAuthenticationKey"/> contains fewer than 32 bytes, or the serialized source profile,
     /// maximum key size, and batch policy would permit a continuation larger than the versioned format bound.
     /// </exception>
@@ -126,7 +126,7 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
         if (!PostgresRelationQueryScalarCatalog.SupportsDurableKeyset(identity))
         {
             throw new ArgumentException(
-                "PostgreSQL durable paging requires a UUID identity or exact ordinal text ordering evidence.",
+                "PostgreSQL durable paging requires a UUID identity or text with exact C-collation equality.",
                 nameof(placement));
         }
         var partition = reader.ResolvePartition(placement.Id);

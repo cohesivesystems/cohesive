@@ -78,6 +78,41 @@ public sealed class PostgresMaterializationStateStoreTests
     }
 
     [PostgresFact]
+    public async Task Nested_document_survives_jsonb_reordering_but_rejects_content_changes()
+    {
+        await using var database = NpgsqlDataSource.Create(
+            Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);
+        var options = new PostgresMaterializationStateStoreOptions("canonical-test",
+            schema: $"canonical_{Guid.NewGuid():N}");
+        var authority = new PostgresMaterializationDocumentAuthority(database, options);
+        var context = OperationContext.Create();
+        var original = System.Text.Json.Nodes.JsonNode.Parse(
+            """{"longProperty":{"zz":1,"a":2},"sequence":[3,1,2]}""")!;
+        try
+        {
+            await authority.EnsureCreatedAsync(context);
+            async Task<System.Text.Json.Nodes.JsonNode> Read() =>
+                await authority.AccessAsync(context, "test", original,
+                    json => System.Text.Json.Nodes.JsonNode.Parse(json)!,
+                    node => node.ToJsonString(),
+                    (node, _) => Task.FromResult((node, node)));
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(original, await Read()));
+            Assert.True(System.Text.Json.Nodes.JsonNode.DeepEquals(original, await Read()));
+            await using var tamper = database.CreateCommand($$"""
+                UPDATE {{options.QualifiedTable}}
+                SET document = jsonb_set(document, '{sequence}', '[1,3,2]'::jsonb)
+                """);
+            await tamper.ExecuteNonQueryAsync();
+            await Assert.ThrowsAsync<InvalidDataException>(() => Read());
+        }
+        finally
+        {
+            await using var cleanup = database.CreateCommand($"DROP SCHEMA {options.QualifiedSchema} CASCADE");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
     public async Task LocalPostgres_RetainsAllMaterializationAuthoritiesAcrossAdapterReconstruction()
     {
         var connectionString = Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")

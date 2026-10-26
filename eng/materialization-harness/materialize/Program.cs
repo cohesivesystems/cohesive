@@ -634,77 +634,12 @@ public static class Program
                 hydrationPlacement,
                 planningPolicy));
         var impactPlan = FreightOrderRebuildPlanCompiler.CompileImpactPlan(semantics, prefix);
-        var impactPlacement = CreateImpactPlacement(
-            provider: provider,
-            semantics: semantics,
-            hydrationPlacement: hydrationPlacement,
-            impactPlan: impactPlan);
-        var impactPhysical = CreateImpactPhysicalPlan(
-            semantics: semantics,
-            hydrationPhysical: hydrationPhysical,
-            impactPlacement: impactPlacement);
-        var scanBindings = hydrationPlacement.Bindings.Select(binding =>
-            binding.Input == semantics.Root.Input.Id
-                ? new RelationQuerySourcePlacementBinding(
-                    binding.Id,
-                    binding.Input,
-                    binding.Node,
-                    binding.Binding,
-                    binding.Shape,
-                    binding.Source,
-                    binding.Kind,
-                    RelationQuerySourceAcquisitionKind.BoundedEnumeration,
-                    binding.Origin,
-                    binding.Identity,
-                    binding.Fields,
-                    binding.RelationshipKeys,
-                    binding.Partition)
-                : binding).ToImmutableArray();
-        var scanPlacement = new RelationQuerySourcePlacement(
-            RelationQuerySourcePlacement.CurrentSchemaVersion,
-            RelationQueryCompiledPlanReference.From(semantics.Plan),
-            $"materialization-harness/{prefix}/scan-placement/v1",
-            sources,
-            scanBindings);
+        var reads = MaterializationRelationReadPlans.Create(semantics.Plan, hydrationPhysical, impactPlan, provider.FieldSelector);
+        var impactPlacement = reads.Impact.Placement;
+        var impactPhysical = reads.Impact;
+        var scanPlacement = reads.Baseline.Placement;
+        var scanPhysical = reads.Baseline;
         var scanRoot = scanPlacement.Bindings.Single(binding => binding.Input == semantics.Root.Input.Id);
-        var suppliedRoot = hydrationPhysical.Stages.Single(stage =>
-            stage.Kind == RelationQueryPhysicalStageKind.SuppliedInput
-            && stage.PlacementBinding == scanRoot.Id);
-        var scanStages = hydrationPhysical.Stages.Select(stage =>
-        {
-            var provenance = new RelationQueryPhysicalStageProvenance(
-                stage.Provenance.Nodes,
-                stage.Provenance.Inputs,
-                stage.Provenance.Requirements,
-                capabilityEvidence: [],
-                stage.Provenance.CompositionRules,
-                stage.Provenance.OperatingBoundaries,
-                stage.Provenance.PlacementBindings,
-                stage.Provenance.LoweringRule,
-                stage.Provenance.PolicyDecisions);
-            return new RelationQueryPhysicalStage(
-                stage.Id,
-                stage.Id == suppliedRoot.Id
-                    ? RelationQueryPhysicalStageKind.SourceRead
-                    : stage.Kind,
-                stage.Dependencies,
-                stage.PlacementBinding,
-                stage.SemanticInputs,
-                stage.Id == suppliedRoot.Id
-                    ? [.. semantics.Root.Fields.Select(static field => field.Input.Id)]
-                    : stage.RequestedFields,
-                stage.BatchSize,
-                provenance);
-        }).ToImmutableArray();
-        var scanPhysical = new CompiledRelationQueryPhysicalPlan(
-            CompiledRelationQueryPhysicalPlan.CurrentSchemaVersion,
-            RelationQueryCompiledPlanReference.From(semantics.Plan),
-            semantics.Realization.Fingerprint,
-            scanPlacement,
-            hydrationPhysical.Policy,
-            scanStages,
-            hydrationPhysical.Terminal,
-            diagnostics: hydrationPhysical.Diagnostics);
         return new(
             hydrationPlacement,
             hydrationPhysical,
@@ -716,126 +651,6 @@ public static class Program
             scanRoot,
             orderSource,
             [customerSource, locationSource]);
-    }
-
-    static RelationQuerySourcePlacement CreateImpactPlacement(
-        FreightOrderMaterializationReplicaDialect provider,
-        FreightOrderMaterializationSemantics semantics,
-        RelationQuerySourcePlacement hydrationPlacement,
-        MaterializationImpactPlan impactPlan)
-    {
-        var stepRelationships = impactPlan.Routes
-            .SelectMany(static route => route.Strategy is MaterializationInverseTraversalImpactStrategy inverse
-                ? inverse.Steps
-                : [])
-            .Where(static step => step.CollectionOccurrence is null)
-            .GroupBy(static step => step.ReferenceSourceInput)
-            .ToDictionary(
-                static group => group.Key,
-                static group => group
-                    .Select(static step => step.RelationshipInput)
-                    .Distinct()
-                    .OrderBy(static input => input.Value, StringComparer.Ordinal)
-                    .ToImmutableArray());
-        var rootInput = semantics.Root.Input.Id;
-        var bindings = hydrationPlacement.Bindings.Select(binding =>
-        {
-            var relationshipKeys = binding.RelationshipKeys.ToBuilder();
-            foreach (var relationshipInput in stepRelationships.GetValueOrDefault(binding.Input, []))
-            {
-                if (relationshipKeys.Any(key => key.Input == relationshipInput))
-                    continue;
-                var traversal = semantics.Plan.InputContract.Traversals.Single(candidate =>
-                    candidate.Input.Id == relationshipInput);
-                relationshipKeys.Add(new(
-                    input: relationshipInput,
-                    semanticPath: traversal.Definition.SourceReference,
-                    sourceSelector: provider.FieldSelector(
-                        binding.Shape,
-                        traversal.Definition.SourceReference)));
-            }
-            return new RelationQuerySourcePlacementBinding(
-                id: binding.Id,
-                input: binding.Input,
-                node: binding.Node,
-                binding: binding.Binding,
-                shape: binding.Shape,
-                source: binding.Source,
-                kind: binding.Input == rootInput
-                    ? RelationQuerySourcePlacementBindingKind.RelationshipTraversal
-                    : binding.Kind,
-                acquisition: binding.Input == rootInput
-                    ? RelationQuerySourceAcquisitionKind.BoundedLookup
-                    : binding.Acquisition,
-                origin: binding.Origin,
-                identity: binding.Identity,
-                fields: binding.Fields,
-                relationshipKeys: relationshipKeys.ToImmutable(),
-                partition: binding.Partition);
-        }).ToImmutableArray();
-        return new(
-            schemaVersion: RelationQuerySourcePlacement.CurrentSchemaVersion,
-            plan: RelationQueryCompiledPlanReference.From(semantics.Plan),
-            conventionSetVersion: $"materialization-harness/{provider.Provider}/impact-placement/v1",
-            sourceInstances: hydrationPlacement.SourceInstances,
-            bindings: bindings);
-    }
-
-    static CompiledRelationQueryPhysicalPlan CreateImpactPhysicalPlan(
-        FreightOrderMaterializationSemantics semantics,
-        CompiledRelationQueryPhysicalPlan hydrationPhysical,
-        RelationQuerySourcePlacement impactPlacement)
-    {
-        var root = impactPlacement.Bindings.Single(binding => binding.Input == semantics.Root.Input.Id);
-        var rootStage = hydrationPhysical.Stages.Single(stage =>
-            stage.PlacementBinding == root.Id
-            && stage.Kind == RelationQueryPhysicalStageKind.SuppliedInput);
-        var stages = hydrationPhysical.Stages.ToBuilder();
-        var requestedFields = semantics.Root.Fields.Select(static field => field.Input.Id).ToImmutableArray();
-        var provenanceInputs = requestedFields
-            .Add(semantics.Root.Input.Id)
-            .Distinct()
-            .ToImmutableArray();
-        var provenance = new RelationQueryPhysicalStageProvenance(
-            nodes: [semantics.Root.Node],
-            inputs: provenanceInputs,
-            placementBindings: [root.Id]);
-        stages.Add(new(
-            id: new($"{rootStage.Id.Value}/impact-enumeration"),
-            kind: RelationQueryPhysicalStageKind.SourceRead,
-            dependencies: [],
-            placementBinding: root.Id,
-            semanticInputs: provenanceInputs,
-            requestedFields: requestedFields,
-            batchSize: null,
-            provenance: provenance));
-        stages.Add(new(
-            id: new($"{rootStage.Id.Value}/impact-identity"),
-            kind: RelationQueryPhysicalStageKind.BatchedIdentityLookup,
-            dependencies: [rootStage.Id],
-            placementBinding: root.Id,
-            semanticInputs: [semantics.Root.Input.Id],
-            requestedFields: requestedFields,
-            batchSize: MaximumBatchItems,
-            provenance: provenance));
-        stages.Add(new(
-            id: new($"{rootStage.Id.Value}/impact-predicate"),
-            kind: RelationQueryPhysicalStageKind.BatchedPredicateLookup,
-            dependencies: [rootStage.Id],
-            placementBinding: root.Id,
-            semanticInputs: [semantics.Root.Input.Id],
-            requestedFields: requestedFields,
-            batchSize: MaximumBatchItems,
-            provenance: provenance));
-        return new(
-            schemaVersion: CompiledRelationQueryPhysicalPlan.CurrentSchemaVersion,
-            plan: RelationQueryCompiledPlanReference.From(semantics.Plan),
-            realization: semantics.Realization.Fingerprint,
-            placement: impactPlacement,
-            policy: hydrationPhysical.Policy,
-            stages: stages.ToImmutable(),
-            terminal: hydrationPhysical.Terminal,
-            diagnostics: hydrationPhysical.Diagnostics);
     }
 
     internal static async Task<FreightOrderRebuildPlanCompilation> CompilePostgresRebuildPlanAsync(
@@ -874,7 +689,7 @@ public static class Program
                 provenance: StorageRealizationProvenance("postgres")),
             provider: "postgres");
         var rootRead = CreateRootRead(plan, semantics.Root);
-        var bindings = ImmutableArray.CreateBuilder<FreightOrderRebuildTenantBinding>(tenants.Length);
+        var bindings = ImmutableArray.CreateBuilder<MaterializationPartitionBinding>(tenants.Length);
         foreach (var tenant in tenants)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -935,7 +750,7 @@ public static class Program
                     runtimeBinding: runtime,
                     policy: policy);
             }).ToImmutableArray();
-            var impactReader = new FreightOrderMaterializationImpactReader(
+            var impactReader = new RelationQueryMaterializationImpactReader(
                 plan: semantics.Plan,
                 physicalPlan: plan.ImpactPhysicalPlan,
                 sourceReaders: impactReaders);
@@ -964,7 +779,7 @@ public static class Program
                     maximumBufferedRows: request.MaximumRows);
                 return rootReader.ReadAsync(read, context.CancellationToken);
             };
-            var sources = ImmutableArray.CreateBuilder<FreightOrderRebuildSourceBinding>(
+            var sources = ImmutableArray.CreateBuilder<MaterializationPartitionSourceBinding>(
                 semantics.Definition.Sources.Length);
             foreach (var requirement in semantics.Definition.Sources)
             {
@@ -1018,6 +833,7 @@ public static class Program
                 sourceReaders: hydrationReaders);
             bindings.Add(new(
                 tenant: tenant,
+                logicalPartition: FreightOrderRebuildPlanCompiler.LogicalPartition(tenant),
                 rootRead: rootRead,
                 hydrator: hydrator,
                 sourceBindings: sources.MoveToImmutable(),
@@ -1109,7 +925,7 @@ public static class Program
                     logicalPartition: LogicalPartition(tenant),
                     partition: new($"cosmos/scenario-envelope/{Uri.EscapeDataString(databaseId)}/{tenant}/{Uri.EscapeDataString(requirement.Input.Value)}"),
                     orderingScope: new($"cosmos/scenario-envelope/{tenant}/{Uri.EscapeDataString(requirement.Input.Value)}/journal-order"));
-                return new FreightOrderRebuildSourceBinding(
+                return new MaterializationPartitionSourceBinding(
                     input: requirement.Input,
                     scope: scope,
                     source: new CosmosScenarioEnvelopeMaterializationChangeSource(
@@ -1141,12 +957,13 @@ public static class Program
                     containerId: CosmosContainerId(placement.Shape),
                     policy: policy);
             }).ToImmutableArray();
-            var impactReader = new FreightOrderMaterializationImpactReader(
+            var impactReader = new RelationQueryMaterializationImpactReader(
                 plan: semantics.Plan,
                 physicalPlan: plan.ImpactPhysicalPlan,
                 sourceReaders: impactReaders);
-            return new FreightOrderRebuildTenantBinding(
+            return new MaterializationPartitionBinding(
                 tenant: tenant,
+                logicalPartition: FreightOrderRebuildPlanCompiler.LogicalPartition(tenant),
                 rootRead: rootRead,
                 hydrator: hydrator,
                 sourceBindings: sources,

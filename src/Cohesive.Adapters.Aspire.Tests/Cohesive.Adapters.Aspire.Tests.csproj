@@ -22,6 +22,7 @@
     <ProjectReference Include="../../eng/examples/aspire-first/AppHost/AppHost.csproj" />
     <ProjectReference Include="../../eng/examples/aspire-first/PostgresCosmosAppHost/PostgresCosmosAppHost.csproj" />
     <ProjectReference Include="../../eng/examples/aspire-first/PostgresCosmosWorker/PostgresCosmosWorker.csproj" />
+    <ProjectReference Include="../../eng/examples/aspire-first/OrderShadow/OrderShadow.csproj" />
     <ProjectReference Include="../../eng/examples/aspire-first/OrderWorker/OrderWorker.csproj" />
     <ProjectReference Include="../adapters/Cohesive.Adapters.Aspire/Cohesive.Adapters.Aspire.csproj" />
     <ProjectReference Include="../adapters/Cohesive.Adapters.DockerCompose/Cohesive.Adapters.DockerCompose.csproj" />
