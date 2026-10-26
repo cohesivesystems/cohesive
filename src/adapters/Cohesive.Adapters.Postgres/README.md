@@ -395,3 +395,10 @@ Offline explanation reads `PostgresPersistenceBindings.HistoryDeclaration` throu
 `IStorageHistoryBinding` contract. It projects the existing database identity and the declared
 `IPostgresEntityHistoryConfiguration.Authority` and `Reconstitution`; it does not resolve a native
 client or claim live validation. Custom history configurations must expose these two policy getters.
+
+### Unreleased migration: history explanation
+
+`IPostgresEntityHistoryConfiguration` now requires `Authority` and `Reconstitution`.
+Custom implementations must expose the same policies used by their history preparation;
+the built-in Marten configuration already does so. Conflicting policies for the same
+resource are rejected during offline service storage admission, before native preparation.

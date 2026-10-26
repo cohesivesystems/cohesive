@@ -107,6 +107,17 @@ public sealed class FulfillmentExplanationTests
             Assert.True(JsonNode.DeepEquals(json["executions"]![index], JsonNode.Parse(
                 Cohesive.Execution.ExecutionDefinitionJsonSerializer.Serialize(document))));
         Assert.True(JsonNode.DeepEquals(json["deployment"], JsonNode.Parse(report.Deployment.ToJson())));
+        var options = Cohesive.Model.Serialization.StrictDocumentJson.CreateOptions();
+        Assert.True(JsonNode.DeepEquals(json["infrastructure"],
+            System.Text.Json.JsonSerializer.SerializeToNode(report.Infrastructure, options)));
+        foreach (var (entity, index) in report.Entities.Select((entity, index) => (entity, index)))
+        {
+            Assert.True(JsonNode.DeepEquals(json["entities"]![index],
+                System.Text.Json.JsonSerializer.SerializeToNode(entity, options)));
+            Assert.NotNull(json["entities"]![index]!["shape"]);
+            Assert.NotNull(json["entities"]![index]!["name"]);
+        }
+
         // Mutating a consumer's JSON cannot alter the admitted typed report.
         json["history"] = null;
         Assert.Single(report.History);
