@@ -79,12 +79,7 @@ public static class RelationDraftIdentityConvention
         if (string.IsNullOrWhiteSpace(slotId.Value))
             throw new ArgumentException("A projection-slot identifier is required.", nameof(slotId));
         ArgumentNullException.ThrowIfNull(value);
-
-        using var document = JsonSerializer.SerializeToDocument(value, typeof(Expr), RelationQueryJsonSerializer.ReadOnlyOptions);
-        if (document.RootElement.ValueKind == JsonValueKind.Null)
-            throw new InvalidOperationException("Failed to materialize canonical candidate expression JSON.");
-        var expression = CanonicalJsonWriter.GetCanonicalSequenceBytes(document.RootElement,
-            CanonicalJsonNumberSemantics.PortableObservation);
+        var expression = CanonicalExpressionBytes(value);
 
         ArrayBufferWriter<byte> canonical = new();
         Append(canonical, CandidateVersion);
@@ -105,6 +100,20 @@ public static class RelationDraftIdentityConvention
     /// <returns><see langword="true"/> when <paramref name="id"/> uses the versioned convention prefix.</returns>
     public static bool IsConventionCandidateId(RelationDraftCandidateId id) =>
         id.Value?.StartsWith(CandidatePrefix, StringComparison.Ordinal) == true;
+
+    /// <summary>
+    /// Returns a key that is equal for two expressions exactly when they receive the same candidate identity in a slot.
+    /// </summary>
+    internal static string CanonicalExpressionKey(Expr value) => Hash(CanonicalExpressionBytes(value));
+
+    static byte[] CanonicalExpressionBytes(Expr value)
+    {
+        using var document = JsonSerializer.SerializeToDocument(value, typeof(Expr), RelationQueryJsonSerializer.ReadOnlyOptions);
+        if (document.RootElement.ValueKind == JsonValueKind.Null)
+            throw new InvalidOperationException("Failed to materialize canonical candidate expression JSON.");
+        return CanonicalJsonWriter.GetCanonicalSequenceBytes(document.RootElement,
+            CanonicalJsonNumberSemantics.PortableObservation);
+    }
 
     static string Hash(ReadOnlySpan<byte> canonical) =>
         Convert.ToHexStringLower(SHA256.HashData(canonical));
