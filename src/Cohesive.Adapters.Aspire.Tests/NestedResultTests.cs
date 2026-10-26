@@ -19,6 +19,35 @@ public sealed class NestedResultTests
     static NestedQueryResultAssembly Assembly => ((QueryDefinition)Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.Definition).Assembly!;
 
     [Fact]
+    public void Rooted_authoring_rejects_parameters_before_returning()
+    {
+        var query = RelationQuery.Expression();
+        var id = query.Parameter<string>("id");
+        var orders = query.Source(Model.Domain.Orders).Where(order => order.Id == id.Value);
+        var reservations = orders.TraverseInverse(Model.Domain.ReservationOrder);
+        var error = Assert.Throws<ArgumentException>(() => query.SingleOrDefault<OrderHeader>()
+            .From(reservations).Key(orders, order => order.Id, result => result.Id)
+            .Field(result => result.Status, orders, order => order.Status)
+            .Collection(result => result.Reservations, reservations, reservation => reservation.Id, item => item.Id, _ => { })
+            .BuildRelation(new("invalid/parameterized")));
+        Assert.Contains("assemblyInvalid", error.Message);
+    }
+
+    [Fact]
+    public void Rooted_authoring_rejects_traversal_identity_before_returning()
+    {
+        var query = RelationQuery.Expression();
+        var orders = query.Source(Model.Domain.Orders);
+        var reservations = orders.TraverseInverse(Model.Domain.ReservationOrder);
+        var error = Assert.Throws<ArgumentException>(() => query.SingleOrDefault<OrderHeader>()
+            .From(reservations).Key(reservations, reservation => reservation.Id, result => result.Id)
+            .Field(result => result.Status, orders, order => order.Status)
+            .Collection(result => result.Reservations, reservations, reservation => reservation.Id, item => item.Id, _ => { })
+            .BuildRelation(new("invalid/traversal-key")));
+        Assert.Contains("root", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Rooted_relation_and_live_query_share_persisted_mappings()
     {
         var request = Model.Queries.OrderDetailsRelation.Definition;

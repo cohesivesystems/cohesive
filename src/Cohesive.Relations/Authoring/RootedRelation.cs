@@ -20,15 +20,14 @@ public sealed class RootedRelation<TResult> where TResult : class
     /// <summary>Derives a keyed live read without changing the relation's joins, filters or result assembly.</summary>
     /// <param name="id">Stable identity of the derived query.</param>
     /// <returns>A query returning null for an absent or filtered root.</returns>
-    /// <exception cref="ArgumentException">A generated identity collides with a declaration, or the relation lacks a direct root key.</exception>
+    /// <exception cref="ArgumentException">A generated identity collides with a declaration.</exception>
     public RelationQuery<string, TResult?> ReadById(QueryId id)
     {
         var relation = (RelationDefinition)Definition.DefinitionDocument.Definition;
         var assembly = relation.Assembly!;
         var projection = (ProjectQueryNode)relation.Body.Nodes.Single(node => node.Id == relation.Output.Node);
         var key = projection.Assignments.Single(assignment => assignment.Target == assembly.Identity).Value;
-        if (key is not FieldExpr field || field.Binding != relation.RootBinding)
-            throw new ArgumentException("Keyed reads require a direct root identity field.", nameof(id));
+        // BuildRelation admits the complete immutable request, including root key shape and graph structure.
         var source = relation.Body.Nodes.OfType<SourceQueryNode>().Single(node => node.Binding == relation.RootBinding);
         QueryNodeId scanId = new(id.Value + "/root-source");
         if (relation.Body.Nodes.Any(node => node.Id == scanId))
