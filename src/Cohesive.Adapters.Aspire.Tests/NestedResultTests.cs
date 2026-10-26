@@ -19,6 +19,54 @@ public sealed class NestedResultTests
     static NestedQueryResultAssembly Assembly => ((QueryDefinition)Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.Definition).Assembly!;
 
     [Fact]
+    public void Rooted_relation_and_live_query_share_persisted_mappings()
+    {
+        var request = Model.Queries.OrderDetailsRelation.Definition;
+        var relation = Assert.IsType<RelationDefinition>(request.DefinitionDocument.Definition);
+        Assert.Empty(relation.Body.Parameters);
+        Assert.Equal(Assembly, relation.Assembly);
+        var roundtrip = RelationQueryJsonSerializer.Deserialize(RelationQueryJsonSerializer.Serialize(request.DefinitionDocument));
+        Assert.Equal(request.DefinitionDocument.DefinitionFingerprint, roundtrip.DefinitionFingerprint);
+        var parameterized = relation with { Body = new LogicalQueryDefinition(relation.Body.Nodes,
+            [new(new("unexpected"), new ScalarTypeRef(ScalarTypeKind.String))]) };
+        Assert.False(RelationQueryDefinitionValidator.Validate(parameterized).IsValid);
+        var wrongKey = relation with { Assembly = relation.Assembly! with { Identity = relation.Assembly.Collections[0].Identity } };
+        Assert.False(RelationQueryDefinitionValidator.Validate(wrongKey).IsValid);
+        var compilation = RelationQueryStaticCompiler.Compile(request);
+        Assert.True(compilation.IsSuccessful, string.Join("; ", compilation.Diagnostics));
+        var derived = Model.Queries.OrderDetailsRelation.ReadById(new("fulfillment/order-details"));
+        Assert.Equal(Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint,
+            derived.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
+    }
+
+    [Fact]
+    public void Rooted_assembly_matches_live_values_for_multiple_roots_and_retains_provenance()
+    {
+        var relation = (RelationDefinition)Model.Queries.OrderDetailsRelation.Definition.DefinitionDocument.Definition;
+        var source = relation.Body.Nodes.OfType<SourceQueryNode>().Single(node => node.Binding == relation.RootBinding);
+        RelationQueryOutputRow RootRow(string id, string? child)
+        {
+            var root = new Cohesive.Relations.Diagnostics.RelationQueryObservationOccurrence(new("root/" + id),
+                relation.RootBinding, source.Shape, id);
+            return new(relation.Output.Shape, Row(child, parent: id), null, root, [root], []);
+        }
+        var rows = NestedQueryResultAssembler.AssembleRoots(relation.Assembly!,
+            [RootRow("second", null), RootRow("order", "b"), RootRow("order", "a"), RootRow("order", "b")]);
+        Assert.Equal(new[] { "order", "second" }, rows.Select(row => row.Root!.ObservationIdentity));
+        Assert.Equal(NestedQueryResultAssembler.Assemble(Assembly, [Row("b"), Row("a")]), rows[0].Value);
+        Assert.Equal(NestedQueryResultAssembler.Assemble(Assembly, [Row(null, parent: "second")]), rows[1].Value);
+        Assert.All(rows, row => { Assert.Equal(Assembly.Shape, row.Shape); Assert.Single(row.InputOccurrences); });
+        Assert.Empty(NestedQueryResultAssembler.AssembleRoots(Assembly, []));
+        Assert.Throws<OperationCanceledException>(() => NestedQueryResultAssembler.AssembleRoots(Assembly, [], new(true)));
+        var unrooted = new RelationQueryOutputRow(relation.Output.Shape, Row("a"), null, null, [], []);
+        Assert.Throws<InvalidOperationException>(() => NestedQueryResultAssembler.AssembleRoots(Assembly, [unrooted]));
+        var valid = RootRow("order", "a");
+        var mismatched = new RelationQueryOutputRow(relation.Output.Shape, Row("a", parent: "wrong"), null,
+            valid.Root, valid.InputOccurrences, []);
+        Assert.Throws<InvalidOperationException>(() => NestedQueryResultAssembler.AssembleRoots(Assembly, [mismatched]));
+    }
+
+    [Fact]
     public void Single_declaration_handles_absence_distinct_children_ordering_and_conflicts()
     {
         Assert.Null(Model.Queries.OrderDetails.AssembleResult([]));

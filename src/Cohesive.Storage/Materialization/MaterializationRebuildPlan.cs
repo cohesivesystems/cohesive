@@ -670,8 +670,8 @@ public sealed record MaterializationRebuildPlan
         }
         if (materialization.Definition.Relation.Output.Field is not null)
             throw new ArgumentException("A materialization rebuild requires a complete shaped Relations output.", nameof(materialization));
-        var outputMode = (materialization.Definition.Relation.CompilationRequest.DefinitionDocument.Definition
-            as RelationDefinition)?.Output.Mode;
+        var relation = materialization.Definition.Relation.CompilationRequest.DefinitionDocument.Definition as RelationDefinition;
+        var outputMode = relation?.Assembly is null ? relation?.Output.Mode : RelationOutputMode.ZeroOrOnePerRoot;
         if (outputMode == RelationOutputMode.Set)
         {
             throw new ArgumentException(

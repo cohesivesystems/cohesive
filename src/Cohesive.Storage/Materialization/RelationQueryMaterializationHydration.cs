@@ -151,6 +151,8 @@ internal sealed class RelationQueryMaterializationHydration
         };
         if (rows.Any(static row => !row.IsComplete))
             throw new InvalidOperationException("A materialization cannot retain rows with unresolved Relations gaps.");
-        return rows;
+        return plan.Definition.Assembly is { } assembly
+            ? NestedQueryResultAssembler.AssembleRoots(assembly, rows, context.CancellationToken)
+            : rows;
     }
 }

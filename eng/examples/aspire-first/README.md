@@ -2,6 +2,19 @@
 
 For state-authoritative versus event-authoritative PostgreSQL execution, see [State authority](STATE-AUTHORITY.md).
 
+## Shared live and materialized read definition
+
+`FulfillmentQueries.OrderDetailsRelation` declares the order root, local partition filter,
+reservation/inventory traversals and nested result mapping once. `OrderDetails` is its derived
+keyed live query, so the existing HTTP endpoint keeps using native PostgreSQL reads.
+Materialization can use the retained relation request through Cohesive's existing rebuild and
+incremental hydration components; both paths assemble the same `OrderDetails` value.
+
+This is the shared-definition foundation for shadow materialization. The demo does **not yet**
+start PostgreSQL change capture, create an Elasticsearch shadow generation, run a rebuild, or
+switch endpoint reads. Those will be separate wiring over the existing materialization contracts.
+Inventory enrichment remains current-state data, not a historical event-stream snapshot.
+
 ## Inspect the compiled system without running it
 
 Both AppHosts use `Cohesive.Adapters.Aspire.Application.AspireApplication.RunAsync`, which registers

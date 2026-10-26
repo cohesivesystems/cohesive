@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using RelationId = Cohesive.Relations.Model.RelationId;
 using System.Linq.Expressions;
 using System.Reflection;
 using Cohesive.Model.Expressions;
@@ -107,6 +108,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
     readonly List<QueryResultCollectionAssembly> collections = [];
     RelationQueryNodeHandle<LogicalQueryNode>? input;
     FieldPath identity;
+    RelationQueryBindingHandle root;
     bool built;
 
     internal NestedQueryResultBuilder(RelationQueryExpressionAuthoring author)
@@ -122,6 +124,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
         ArgumentNullException.ThrowIfNull(parent);
         ArgumentNullException.ThrowIfNull(key);
         input = rows;
+        root = parent.Binding.Structural;
         identity = AddSlot(parent, key);
     }
 
@@ -206,15 +209,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
         RequireMutable();
         ArgumentNullException.ThrowIfNull(parameter);
         if (!ReferenceEquals(parameter.Owner, author)) throw new ArgumentException("Foreign query parameter.", nameof(parameter));
-        var rowShape = new QualifiedShapeId(new GraphId(id.Value + "/result-slots/v1"), new ShapeId("Row"));
-        // Named enum slots retain their declaration in the standalone row graph.
-        var slotTypes = slots.Select(slot => slot.Type).OfType<NamedTypeRef>().Select(type => type.TypeId).ToHashSet();
-        var graph = new ShapeGraph(rowShape.GraphId, [new Shape(rowShape.ShapeId, [.. slots])],
-            [.. shape.Document.Graph.NamedTypes.Where(type => slotTypes.Contains(type.Id))]);
-        var projected = author.Structural.Project(input!.Value, rowShape, [.. assignments]);
-        var rows = author.Structural.Rows(projected.Node);
-        var assembly = new NestedQueryResultAssembly(rows.Id, shape.Id, identity, [.. fields], [.. collections]);
-        assembly.Validate(graph.Shapes[0], shape.Document.Graph);
+        var (graph, projected, rows, assembly) = PrepareRows(id.Value);
         var definition = author.Structural.BuildQuery(id, name, [rows]).Definition with { Assembly = assembly };
         if (definition.Body.Parameters.Length != 1 || definition.Body.Parameters[0].Id != parameter.Id)
             throw new ArgumentException("Nested typed query requires exactly the supplied invocation parameter.", nameof(parameter));
@@ -230,6 +225,37 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
                 throw new InvalidOperationException("Nested result violates its declared output shape.");
             return materialize(result);
         });
+    }
+
+    /// <summary>Declares one parameter-free rooted relation, retaining the same portable nested-result mappings.</summary>
+    /// <param name="id">Stable relation identity; its name defaults to this identity.</param>
+    /// <returns>A typed relation from which keyed live reads and materialization hydration can be derived.</returns>
+    /// <exception cref="ArgumentException">The key is not a direct root field or the declaration contains parameters.</exception>
+    /// <exception cref="InvalidOperationException">This builder is complete.</exception>
+    public RootedRelation<TResult> BuildRelation(RelationId id)
+    {
+        RequireMutable();
+        var (graph, projected, _, assembly) = PrepareRows(id.Value);
+        var definition = author.Structural.BuildRelation(id, new(id.Value), root, projected.Node,
+            new(graph.Id, graph.Shapes[0].Id), RelationOutputMode.ManyPerRoot).Definition with { Assembly = assembly };
+        var request = new RelationQueryCompilationRequest(RelationQueryDocument.FromDefinition(definition),
+            [.. author.ShapeDocuments, ShapeGraphDocument.FromGraph(graph)], author.CreateRelationshipCatalogDocument());
+        built = true;
+        return new(request);
+    }
+
+    (ShapeGraph Graph, RelationQueryBoundNodeHandle<ProjectQueryNode> Projected, RelationQueryResultHandle<RowsQueryResultDefinition> Rows, NestedQueryResultAssembly Assembly) PrepareRows(string id)
+    {
+        var rowShape = new QualifiedShapeId(new GraphId(id + "/result-slots/v1"), new ShapeId("Row"));
+        // Named enum slots retain their declaration in the standalone row graph.
+        var slotTypes = slots.Select(slot => slot.Type).OfType<NamedTypeRef>().Select(type => type.TypeId).ToHashSet();
+        var graph = new ShapeGraph(rowShape.GraphId, [new Shape(rowShape.ShapeId, [.. slots])],
+            [.. shape.Document.Graph.NamedTypes.Where(type => slotTypes.Contains(type.Id))]);
+        var projected = author.Structural.Project(input!.Value, rowShape, [.. assignments]);
+        var rows = author.Structural.Rows(projected.Node);
+        var assembly = new NestedQueryResultAssembly(rows.Id, shape.Id, identity, [.. fields], [.. collections]);
+        assembly.Validate(graph.Shapes[0], shape.Document.Graph);
+        return (graph, projected, rows, assembly);
     }
 
     internal FieldPath AddSlot<TSource, TValue>(IRelationQueryBinding<TSource> source,

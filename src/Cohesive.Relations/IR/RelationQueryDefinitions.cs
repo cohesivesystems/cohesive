@@ -262,6 +262,10 @@ public abstract record RelationQueryDefinition : IImmutableExecutionDefinition
 
     /// <summary>Shared logical query body.</summary>
     public LogicalQueryDefinition Body { get; init; }
+
+    /// <summary>Optional terminal nested-result assembly over raw rows; for a rooted relation it is applied independently per root.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public NestedQueryResultAssembly? Assembly { get; init; }
 }
 
 /// <summary>
@@ -460,9 +464,4 @@ public sealed record QueryDefinition : RelationQueryDefinition
 
     /// <summary>Named row and aggregation result branches.</summary>
     public ImmutableArray<QueryResultDefinition> Results { get; init; }
-
-    /// <summary>Optional terminal nested-result assembly over the sole raw row branch.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public NestedQueryResultAssembly? Assembly { get; init; }
-
 }
