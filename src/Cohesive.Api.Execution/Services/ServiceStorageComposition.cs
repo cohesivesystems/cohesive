@@ -85,6 +85,16 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
         foreach (var contract in required.Distinct().Where(contract => !repositoryOwners.ContainsKey(contract)))
             Error("repositoryMissing", $"No storage model supplies observation '{contract}'. Candidates: {Names(Enumerable.Range(0, sources.Length))}.");
 
+        // Resource identity, not binding object identity, owns the history policy.
+        var histories = sources.SelectMany((source, index) => source.Storage.Bindings
+            .OfType<IStorageHistoryBinding>()
+            .Select(binding => (Declaration: binding.HistoryDeclaration, Owner: index)))
+            .Where(item => item.Declaration is not null)
+            .GroupBy(item => item.Declaration!.Resource, StringComparer.Ordinal);
+        foreach (var history in histories)
+            if (history.Select(item => item.Declaration).Distinct().Skip(1).Any())
+                Error("historyConflict", $"Resource '{history.Key}' has conflicting history policies in models: {Names(history.Select(item => item.Owner).Distinct())}.");
+
         var explainedQueries = new List<ServiceQueryPlacement>();
         var routed = sources.Select(_ => new List<ServiceQuerySelection>()).ToArray();
         var queryOwners = new Dictionary<RelationQueryPlanComponentFingerprint, int>();
