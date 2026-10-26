@@ -16,6 +16,30 @@ public sealed class RelationQueryFluentWhereTests
     }
 
     [Fact]
+    public void Take_lowers_to_an_offset_page_over_its_input_and_retains_its_binding()
+    {
+        var query = RelationQuery.Expression();
+        var id = query.Parameter<string>("id");
+        var filtered = query.Source<Row>().Where(row => row.Id == id.Value);
+        var limited = filtered.Take(2);
+        Assert.Same(filtered.Binding, limited.Binding);
+
+        var definition = limited.BuildArrayQuery(id: new("limited"), name: new("Limited"), parameter: id)
+            .CompilationRequest.DefinitionDocument.Definition;
+        var page = Assert.Single(definition.Body.Nodes.OfType<PageQueryNode>());
+        Assert.Equal(new OffsetPageDefinition(limit: 2), page.Page);
+        Assert.Equal(Assert.Single(definition.Body.Nodes.OfType<FilterQueryNode>()).Id, page.Input);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Take_rejects_a_non_positive_count(int count)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => RelationQuery.Expression().Source<Row>().Take(count));
+    }
+
+    [Fact]
     public void Foreign_parameters_are_still_rejected()
     {
         var query = RelationQuery.Expression();

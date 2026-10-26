@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq.Expressions;
 using Cohesive.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
@@ -21,8 +22,16 @@ public static class IdentityDirectoryQueries
     const string RowsResultIdentity = "rows";
     const int UniqueLookupLimit = 2;
 
-    static readonly ScalarTypeRef StringType = new(ScalarTypeKind.String);
-    static readonly ArrayTypeRef StringArrayType = new(StringType);
+    static readonly RelationQueryClrAuthoringContext Clr = new();
+    static readonly RelationQueryClrShape<PrincipalAccountRecord> PrincipalShape = Clr.Shape<PrincipalAccountRecord>(
+        IdentityDomainModel.ShapeGraphDocument,
+        IdentityDomainModel.PrincipalAccountShape);
+    static readonly RelationQueryClrShape<ScopeMembershipRecord> MembershipShape = Clr.Shape<ScopeMembershipRecord>(
+        IdentityDomainModel.ShapeGraphDocument,
+        IdentityDomainModel.ScopeMembershipShape);
+    static readonly RelationQueryClrShape<IdentityScopeRecord> ScopeShape = Clr.Shape<IdentityScopeRecord>(
+        IdentityDomainModel.ShapeGraphDocument,
+        IdentityDomainModel.ScopeShape);
     static readonly QueryResultId RowsResultIdentityId = new(RowsResultIdentity);
 
     static readonly ImmutableArray<RelationQueryFieldReference> PrincipalFields = Fields(
@@ -58,25 +67,29 @@ public static class IdentityDirectoryQueries
         queryId: "cohesive.identity/principals/by-id/v1",
         queryName: "IdentityPrincipalById",
         parameterId: "principalId",
-        fieldName: nameof(PrincipalAccountRecord.Id));
+        match: principalId => principal =>
+            principal.Status == PrincipalAccountStatus.Active && principal.Id == principalId.Value);
 
     static readonly ParameterizedRowsQuery PrincipalByEmailQuery = CreatePrincipalLookup(
         queryId: "cohesive.identity/principals/by-email/v1",
         queryName: "IdentityPrincipalByEmail",
         parameterId: "email",
-        fieldName: nameof(PrincipalAccountRecord.Email));
+        match: email => principal =>
+            principal.Status == PrincipalAccountStatus.Active && principal.Email == email.Value);
 
     static readonly ParameterizedRowsQuery PrincipalBySubjectQuery = CreatePrincipalLookup(
         queryId: "cohesive.identity/principals/by-subject/v1",
         queryName: "IdentityPrincipalBySubject",
         parameterId: "subject",
-        fieldName: nameof(PrincipalAccountRecord.Subject));
+        match: subject => principal =>
+            principal.Status == PrincipalAccountStatus.Active && principal.Subject == subject.Value);
 
     static readonly ParameterizedRowsQuery PrincipalByClientIdQuery = CreatePrincipalLookup(
         queryId: "cohesive.identity/principals/by-client-id/v1",
         queryName: "IdentityPrincipalByClientId",
         parameterId: "clientId",
-        fieldName: nameof(PrincipalAccountRecord.ClientId));
+        match: clientId => principal =>
+            principal.Status == PrincipalAccountStatus.Active && principal.ClientId == clientId.Value);
 
     static readonly ParameterizedRowsQuery ActiveMembershipsByPrincipalQuery =
         CreateMembershipLookup();
@@ -165,113 +178,90 @@ public static class IdentityDirectoryQueries
         string queryId,
         string queryName,
         string parameterId,
-        string fieldName)
+        Func<RelationQueryExpressionParameter<string>, Expression<Func<PrincipalAccountRecord, bool>>> match)
     {
-        var author = RelationQuery.Structural();
-        var parameter = author.Parameter(StringType, id: new(parameterId));
-        var principals = author.Source(IdentityDomainModel.PrincipalAccountShape);
-        var filtered = author.Filter(
-            principals.Node,
-            All(
-                Expr.Eq(
-                    principals.Binding.Field(nameof(PrincipalAccountRecord.Status)),
-                    Expr.Const(nameof(PrincipalAccountStatus.Active))),
-                Expr.Eq(principals.Binding.Field(fieldName), parameter.Expression)));
-        var limited = author.Page(filtered, new OffsetPageDefinition(limit: UniqueLookupLimit));
-        var rows = author.Rows(limited, id: RowsResultId);
-        return new(
-            RequireValid(author.BuildQuery(new(queryId), new(queryName), [rows])),
-            [parameter],
-            rows,
-            PrincipalFields);
+        var query = RelationQuery.Expression(Clr);
+        var parameter = query.Parameter<string>(parameterId);
+        var principals = query.Source(PrincipalShape).Where(match(parameter)).Take(UniqueLookupLimit);
+        return Build(query, queryId, queryName, principals, PrincipalFields, parameter.Id);
     }
 
     static ParameterizedRowsQuery CreateMembershipLookup()
     {
-        var author = RelationQuery.Structural();
-        var principalId = author.Parameter(StringType, id: new("principalId"));
-        var memberships = author.Source(IdentityDomainModel.ScopeMembershipShape);
-        var filtered = author.Filter(
-            memberships.Node,
-            All(
-                Expr.Eq(
-                    memberships.Binding.Field(nameof(ScopeMembershipRecord.Status)),
-                    Expr.Const(nameof(ScopeMembershipStatus.Active))),
-                Expr.Eq(
-                    memberships.Binding.Field(nameof(ScopeMembershipRecord.PrincipalId)),
-                    principalId.Expression)));
-        var rows = author.Rows(filtered, id: RowsResultId);
-        return new(
-            RequireValid(author.BuildQuery(
-                new("cohesive.identity/memberships/active-by-principal/v1"),
-                new("IdentityActiveMembershipsByPrincipal"),
-                [rows])),
-            [principalId],
-            rows,
-            MembershipFields);
+        var query = RelationQuery.Expression(Clr);
+        var principalId = query.Parameter<string>("principalId");
+        var memberships = query.Source(MembershipShape).Where(membership =>
+            membership.Status == ScopeMembershipStatus.Active
+            && membership.PrincipalId == principalId.Value);
+        return Build(
+            query,
+            "cohesive.identity/memberships/active-by-principal/v1",
+            "IdentityActiveMembershipsByPrincipal",
+            memberships,
+            MembershipFields,
+            principalId.Id);
     }
 
     static ParameterizedRowsQuery CreateDefaultMembershipLookup()
     {
-        var author = RelationQuery.Structural();
-        var principalId = author.Parameter(StringType, id: new("principalId"));
-        var scopeKind = author.Parameter(StringType, id: new("scopeKind"));
-        var candidateScopeIds = author.Parameter(StringArrayType, id: new("candidateScopeIds"));
-        var memberships = author.Source(IdentityDomainModel.ScopeMembershipShape);
-        var filtered = author.Filter(
-            memberships.Node,
-            All(
-                Expr.Eq(
-                    memberships.Binding.Field(nameof(ScopeMembershipRecord.Status)),
-                    Expr.Const(nameof(ScopeMembershipStatus.Active))),
-                Expr.Eq(
-                    memberships.Binding.Field(nameof(ScopeMembershipRecord.PrincipalId)),
-                    principalId.Expression),
-                Expr.Eq(
-                    memberships.Binding.Field(nameof(ScopeMembershipRecord.ScopeKind)),
-                    scopeKind.Expression),
-                Expr.Eq(
-                    memberships.Binding.Field(nameof(ScopeMembershipRecord.IsDefaultScope)),
-                    Expr.Const(true)),
-                Expr.Contains(
-                    candidateScopeIds.Expression,
-                    memberships.Binding.Field(nameof(ScopeMembershipRecord.ScopeId)))));
-        var limited = author.Page(filtered, new OffsetPageDefinition(limit: UniqueLookupLimit));
-        var rows = author.Rows(limited, id: RowsResultId);
-        return new(
-            RequireValid(author.BuildQuery(
-                new("cohesive.identity/memberships/active-default-by-principal-and-kind/v1"),
-                new("IdentityActiveDefaultMembershipByPrincipalAndKind"),
-                [rows])),
-            [principalId, scopeKind, candidateScopeIds],
-            rows,
-            MembershipFields);
+        var query = RelationQuery.Expression(Clr);
+        var principalId = query.Parameter<string>("principalId");
+        var scopeKind = query.Parameter<string>("scopeKind");
+        var candidateScopeIds = query.Parameter<string[]>("candidateScopeIds");
+        var memberships = query.Source(MembershipShape).Where(membership =>
+                membership.Status == ScopeMembershipStatus.Active
+                && membership.PrincipalId == principalId.Value
+                && membership.ScopeKind == scopeKind.Value
+                && membership.IsDefaultScope == true
+                && candidateScopeIds.Value.Contains(membership.ScopeId))
+            .Take(UniqueLookupLimit);
+        return Build(
+            query,
+            "cohesive.identity/memberships/active-default-by-principal-and-kind/v1",
+            "IdentityActiveDefaultMembershipByPrincipalAndKind",
+            memberships,
+            MembershipFields,
+            principalId.Id,
+            scopeKind.Id,
+            candidateScopeIds.Id);
     }
 
     static ParameterizedRowsQuery CreateScopeLookup()
     {
-        var author = RelationQuery.Structural();
-        var scopeKind = author.Parameter(StringType, id: new("scopeKind"));
-        var scopeId = author.Parameter(StringType, id: new("scopeId"));
-        var scopes = author.Source(IdentityDomainModel.ScopeShape);
-        var filtered = author.Filter(
-            scopes.Node,
-            All(
-                Expr.Eq(
-                    scopes.Binding.Field(nameof(IdentityScopeRecord.Status)),
-                    Expr.Const(nameof(IdentityScopeStatus.Active))),
-                Expr.Eq(scopes.Binding.Field(nameof(IdentityScopeRecord.Kind)), scopeKind.Expression),
-                Expr.Eq(scopes.Binding.Field(nameof(IdentityScopeRecord.Id)), scopeId.Expression)));
-        var limited = author.Page(filtered, new OffsetPageDefinition(limit: UniqueLookupLimit));
-        var rows = author.Rows(limited, id: RowsResultId);
+        var query = RelationQuery.Expression(Clr);
+        var scopeKind = query.Parameter<string>("scopeKind");
+        var scopeId = query.Parameter<string>("scopeId");
+        var scopes = query.Source(ScopeShape).Where(scope =>
+                scope.Status == IdentityScopeStatus.Active
+                && scope.Kind == scopeKind.Value
+                && scope.Id == scopeId.Value)
+            .Take(UniqueLookupLimit);
+        return Build(
+            query,
+            "cohesive.identity/scopes/active-by-kind-and-id/v1",
+            "IdentityActiveScopeByKindAndId",
+            scopes,
+            ScopeFields,
+            scopeKind.Id,
+            scopeId.Id);
+    }
+
+    static ParameterizedRowsQuery Build<TNode, TRow>(
+        RelationQueryExpressionAuthoring query,
+        string queryId,
+        string queryName,
+        RelationQueryExpressionBoundNode<TNode, TRow> branch,
+        ImmutableArray<RelationQueryFieldReference> selectedFields,
+        params QueryParameterId[] parameters)
+        where TNode : LogicalQueryNode
+        where TRow : notnull
+    {
+        var rows = query.Rows(branch, id: RowsResultIdentity);
         return new(
-            RequireValid(author.BuildQuery(
-                new("cohesive.identity/scopes/active-by-kind-and-id/v1"),
-                new("IdentityActiveScopeByKindAndId"),
-                [rows])),
-            [scopeKind, scopeId],
-            rows,
-            ScopeFields);
+            RequireValid(query.BuildQuery(new(queryId), new(queryName), [rows])),
+            [.. parameters],
+            rows.Id,
+            selectedFields);
     }
 
     static ImmutableArray<RelationQueryFieldReference> Fields(
@@ -279,16 +269,6 @@ public static class IdentityDirectoryQueries
         params string[] fieldNames) =>
         [.. fieldNames.Select(fieldName => new RelationQueryFieldReference(shape, FieldPath.FromField(fieldName)))];
 
-    static Expr All(params Expr[] predicates)
-    {
-        if (predicates.Length == 0)
-            throw new ArgumentException("At least one canonical predicate is required.", nameof(predicates));
-
-        var result = predicates[0];
-        for (var index = 1; index < predicates.Length; index++)
-            result = Expr.And(result, predicates[index]);
-        return result;
-    }
 
     static RelationQueryAuthoringResult<QueryDefinition> RequireValid(
         RelationQueryAuthoringResult<QueryDefinition> query)
@@ -307,13 +287,13 @@ public static class IdentityDirectoryQueries
     sealed class ParameterizedRowsQuery
     {
         readonly RelationQueryAuthoringResult<QueryDefinition> query;
-        readonly ImmutableArray<RelationQueryParameterHandle> parameters;
+        readonly ImmutableArray<QueryParameterId> parameters;
         readonly RelationQueryCompilationRequest compilation;
 
         public ParameterizedRowsQuery(
             RelationQueryAuthoringResult<QueryDefinition> query,
-            ImmutableArray<RelationQueryParameterHandle> parameters,
-            RelationQueryResultHandle<RowsQueryResultDefinition> rows,
+            ImmutableArray<QueryParameterId> parameters,
+            QueryResultId rows,
             ImmutableArray<RelationQueryFieldReference> selectedFields)
         {
             this.query = query;
@@ -324,7 +304,7 @@ public static class IdentityDirectoryQueries
                 [IdentityDomainModel.ShapeGraphDocument],
                 demand: RelationQueryCompilationDemand.ForQueryResults(
                 [
-                    QueryResultDemand.SelectedFields(rows.Id, selectedFields)
+                    QueryResultDemand.SelectedFields(rows, selectedFields)
                 ]));
         }
 
@@ -345,7 +325,7 @@ public static class IdentityDirectoryQueries
             for (var index = 0; index < parameters.Length; index++)
             {
                 builder.Set(
-                    parameters[index].Id,
+                    parameters[index],
                     values[index],
                     evidenceReference: "cohesive.identity/directory-parameter");
             }

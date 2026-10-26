@@ -231,6 +231,13 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     public RelationQueryExpressionBoundNode<FilterQueryNode, TValue> Where(Expression<Func<TValue, bool>> predicate) =>
         Binding.Owner.Where(this, predicate);
 
+    /// <summary>Limits this focused branch to its first <paramref name="count"/> rows.</summary>
+    /// <param name="count">Maximum number of rows the branch yields; must be positive.</param>
+    /// <returns>The paged branch.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="count"/> is not positive.</exception>
+    public RelationQueryExpressionBoundNode<PageQueryNode, TValue> Take(int count) =>
+        Binding.Owner.Take(this, count);
+
     /// <summary>Projects the focused row through the owning authoring session.</summary>
     /// <typeparam name="TResult">Projected row type.</typeparam>
     /// <param name="projection">Canonical projection expression.</param>
