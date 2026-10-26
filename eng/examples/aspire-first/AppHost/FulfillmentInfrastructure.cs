@@ -14,6 +14,7 @@ namespace AspireFirst;
 public sealed class FulfillmentInfrastructure : InfrastructureModel
 {
     readonly FulfillmentHistoryPolicy policy;
+    readonly FulfillmentApplication application;
     /// <summary>Canonical order storage identity.</summary>
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
@@ -29,6 +30,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     public FulfillmentInfrastructure(FulfillmentApplication model, FulfillmentHistoryPolicy policy)
     {
         this.policy = policy;
+        application = model;
         Define(
             id: new("example/orders"),
             revision: new("4"),
@@ -40,6 +42,13 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
                 infra.Workload(Worker).Requires(ApplicationExecution).RequiresReady(Store);
             });
     }
+
+    /// <summary>Projects the same activated model and association into an offline inspection report.</summary>
+    /// <param name="association">Association produced by Configure for this model.</param>
+    /// <returns>Canonical artifacts plus the selected state/history policy.</returns>
+    public Cohesive.Host.Composition.ApplicationExplanationDocument Explain(AspireInfrastructureAssociation association) =>
+        Cohesive.Host.Composition.ApplicationExplanation.Create(application, Definition, association.Deployment,
+            "development", SourceReference.Create("example", Definition.Definition.Definition.Id.Value));
 
     /// <summary>Starts with native resources, then associates only the resources governed by the requirements.</summary>
     /// <param name="builder">Existing AppHost builder.</param>

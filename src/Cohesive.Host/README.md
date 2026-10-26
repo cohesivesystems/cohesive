@@ -126,3 +126,24 @@ auto-discovery from silently constructing defaults. Register an instance, factor
 the activation services before `ModelActivator.Create`. Ordinary model dependencies still
 support constructor and required-init discovery. The marker validates registration, not the
 contents of a policy; its owner validates those values.
+
+## Offline application explanation
+
+`ApplicationExplanation.Create(application, infrastructure, deployment, environmentName, deploymentSource)`
+admits the application and returns an immutable `ApplicationExplanationDocument`. It rejects incomplete
+or foreign infrastructure associations and storage admission failures before producing a report.
+The document retains original canonical entities, portable endpoint implementation links, query and
+execution documents, and the validated deployment artifact. Existing documents retain their own
+fingerprint authority. `SchemaVersion` versions only the report structure; `Scope` is explicitly
+`OfflineAdmission`, never live readiness.
+
+History is collected from contributing native bindings implementing `IStorageHistoryBinding`.
+The PostgreSQL binding projects the authority and reconstitution of its declared history attachment,
+with its existing database identity. No clients, credentials, connections or native preparation are
+required. A composition without a history attachment contributes no history entry.
+
+`ApplicationExplainCommand.TryWrite(writer, () => report)` evaluates its typed factory only when
+`--explain` is supplied, serializes the complete report before writing, and leaves other host arguments
+untouched. `report.ToJson()` uses the existing portable document serializers directly; it does not
+serialize and parse embedded documents into mutable JSON trees. The output is an inspection report,
+not a supported application import format or an independent executable system IR.

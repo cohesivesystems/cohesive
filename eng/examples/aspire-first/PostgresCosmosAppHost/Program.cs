@@ -1,5 +1,8 @@
 using AspireFirst.PostgresCosmos;
 using Cohesive.Host.Composition;
-var builder = DistributedApplication.CreateBuilder(args);
-ModelActivator.Create<PostgresCosmosFulfillmentInfrastructure>().Configure(builder);
+var explain = new ApplicationExplainCommand(args);
+var builder = DistributedApplication.CreateBuilder(explain.Arguments);
+var model = ModelActivator.Create<PostgresCosmosFulfillmentInfrastructure>();
+var association = model.Configure(builder);
+if (explain.TryWrite(Console.Out, () => model.Explain(association))) return;
 builder.Build().Run();

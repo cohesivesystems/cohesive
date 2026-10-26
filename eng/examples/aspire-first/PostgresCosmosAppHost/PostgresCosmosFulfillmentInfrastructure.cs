@@ -41,6 +41,13 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
             });
     }
 
+    /// <summary>Uses shared offline report projection and complete-deployment validation.</summary>
+    /// <param name="association">Association produced for this infrastructure.</param>
+    /// <returns>The linked inspection report; this composition has no history attachment.</returns>
+    public Cohesive.Host.Composition.ApplicationExplanationDocument Explain(AspireInfrastructureAssociation association) =>
+        Cohesive.Host.Composition.ApplicationExplanation.Create(Application, Definition, association.Deployment,
+            "development", Cohesive.Model.SourceReference.Create("example", Definition.Definition.Definition.Id.Value));
+
     /// <summary>Attaches native local resources and the inferred .NET workload implementation.</summary>
     /// <param name="builder">Native Aspire host under construction.</param>
     /// <returns>Association evidence for the governed workload.</returns>

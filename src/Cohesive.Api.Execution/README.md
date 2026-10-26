@@ -413,3 +413,26 @@ must agree across modules; rebuilt equivalent requests do not depend on CLR refe
 Repository ownership uses canonical observation contracts. Process repository requirements
 are derived from actual references; every missing transition or lookup is reported by the
 existing dependency validator before native preparation, never filtered out.
+
+## Inspect admitted implementations
+
+`ServiceImplementationPlan.Implementations` retains the original endpoint operation,
+its exact execution reference (query/process/service where the binding supplies one),
+and its entity observation contract. It freezes once with the plan; failed contributions
+roll back the links along with coverage and query selections. Registration requires an execution reference or an entity observation contract; there is no unlinked overload. Entity-only endpoints need not invent an execution document.
+
+After `ServiceStorageComposition.Validate(plans)` succeeds, `Explanation` exposes the
+query references, compiled-plan references, all source/traversal shapes, selected storage
+model labels, declared consistency and bounds, plus repository ownership. It is projected
+from that same admission pass, without another compilation or native preparation.
+Before successful admission the property throws. These records are derived inspection
+views, not new semantic authorities or trusted provider capability evidence. Runtime
+readiness must be established separately.
+
+`Cohesive.Host.Composition.ApplicationExplanation.Create` collects root-exposed
+`IServiceImplementationModel`, `StorageModel` and `DomainModel` contributions and
+projects the shared report with explicit environment/source attribution. It rejects
+incomplete or foreign infrastructure compilation before admission. `ApplicationExplainCommand`
+handles the offline switch and writes a report only when requested; both native Aspire
+examples use this entry point. Application-specific history metadata is supplementary;
+a composition without a history attachment does not invent a history selection.

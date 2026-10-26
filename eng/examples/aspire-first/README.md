@@ -1,6 +1,55 @@
+# One fulfillment model, two storage compositions
+
 For state-authoritative versus event-authoritative PostgreSQL execution, see [State authority](STATE-AUTHORITY.md).
 
-# One fulfillment model, two storage compositions
+## Inspect the compiled system without running it
+
+Both AppHosts use `Cohesive.Host`’s `ApplicationExplainCommand` and
+`ApplicationExplanation.Create`. They can emit an offline report without building or starting the distributed
+application, opening native clients, initializing schemas, or running containers.
+
+The shared entry returns an immutable `ApplicationExplanationDocument`, reusing canonical entities,
+endpoint links, query/execution documents and deployment artifacts. `scope: OfflineAdmission`
+and `schemaVersion` describe the report, not runtime readiness or a new system fingerprint.
+History entries are derived from the native storage bindings (`history[].resource`, `authority`,
+`reconstitution`); neither AppHost appends JSON fields. The CLI serializes this typed report directly.
+
+```sh
+dotnet build eng/examples/aspire-first/AppHost
+dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/AppHost -- --explain > state.json
+dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/AppHost -- --explain --EntityState:Authority=Events > events.json
+
+dotnet build eng/examples/aspire-first/PostgresCosmosAppHost
+dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/PostgresCosmosAppHost -- --explain > mixed.json
+```
+
+Follow `Order.Details` in `endpoints`: its `execution` reference names
+`fulfillment/order-details` with an exact revision and fingerprint. Match that reference
+in `storage.queries` to see all required entity shapes, the admitted storage owner,
+consistency and read bounds. The original query document is in `queries`. Process
+start and poll endpoints similarly retain their process references and `resultOf` link;
+`executions` contains the activated process documents. Entity endpoints retain their
+observation contracts and any declared transition reference.
+
+`infrastructure` and `deployment` are the existing canonical infrastructure document
+and deployment artifact, including capability requirements, witnesses and their exact
+fingerprints. They explain the native resource associations and accepted realization.
+The report does not create a new system fingerprint or replace these authorities.
+Storage owner names are human-readable module labels, not semantic identifiers.
+
+Compare `state.json` and `events.json`: endpoint/query definitions stay the same while
+the history authority and selected physical database change. Compare `mixed.json`:
+Postgres and Cosmos contribute distinct resources. The shared API explicitly permits
+`IndependentSources`; the mixed composition does **not** promise a cross-store snapshot.
+A stronger guarantee offered by a native provider does not upgrade the API's declared
+requirement. Offline admission rejects unsupported requirements before a report is emitted.
+
+This is a linked inspection projection, not a complete portable application bundle:
+CLR request/response binding callbacks and schema migration callbacks are not exported.
+It proves neither schema readiness nor actual runtime isolation, durability, credentials,
+or successful execution. The existing integration tests qualify those separate boundaries.
+
+
 
 Declare orders, reservations, inventory, their queries and transitions once. Attach native storage and
 Aspire resources to choose how the same HTTP API executes.

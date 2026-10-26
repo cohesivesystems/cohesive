@@ -15,6 +15,10 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
     readonly Dictionary<ValueContract, int> repositories = [];
     readonly Dictionary<RelationQueryPlanComponentFingerprint, int> queries = [];
     ImmutableArray<IServiceStorageComposition> prepared;
+    ServiceStorageExplanation? explanation;
+    /// <summary>Offline admission evidence, available only after successful validation. This is not native readiness.</summary>
+    /// <exception cref="InvalidOperationException">Admission has not succeeded.</exception>
+    public ServiceStorageExplanation Explanation => explanation ?? throw new InvalidOperationException("Validate endpoint selections before explaining storage.");
 
     /// <summary>Creates an offline ownership scope; repeated composition instances are shared.</summary>
     /// <param name="compositions">Storage declarations, independent of API selections.</param>
@@ -81,6 +85,17 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
         foreach (var contract in required.Distinct().Where(contract => !repositoryOwners.ContainsKey(contract)))
             Error("repositoryMissing", $"No storage model supplies observation '{contract}'. Candidates: {Names(Enumerable.Range(0, sources.Length))}.");
 
+        // Resource identity, not binding object identity, owns the history policy.
+        var histories = sources.SelectMany((source, index) => source.Storage.Bindings
+            .OfType<IStorageHistoryBinding>()
+            .Select(binding => (Declaration: binding.HistoryDeclaration, Owner: index)))
+            .Where(item => item.Declaration is not null)
+            .GroupBy(item => item.Declaration!.Resource, StringComparer.Ordinal);
+        foreach (var history in histories)
+            if (history.Select(item => item.Declaration).Distinct().Skip(1).Any())
+                Error("historyConflict", $"Resource '{history.Key}' has conflicting history policies in models: {Names(history.Select(item => item.Owner).Distinct())}.");
+
+        var explainedQueries = new List<ServiceQueryPlacement>();
         var routed = sources.Select(_ => new List<ServiceQuerySelection>()).ToArray();
         var queryOwners = new Dictionary<RelationQueryPlanComponentFingerprint, int>();
         var identities = new Dictionary<RelationQueryPlanComponentFingerprint, ServiceQuerySelection>();
@@ -93,7 +108,7 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
                 diagnostics.AddRange(compilation.Diagnostics);
                 continue;
             }
-            var key = Key(compilation);
+            var key = Key(compilation, out var planReference);
             var revision = (selection.Reference.DefinitionId.Value, selection.Reference.RevisionId.Value);
             if (revisions.TryGetValue(revision, out var priorKey) && priorKey != key)
             {
@@ -120,6 +135,9 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
                 continue;
             }
             queryOwners.Add(key, owners[0]); routed[owners[0]].Add(selection);
+            explainedQueries.Add(new(selection.Reference, planReference,
+                [.. shapes.OrderBy(shape => shape.ToString(), StringComparer.Ordinal)], sources[owners[0]].Name,
+                selection.Consistency, selection.MaximumRows, selection.MaximumBytes));
         }
         if (diagnostics.Count > 0) throw new ServiceBindingValidationException(new([.. diagnostics]));
         // Provider planning, including consistency validation, is still offline and must succeed everywhere before IO.
@@ -136,14 +154,21 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
         foreach (var (contract, owners) in repositoryOwners) repositories.Add(contract, owners[0]);
         foreach (var entry in queryOwners) queries.Add(entry.Key, entry.Value);
         prepared = admitted.ToImmutable();
+        explanation = new(
+            [.. explainedQueries.OrderBy(query => query.Query.DefinitionId.Value, StringComparer.Ordinal)],
+            [.. repositoryOwners.OrderBy(pair => pair.Key.ToString(), StringComparer.Ordinal)
+                .Select(pair => new ServiceRepositoryPlacement(pair.Key, sources[pair.Value[0]].Name))]);
     }
-    static RelationQueryPlanComponentFingerprint Key(RelationQueryCompilationResult compilation) =>
-        RelationQueryCompiledPlanReferenceFingerprinter.Compute(RelationQueryCompiledPlanReference.From(compilation.Plan!));
+    static RelationQueryPlanComponentFingerprint Key(RelationQueryCompilationResult compilation, out RelationQueryCompiledPlanReference reference)
+    {
+        reference = RelationQueryCompiledPlanReference.From(compilation.Plan!);
+        return RelationQueryCompiledPlanReferenceFingerprinter.Compute(reference);
+    }
     static RelationQueryPlanComponentFingerprint Key(RelationQueryCompilationRequest request)
     {
         var compiled = RelationQueryStaticCompiler.Compile(request);
         if (!compiled.IsSuccessful) throw new RelationQueryPreparationException("storage ownership", compiled);
-        return Key(compiled);
+        return Key(compiled, out _);
     }
     /// <inheritdoc />
     public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)

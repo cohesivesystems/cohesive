@@ -24,6 +24,7 @@
     <ProjectReference Include="..\Cohesive.Transitions\Cohesive.Transitions.csproj" />
     <ProjectReference Include="..\Cohesive.Relations\Cohesive.Relations.csproj" />
     <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />
+    <ProjectReference Include="..\Cohesive.Infra\Cohesive.Infra.csproj" />
     <ProjectReference Include="..\Cohesive.Storage\Cohesive.Storage.csproj" />
   </ItemGroup>
 

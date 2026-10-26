@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Compilation;
 using Cohesive.Execution;
@@ -14,10 +15,16 @@ public sealed class ServiceImplementationPlan
 {
     readonly List<ApiDefinition> definitions = [];
     readonly HashSet<ApiEndpointId> supplied = [];
+    readonly List<ServiceEndpointImplementation> implementations = [];
+    ImmutableArray<ServiceEndpointImplementation> frozenImplementations;
+
+    /// <summary>Exact endpoint-to-implementation links retained during binding, in endpoint identity order.</summary>
+    public ImmutableArray<ServiceEndpointImplementation> Implementations
+    { get { _ = Definition; return frozenImplementations; } }
     readonly AuthoringState<ApiDefinition> state;
     ServiceDependencies queries = new();
     int contributionDepth;
-    System.Collections.Immutable.ImmutableHashSet<ValueContract> repositories = [];
+    ImmutableHashSet<ValueContract> repositories = [];
     /// <summary>Exact entity dependencies selected by entity endpoints and process bindings.</summary>
     public IReadOnlyCollection<ValueContract> RepositoryRequirements { get { _ = Definition; return repositories; } }
     /// <summary>Records repositories needed by an implementation contribution.</summary>
@@ -40,6 +47,7 @@ public sealed class ServiceImplementationPlan
                 $"/api/endpoints/{operation.Id.Value.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal)}/resultOf"));
         var diagnostics = errors.Concat(links).ToArray();
         if (diagnostics.Length != 0) throw new ServiceBindingValidationException(new([.. diagnostics]));
+        frozenImplementations = [.. implementations.OrderBy(item => item.Endpoint.Id.Value, StringComparer.Ordinal)];
         return definition;
     });
 
@@ -54,6 +62,7 @@ public sealed class ServiceImplementationPlan
             var previousSupplied = supplied.ToArray();
             var previousQueries = queries;
             var previousRepositories = repositories;
+            var previousImplementationCount = implementations.Count;
             contributionDepth++;
             try { Declare(definition); configure(); }
             catch
@@ -62,6 +71,7 @@ public sealed class ServiceImplementationPlan
                 supplied.Clear(); supplied.UnionWith(previousSupplied);
                 queries = previousQueries;
                 repositories = previousRepositories;
+                implementations.RemoveRange(previousImplementationCount, implementations.Count - previousImplementationCount);
                 throw;
             }
             finally { contributionDepth--; }
@@ -77,10 +87,30 @@ public sealed class ServiceImplementationPlan
         state.Edit(() => { if (!definitions.Contains(definition)) definitions.Add(definition); return this; });
     }
 
-    /// <summary>Admits one implementation against its exact endpoint authority, without resolving storage.</summary>
-    /// <param name="definition">Declared API authority.</param><param name="endpoint">Original endpoint handle.</param>
-    /// <exception cref="ServiceBindingValidationException">The endpoint is foreign or already implemented.</exception>
-    public void Implement(ApiDefinition definition, ApiEndpoint endpoint)
+    /// <summary>Admits an endpoint linked to an exact query, process or service authority.</summary>
+    /// <param name="definition">Declared API authority.</param><param name="endpoint">Original endpoint.</param>
+    /// <param name="execution">Required exact selected execution reference.</param>
+    /// <exception cref="ArgumentNullException">The execution reference is null.</exception>
+    /// <exception cref="ServiceBindingValidationException">Endpoint is foreign or already implemented.</exception>
+    public void Implement(ApiDefinition definition, ApiEndpoint endpoint, ExecutionDefinitionReference execution)
+    {
+        ArgumentNullException.ThrowIfNull(execution);
+        ImplementCore(definition, endpoint, execution, null);
+    }
+
+    /// <summary>Admits an entity endpoint linked to its canonical repository observation contract.</summary>
+    /// <param name="definition">Declared API authority.</param><param name="endpoint">Original endpoint.</param>
+    /// <param name="repository">Required canonical entity observation contract.</param>
+    /// <exception cref="ArgumentNullException">The repository contract is null.</exception>
+    /// <exception cref="ServiceBindingValidationException">Endpoint is foreign or already implemented.</exception>
+    public void Implement(ApiDefinition definition, ApiEndpoint endpoint, ValueContract repository)
+    {
+        ArgumentNullException.ThrowIfNull(repository);
+        ArgumentNullException.ThrowIfNull(endpoint);
+        ImplementCore(definition, endpoint, endpoint.Operation.TransitionReference, repository);
+    }
+
+    void ImplementCore(ApiDefinition definition, ApiEndpoint endpoint, ExecutionDefinitionReference? execution, ValueContract? repository)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         state.Edit(() =>
@@ -89,6 +119,7 @@ public sealed class ServiceImplementationPlan
                 throw Error("services.api.foreignEndpoint", $"Endpoint '{endpoint.Id}' is not from the declared API.");
             if (!supplied.Add(endpoint.Id))
                 throw Error("services.api.duplicateImplementation", $"Endpoint '{endpoint.Id}' has competing implementations.");
+            implementations.Add(new(endpoint.Operation, execution, repository));
             return this;
         });
     }
@@ -98,8 +129,9 @@ public sealed class ServiceImplementationPlan
     /// <param name="query">Canonical query authority.</param><param name="revision">Semantic revision.</param>
     /// <param name="rows">Maximum result rows.</param><param name="bytes">Maximum decoded bytes.</param>
     /// <param name="consistency">Required consistency across every read contributing to the result.</param>
+    /// <returns>The exact selected query reference, reusable by endpoint inspection.</returns>
     /// <exception cref="ServiceBindingValidationException">The same query has competing bounds or revisions.</exception>
-    public void Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes, RelationQueryConsistency consistency) =>
+    public ExecutionDefinitionReference Query<TInput, TResult>(RelationQuery<TInput, TResult> query, ExecutionRevisionId revision, int rows, long bytes, RelationQueryConsistency consistency) =>
         state.Edit(() =>
         {
             var reference = ServiceQueryBinding.GetReference(revision, query.CompilationRequest);
@@ -109,7 +141,7 @@ public sealed class ServiceImplementationPlan
                 || RelationQueryCompilationRequestReference.From(existing.Request) != RelationQueryCompilationRequestReference.From(query.CompilationRequest)
                 || existing.MaximumRows != rows || existing.MaximumBytes != bytes || existing.Consistency != consistency)
                 throw Error("services.api.querySelectionMismatch", "One query authority must have one revision, preparation bound and consistency requirement.");
-            return this;
+            return reference;
         });
 
     /// <summary>Freezes and validates complete coverage, without any persistence or host.</summary>

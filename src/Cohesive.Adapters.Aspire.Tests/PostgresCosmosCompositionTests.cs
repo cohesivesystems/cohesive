@@ -132,7 +132,12 @@ public sealed class PostgresCosmosCompositionTests
         var model = ModelActivator.Create<PostgresCosmosApplication>();
         var plan = new ServiceImplementationPlan();
         plan.Declare(model.Api.Definition);
-        foreach (var endpoint in model.Api.Definition.Endpoints) plan.Implement(model.Api.Definition, endpoint);
+        foreach (var link in model.Endpoints.Plan.Implementations)
+        {
+            var endpoint = model.Api.Definition.Endpoints.Single(item => item.Id == link.Endpoint.Id);
+            if (link.Repository is { } repository) plan.Implement(model.Api.Definition, endpoint, repository);
+            else plan.Implement(model.Api.Definition, endpoint, link.Execution!);
+        }
         plan.Query(model.Queries.OrderDetails, new("1"), 1000, 1_000_000, RelationQueryConsistency.SingleSnapshot);
         var error = Assert.Throws<ServiceBindingValidationException>(() => model.Storage.PostgresBindings.PrepareComposedService(
             plan, new([model.Storage.Inventory.Query.Binding]), PostgresCosmosStorage.Policy));
