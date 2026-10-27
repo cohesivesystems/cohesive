@@ -445,4 +445,7 @@ placement subject; there is no independent Partition option to drift. Database
 identity and checkpoint authority are likewise supplied once by the declaration.
 The public native binding seam is `PostgresMaterializationStorage.BindAsync(pool,
 replicationFactory, target, key, slotGeneration, ct)`; relation-level reader binding
-is internal. Native preflight still validates actual connection/replication affinity.
+is internal. Native preflight checks that the pool and replication factory address the same
+physical host, port and database before opening a connection. The logical database
+ID is not a physical database-name assertion: configuring both native connections
+for the same unintended database cannot be detected from that ID alone.

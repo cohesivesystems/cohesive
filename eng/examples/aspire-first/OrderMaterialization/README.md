@@ -163,9 +163,5 @@ acquire an Elasticsearch dependency. Slot recipes are evaluated once at declarat
 and invalid or duplicate native names fail before IO. Existing publication, slot,
 authority and durable progress identities are retained.
 
-The source's `Reads.PartitionScope.CanonicalValue` also determines the physical
-placement subject; there is no independent Partition option to drift. Database
-identity and checkpoint authority are likewise supplied once by the declaration.
-The public native binding seam is `PostgresMaterializationStorage.BindAsync(pool,
-replicationFactory, target, key, slotGeneration, ct)`; relation-level reader binding
-is internal. Native preflight still validates actual connection/replication affinity.
+See the PostgreSQL adapter's [storage-owned materialization contract](../../../../src/adapters/Cohesive.Adapters.Postgres/README.md#storage-owned-materialization)
+for partition derivation, native binding and connection-affinity guarantees.

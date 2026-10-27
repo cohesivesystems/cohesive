@@ -97,9 +97,28 @@ public sealed class FulfillmentShadowTests
     {
         var storage = DeclareStorage(StorageOptions());
         await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=unreachable;Username=test");
-        var error = await Assert.ThrowsAsync<ArgumentNullException>(() => storage.BindAsync(database, null!, null!, new byte[32], "test/v1"));
+        var error = await Assert.ThrowsAsync<ArgumentNullException>(() => storage.BindAsync(database, null!, UnusedTarget(), new byte[32], "test/v1"));
         Assert.Equal("replicationConnectionFactory", error.ParamName);
     }
+
+    [Fact]
+    public async Task Wrong_database_pool_fails_native_affinity_before_opening_connections()
+    {
+        var storage = DeclareStorage(StorageOptions());
+        await using var database = NpgsqlDataSource.Create(
+            "Host=127.0.0.1;Port=1;Database=wrong_database;Username=test");
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => storage.BindAsync(
+            database,
+            () => new LogicalReplicationConnection("Host=127.0.0.1;Port=1;Database=orders;Username=test"),
+            UnusedTarget(), new byte[32], "test/v1"));
+        Assert.Contains("does not match", error.Message);
+        Assert.DoesNotContain("wrong_database", error.Message);
+    }
+
+    // Neither admission failure should reach target capability admission or perform target IO.
+    static InMemoryMaterializationTarget UnusedTarget() => new(new(
+        new("test/unused-target"), new("test/materialization"),
+        new(new("test/unused-profile"), MaterializationEndpointRole.Target, "test/unused-target", [])));
 
     static PostgresMaterializationStorage DeclareStorage(PostgresMaterializationStorageOptions options)
     {
