@@ -1,7 +1,7 @@
 using Cohesive.Adapters.Marten;
 using Marten;
 using JasperFx.Events;
-using Cohesive.Host.Composition;
+using Cohesive.Application;
 using Cohesive.Api.Execution.Services;
 using AspireFirst.Orders;
 using System.Diagnostics;
@@ -25,7 +25,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 [Collection("Order PostgreSQL schema")]
 public sealed partial class OrderStorageIntegrationTests
 {
-    readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
+    readonly AspireFirst.Orders.FulfillmentApplication Model = TestModels.Fulfillment();
     const string ConnectionVariable = "COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING";
 
     [PostgresFact]
@@ -70,7 +70,7 @@ public sealed partial class OrderStorageIntegrationTests
             .Entity(Model.Domain.Orders, Model.Storage.Bindings.Mapping(Model.Domain.Orders))
             .Entity(Model.Domain.Inventory, Model.Storage.Bindings.Mapping(Model.Domain.Inventory))
             .Entity(Model.Domain.Reservations, Model.Storage.Bindings.Mapping(Model.Domain.Reservations)));
-        var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(native, Model.Endpoints.Plan);
+        var composition = new Cohesive.Adapters.Postgres.Services.PostgresStorageComposition(native);
         var registrations = new ServiceCollection();
         registrations.AddKeyedSingleton(FulfillmentStoragePolicy.OrdersDatabaseName, database);
         await using var provider = registrations.BuildServiceProvider();
@@ -382,7 +382,7 @@ public sealed partial class OrderStorageIntegrationTests
         }
     }
 
-    sealed class PostgresFactAttribute : FactAttribute
+    internal sealed class PostgresFactAttribute : FactAttribute
     {
         public PostgresFactAttribute()
         {

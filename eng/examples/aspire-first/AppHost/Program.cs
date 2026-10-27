@@ -1,9 +1,11 @@
-using Cohesive.Host.Composition;
+using Microsoft.Extensions.DependencyInjection;
+using Cohesive.Application;
+using Cohesive.Adapters.Aspire.Application;
 using AspireFirst;
 
-var builder = DistributedApplication.CreateBuilder(args);
-var association = ModelActivator.Create<FulfillmentInfrastructure>().Configure(builder);
-if (!association.Deployment.IsComplete)
-    throw new InvalidOperationException(string.Join(Environment.NewLine,
-        association.Deployment.Diagnostics.Select(d => $"{d.Code}: {d.Message}")));
-builder.Build().Run();
+return await AspireApplication.RunAsync(args, builder =>
+{
+    var policy = AspireFirst.Orders.FulfillmentHistoryPolicy.FromConfiguration(builder.Configuration);
+    var model = ModelActivator.Create<FulfillmentInfrastructure>(services => services.AddSingleton(policy));
+    return model.Explain(model.Configure(builder));
+});

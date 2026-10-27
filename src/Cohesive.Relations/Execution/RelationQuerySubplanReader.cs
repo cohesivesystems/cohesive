@@ -97,7 +97,10 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
         ArgumentNullException.ThrowIfNull(policy);
         ArgumentNullException.ThrowIfNull(remainingReaders);
         ArgumentNullException.ThrowIfNull(logicalPartition);
-        if (!ReferenceEquals(definition.CompilationRequest, plan.Original.Request)
+        var compiled = RelationQueryStaticCompiler.Compile(definition.CompilationRequest);
+        if (!compiled.IsSuccessful) throw new RelationQueryPreparationException("subplan binding", compiled);
+        if (RelationQueryCompilationRequestReference.From(RelationQueryCompiledPlanReference.From(compiled.Plan!))
+            != RelationQueryCompilationRequestReference.From(RelationQueryCompiledPlanReference.From(plan.Original.Plan!))
             || !prefix.Plan.GetMismatchedComponents(plan.Prefix.Plan!).IsDefaultOrEmpty)
             throw new ArgumentException("Subplan execution requires exact original and native-prefix plan affinity.");
         Definition = definition;

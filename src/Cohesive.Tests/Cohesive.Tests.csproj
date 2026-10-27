@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -71,5 +71,9 @@
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="../../eng/examples/aspire-first/migrations/001-explicit-collations.sql" LogicalName="PostgresMigration001.sql" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Cohesive.Application/Cohesive.Application.csproj" />
+    <ProjectReference Include="../Cohesive.Application.Cli/Cohesive.Application.Cli.csproj" />
   </ItemGroup>
 </Project>

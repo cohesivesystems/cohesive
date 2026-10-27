@@ -1,4 +1,5 @@
-using Cohesive.Host.Composition;
+using Microsoft.Extensions.DependencyInjection;
+using Cohesive.Application;
 using System.Collections.Immutable;
 using AspireFirst.Orders;
 using Cohesive.Model;
@@ -13,7 +14,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class NestedResultTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = TestModels.Fulfillment();
 
     static NestedQueryResultAssembly Assembly => ((QueryDefinition)Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.Definition).Assembly!;
 

@@ -8,7 +8,7 @@ namespace Cohesive.Model;
 // Immutable sparse physical storage used by strict nested ingestion and benchmarks. Meaning and name/ordinal
 // identity remain layout-owned. Present values are packed in declaration order; a bitmap plus
 // per-word rank makes reads independent of the number of preceding fields, including wide layouts.
-internal sealed class CompactOrdinalObservationFields : IReadOnlyDictionary<string, ObservationValue>, IOrdinalObservationFieldReader
+internal sealed class CompactOrdinalObservationFields : IOrdinalObservationStorage
 {
     readonly ImmutableArray<ObservationValue> values;
     readonly ImmutableArray<RankedWord> words;
@@ -72,6 +72,22 @@ internal sealed class CompactOrdinalObservationFields : IReadOnlyDictionary<stri
         var prefix = words.IsDefault ? 0 : words[word].Prefix;
         field = values[prefix + BitOperations.PopCount(bits & (bit - 1))];
         return true;
+    }
+
+    // Scans presence words only; absent runs cost one masked word read, not a rank lookup per ordinal.
+    public int NextPresentOrdinal(int after)
+    {
+        var start = after + 1;
+        if (start >= Layout.Count || values.IsEmpty) return -1;
+        var word = start >> 6;
+        var wordCount = words.IsDefault ? 1 : words.Length;
+        var bits = (words.IsDefault ? inlinePresence : words[word].Bits) & (ulong.MaxValue << (start & 63));
+        while (bits == 0)
+        {
+            if (++word >= wordCount) return -1;
+            bits = words[word].Bits;
+        }
+        return (word << 6) + BitOperations.TrailingZeroCount(bits);
     }
 
     public Enumerator GetEnumerator() => new(this, canonical: false);

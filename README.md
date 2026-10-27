@@ -39,6 +39,9 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | `Cohesive.Simulation.ExternalProcess` | Optional bounded imports of finite generation catalogs from another runtime. |
 | `Cohesive.Identity` | Identity context and scope resolution helpers. |
 | `Cohesive.Cli` | Reusable typed command composition, configuration binding, validation, invocation, and testing helpers. |
+| `Cohesive.Application` | Offline application model composition, activation, validation and typed explanation. |
+| `Cohesive.Application.Cli` | Optional CLI explanation commands, without CLI dependencies in offline models. |
+| `Cohesive.Adapters.Aspire.Application` | One admitted configuration path for Aspire run and explain. |
 | `Cohesive.Host` | Generic-host lifecycle, dependency-injection scope, and runtime binding helpers. |
 | `Cohesive.CodeGen.Cli` | Build-facing code generation for shapes, APIs, OpenAPI, GraphQL, and TypeScript artifacts. |
 | `Cohesive.Analyzers` | Roslyn analyzers and source generators for Cohesive authoring patterns. |
@@ -73,6 +76,7 @@ The [Execution Kernel adoption and migration guide](docs/EXECUTION_KERNEL_GUIDE.
 | [`Cohesive.Adapters.Postgres.Services`](src/adapters/Cohesive.Adapters.Postgres.Services/README.md) | Shared service query selections for native readers and infrastructure evidence. |
 | [`Cohesive.Relations.Infra`](src/Cohesive.Relations.Infra/README.md) | Provider-neutral versioned query snapshot requirements. |
 | [`Cohesive.Adapters.Aspire.Postgres`](src/adapters/Cohesive.Adapters.Aspire.Postgres/README.md) | Native database affinity checks for prepared query evidence. |
+| [`Cohesive.Adapters.Aspire.Cosmos`](src/adapters/Cohesive.Adapters.Aspire.Cosmos/README.md) | Native container and partition affinity checks for prepared Cosmos source evidence. |
 | `Cohesive.Adapters.Postgres` | PostgreSQL relation/query and materialization integrations plus a durable Process distribution ledger. |
 | [`Cohesive.Adapters.SQLite`](src/adapters/Cohesive.Adapters.SQLite/README.md) | SQLite entity repositories with optimistic concurrency and atomic batches, exact scalar encodings, and module migrations. |
 | `Cohesive.Adapters.TypeScript` | TypeScript emitters for shapes, API clients, constants, and test mocks. |

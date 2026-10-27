@@ -12,6 +12,8 @@ namespace Cohesive.Adapters.Cosmos;
 /// partition metadata must be verified by the host. No client or IO is needed for construction.</remarks>
 public sealed class CosmosEntityStorageBinding : IEntityStorageBinding
 {
+    /// <inheritdoc />
+    public ValueContract Observation => ValueContract.FromShape(entity.Shape);
     readonly EntityDefinition entity;
     readonly string identityField;
     readonly EntityPartitionKeyPolicy partition;
@@ -49,6 +51,9 @@ public sealed class CosmosEntityStorageBinding : IEntityStorageBinding
                 maximumQueryChunks: maximumQueryChunks, maximumSdkPageSize: maximumSdkPageSize),
             FieldPath.FromField(identityField));
     }
+
+    /// <summary>Native partition path required by the adapter's observation envelope.</summary>
+    public string PartitionKeyPath => CosmosObservationContainerDocument.PartitionPath;
 
     /// <summary>Offline acquisition metadata used for physical planning and infrastructure evidence.</summary>
     public CosmosEntityQueryBinding Query { get; }

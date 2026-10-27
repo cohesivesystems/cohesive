@@ -28,12 +28,22 @@ public sealed class ServiceDependencies
     readonly ImmutableDictionary<ExecutionDefinitionReference, LookupFactory> lookups;
     /// <summary>Creates an empty registration set.</summary>
     public ServiceDependencies() : this(ImmutableDictionary<ExecutionDefinitionReference, TransitionFactory>.Empty,
-        ImmutableDictionary<ExecutionDefinitionReference, LookupFactory>.Empty, []) { }
+        ImmutableDictionary<ExecutionDefinitionReference, LookupFactory>.Empty, [], ImmutableDictionary<ExecutionDefinitionReference, ValueContract>.Empty) { }
     ServiceDependencies(
         ImmutableDictionary<ExecutionDefinitionReference, TransitionFactory> transitions,
         ImmutableDictionary<ExecutionDefinitionReference, LookupFactory> lookups,
-        ImmutableArray<ServiceQuerySelection> queries)
-    { this.transitions = transitions; this.lookups = lookups; Queries = queries; }
+        ImmutableArray<ServiceQuerySelection> queries, ImmutableDictionary<ExecutionDefinitionReference, ValueContract> observations)
+    { this.transitions = transitions; this.lookups = lookups; Queries = queries; this.observations = observations; }
+    readonly ImmutableDictionary<ExecutionDefinitionReference, ValueContract> observations;
+    /// <summary>Derives required repositories from the selected process's actual transition and point-read references.</summary>
+    /// <param name="process">Canonical process whose dependencies will be hosted.</param>
+    /// <returns>Exact observation contracts, without compiling transitions or resolving storage.</returns>
+    public ImmutableArray<ValueContract> RepositoryRequirements(ProcessDefinition process)
+    {
+        var required = Required(process);
+        RequireDependencies(required);
+        return [.. required.Transitions.Concat(required.Queries).Select(reference => observations[reference]).Distinct()];
+    }
 
     /// <summary>Explicit relational query roots selected for this service's transports.</summary>
     public ImmutableArray<ServiceQuerySelection> Queries { get; }
@@ -100,7 +110,7 @@ public sealed class ServiceDependencies
         });
         return new(transitions.Add(transition.Reference, (resolve, contracts) =>
             new(prepared.Value, resolve(transition.Definition.Observation), contracts,
-                expectedConcurrencyTokenField: expectedConcurrencyTokenField)), lookups, Queries);
+                expectedConcurrencyTokenField: expectedConcurrencyTokenField)), lookups, Queries, observations.Add(transition.Reference, transition.Definition.Observation));
     }
 
     /// <summary>Attaches a typed entity point read to an exact hosted-query contract.</summary>
@@ -133,7 +143,7 @@ public sealed class ServiceDependencies
             var options = new EntityReadOptions(partitionKey: partition);
             return (query.CreateProcessDefinitionLink(), ProcessRelationHandlerRegistration.Create(query,
                 async (context, _, input) => result(await typed.TryGetEntity(context, key(input), options).ConfigureAwait(false))));
-        }), Queries);
+        }), Queries, observations.Add(query.Reference, ValueContract.FromShape(entity.Definition.Shape)));
     }
 
     /// <summary>Selects a canonical relational query once for transport reading and infrastructure preparation.</summary>
@@ -150,7 +160,7 @@ public sealed class ServiceDependencies
         var reference = ServiceQueryBinding.GetReference(revision, query.CompilationRequest);
         if (Queries.Any(item => item.Reference.DefinitionId == reference.DefinitionId))
             throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryDuplicate, "A query is already selected.", "/bindings/queries");
-        return new(transitions, lookups, Queries.Add(new(reference, query.CompilationRequest, maximumRows, maximumBytes, consistency)));
+        return new(transitions, lookups, Queries.Add(new(reference, query.CompilationRequest, maximumRows, maximumBytes, consistency)), observations);
     }
 
     // Shared preparation slots retain successful projections only for the definition's lifetime.

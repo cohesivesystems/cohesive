@@ -216,18 +216,84 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     public ObservationValue WithFields(IEnumerable<KeyValuePair<FieldPath, ObservationValue>> assignments)
     {
         ArgumentNullException.ThrowIfNull(assignments);
-        using var enumerator = assignments.GetEnumerator();
-        if (!enumerator.MoveNext()) return this;
+        switch (assignments)
+        {
+            case KeyValuePair<FieldPath, ObservationValue>[] array: return WithFieldSpan(array);
+            case ArraySegment<KeyValuePair<FieldPath, ObservationValue>> segment: return WithFieldSpan(segment);
+            case ImmutableArray<KeyValuePair<FieldPath, ObservationValue>> immutable: return WithFieldSpan(immutable.AsSpan());
+            case List<KeyValuePair<FieldPath, ObservationValue>> list: return WithFieldSpan(CollectionsMarshal.AsSpan(list));
+        }
+        // Other sequences are buffered once into pooled storage, so every form shares one implementation.
+        var buffer = ArrayPool<KeyValuePair<FieldPath, ObservationValue>>.Shared.Rent(
+            assignments.TryGetNonEnumeratedCount(out var known) ? Math.Max(known, 1) : 8);
+        var count = 0;
+        try
+        {
+            foreach (var assignment in assignments)
+            {
+                if (count == buffer.Length)
+                {
+                    var grown = ArrayPool<KeyValuePair<FieldPath, ObservationValue>>.Shared.Rent(buffer.Length * 2);
+                    buffer.AsSpan(0, count).CopyTo(grown);
+                    ArrayPool<KeyValuePair<FieldPath, ObservationValue>>.Shared.Return(buffer, clearArray: true);
+                    buffer = grown;
+                }
+                buffer[count++] = assignment;
+            }
+            return WithFieldSpan(buffer.AsSpan(0, count));
+        }
+        finally
+        {
+            ArrayPool<KeyValuePair<FieldPath, ObservationValue>>.Shared.Return(buffer, clearArray: true);
+        }
+    }
+
+    // The single WithFields implementation. Direct fields need no assignment tree: one owned copy receives the
+    // ordered updates. Nested paths prepare each touched object once. The span is read and never retained.
+    ObservationValue WithFieldSpan(ReadOnlySpan<KeyValuePair<FieldPath, ObservationValue>> assignments)
+    {
+        if (assignments.IsEmpty) return this;
         if (Kind is not (ObservationValueKind.Object or ObservationValueKind.Null or ObservationValueKind.Undefined))
             throw new InvalidOperationException($"Value kind '{Kind}' cannot be updated as an object.");
-        var root = new AssignmentObject(this);
-        do
+        var direct = true;
+        foreach (var assignment in assignments)
+            if (assignment.Key.Segments.IsDefaultOrEmpty || !assignment.Key.TryGetDirectFieldName(out var name)
+                || string.IsNullOrWhiteSpace(name)) { direct = false; break; }
+        if (direct)
         {
-            var assignment = enumerator.Current;
+            var fields = Kind == ObservationValueKind.Object ? Fields : null;
+            var owned = new Dictionary<string, ObservationValue>((fields?.Count ?? 0) + assignments.Length, StringComparer.Ordinal);
+            if (fields is not null)
+            {
+                // The shared storage traversal copies built-in stores through their unboxed enumerators.
+                var copier = new FieldDictionaryCopier(owned);
+                ObservationFieldTraversal.Visit(fields, ref copier);
+            }
+            foreach (var assignment in assignments)
+            {
+                assignment.Key.TryGetDirectFieldName(out var name);
+                if (assignment.Value.Kind == ObservationValueKind.Undefined) owned.Remove(name);
+                else owned[name] = assignment.Value;
+            }
+            return FromOwnedObjectInOrdinalOrder(owned);
+        }
+        var root = new AssignmentObject(this);
+        foreach (var assignment in assignments)
+        {
             if (assignment.Key.Segments.IsDefaultOrEmpty) throw new ArgumentException("An object assignment requires a non-empty field path.", "path");
             root.Set(assignment.Key, 0, assignment.Value);
-        } while (enumerator.MoveNext());
+        }
         return root.Freeze();
+    }
+
+    readonly struct FieldDictionaryCopier(Dictionary<string, ObservationValue> target) : IObservationFieldVisitor
+    {
+        public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+            where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+        {
+            try { while (fields.MoveNext()) target.Add(fields.Current.Key, fields.Current.Value); }
+            finally { fields.Dispose(); }
+        }
     }
 
     sealed class AssignmentObject
@@ -369,7 +435,8 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     {
         if (fields is null)
             return null;
-        if (fields is OrdinalObservationFields or SmallObservationFields or OwnedObservationFields or CompactOrdinalObservationFields or ObservationNestedFields)
+        // Retain owned immutable storage, including nested views over it, exactly as supplied.
+        if (ObservationFieldStorage.Of(fields).IsOwnedImmutable)
             return fields;
         if (fields.Count == 0)
             return EmptyObjectValues;
@@ -918,11 +985,16 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
         return FromDouble(value);
     }
 
+    // Reflection facts only; every projected value is still converted per call.
+    static readonly WeakPreparationCache<Type, bool> DeclaredJsonConversionByType = new();
+
     static bool TryProjectJsonConvertedValue(object value, out ObservationValue observed)
     {
         var type = value.GetType();
-        if (type.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is null
-            && !PortableJsonValueAttribute.TryGetKind(type, out _))
+        var declared = DeclaredJsonConversionByType.Get(type, static owner =>
+            owner.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is not null
+            || PortableJsonValueAttribute.TryGetKind(owner, out _));
+        if (!declared)
         {
             observed = default;
             return false;

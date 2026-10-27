@@ -1,0 +1,31 @@
+System.Object[]
+System.Lazy<Ari.Training.Runtime.Services.ProtocolSpecCompilationAcquisition>
+Ari.Training.Runtime.Services.ProtocolSpecCompilationAcquisition
+Cohesive.Relations.Compilation.RelationQueryCompilationRequest
+Cohesive.Relations.Execution.RelationQueryEvaluator+PreparationCacheEntry
+Cohesive.Relations.Execution.RelationQueryEvaluator
+System.Func<Cohesive.Relations.Compilation.CompiledRelationQueryPlan, Cohesive.Relations.Physical.RelationQuerySourcePlacement>
+Cohesive.Storage.EntityRelationQuerySourceCatalog
+System.Collections.Immutable.ImmutableDictionary<Cohesive.Model.QualifiedShapeId, Cohesive.Storage.EntityRelationQuerySourceBinding>
+System.Collections.Immutable.SortedInt32KeyNode<System.Collections.Immutable.ImmutableDictionary<Cohesive.Model.QualifiedShapeId, Cohesive.Storage.EntityRelationQuerySourceBinding>+HashBucket>
+Cohesive.Storage.EntityRelationQuerySourceRegistration
+Cohesive.Storage.InMemoryEntityRelationQuerySourceReader
+Cohesive.Storage.InMemoryEntityOutboxRepository
+System.Collections.Generic.Dictionary<System.String, Cohesive.Storage.EntitySnapshot>
+System.Collections.Generic.Dictionary<System.String, Cohesive.Storage.EntitySnapshot>+Entry[]
+Cohesive.Storage.EntitySnapshot
+Cohesive.Model.EntityObservationSnapshot
+Cohesive.Model.Observation
+Cohesive.Model.OwnedObservationFields
+System.Collections.Generic.Dictionary<System.String, Cohesive.Model.ObservationValue>
+System.Collections.Generic.Dictionary<System.String, Cohesive.Model.ObservationValue>+Entry[]
+System.Collections.Immutable.ImmutableSortedDictionary<System.String, Cohesive.Model.ObservationValue>
+Cohesive.Model.ImmutableObservationProjectionCache+Projections
+Cohesive.Model.ImmutableObservationProjectionCache+Profile[]
+Cohesive.Model.ImmutableObservationProjectionCache+Profile
+System.Collections.Concurrent.ConcurrentDictionary<Cohesive.Model.ImmutableObservationProjectionCache+Key, Cohesive.Model.PreparationSlot<System.Object>>
+System.Collections.Concurrent.ConcurrentDictionary<Cohesive.Model.ImmutableObservationProjectionCache+Key, Cohesive.Model.PreparationSlot<System.Object>>+Tables
+System.Collections.Concurrent.ConcurrentDictionary<Cohesive.Model.ImmutableObservationProjectionCache+Key, Cohesive.Model.PreparationSlot<System.Object>>+VolatileNode[]
+System.Collections.Concurrent.ConcurrentDictionary<Cohesive.Model.ImmutableObservationProjectionCache+Key, Cohesive.Model.PreparationSlot<System.Object>>+Node
+Cohesive.Model.PreparationSlot<System.Object>
+Cohesive.Protocols.PortableProtocolSpecDocument

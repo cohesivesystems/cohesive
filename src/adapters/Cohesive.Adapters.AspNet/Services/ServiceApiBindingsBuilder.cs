@@ -157,8 +157,8 @@ public sealed class ServiceApiImplementation<TApi>
     {
         ArgumentNullException.ThrowIfNull(configure);
         var endpoint = Select(select);
-        model.Plan.Query(query, revision, maximumRows, maximumBytes, consistency);
-        model.Plan.Implement(definition, endpoint);
+        var reference = model.Plan.Query(query, revision, maximumRows, maximumBytes, consistency);
+        model.Plan.Implement(definition, endpoint, reference);
         model.Add(persistence =>
         {
             var reader = ServiceQueryConsistencyValidation.Require(persistence.Query(query, maximumRows, maximumBytes, consistency), consistency);
@@ -178,7 +178,9 @@ public sealed class ServiceApiImplementation<TApi>
         ArgumentNullException.ThrowIfNull(entity); ArgumentNullException.ThrowIfNull(configure);
         var binding = new TypedEntityApiBindings<TEntity>(entity.Definition, partition);
         configure(api, binding);
-        foreach (var endpoint in binding.BoundEndpoints) model.Plan.Implement(definition, endpoint);
+        var observation = ValueContract.FromShape(entity.Definition.Shape);
+        model.Plan.RequireRepositories([observation]);
+        foreach (var endpoint in binding.BoundEndpoints) model.Plan.Implement(definition, endpoint, repository: observation);
         model.Add(persistence =>
         {
             binding.Attach(persistence.Repository(ValueContract.FromShape(entity.Definition.Shape)));
@@ -209,8 +211,8 @@ public sealed class ServiceApiImplementation<TApi>
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "The linked API and runtime require the same exact service.");
         model.Plan.Contribute(definition, () =>
         {
-            model.Plan.Implement(definition, start);
-            model.Plan.Implement(definition, result);
+            model.Plan.Implement(definition, start, pair.Declaration.Reference);
+            model.Plan.Implement(definition, result, pair.Declaration.Reference);
             model.Add(_ => new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project), []));
         });
         return this;
@@ -304,8 +306,9 @@ public sealed class ServiceApiImplementation<TApi>
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "Host binding requires exact process references and host-owned admission.");
         model.Plan.Contribute(definition, () =>
         {
-            model.Plan.Implement(definition, start);
-            model.Plan.Implement(definition, result);
+            model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
+            model.Plan.Implement(definition, start, process.Definition.Reference);
+            model.Plan.Implement(definition, result, process.Definition.Reference);
             var policies = authorizationPolicyResolver;
             model.ConfigureServices(services => policies ??= ServiceProcessHttpAuthorization.Register(services, pair, authorization));
             model.Add((lifetime, persistence) =>
@@ -341,7 +344,8 @@ public sealed class ServiceApiImplementation<TApi>
         if (operations.Length != 1 || operations[0].Id != endpoint.OperationId)
             throw ServiceImplementationPlan.Error("services.api.operationMismatch", "This finite host requires the endpoint's single declared service operation.");
         var http = endpoint.Operation.Http ?? throw ServiceImplementationPlan.Error("services.api.httpMissing", "Process endpoint requires HTTP binding.");
-        model.Plan.Implement(definition, endpoint);
+        model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
+        model.Plan.Implement(definition, endpoint, process.Definition.Reference);
         model.Add(persistence =>
         {
             var hosted = service.Bind(process.Definition, persistence.Repository).Build(authority, authorization);

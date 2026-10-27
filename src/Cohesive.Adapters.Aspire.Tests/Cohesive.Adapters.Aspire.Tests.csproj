@@ -30,4 +30,7 @@
   <ItemGroup>
     <ProjectReference Include="../adapters/Cohesive.Adapters.Marten/Cohesive.Adapters.Marten.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Cohesive.Application/Cohesive.Application.csproj" />
+  </ItemGroup>
 </Project>

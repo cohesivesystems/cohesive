@@ -99,7 +99,7 @@ public sealed class ApiDefinition
 
     static IReadOnlyDictionary<ApiEndpointId, ApiOperation> BuildOperationIndex(IReadOnlyList<ApiEndpoint> endpoints)
     {
-        Dictionary<ApiEndpointId, ApiOperation> index = new();
+        Dictionary<ApiEndpointId, ApiOperation> index = new(endpoints.Count);
         for (var i = 0; i < endpoints.Count; i++)
         {
             var endpoint = endpoints[i] ?? throw new ArgumentException("API definition endpoints must not contain null values.", nameof(endpoints));

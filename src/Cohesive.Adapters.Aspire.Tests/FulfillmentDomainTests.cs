@@ -1,4 +1,5 @@
-using Cohesive.Host.Composition;
+using Microsoft.Extensions.DependencyInjection;
+using Cohesive.Application;
 using AspireFirst.Orders;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Execution;
@@ -7,7 +8,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class FulfillmentDomainTests(Xunit.Abstractions.ITestOutputHelper output)
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = TestModels.Fulfillment();
 
     [Fact]
     public void Remote_inventory_registration_prepares_its_declared_key_without_an_Id_convention()

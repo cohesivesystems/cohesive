@@ -44,6 +44,36 @@ public sealed class ServiceModelTests
         query => query.FromRoute<string>("id", value => value).OkOrNotFound(), RelationQueryConsistency.SingleSnapshot);
 
     [Fact]
+    public void Inspection_links_exact_query_authorities_and_reuses_frozen_links()
+    {
+        var api = new Catalog();
+        var model = new ServiceApiBindingsBuilder().Implement(api, Second).Implement(api, First);
+        var links = model.Plan.Implementations;
+        Assert.Equal(new[] { api.First.Id, api.Second.Id }, links.Select(link => link.Endpoint.Id));
+        Assert.Equal(links, model.Plan.Implementations);
+        foreach (var link in links)
+        {
+            var selected = Assert.Single(model.Plan.QueryDependencies.Queries, query => query.Reference == link.Execution);
+            Assert.Equal(link.Endpoint.Id.Value, selected.Reference.DefinitionId.Value);
+            Assert.Null(link.Repository);
+        }
+    }
+
+    [Fact]
+    public void Failed_contribution_does_not_leave_inspection_links_behind()
+    {
+        var api = new Catalog();
+        var model = new ServiceApiBindingsBuilder();
+        Assert.Throws<InvalidOperationException>(() => model.Implement(api, implementation =>
+        {
+            First(implementation);
+            throw new InvalidOperationException("abort contribution");
+        }));
+        model.Implement(api, First).Implement(api, Second);
+        Assert.Equal(2, model.Plan.Implementations.Length);
+    }
+
+    [Fact]
     public async Task Partial_contributions_map_one_surface_and_prepare_once_before_requests()
     {
         var api = new Catalog();

@@ -181,6 +181,57 @@ public sealed class RealizationAllocationTests(ITestOutputHelper output)
         Assert.True(median < 1_150_000, $"Realization allocated {median} bytes.");
     }
 
+    [Theory]
+    [InlineData(false, false, 1_400_000, "b762484114319ff2d72a1d286b9a8eca9996dfb71a53d78760b3d107778d92f5")]
+    [InlineData(false, true, 1_000_000, "ad2da17fc6f7b70a0eb4b152840848aa0af6d135ec2db6b137d3757b80bef4f3")]
+    [InlineData(true, false, 2_300_000, "42c8677735ef7dac150186d1c15837cb7e567fa3e3dbb3813a89b5d0263f100b")]
+    [InlineData(true, true, 1_850_000, "27ac74a7d4eb429a074114f8e5ebde09fd146de8254778ed96546b63d1e80ce0")]
+    public void RepeatedGuaranteeRequirementsHaveBoundedPreparationAllocations(
+        bool distinctProofs, bool missingEvidence, long allocationCeiling, string fingerprint)
+    {
+        var plan = new RelationQueryCompiledPlanReference("compiler/test", "schema/v1",
+            new("sha256", "definition/v1", "definition"), new("sha256", "shapes/v1", "shapes"), null,
+            new("sha256", "demand/v1", "demand"), [new("input/test")]);
+        var capability = new LogicalRelationQueryCapability(RelationQueryLogicalCapabilityKind.Projection);
+        var guarantees = new[] { RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
+            RelationQueryGuaranteeCapabilityKind.Cardinality, RelationQueryGuaranteeCapabilityKind.OutputIdentity };
+        var requirements = Enumerable.Range(0, 128).Select(i => new RelationQueryRealizationRequirement(
+            new($"requirement/{i:D4}"), distinctProofs
+                ? new ExpressionRelationQueryCapability(new($"expression/{i:D4}"), ExprCapabilityRequirementKind.Operation)
+                : capability, requiredGuarantees: [.. guarantees])).ToImmutableArray();
+        ImmutableArray<RelationQueryTargetCapabilityEvidence> capabilities = distinctProofs
+            ? [.. requirements.Select((r, i) => new RelationQueryTargetCapabilityEvidence(new($"evidence/{i:D4}"), r.Capability))]
+            : [new(new("evidence/projection"), capability)];
+        var profile = new RelationQueryTargetCapabilityProfile(new("target/test"), new("target/test/v1"),
+            [plan.DefinitionSchemaVersion], [plan.CompilerProfile],
+            [.. capabilities, .. guarantees.Take(missingEvidence ? 2 : 3).Select(g => new RelationQueryTargetCapabilityEvidence(
+                new($"evidence/guarantee/{g}"), new GuaranteeRelationQueryCapability(g)))]);
+        var policy = new RelationQueryRealizationPolicy(new("policy/test"), "conventions/v1");
+        var expected = RelationQueryRealizationCompiler.Match(plan, requirements, profile, policy);
+        Assert.Equal(!missingEvidence, expected.IsRealizable);
+        Assert.Equal(128, expected.Decisions.Length);
+        if (!missingEvidence)
+            Assert.All(expected.Decisions, d => Assert.Equal(4,
+                Assert.IsType<NativeRelationQueryRealizationDecision>(d).CapabilityEvidence.Length));
+        else
+            Assert.All(requirements, r => Assert.Contains(expected.Diagnostics,
+                d => d.Requirement == r.Id && d.Message.Contains(r.Id.Value, StringComparison.Ordinal)));
+        // All four digests were recorded from published alpha.157 before preparation reuse.
+        Assert.Equal(fingerprint, expected.Fingerprint.Value);
+        for (var i = 0; i < 4; i++) RelationQueryRealizationCompiler.Match(plan, requirements, profile, policy);
+        var samples = new long[7];
+        for (var i = 0; i < samples.Length; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var actual = RelationQueryRealizationCompiler.Match(plan, requirements, profile, policy);
+            samples[i] = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(expected.Fingerprint, actual.Fingerprint);
+        }
+        Array.Sort(samples);
+        output.WriteLine($"Distinct={distinctProofs}, missing={missingEvidence}: {samples[3]} bytes (median of seven).");
+        Assert.True(samples[3] < allocationCeiling, $"Realization allocated {samples[3]} bytes.");
+    }
+
     static string PreviousKey(IEnumerable<string?> values)
     {
         StringBuilder key = new();

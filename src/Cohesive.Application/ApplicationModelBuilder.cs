@@ -6,7 +6,7 @@ using Cohesive.Model;
 using Cohesive.Prelude;
 using Microsoft.Extensions.DependencyInjection;
 
-namespace Cohesive.Host.Composition;
+namespace Cohesive.Application;
 
 /// <summary>Composes offline declarations by constructor dependencies and required init properties, then freezes them.</summary>
 /// <remarks>No runtime services or resources are created implicitly. Registrations and instances belong to this
@@ -118,6 +118,8 @@ public sealed class ApplicationModelBuilder
                 foreach (var dependency in Dependencies(implementation)) Discover(dependency, visited);
             return;
         }
+        if (root.IsDefined(typeof(ExplicitModelRegistrationAttribute), inherit: true))
+            throw new InvalidOperationException($"Model policy '{root}' needs an explicit registration.");
         if (!root.IsClass || root.IsAbstract || root == typeof(string) || root.ContainsGenericParameters)
             throw new InvalidOperationException($"Model dependency '{root}' needs an explicit registration.");
         if (typeof(IDisposable).IsAssignableFrom(root) || typeof(IAsyncDisposable).IsAssignableFrom(root))
@@ -217,6 +219,17 @@ public abstract class ApplicationModel
 {
     PreparedApplicationModel? composition;
     internal void Attach(PreparedApplicationModel value) => composition = value;
+    /// <summary>Returns only components explicitly exposed by this root, in ordinal member-name order.</summary>
+    /// <typeparam name="T">Requested contribution contract.</typeparam>
+    /// <returns>Completed direct components; incidental transitive dependencies do not contribute.</returns>
+    public IReadOnlyList<T> Components<T>() where T : class
+    {
+        _ = Composition;
+        return GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(property => property.Name != nameof(Composition) && property.GetIndexParameters().Length == 0)
+            .OrderBy(property => property.Name, StringComparer.Ordinal)
+            .Select(property => property.GetValue(this)).OfType<T>().Distinct<T>(ReferenceEqualityComparer.Instance).ToArray();
+    }
     /// <summary>Validated declarations; available after ModelActivator returns, never during constructors.</summary>
     public PreparedApplicationModel Composition => composition ?? throw new InvalidOperationException("Activate the application before inspecting its composition.");
 }

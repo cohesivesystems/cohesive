@@ -16,7 +16,7 @@
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Aspire/Cohesive.Adapters.Aspire.csproj" IsAspireProjectResource="false" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Aspire.Postgres/Cohesive.Adapters.Aspire.Postgres.csproj" IsAspireProjectResource="false" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres.Services/Cohesive.Adapters.Postgres.Services.csproj" IsAspireProjectResource="false" />
-    <ProjectReference Include="../../../../src/Cohesive.Host/Cohesive.Host.csproj" IsAspireProjectResource="false" />
-    <ProjectReference Include="../OrderWorker/OrderWorker.csproj" ReferenceOutputAssembly="true" />
+    <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Aspire.Application/Cohesive.Adapters.Aspire.Application.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="../OrderWorker/OrderWorker.csproj" ReferenceOutputAssembly="true" Private="true" ExcludeAssets="none" />
   </ItemGroup>
 </Project>

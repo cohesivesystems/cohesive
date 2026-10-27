@@ -11,13 +11,12 @@ public sealed class FulfillmentStorage : StorageModel
 {
     /// <summary>Builds immutable offline mappings without opening a connection.</summary>
     /// <param name="domain">Shared canonical entities.</param>
-    /// <param name="endpoints">Shared endpoint selections.</param>
     /// <param name="history">Environment-selected authority and reconstitution, captured by this model.</param>
     /// <param name="mappings">Shared native table mappings.</param>
-    public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, OrderEndpoints endpoints, FulfillmentHistoryPolicy history)
+    public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, FulfillmentHistoryPolicy history)
     {
         Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
-            new(FulfillmentStoragePolicy.OrdersDatabaseName), storage =>
+            new(history.DatabaseName), storage =>
             {
                 storage.Schema(PostgresSchemaInitialization.CreateIfMissing, schema =>
                 {
@@ -30,28 +29,18 @@ public sealed class FulfillmentStorage : StorageModel
                 storage.SchemaPreparation(typeof(FulfillmentStorage).Assembly, "Orders.schema.sql");
                 storage.TransitionReceipts(new("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition),
                 initialization: PostgresSchemaInitialization.CreateIfMissing);
-                storage.History(new MartenEntityHistoryConfiguration(history.Authority, history.Reconstitution,
-                    initialization: PostgresSchemaInitialization.CreateIfMissing));
+                storage.History(history.History);
                 storage.Outbox(new("public", "cohesive_transition_outbox"),
                     initialization: PostgresSchemaInitialization.CreateIfMissing);
                 storage.Entity(domain.Orders, mappings.Orders);
                 storage.Entity(domain.Reservations, mappings.Reservations);
                 storage.Entity(domain.Inventory, mappings.Inventory);
             }));
-        Storage.Compose(() => new PostgresStorageComposition(Bindings, endpoints.Plan));
+        Storage.Compose(() => new PostgresStorageComposition(Bindings));
     }
 
     /// <summary>Native mappings for the primary database.</summary>
     public PostgresPersistenceBindings Bindings { get; }
 
 
-}
-
-/// <summary>Demo environment selection; switching authority for existing data requires migration.</summary>
-public sealed class FulfillmentHistoryPolicy
-{
-    /// <summary>Authoritative entity representation.</summary>
-    public EntityStateAuthority Authority { get; init; } = EntityStateAuthority.State;
-    /// <summary>History read policy.</summary>
-    public EntityReconstitutionMode Reconstitution { get; init; } = EntityReconstitutionMode.CheckpointAndTail;
 }

@@ -1,4 +1,5 @@
-using Cohesive.Host.Composition;
+using Microsoft.Extensions.DependencyInjection;
+using Cohesive.Application;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Model;
@@ -11,7 +12,7 @@ namespace Cohesive.Adapters.Aspire.Tests;
 
 public sealed class OrderStorageExampleTests
 {
-    static readonly AspireFirst.Orders.FulfillmentApplication Model = ModelActivator.Create<AspireFirst.Orders.FulfillmentApplication>();
+    static readonly AspireFirst.Orders.FulfillmentApplication Model = TestModels.Fulfillment();
 
     [Fact]
     public void Declared_HTTP_contract_matches_creation_lookup_and_both_conflicts()

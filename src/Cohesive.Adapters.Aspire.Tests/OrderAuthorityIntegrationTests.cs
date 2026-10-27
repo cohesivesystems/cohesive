@@ -1,6 +1,6 @@
+using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Adapters.Marten;
 using Marten;
-using JasperFx.Events;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
@@ -19,27 +19,30 @@ public sealed partial class OrderStorageIntegrationTests
     public async Task Same_OrderApi_and_transition_use_state_or_events_without_parallel_bindings()
     {
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(ConnectionVariable)!);
-        await Model.Storage.Bindings.PrepareSchemaAsync(database);
         foreach (var authority in new[] { EntityStateAuthority.State, EntityStateAuthority.Events })
         {
-            var model = Cohesive.Host.Composition.ModelActivator.Create<FulfillmentApplication>();
-            var prefix = "authority_" + Guid.NewGuid().ToString("N");
+            var model = TestModels.Fulfillment(authority);
+            var policy = Assert.IsType<MartenEntityHistoryConfiguration>(model.Storage.Bindings.HistoryConfiguration);
+            Assert.Equal(authority, policy.Authority);
+            var resource = authority == EntityStateAuthority.Events ? "orders_events" : "orders";
+            Assert.Equal(resource, model.Storage.Bindings.Database.Value);
             using var store = DocumentStore.For(options =>
             {
-                options.AutoCreateSchemaObjects = JasperFx.AutoCreate.None;
-                options.Connection(database); options.DatabaseSchemaName = prefix;
-                options.UseCohesiveEntityHistory();
+                options.Connection(database);
+                policy.Configure(options);
             });
-            await store.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
-            var history = await MartenEntityHistoryStorage.BindAsync(database, store, authority, checkpointInterval: 1);
             string? id = null;
             try
             {
-                var persistence = model.Storage.Bindings.Bind(database, authority: "test/fulfillment");
                 var builder = WebApplication.CreateBuilder();
-                var services = await OrderHttpTestHost.Prepare(builder, model, persistence, database, history: history);
+                builder.Services.AddRequestOperationContext();
+                builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
+                builder.Services.AddKeyedSingleton<NpgsqlDataSource>(resource, database);
+                builder.Services.AddKeyedSingleton<IDocumentStore>(resource, store);
+                builder.Services.AddCohesiveServices(model);
                 await using var app = builder.Build();
-                app.UseRequestOperationContext(); app.UseAuthorization(); app.MapServices(services);
+                app.UseRequestOperationContext(); app.UseAuthorization();
+                await app.MapServicesAsync();
                 app.Urls.Add("http://127.0.0.1:0");
                 await app.StartAsync();
                 using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
@@ -59,7 +62,6 @@ public sealed partial class OrderStorageIntegrationTests
             }
             finally
             {
-                await using (var drop = database.CreateCommand($"DROP SCHEMA {prefix} CASCADE")) await drop.ExecuteNonQueryAsync();
                 await using var cleanup = database.CreateCommand("DELETE FROM public.cohesive_orders WHERE order_id=$1");
                 cleanup.Parameters.AddWithValue(id ?? "unused");
                 await cleanup.ExecuteNonQueryAsync();

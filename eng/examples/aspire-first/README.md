@@ -1,6 +1,57 @@
+# One fulfillment model, two storage compositions
+
 For state-authoritative versus event-authoritative PostgreSQL execution, see [State authority](STATE-AUTHORITY.md).
 
-# One fulfillment model, two storage compositions
+## Inspect the compiled system without running it
+
+Both AppHosts use `Cohesive.Adapters.Aspire.Application.AspireApplication.RunAsync`, which registers
+the optional `Cohesive.Application.Cli` explain command on `Cohesive.Cli.CliApplication`
+and use `ApplicationExplanation.Create`. They can emit an offline report without building or starting the distributed
+application, opening native clients, initializing schemas, or running containers.
+
+The shared entry returns an immutable `ApplicationExplanationDocument`, reusing canonical entities,
+endpoint links, query/execution documents and deployment artifacts. `scope: OfflineAdmission`
+and `schemaVersion` describe the report, not runtime readiness or a new system fingerprint.
+History entries are derived from the native storage bindings (`history[].resource`, `authority`,
+`reconstitution`); neither AppHost appends JSON fields. The CLI serializes this typed report directly. `explain --help` displays help without constructing the
+model; normal startup arguments pass unchanged to Aspire via `RunOrFallbackAsync`.
+
+```sh
+dotnet build eng/examples/aspire-first/AppHost
+dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/AppHost -- explain > state.json
+dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/AppHost -- explain -- --EntityState:Authority=Events > events.json
+
+dotnet build eng/examples/aspire-first/PostgresCosmosAppHost
+dotnet run --no-build --no-launch-profile --project eng/examples/aspire-first/PostgresCosmosAppHost -- explain > mixed.json
+```
+
+Follow `Order.Details` in `endpoints`: its `execution` reference names
+`fulfillment/order-details` with an exact revision and fingerprint. Match that reference
+in `storage.queries` to see all required entity shapes, the admitted storage owner,
+consistency and read bounds. The original query document is in `queries`. Process
+start and poll endpoints similarly retain their process references and `resultOf` link;
+`executions` contains the activated process documents. Entity endpoints retain their
+observation contracts and any declared transition reference.
+
+`infrastructure` and `deployment` are the existing canonical infrastructure document
+and deployment artifact, including capability requirements, witnesses and their exact
+fingerprints. They explain the native resource associations and accepted realization.
+The report does not create a new system fingerprint or replace these authorities.
+Storage owner names are human-readable module labels, not semantic identifiers.
+
+Compare `state.json` and `events.json`: endpoint/query definitions stay the same while
+the history authority and selected physical database change. Compare `mixed.json`:
+Postgres and Cosmos contribute distinct resources. The shared API explicitly permits
+`IndependentSources`; the mixed composition does **not** promise a cross-store snapshot.
+A stronger guarantee offered by a native provider does not upgrade the API's declared
+requirement. Offline admission rejects unsupported requirements before a report is emitted.
+
+This is a linked inspection projection, not a complete portable application bundle:
+CLR request/response binding callbacks and schema migration callbacks are not exported.
+It proves neither schema readiness nor actual runtime isolation, durability, credentials,
+or successful execution. The existing integration tests qualify those separate boundaries.
+
+
 
 Declare orders, reservations, inventory, their queries and transitions once. Attach native storage and
 Aspire resources to choose how the same HTTP API executes.
@@ -186,9 +237,11 @@ to those plans without rediscovering the split or recompiling the physical remai
 ## Storage preparation and native resource ownership
 
 `StorageModel` owns native mappings, receipt/history/outbox configuration and a single offline composition. The PostgreSQL
-example composes its endpoint plan with `PostgresStorageComposition`; the mixed example uses
-`ComposeServices` with its declared Cosmos source. Infrastructure consumes this same preparation through
-`RequireComposition<T>()`. There is no extra `Preparation` property or application-owned mixed-store `Bind` recipe.
+example declares `PostgresStorageComposition` from entity mappings; the mixed example uses
+`ComposeServices(nativeSources, policy)` with its declared Cosmos source. Neither storage constructor
+depends on endpoint models. Application admission routes queries from all modules by entity placement
+and prepares their declared consistency before native initialization. Infrastructure uses the same
+offline `PrepareEvidence` operation on the selected queries; no application-owned mixed-store `Bind` recipe is needed.
 
 The workers register keyed native singleton clients using the **existing Aspire connection names** (`orders`
 and `inventory-cosmos`). No additional resource catalog is introduced. A PostgreSQL data source owns its pool;
@@ -264,3 +317,18 @@ schemas need their own reviewed migration. Marten history format migrations rema
 inherit that backend. Native clients remain DI-owned. The embedded native additions run through the model's
 `SchemaPreparation` declaration in one transaction under the schema advisory lock, including in integration tests. Built-in creation serializes competing host
 bootstraps with a transaction advisory lock; custom native-addition callbacks still own their coordination. These callbacks cannot repair projected-schema drift: run reviewed migrations before host preparation.
+
+Authority selection is shared by AppHost and worker through an explicitly registered
+`FulfillmentHistoryPolicy`. See [state authority](STATE-AUTHORITY.md) for native schema
+expectations and isolated state/event databases. The mixed example uses the optional
+`Cohesive.Adapters.Aspire.Cosmos` association to validate native account, database, container
+and partition path against its prepared storage source before accepting evidence.
+
+The workers register their activated application with `AddCohesiveServices(model)` and map
+it with `MapServicesAsync()`. Public root properties supply API bindings and storage models;
+Program does not pair a single endpoint catalog with a single store. Native clients are still
+registered explicitly under the existing resource identities. Additional application modules
+can expose endpoint and storage models on the root; a new query module over the same entities
+requires no edit to the existing storage declaration. Incidental transitive models are excluded.
+Preparation follows ordinal root member names. Missing/ambiguous placement and missing process
+dependencies fail before native preparation; cross-store queries still need explicit composed policy.

@@ -398,3 +398,41 @@ authorized polling endpoint. `ServiceApiBindingsBuilder` binds the linked pair t
 `MapServiceAcceptedProcess` supports direct native routing. Execution remains with the qualified native
 dispatcher and retained-value provider, with no implicit worker activation or automatic retry.
 See [the protocol and binding walkthrough](../../docs/design/accepted-process-api.md) for contracts, examples and limits.
+
+`ServiceStorageComposition` admits endpoint selections against model-declared entity placement,
+without native clients or transport dependencies. Adapters derive `Observations` and `Shapes`
+from storage mappings. They do not accept API plans in their storage declarations. Admission
+routes each compiled query to the unique composition covering all source and traversal shapes,
+then calls `PrepareQueries` to validate its bounds and consistency offline. Cross-store queries
+need explicit composed storage; a native snapshot is never silently weakened.
+
+Ownership failures are aggregated as `services.storage.*` diagnostics naming the contracts,
+queries and contributing models. Query routing uses canonical compiled-plan fingerprints,
+including definition, shape, relationship and demand inputs. Exact query ID/revision and bounds
+must agree across modules; rebuilt equivalent requests do not depend on CLR reference identity.
+Repository ownership uses canonical observation contracts. Process repository requirements
+are derived from actual references; every missing transition or lookup is reported by the
+existing dependency validator before native preparation, never filtered out.
+
+## Inspect admitted implementations
+
+`ServiceImplementationPlan.Implementations` retains the original endpoint operation,
+its exact execution reference (query/process/service where the binding supplies one),
+and its entity observation contract. It freezes once with the plan; failed contributions
+roll back the links along with coverage and query selections. Registration requires an execution reference or an entity observation contract; there is no unlinked overload. Entity-only endpoints need not invent an execution document.
+
+After `ServiceStorageComposition.Validate(plans)` succeeds, `Explanation` exposes the
+query references, compiled-plan references, all source/traversal shapes, selected storage
+model labels, declared consistency and bounds, plus repository ownership. It is projected
+from that same admission pass, without another compilation or native preparation.
+Before successful admission the property throws. These records are derived inspection
+views, not new semantic authorities or trusted provider capability evidence. Runtime
+readiness must be established separately.
+
+`Cohesive.Application.ApplicationExplanation.Create` collects root-exposed
+`IServiceImplementationModel`, `StorageModel` and `DomainModel` contributions and
+projects the shared report with explicit environment/source attribution. It rejects
+incomplete or foreign infrastructure compilation before admission. the Application-owned `AddApplicationExplanation` extension on `CliApplication`
+registers the named offline command and writes a report only when requested; both native Aspire
+examples use this entry point. History metadata derives from the storage-owned declaration;
+a composition without a history attachment does not invent a history selection.

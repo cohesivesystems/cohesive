@@ -13,8 +13,15 @@ namespace Cohesive.Adapters.Postgres;
 /// <summary>Offline PostgreSQL entity mappings used by native query preparation and runtime registration.</summary>
 /// <remarks>Configure once at host composition. Define is the sole authoring entry point and freezes mappings before returning. Runtime registrations
 /// share immutable mappings. Completion freezes authoring and rejects late contributions. Preparation performs no IO and retains no credentials or data source.</remarks>
-public sealed partial class PostgresPersistenceBindings
+public sealed partial class PostgresPersistenceBindings : Cohesive.Storage.IStorageHistoryBinding
 {
+    /// <inheritdoc />
+    public Cohesive.Storage.StorageHistoryDeclaration? HistoryDeclaration => HistoryConfiguration is { } history
+        ? new(Database.Value, history.Authority, history.Reconstitution) : null;
+    /// <summary>Canonical shapes placed by the declared entity mappings.</summary>
+    public System.Collections.Immutable.ImmutableArray<QualifiedShapeId> Shapes => [.. Tables.Keys];
+    /// <summary>Entity contracts derived from the frozen native mappings.</summary>
+    public System.Collections.Immutable.ImmutableArray<ValueContract> Observations => [.. Tables.Values.Select(item => ValueContract.FromShape(item.Entity.Shape))];
     readonly AuthoringState<PostgresPersistenceBindings> state;
     readonly WeakPreparationCache<RelationQueryCompilationRequest, PostgresRelationQueryCompiledArtifact> preparedQueries = new();
     ExceptionDispatchInfo? preparationFailure;

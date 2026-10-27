@@ -46,6 +46,18 @@ public static class ObjectEntityDefinition
     public static EntityDefinition For<T>(EntityTypeName name, IClrTypeRefMapper? typeRefMapper = null)
         where T : notnull => Build(typeof(T), name, typeRefMapper ?? ClrTypeRefMapper);
 
+    /// <summary>Projects a discovered CLR declaration through the ordinary entity authoring path.</summary>
+    /// <param name="clrType">Explicitly selected CLR entity type.</param>
+    /// <param name="name">Stable semantic entity name.</param>
+    /// <returns>The materialized entity shape.</returns>
+    /// <exception cref="ArgumentNullException">The CLR type is null.</exception>
+    /// <exception cref="InvalidOperationException">The shape is empty or ambiguous.</exception>
+    internal static EntityDefinition For(Type clrType, EntityTypeName name)
+    {
+        ArgumentNullException.ThrowIfNull(clrType);
+        return Build(clrType, name, ClrTypeRefMapper);
+    }
+
     static EntityDefinition Build(Type clrType, EntityTypeName name, IClrTypeRefMapper typeRefMapper)
     {
         var properties = ShapeTypeInspector.GetReadableProperties(clrType);

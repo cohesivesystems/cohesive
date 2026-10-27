@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <Description>Aspire application run and offline explanation integration.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../Cohesive.Application.Cli/Cohesive.Application.Cli.csproj" />
+    <ProjectReference Include="../Cohesive.Adapters.Aspire/Cohesive.Adapters.Aspire.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Aspire.Cosmos;
 using Cohesive.Adapters.Postgres.Services;
 using AspireFirst.Orders;
 using Aspire.Hosting;
@@ -9,6 +10,7 @@ namespace AspireFirst.PostgresCosmos;
 /// <summary>Separate native host: PostgreSQL orders plus Cosmos inventory, with no distributed snapshot claim.</summary>
 public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureModel
 {
+    readonly PostgresComposedServicePreparation prepared;
     /// <summary>Canonical shared application workload identity.</summary>
     public static InfrastructureNodeId Worker { get; } = new("workloads/orders");
 
@@ -24,13 +26,13 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
     public PostgresCosmosFulfillmentInfrastructure(PostgresCosmosApplication model)
     {
         Application = model;
+        prepared = model.Storage.RequireComposition<PostgresComposedStorageComposition>().PrepareEvidence(model.Endpoints.Plan.QueryDependencies.Queries);
         Define(
             id: new("example/orders-postgres-cosmos"),
             revision: new("1"),
             bindingProfileId: new("example/orders-postgres-cosmos/bindings"),
             infra =>
             {
-                var prepared = model.Storage.RequireComposition<PostgresComposedStorageComposition>().Preparation;
                 infra.Resource(Orders).Persistent().Prepared(prepared.Postgres);
                 infra.Resource(Inventory).Persistent().Prepared(prepared.Sources[model.Storage.Inventory.Query.Binding.Source.Id]);
                 var worker = infra.Workload(Worker).Requires(AspireInfrastructure.DotNetProjectExecution)
@@ -38,6 +40,13 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
                 foreach (var requirement in prepared.Requirements) worker.Requires(requirement);
             });
     }
+
+    /// <summary>Uses shared offline report projection and complete-deployment validation.</summary>
+    /// <param name="association">Association produced for this infrastructure.</param>
+    /// <returns>The linked inspection report; this composition has no history attachment.</returns>
+    public Cohesive.Application.ApplicationExplanationDocument Explain(AspireInfrastructureAssociation association) =>
+        Cohesive.Application.ApplicationExplanation.Create(Application, Definition, association.Deployment,
+            "development", Cohesive.Model.SourceReference.Create("example", Definition.Definition.Definition.Id.Value));
 
     /// <summary>Attaches native local resources and the inferred .NET workload implementation.</summary>
     /// <param name="builder">Native Aspire host under construction.</param>
@@ -53,7 +62,7 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
         var cosmos = builder.AddAzureCosmosDB(PostgresCosmosStorage.CosmosAccount).RunAsPreviewEmulator();
 #pragma warning restore ASPIRECOSMOSDB001
         var database = cosmos.AddCosmosDatabase(PostgresCosmosStorage.InventoryDatabase);
-        var inventory = database.AddContainer(PostgresCosmosStorage.InventoryContainer, PostgresCosmosStorage.PartitionPath);
+        var inventory = database.AddContainer(PostgresCosmosStorage.InventoryContainer, Application.Storage.Inventory.PartitionKeyPath);
         var worker = builder.AddProject<Projects.PostgresCosmosWorker>("worker")
             .WithHttpEndpoint(env: "ASPNETCORE_HTTP_PORTS").WithReference(orders).WithReference(cosmos)
             .WaitFor(orders).WaitFor(inventory);
@@ -64,15 +73,8 @@ public sealed class PostgresCosmosFulfillmentInfrastructure : InfrastructureMode
             variant: new("development"),
             associations =>
             {
-                var prepared = Application.Storage.RequireComposition<PostgresComposedStorageComposition>().Preparation;
-                var source = Application.Storage.Inventory.Query;
-                // Native names are shared with the source declaration; no account endpoint is invented offline.
-                if (cosmos.Resource.Name != source.Account || database.Resource.DatabaseName != source.Database
-                    || inventory.Resource.ContainerName != source.Container
-                    || inventory.Resource.PartitionKeyPath != PostgresCosmosStorage.PartitionPath)
-                    throw new InvalidOperationException("Cosmos resource differs from the prepared acquisition binding.");
                 associations.Resource(Orders, orders, prepared.Postgres.ForSource(orders.Resource.DatabaseName), new("aspire/example/orders"));
-                associations.Resource(Inventory, inventory, prepared.Sources[source.Binding.Source.Id].ForSource(source.Binding.Source.Id.Value), new("aspire/example/inventory"));
+                associations.Resource(Inventory, inventory, Application.Storage.Inventory, new("aspire/example/inventory"));
                 associations.Workload(Worker, worker, executionEvidence: prepared.ExecutionEvidence);
             });
         if (!association.Deployment.IsComplete) throw new InvalidOperationException(string.Join("; ", association.Deployment.Diagnostics.Select(item => item.Code + ": " + item.Message)));

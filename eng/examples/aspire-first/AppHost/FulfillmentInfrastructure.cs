@@ -13,6 +13,8 @@ namespace AspireFirst;
 /// <summary>A native AppHost with optional Cohesive requirement validation attached to selected resources.</summary>
 public sealed class FulfillmentInfrastructure : InfrastructureModel
 {
+    readonly FulfillmentHistoryPolicy policy;
+    readonly FulfillmentApplication application;
     /// <summary>Canonical order storage identity.</summary>
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
@@ -24,8 +26,11 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
 
     /// <summary>Prepares requirements from the same offline composition as the worker.</summary>
     /// <param name="model">Same activated application graph consumed by the worker.</param>
-    public FulfillmentInfrastructure(FulfillmentApplication model)
+    /// <param name="policy">Explicit environment selection used to activate that graph.</param>
+    public FulfillmentInfrastructure(FulfillmentApplication model, FulfillmentHistoryPolicy policy)
     {
+        this.policy = policy;
+        application = model;
         Define(
             id: new("example/orders"),
             revision: new("4"),
@@ -33,10 +38,17 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             infra =>
             {
                 infra.Resource(Store).Persistent()
-                    .Prepared(model.Storage.RequireComposition<PostgresStorageComposition>().Evidence);
+                    .Prepared(model.Storage.RequireComposition<PostgresStorageComposition>().PrepareEvidence(model.Endpoints.Plan.QueryDependencies.Queries));
                 infra.Workload(Worker).Requires(ApplicationExecution).RequiresReady(Store);
             });
     }
+
+    /// <summary>Projects the same activated model and association into an offline inspection report.</summary>
+    /// <param name="association">Association produced by Configure for this model.</param>
+    /// <returns>Canonical artifacts plus the selected state/history policy.</returns>
+    public Cohesive.Application.ApplicationExplanationDocument Explain(AspireInfrastructureAssociation association) =>
+        Cohesive.Application.ApplicationExplanation.Create(application, Definition, association.Deployment,
+            "development", SourceReference.Create("example", Definition.Definition.Definition.Id.Value));
 
     /// <summary>Starts with native resources, then associates only the resources governed by the requirements.</summary>
     /// <param name="builder">Existing AppHost builder.</param>
@@ -47,16 +59,12 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     {
         ArgumentNullException.ThrowIfNull(builder);
         var postgres = builder.AddPostgres("postgres").WithDataVolume();
-        var authorityText = builder.Configuration["EntityState:Authority"] ?? nameof(EntityStateAuthority.State);
-        if (!Enum.TryParse<EntityStateAuthority>(authorityText, out var authority) || !Enum.IsDefined(authority))
-            throw new ArgumentException("EntityState:Authority must be State or Events.");
-        var database = postgres.AddDatabase(FulfillmentStoragePolicy.OrdersDatabaseName,
-            databaseName: authority == EntityStateAuthority.Events ? "orders_events" : "orders");
+        var database = postgres.AddDatabase(FulfillmentStoragePolicy.OrdersDatabaseName, databaseName: policy.DatabaseName);
         var worker = builder.AddProject<Projects.OrderWorker>("worker")
             .WithHttpEndpoint(env: "ASPNETCORE_HTTP_PORTS")
             .WithReference(database).WaitFor(database)
-            .WithEnvironment("EntityState__Authority", authority.ToString())
-            .WithEnvironment("EntityState__Reconstitution", builder.Configuration["EntityState:Reconstitution"] ?? nameof(EntityReconstitutionMode.CheckpointAndTail));
+            .WithEnvironment("EntityState__Authority", policy.Authority.ToString())
+            .WithEnvironment("EntityState__Reconstitution", policy.Reconstitution.ToString());
         _ = builder.AddContainer("native-only", "redis", "7.4");
 
         // Associate existing Aspire resources with the canonical requirements and implementations.

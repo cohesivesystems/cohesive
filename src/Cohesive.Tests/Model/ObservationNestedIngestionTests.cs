@@ -70,6 +70,63 @@ public sealed class ObservationNestedIngestionTests
     }
 
     [Fact]
+    public void SparseRowsUseCompactCanonicalOrderingAndNameMissesStayLocalToTheirLayout()
+    {
+        ObjectFieldTypeDef[] fields = [new("Id", new ScalarTypeRef(ScalarTypeKind.Int64)),
+            .. Enumerable.Range(0, 9).Select(i => new ObjectFieldTypeDef("pad" + i, new ScalarTypeRef(ScalarTypeKind.Int64), presence: FieldPresence.Optional))];
+        Shape definition = new(new("root"), [new(new("Id"), new ScalarTypeRef(ScalarTypeKind.Int64)),
+            new(new("rows"), new ObjectTypeRef([.. fields]), cardinality: FieldCardinality.Many)]);
+        ShapeGraph graph = new(new("nested-sparse-ingestion"), [definition]);
+        GraphShapeId shape = new(graph, definition.Id); var layout = ObservationLayout.Create(shape, ["rows", "Id"]);
+        var plan = ObservationJsonIngestionPlan.Create(layout); Assert.NotNull(plan);
+        const string sparse = "{\"pad7\":7,\"Id\":1,\"pad2\":2}";
+        const string variant = "{\"ID\":1,\"pad2\":2}";
+
+        // Sparse rows are packed and canonically ordered in place: no field buffer is rented.
+        var rows = Parse("{\"Id\":7,\"rows\":[" + sparse + "]}").GetProperty("rows").Array;
+        var nested = Assert.IsType<ObservationNestedFields>(rows[0].Fields);
+        Assert.IsType<CompactOrdinalObservationFields>(nested.Storage);
+        using (var ordered = new OrderedObservationFields(nested, new NoRentPool()))
+        {
+            var cursor = ordered.GetEnumerator(); var keys = new List<string>();
+            while (cursor.MoveNext()) keys.Add(cursor.Current.Key);
+            cursor.Dispose(); Assert.Equal(["Id", "pad2", "pad7"], keys);
+        }
+        Assert.Equal([new KeyValuePair<string, ObservationValue>("Id", ObservationValue.FromInt64(1)),
+            new("pad2", ObservationValue.FromInt64(2)), new("pad7", ObservationValue.FromInt64(7))], nested.ToArray());
+
+        // One stray spelling early in a batch falls back for that row only.
+        var mixed = "{\"Id\":7,\"rows\":[" + variant + "," + string.Join(',', Enumerable.Repeat(sparse, 3)) + "]}";
+        Assert.Equal(Outcome(mixed, null), Outcome(mixed, plan));
+        var mixedRows = Parse(mixed).GetProperty("rows").Array;
+        Assert.IsNotType<ObservationNestedFields>(mixedRows[0].Fields);
+        Assert.All(mixedRows.Skip(1), row => Assert.IsType<ObservationNestedFields>(row.Fields));
+
+        // A consistent miss streak stops speculation for that layout; an exact read resets the streak.
+        var streak = "{\"Id\":7,\"rows\":[" + string.Join(',', Enumerable.Repeat(variant, 4)) + "," + sparse + "]}";
+        Assert.Equal(Outcome(streak, null), Outcome(streak, plan));
+        Assert.IsNotType<ObservationNestedFields>(Parse(streak).GetProperty("rows").Array[^1].Fields);
+        var reset = "{\"Id\":7,\"rows\":[" + string.Join(',', Enumerable.Repeat(variant, 3)) + "," + sparse + "," +
+            string.Join(',', Enumerable.Repeat(variant, 3)) + "," + sparse + "]}";
+        Assert.Equal(Outcome(reset, null), Outcome(reset, plan));
+        Assert.IsType<ObservationNestedFields>(Parse(reset).GetProperty("rows").Array[^1].Fields);
+
+        string Outcome(string json, ObservationJsonIngestionPlan? candidate)
+        {
+            try { var value = ParseWith(json, candidate); return Convert.ToHexString(Canonical(value)) + ":" + value.GetHashCode(); }
+            catch (Exception error) when (error is JsonException or ArgumentException) { return error.GetType().FullName + ":" + error.Message; }
+        }
+        ObservationValue Parse(string json) => ParseWith(json, plan);
+        ObservationValue ParseWith(string json, ObservationJsonIngestionPlan? candidate)
+        {
+            var values = new ObservationValue[layout.Count]; var presence = new ulong[1];
+            if (!ObservationJsonReader.TryReadShape(Encoding.UTF8.GetBytes(json), shape, layout, values, presence, out var error, candidate))
+                throw new ArgumentException(error, nameof(json));
+            return ObservationValue.FromOrdinalFields(new(layout, ImmutableArray.CreateRange(values), values.Count(v => v.Kind != ObservationValueKind.Undefined)));
+        }
+    }
+
+    [Fact]
     public void StrictMaterializerAdmitsUnmappedSparseRowsBeforeConvertersWithBoundedAllocation()
     {
         ObjectTypeRef row = new([.. Enumerable.Range(0, 16).Select(i => new ObjectFieldTypeDef("field" + i, new ScalarTypeRef(ScalarTypeKind.Int64),

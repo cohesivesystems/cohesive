@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Cohesive.Api.Execution/Cohesive.Api.Execution.csproj" />
+    <ProjectReference Include="../Cohesive/Cohesive.csproj" />
+    <ProjectReference Include="../Cohesive.Transitions/Cohesive.Transitions.csproj" />
+    <ProjectReference Include="../Cohesive.Processes/Cohesive.Processes.csproj" />
+    <ProjectReference Include="../Cohesive.Relations/Cohesive.Relations.csproj" />
+    <ProjectReference Include="../Cohesive.Infra/Cohesive.Infra.csproj" />
+    <ProjectReference Include="../Cohesive.Storage/Cohesive.Storage.csproj" />
+  </ItemGroup>
+</Project>
