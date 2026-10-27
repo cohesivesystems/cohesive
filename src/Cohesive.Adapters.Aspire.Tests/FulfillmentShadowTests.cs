@@ -1,4 +1,6 @@
 using System.Text.Json;
+using Cohesive.Application;
+using Microsoft.Extensions.DependencyInjection;
 using System.Text.Json.Serialization;
 using AspireFirst.Orders;
 using AspireFirst.Materialization;
@@ -17,11 +19,41 @@ public sealed class FulfillmentShadowTests
     static readonly JsonSerializerOptions Json = new() { Converters = { new JsonStringEnumConverter() } };
 
     [Fact]
+    public void Materialization_model_activation_shares_query_authority_and_freezes_membership()
+    {
+        var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var model = application.Materializations;
+        Assert.Same(model.Prepared, Assert.Single(model.Definition));
+        Assert.Equal(model.Definition, model.Definition);
+        Assert.Same(application.Orders.Queries.OrderDetailsRelation.Definition,
+            model.Prepared.Document.Definition.Relation.CompilationRequest);
+        var builder = new MaterializationModelBuilder();
+        Assert.Same(model.Prepared, builder.Include(model.Prepared));
+        Assert.Throws<ArgumentException>(() => builder.Include(model.Prepared));
+        Assert.Same(model.Prepared, Assert.Single(builder.Build()));
+        Assert.Throws<InvalidOperationException>(() => builder.Include(model.Prepared));
+    }
+
+    [Fact]
+    public void Activator_completes_materialization_models_without_native_resources()
+    {
+        var model = ModelActivator.Create<CompletionProbe>();
+        Assert.Empty(model.Definition);
+        Assert.Throws<InvalidOperationException>(() => model.Add(TestModels.Fulfillment().Queries));
+    }
+
+    public sealed class CompletionProbe : MaterializationModel
+    {
+        public void Add(FulfillmentQueries queries) => Materializations.Include(new FulfillmentMaterializations(queries).Prepared);
+    }
+
+    [Fact]
     public void Shadow_reads_preserve_the_live_relation_and_map_every_impact_field()
     {
-        var model = TestModels.Fulfillment();
+        var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var model = application.Orders;
         var live = model.Queries.OrderDetails.CompilationRequest;
-        var definition = new FulfillmentShadowDefinition(model.Queries);
+        var definition = application.Materializations;
         var prepared = new PostgresMaterializationRelation(model.Storage.Bindings, model.Queries.OrderDetailsRelation.Definition,
             definition.Impact, FulfillmentDomain.PartitionField, new(new("test/shadow"), "test/v1", 100, 1000, 1000, 100, 100, 1));
         Assert.Same(live, model.Queries.OrderDetails.CompilationRequest);
@@ -48,14 +80,15 @@ public sealed class FulfillmentShadowTests
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var ct = timeout.Token;
-        var model = TestModels.Fulfillment();
+        var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var model = application.Orders;
         var connection = Environment.GetEnvironmentVariable("COHESIVE_SHADOW_POSTGRES")!;
         await using var database = NpgsqlDataSource.Create(connection);
         using var http = new HttpClient { BaseAddress = new(Environment.GetEnvironmentVariable("COHESIVE_SHADOW_ELASTIC")!) };
-        await ShadowBootstrap.InitializeAsync(model, database, http, ct);
-        var definition = new FulfillmentShadowDefinition(model.Queries);
+        var definition = application.Materializations;
+        await ShadowBootstrap.InitializeAsync(model, definition, database, http, ct);
         var target = await ShadowElastic.BindAsync(http, definition, ct);
-        var runtime = await FulfillmentShadowRuntime.BindAsync(model, definition, database, connection, target, new byte[32], "test-slots/v1", ct);
+        var runtime = await FulfillmentMaterializationBindings.BindAsync(model, definition, database, connection, target, new byte[32], "test-slots/v1", ct);
         var id = Guid.NewGuid().ToString("N");
         var first = "first-" + id;
         var second = "second-" + id;
@@ -77,7 +110,7 @@ public sealed class FulfillmentShadowTests
             await Assert.ThrowsAsync<TestInterruption>(() => new MaterializationRebuildExecutor(runtime.Resolved, interruption)
                 .RunShardAsync(context, attempt, Assert.Single(runtime.Compilation.Plan.Shards).Id));
             // Rebind all native interpretations, simulating restart with the same fingerprint, attempt and key.
-            runtime = await FulfillmentShadowRuntime.BindAsync(model, definition, database, connection, target, new byte[32], "test-slots/v1", ct);
+            runtime = await FulfillmentMaterializationBindings.BindAsync(model, definition, database, connection, target, new byte[32], "test-slots/v1", ct);
             rebuild = new(runtime.Resolved);
             Assert.Equal(MaterializationRebuildInitializationDisposition.Ready, (await rebuild.BeginAttemptAsync(context, attempt)).Disposition);
             Assert.Equal(MaterializationRebuildShardDisposition.BaselineCompleteCatchUpRequired,
@@ -117,7 +150,7 @@ public sealed class FulfillmentShadowTests
         }
         async Task CatchUp(string invocation)
         {
-            var result = await MaterializationShadowExecution.RunAsync(runtime.Resolved, runtime.State,
+            var result = await MaterializationShadowExecution.RunAsync(runtime,
                 invocation == "baseline" ? MaterializationShadowOperation.Rebuild : MaterializationShadowOperation.CatchUp,
                 context, attempt, new(id + "/" + invocation), new("test-worker"));
             Assert.True(result.Disposition == MaterializationSynchronizationRunDisposition.Converged, JsonSerializer.Serialize(result.Diagnostics));

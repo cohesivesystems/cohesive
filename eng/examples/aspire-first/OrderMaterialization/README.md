@@ -115,7 +115,7 @@ Baseline root reads now use `PostgresRelationQueryReadPolicy.MaximumRowsPerRead`
 
 ## Declaration, preparation and command ownership
 
-`FulfillmentShadowDefinition` owns the example's materialization policies and calls
+`FulfillmentMaterializations : MaterializationModel` owns the example's materialization policies and calls
 `Build().Prepare(impactPolicy)`. `PreparedMaterialization` retains the admitted
 declaration and impact plan; PostgreSQL preparation consumes that same object.
 The target and runtime share one declaration instance per activation.
@@ -129,3 +129,22 @@ names, and explicit provider policy. These commands are bounded activations, not
 a continuously running service. The namespace and project are now
 `AspireFirst.Materialization` / `OrderMaterialization`; durable identities,
 `Shadow:*` configuration, and live PostgreSQL endpoint bindings are unchanged.
+
+### Model activation and runtime binding
+
+`OrderMaterializationApplication` activates the live `FulfillmentApplication` and
+`FulfillmentMaterializations` in one graph. Constructor dependencies resolve the
+same `FulfillmentQueries` instance. `IAuthoringModel.Complete` freezes the ordered
+materialization catalog before activation returns, without opening native clients.
+
+The base class is optional. Direct consumers can call
+`new MaterializationModelBuilder().Include(builder.Build().Prepare(impactPolicy))`
+and `Build()` to freeze the catalog, or keep using an individual prepared declaration.
+Duplicate semantic IDs are rejected; frozen catalogs cannot be mutated.
+
+`FulfillmentMaterializationBindings` contains only the example's native placement
+and limits. It returns Cohesive's `BoundMaterialization`, which borrows the resolved
+source/target/progress/work ports and owns no connections. The command host owns
+disposal. `MaterializationShadowExecution.RunAsync` consumes this shared binding;
+there is no application-specific runtime wrapper. Durable resource identities,
+shadow-only execution, and live PostgreSQL reads are unchanged.

@@ -15,8 +15,7 @@ public enum MaterializationShadowOperation
 public static class MaterializationShadowExecution
 {
     /// <summary>Executes one bounded shadow activation with stable retry identities.</summary>
-    /// <param name="resolved">Admitted native interpretations, borrowed for this invocation.</param>
-    /// <param name="workStore">Durable synchronization work authority.</param>
+    /// <param name="runtime">Admitted native ports, borrowed for this invocation.</param>
     /// <param name="operation">Baseline plus catch-up, or catch-up alone.</param>
     /// <param name="context">Invocation context, including cancellation.</param>
     /// <param name="attempt">Stable attempt identity and original start time.</param>
@@ -27,12 +26,13 @@ public static class MaterializationShadowExecution
     /// <exception cref="InvalidOperationException">Baseline initialization or a shard cannot complete.</exception>
     /// <remarks>Native resources remain caller-owned. Execution is resumable, not an unbounded polling loop.</remarks>
     public static async Task<MaterializationSynchronizationRunResult> RunAsync(
-        ResolvedMaterializationRebuildPlan resolved, IMaterializationSynchronizationWorkStore workStore,
+        BoundMaterialization runtime,
         MaterializationShadowOperation operation, OperationContext context, MaterializationRebuildAttempt attempt,
         MaterializationSynchronizationInvocationId invocation, MaterializationSynchronizationWorkerId worker)
     {
-        ArgumentNullException.ThrowIfNull(resolved);
-        ArgumentNullException.ThrowIfNull(workStore);
+        ArgumentNullException.ThrowIfNull(runtime);
+        var resolved = runtime.Resolved;
+        var workStore = runtime.WorkStore;
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(attempt);
         if (!Enum.IsDefined(operation)) throw new ArgumentOutOfRangeException(nameof(operation));

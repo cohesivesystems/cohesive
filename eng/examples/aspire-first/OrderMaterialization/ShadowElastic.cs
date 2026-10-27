@@ -14,7 +14,7 @@ internal static class ShadowElastic
         """;
 
     internal static async Task<ElasticMaterializationTarget> BindAsync(HttpClient http,
-        FulfillmentShadowDefinition definition, CancellationToken cancellationToken)
+        FulfillmentMaterializations definition, CancellationToken cancellationToken)
     {
         using var info = JsonDocument.Parse(await http.GetStringAsync("/", cancellationToken));
         var cluster = new ElasticClusterId(info.RootElement.GetProperty("cluster_uuid").GetString()!);
@@ -31,12 +31,12 @@ internal static class ShadowElastic
             new("fulfillment/order-details/shadow"), definition.Document.Definition.Id, "orders-shadow",
             "cohesive-order-shadow-generation-", ".cohesive-order-shadow-control",
             new(TemplateName, new("sha256", "aspire-first/elastic-template-json/v1",
-                Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Template)))), FulfillmentShadowRuntime.Authority),
-            new(FulfillmentShadowRuntime.Authority, "postgres-session-advisory-lock/order-shadow"),
+                Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Template)))), FulfillmentMaterializationBindings.Authority),
+            new(FulfillmentMaterializationBindings.Authority, "postgres-session-advisory-lock/order-shadow"),
             new(new("fulfillment/shadow/search/v1"), new("elastic/order-shadow"), new("elastic/order-shadow/placement"),
                 ElasticRelationQueryTargetProfile.Target, ElasticRelationQueryTargetProfile.ProfileId, "orders-shadow", []));
         var client = new ElasticsearchClient(new ElasticsearchClientSettings(http.BaseAddress!));
         return new(binding, ElasticMaterializationTargetPolicy.Default,
-            new ElasticElasticsearchRuntimeBinding(cluster, client, FulfillmentShadowRuntime.Authority));
+            new ElasticElasticsearchRuntimeBinding(cluster, client, FulfillmentMaterializationBindings.Authority));
     }
 }

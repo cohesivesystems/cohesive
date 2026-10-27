@@ -287,3 +287,18 @@ and inverse-impact acquisition plans from the same semantic relation;
 Relations source readers. The freight harness and the Aspire OrderShadow example
 share this recipe. Neither the recipe nor current-state enrichment promises a
 cross-source historical snapshot or promotes a generation automatically.
+
+### Materialization model declarations
+
+`MaterializationModel` is optional constructor-authoring syntax over
+`MaterializationModelBuilder`. Include immutable preparations produced by the
+existing `Materialization.Define(...).Build().Prepare(impactPolicy)` path.
+`Definition` freezes ordered membership once; model activation calls the same
+completion boundary. Duplicate semantic IDs fail during registration. Declaration
+and completion perform no native IO; each prepared document remains the semantic
+authority and the catalog adds no alternate format or IDs.
+
+Native preparation returns `BoundMaterialization`, containing the admitted
+partitioned compilation, resolved ports and synchronization work store. It borrows
+all native resources; the host owns their lifetimes. This runtime value is separate
+from model activation and can be created directly without a model subclass.

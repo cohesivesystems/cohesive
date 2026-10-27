@@ -14,23 +14,12 @@ using Npgsql.Replication;
 namespace AspireFirst.Materialization;
 
 /// <summary>Native shadow bindings borrow the host's pool; all progression is interpreted by Cohesive's existing executors.</summary>
-public sealed class FulfillmentShadowRuntime
+public static class FulfillmentMaterializationBindings
 {
     /// <summary>Dedicated local pgoutput publication.</summary>
     public const string Publication = "cohesive_order_shadow";
     /// <summary>Durable shadow state authority.</summary>
     public const string Authority = "aspire-first/order-shadow/v1";
-    /// <summary>Admitted rebuild, placement and partition evidence.</summary>
-    public MaterializationPartitionedRebuild Compilation { get; }
-    /// <summary>Native interpretations bound to the admitted plan.</summary>
-    public ResolvedMaterializationRebuildPlan Resolved { get; }
-    /// <summary>Durable progress and prepared-work store.</summary>
-    public PostgresMaterializationStateStore State { get; }
-
-    FulfillmentShadowRuntime(MaterializationPartitionedRebuild compilation, IMaterializationTarget target,
-        PostgresMaterializationStateStore state)
-    { Compilation = compilation; State = state; Resolved = compilation.Resolve(target, state); }
-
     /// <summary>Derives a stable PostgreSQL-safe slot name from a canonical input.</summary>
     /// <param name="input">Canonical relation acquisition input.</param>
     /// <returns>Dedicated replication slot name.</returns>
@@ -47,14 +36,14 @@ public sealed class FulfillmentShadowRuntime
     /// <param name="slotGeneration">Operator-owned slot incarnation, stable across restart.</param>
     /// <param name="cancellationToken">Cancels native preflight.</param>
     /// <returns>One reusable native interpretation with durable state.</returns>
-    public static async Task<FulfillmentShadowRuntime> BindAsync(FulfillmentApplication application, FulfillmentShadowDefinition definition,
+    public static async Task<BoundMaterialization> BindAsync(FulfillmentApplication application, FulfillmentMaterializations definition,
         NpgsqlDataSource database, string connectionString, IMaterializationTarget target,
         ReadOnlyMemory<byte> authenticationKey, string slotGeneration, CancellationToken cancellationToken)
     {
         var prepared = new PostgresMaterializationRelation(application.Storage.Bindings,
             definition.Prepared, FulfillmentDomain.PartitionField,
             new(new("fulfillment/shadow/physical/v1"), "fulfillment/shadow/v1", 100, 1000, 1000, 100, 100, 1));
-        var policy = new PostgresRelationQuerySourcePolicy(100, 1000, 100, FulfillmentShadowDefinition.MaximumBytes,
+        var policy = new PostgresRelationQuerySourcePolicy(100, 1000, 100, FulfillmentMaterializations.MaximumBytes,
             partitionScope: new(new(FulfillmentStoragePolicy.LogicalPartition), FulfillmentDomain.PartitionField,
                 FulfillmentStoragePolicy.LocalPartition));
         var native = new PostgresNpgsqlRuntimeBinding(application.Storage.Bindings.Database, database, Authority,
@@ -66,11 +55,12 @@ public sealed class FulfillmentShadowRuntime
                 beforeImageRequirement: PostgresLogicalReplicationBeforeImageRequirement.Required),
             new(readInactivityTimeout: TimeSpan.FromSeconds(3)), cancellationToken);
         var compilation = MaterializationPartitionedRebuildCompiler.Compile(definition.Document, prepared.Plan,
-            new(100, FulfillmentShadowDefinition.MaximumBytes, 100, FulfillmentShadowDefinition.MaximumBytes, 128,
+            new(100, FulfillmentMaterializations.MaximumBytes, 100, FulfillmentMaterializations.MaximumBytes, 128,
                 MaterializationRebuildProcessFactory.MaximumStartsPerActivation, MaterializationRebuildProcessFactory.MaximumParallelism, 16),
             "fulfillment-shadow", target.Descriptor, [partition], definition.Impact,
             new(new("fulfillment-shadow/capacity"), 1, ["postgres-session-advisory-lock/order-shadow"]),
             new(new("aspire-first/shadow", "1"), new("fulfillment/order-details/shadow")));
-        return new(compilation, target, new(database, new(Authority)));
+        var state = new PostgresMaterializationStateStore(database, new(Authority));
+        return new(compilation, target, state, state);
     }
 }
