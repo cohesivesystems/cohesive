@@ -34,13 +34,15 @@ jobs:
       - name: Verify native paging and durable ledger contracts
         env:
           COHESIVE_POSTGRES_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=orders;Username=postgres;Password=shadow-ci-only
-        run: dotnet test src/Cohesive.Tests -c Release -m:1 --filter 'FullyQualifiedName~PostgresMaterializationStateStoreTests|FullyQualifiedName~PostgresRelationQuerySourceReaderTests'
+        run: dotnet test src/Cohesive.Tests -c Release -m:1 --filter 'FullyQualifiedName~PostgresMaterializationStateStoreTests|FullyQualifiedName~PostgresRelationQuerySourceReaderTests' --logger 'trx;LogFileName=ledger-keyset.trx'
       - name: Retain test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: shadow-native-results
-          path: src/Cohesive.Adapters.Aspire.Tests/TestResults/*.trx
+          path: |
+            src/Cohesive.Adapters.Aspire.Tests/TestResults/*.trx
+            src/Cohesive.Tests/TestResults/*.trx
       - name: Clean up native dependencies
         if: always()
         run: docker rm -f shadow-postgres shadow-elastic

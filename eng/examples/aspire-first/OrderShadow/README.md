@@ -106,3 +106,9 @@ allocated 3,424 / 196,960 / 786,968 bytes per operation; canonical hashing alloc
 The canonical path still parses serialized JSON; it avoids the legacy full UTF-8
 hash input allocation by streaming canonical output. The regression bounds
 allocation growth, preserves array order and checks decimal/object equivalence.
+
+### Review compatibility notes
+
+The public partition binding uses `partition`/`Partition` instead of `tenant`/`Tenant`; named arguments and property accesses must be updated. Persisted shard and placement identifiers retain the historical `tenant/` prefix so the terminology cleanup does not rename saved progress.
+
+Baseline root reads now use `PostgresRelationQueryReadPolicy.MaximumRowsPerRead` rather than a hidden limit of 1000. Configure that policy explicitly to retain the previous bound. CDC source binding performs scoped deployment inspection and retains no open connection; stream enumeration owns and disposes its native connection. Existing publications must cover every declared input table; initialization rejects missing coverage instead of silently omitting changes.

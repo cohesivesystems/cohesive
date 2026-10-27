@@ -53,7 +53,7 @@ public sealed class FreightOrderRebuildPlanCompilerTests
         Assert.Equal(
             MaterializationRebuildPlanningJsonSerializer.GetCanonicalPlanSetBytes(forward.PlanSet),
             MaterializationRebuildPlanningJsonSerializer.GetCanonicalPlanSetBytes(reverse.PlanSet));
-        Assert.Equal(["partition/acme", "partition/northwind"], forward.Plan.Shards.Select(static shard => shard.Id.Value));
+        Assert.Equal(["tenant/acme", "tenant/northwind"], forward.Plan.Shards.Select(static shard => shard.Id.Value));
         Assert.Equal(8, forward.Plan.ChangeFeeds.Length);
         Assert.All(
             forward.Plan.ChangeFeeds.Where(feed => feed.Scope.Input == semantics.Root.Input.Id),

@@ -101,6 +101,8 @@ public sealed class PostgresMaterializationRelation
         var baselineReader = new PostgresRelationQuerySourceReader(Plan, Reads.Baseline,
             baselineBinding.Source, BaselineStorage, database, native, policy);
         var sources = new List<MaterializationPartitionSourceBinding>();
+        // CreateAsync performs scoped inspection only; sources retain factories, not open connections.
+        // Each later stream owns its connection for the lifetime of its async enumeration.
         foreach (var impactBinding in Reads.Impact.Placement.Bindings)
         {
             var isRoot = impactBinding.Input == root.Input.Id;

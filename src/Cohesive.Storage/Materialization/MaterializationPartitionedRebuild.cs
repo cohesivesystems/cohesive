@@ -25,7 +25,7 @@ public sealed class MaterializationPartitionSourceBinding
 {
     /// <summary>Creates one exact source binding.</summary>
     /// <param name="input">Canonical Relations acquisition input implemented by the source.</param>
-    /// <param name="scope">Exact provider physical-plan, placement, partition partition, and ordering scope.</param>
+    /// <param name="scope">Exact provider physical-plan, placement, logical partition, and ordering scope.</param>
     /// <param name="source">Paged baseline and positioned change source implementing the binding.</param>
     /// <exception cref="ArgumentNullException"><paramref name="scope"/> or <paramref name="source"/> is null.</exception>
     /// <exception cref="ArgumentException">The input or physical source identity differs from the exact scope.</exception>
@@ -51,7 +51,7 @@ public sealed class MaterializationPartitionSourceBinding
     /// <summary>Canonical Relations acquisition input implemented by the source.</summary>
     public RelationQueryInputId Input { get; }
 
-    /// <summary>Exact provider physical-plan, placement, partition partition, and ordering scope.</summary>
+    /// <summary>Exact provider physical-plan, placement, logical partition, and ordering scope.</summary>
     public MaterializationSourceScope Scope { get; }
 
     /// <summary>Paged baseline and positioned change source implementing the binding.</summary>
@@ -323,7 +323,7 @@ public static class MaterializationPartitionedRebuildCompiler
         }).ToImmutableArray();
 
         var subjects = partitions
-            .Select(static partition => new MaterializationPlacementSubjectId($"partition/{partition.Partition}"))
+            .Select(static partition => new MaterializationPlacementSubjectId($"tenant/{partition.Partition}"))
             .ToImmutableArray();
         var pool = MaterializationBackendPoolDocument.FromDefinition(new(
             id: new($"materialization/{provider}/partition-pool/v1"),
@@ -499,7 +499,8 @@ public static class MaterializationPartitionedRebuildCompiler
             impactRuntimesByFeed: impactRuntimesByFeed.ToImmutable());
     }
 
-    static MaterializationRebuildShardId Shard(string partition) => new($"partition/{partition}");
+    // Persisted identity namespace predates the public partition terminology; retain it for resume.
+    static MaterializationRebuildShardId Shard(string partition) => new($"tenant/{partition}");
 
     static ChannelRealizationPlanFingerprint Channel(MaterializationSourceScope scope)
     {

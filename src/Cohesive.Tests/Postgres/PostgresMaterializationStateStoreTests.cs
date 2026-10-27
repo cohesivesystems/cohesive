@@ -78,6 +78,32 @@ public sealed class PostgresMaterializationStateStoreTests
     }
 
     [PostgresFact]
+    public async Task Existing_publication_rejects_new_unpublished_table_and_rolls_back_identity_change()
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);
+        var name = "coverage_" + Guid.NewGuid().ToString("N");
+        await using var setup = database.CreateCommand($"CREATE SCHEMA {name}; CREATE TABLE {name}.original(id text); CREATE TABLE {name}.added(id text); CREATE PUBLICATION {name} FOR TABLE {name}.original");
+        await setup.ExecuteNonQueryAsync();
+        try
+        {
+            var state = new PostgresMaterializationStateStore(database, new PostgresMaterializationStateStoreOptions(name));
+            await PostgresLogicalReplicationPreparation.InitializeAsync(database,
+                [new Cohesive.Adapters.Sql.SqlQualifiedTable(name, "original")], name, [], state);
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                PostgresLogicalReplicationPreparation.InitializeAsync(database,
+                    [new Cohesive.Adapters.Sql.SqlQualifiedTable(name, "original"), new(name, "added")], name, [], state));
+            Assert.Contains("does not cover table", error.Message);
+            await using var identity = database.CreateCommand($"SELECT relreplident::text FROM pg_class WHERE oid = '{name}.added'::regclass");
+            Assert.Equal("d", await identity.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await using var cleanup = database.CreateCommand($"DROP PUBLICATION {name}; DROP SCHEMA {name} CASCADE");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
     public async Task Operator_lease_releases_and_broken_unlock_does_not_mask_failure()
     {
         var connection = Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!;

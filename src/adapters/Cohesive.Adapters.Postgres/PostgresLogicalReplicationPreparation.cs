@@ -14,7 +14,7 @@ public static class PostgresLogicalReplicationPreparation
     /// <param name="state">Configured progress authority protecting against lost-WAL recreation.</param>
     /// <param name="cancellationToken">Cancels native preparation.</param>
     /// <returns>Completion after explicit preparation.</returns>
-    /// <exception cref="InvalidOperationException">A slot is missing while durable state exists.</exception>
+    /// <exception cref="InvalidOperationException">A slot is missing while durable state exists, or an existing publication omits a declared table.</exception>
     public static async Task InitializeAsync(NpgsqlDataSource database, IEnumerable<SqlQualifiedTable> tables,
         string publication, IEnumerable<string> slots, PostgresMaterializationStateStore state,
         CancellationToken cancellationToken = default)
@@ -27,7 +27,7 @@ public static class PostgresLogicalReplicationPreparation
         await using (var connection = await database.OpenConnectionAsync(cancellationToken))
         {
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-            using var identifiers = new NpgsqlCommandBuilder();
+            var publicationSql = PostgresSqlDialect.Identifier(publication).ToSql(PostgresSqlDialect.Instance);
             var names = tables.Select(table => table.ToSql(PostgresSqlDialect.Instance)).ToArray();
             foreach (var name in names)
             {
@@ -38,9 +38,24 @@ public static class PostgresLogicalReplicationPreparation
             exists.Parameters.AddWithValue(publication);
             if (!(bool)(await exists.ExecuteScalarAsync(cancellationToken))!)
             {
-                await using var createPublication = new NpgsqlCommand("CREATE PUBLICATION " + identifiers.QuoteIdentifier(publication) +
+                await using var createPublication = new NpgsqlCommand("CREATE PUBLICATION " + publicationSql +
                     " FOR TABLE " + string.Join(", ", names) + " WITH (publish = 'insert, update, delete')", connection, transaction);
                 await createPublication.ExecuteNonQueryAsync(cancellationToken);
+            }
+            // Resolve qualified and search-path-relative table names exactly as the DDL does.
+            foreach (var name in names)
+            {
+                await using var coverage = new NpgsqlCommand("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM pg_publication_tables p
+                        JOIN pg_namespace n ON n.nspname = p.schemaname
+                        JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = p.tablename
+                        WHERE p.pubname = $1 AND c.oid = to_regclass($2))
+                    """, connection, transaction);
+                coverage.Parameters.AddWithValue(publication);
+                coverage.Parameters.AddWithValue(name);
+                if (!(bool)(await coverage.ExecuteScalarAsync(cancellationToken))!)
+                    throw new InvalidOperationException($"Publication '{publication}' does not cover table {name}. Explicitly update publication coverage before initializing replication.");
             }
             await transaction.CommitAsync(cancellationToken);
             foreach (var input in slots)
