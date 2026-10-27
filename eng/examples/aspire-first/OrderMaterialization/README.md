@@ -142,9 +142,23 @@ The base class is optional. Direct consumers can call
 and `Build()` to freeze the catalog, or keep using an individual prepared declaration.
 Duplicate semantic IDs are rejected; frozen catalogs cannot be mutated.
 
-`FulfillmentMaterializationBindings` contains only the example's native placement
-and limits. It returns Cohesive's `BoundMaterialization`, which borrows the resolved
+`FulfillmentMaterializationStorage : StorageModel` declares `OrderDetails` through
+`Storage.Define` using `PostgresMaterializationStorage`. Its named options own
+partition/read/rebuild policies, publication, stable slot naming, checkpoint
+schema/authority, capacity evidence and provenance. The adapter derives source
+tables, reader sets and rebuild composition. `FulfillmentMaterializations.OrderDetails`
+is the prepared declaration; there are no model-wide Document/Impact forwarding properties.
+The native binding returns Cohesive's `BoundMaterialization`, which borrows the
 source/target/progress/work ports and owns no connections. The command host owns
 disposal. `MaterializationShadowExecution.RunAsync` consumes this shared binding;
 there is no application-specific runtime wrapper. Durable resource identities,
 shadow-only execution, and live PostgreSQL reads are unchanged.
+
+Source initialization is explicit through `model.Storage.OrderDetails.InitializeSourcesAsync`;
+it derives publication tables from the prepared source mappings, rather than a
+hand-maintained entity list. Binding checks native database identity and authority
+before source admission and performs no DDL. Elasticsearch template policy stays
+native and the host supplies an admitted target; the PostgreSQL adapter does not
+acquire an Elasticsearch dependency. Slot recipes are evaluated once at declaration,
+and invalid or duplicate native names fail before IO. Existing publication, slot,
+authority and durable progress identities are retained.

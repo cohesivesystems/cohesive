@@ -422,3 +422,20 @@ exact decimal values and sequence-preserving arrays. PostgreSQL `jsonb` may
 reorder properties without breaking integrity. Valid legacy `sha256-v1` rows are
 verified with their original algorithm and upgraded on write; an already-invalid
 legacy row requires explicit recovery and is never silently re-signed.
+
+### Storage-owned materialization
+
+A `StorageModel` can register `PostgresMaterializationStorage` through the existing
+`Storage.Define` builder. Supply a `PreparedMaterialization`, existing persistence
+bindings and `PostgresMaterializationStorageOptions`: explicit partition, planning,
+read and rebuild bounds, publication/slot naming, checkpoint store, provenance and
+capacity evidence. Construction prepares offline plans and freezes slot names;
+it performs no native IO. The same API works without a StorageModel subclass.
+
+`InitializeSourcesAsync` is explicit opt-in publication/slot/checkpoint setup using
+derived source tables. It does not initialize product tables or the external target.
+`BindAsync` checks the supplied runtime database and authority before native
+preflight, borrows its pool/replication factory and an admitted target, and returns
+`BoundMaterialization`. No DDL, client disposal, promotion or live route changes
+are implicit in binding. Host/client ownership and target-specific configuration
+remain at their existing native boundaries.

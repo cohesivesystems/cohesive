@@ -11,6 +11,7 @@ using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Physical;
 using Cohesive.Storage.Materialization;
 using Npgsql;
+using Npgsql.Replication;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
@@ -23,15 +24,17 @@ public sealed class FulfillmentShadowTests
     {
         var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
         var model = application.Materializations;
-        Assert.Same(model.Prepared, Assert.Single(model.Definition));
+        Assert.Same(model.OrderDetails, Assert.Single(model.Definition));
         Assert.Equal(model.Definition, model.Definition);
+        Assert.Same(model.OrderDetails, application.Storage.OrderDetails.Materialization);
+        Assert.Same(application.Storage.OrderDetails, Assert.Single(application.Storage.Definition));
         Assert.Same(application.Orders.Queries.OrderDetailsRelation.Definition,
-            model.Prepared.Document.Definition.Relation.CompilationRequest);
+            model.OrderDetails.Document.Definition.Relation.CompilationRequest);
         var builder = new MaterializationModelBuilder();
-        Assert.Same(model.Prepared, builder.Include(model.Prepared));
-        Assert.Throws<ArgumentException>(() => builder.Include(model.Prepared));
-        Assert.Same(model.Prepared, Assert.Single(builder.Build()));
-        Assert.Throws<InvalidOperationException>(() => builder.Include(model.Prepared));
+        Assert.Same(model.OrderDetails, builder.Include(model.OrderDetails));
+        Assert.Throws<ArgumentException>(() => builder.Include(model.OrderDetails));
+        Assert.Same(model.OrderDetails, Assert.Single(builder.Build()));
+        Assert.Throws<InvalidOperationException>(() => builder.Include(model.OrderDetails));
     }
 
     [Fact]
@@ -44,7 +47,7 @@ public sealed class FulfillmentShadowTests
 
     public sealed class CompletionProbe : MaterializationModel
     {
-        public void Add(FulfillmentQueries queries) => Materializations.Include(new FulfillmentMaterializations(queries).Prepared);
+        public void Add(FulfillmentQueries queries) => Materializations.Include(new FulfillmentMaterializations(queries).OrderDetails);
     }
 
     [Fact]
@@ -55,9 +58,9 @@ public sealed class FulfillmentShadowTests
         var live = model.Queries.OrderDetails.CompilationRequest;
         var definition = application.Materializations;
         var prepared = new PostgresMaterializationRelation(model.Storage.Bindings, model.Queries.OrderDetailsRelation.Definition,
-            definition.Impact, FulfillmentDomain.PartitionField, new(new("test/shadow"), "test/v1", 100, 1000, 1000, 100, 100, 1));
+            definition.OrderDetails.Impact, FulfillmentDomain.PartitionField, new(new("test/shadow"), "test/v1", 100, 1000, 1000, 100, 100, 1));
         Assert.Same(live, model.Queries.OrderDetails.CompilationRequest);
-        Assert.Equal(RelationQueryCompiledPlanReferenceFingerprinter.Compute(definition.Document.Definition.Relation.CompiledPlan),
+        Assert.Equal(RelationQueryCompiledPlanReferenceFingerprinter.Compute(definition.OrderDetails.Document.Definition.Relation.CompiledPlan),
             RelationQueryCompiledPlanReferenceFingerprinter.Compute(prepared.Reads.Baseline.Plan));
         var root = Assert.Single(prepared.Reads.Baseline.Placement.Bindings.Where(binding =>
             binding.Kind == RelationQuerySourcePlacementBindingKind.SourceSet));
@@ -75,6 +78,32 @@ public sealed class FulfillmentShadowTests
         Assert.NotNull(RelationQueryPlacement.ForPhysicalReads(prepared.Plan, prepared.Reads.Impact));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Storage_declaration_rejects_invalid_slots_or_missing_partition_before_io(bool duplicateSlots)
+    {
+        var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var error = Assert.Throws<ArgumentException>(() => new PostgresMaterializationStorage(application.Orders.Storage.Bindings,
+            application.Materializations.OrderDetails, new()
+            {
+                PartitionField = FulfillmentDomain.PartitionField,
+                Partition = "local",
+                Planning = new(new("test/storage"), "test/v1", 100, 1000, 1000, 100, 100, 1),
+                Reads = new(100, 1000, 100, 1_048_576, partitionScope: duplicateSlots
+                    ? new(new("local"), FulfillmentDomain.PartitionField, "local") : null),
+                Rebuild = new(100, 1_048_576, 100, 1_048_576, 128, 1, 1, 16),
+                Publication = "test_publication",
+                Slot = _ => "duplicate_slot",
+                Replication = new(),
+                Checkpoints = new("test/storage"),
+                Provider = "test/storage",
+                Capacity = new(new("test/capacity"), 1, ["test/single-writer"]),
+                Provenance = new(new("test/storage", "1"), new("test/storage"))
+            }));
+        Assert.Contains(duplicateSlots ? "distinct" : "partition scope", error.Message);
+    }
+
     [ShadowFact]
     public async Task Native_shadow_resumes_then_tracks_updates_reparenting_and_deletes_without_changing_live_reads()
     {
@@ -86,9 +115,14 @@ public sealed class FulfillmentShadowTests
         await using var database = NpgsqlDataSource.Create(connection);
         using var http = new HttpClient { BaseAddress = new(Environment.GetEnvironmentVariable("COHESIVE_SHADOW_ELASTIC")!) };
         var definition = application.Materializations;
-        await ShadowBootstrap.InitializeAsync(model, definition, database, http, ct);
-        var target = await ShadowElastic.BindAsync(http, definition, ct);
-        var runtime = await FulfillmentMaterializationBindings.BindAsync(model, definition, database, connection, target, new byte[32], "test-slots/v1", ct);
+        await ShadowBootstrap.InitializeAsync(application, database, http, ct);
+        var target = await ShadowElastic.BindAsync(http, definition.OrderDetails, ct);
+        var native = new PostgresNpgsqlRuntimeBinding(model.Storage.Bindings.Database, database,
+            FulfillmentMaterializationStorage.Authority, logicalReplicationConnectionFactory: () => new LogicalReplicationConnection(connection));
+        var foreign = new PostgresNpgsqlRuntimeBinding(model.Storage.Bindings.Database, database,
+            "foreign-authority", logicalReplicationConnectionFactory: () => new LogicalReplicationConnection(connection));
+        await Assert.ThrowsAsync<ArgumentException>(() => application.Storage.OrderDetails.BindAsync(foreign, target, new byte[32], "test-slots/v1", ct));
+        var runtime = await application.Storage.OrderDetails.BindAsync(native, target, new byte[32], "test-slots/v1", ct);
         var id = Guid.NewGuid().ToString("N");
         var first = "first-" + id;
         var second = "second-" + id;
@@ -110,7 +144,7 @@ public sealed class FulfillmentShadowTests
             await Assert.ThrowsAsync<TestInterruption>(() => new MaterializationRebuildExecutor(runtime.Resolved, interruption)
                 .RunShardAsync(context, attempt, Assert.Single(runtime.Compilation.Plan.Shards).Id));
             // Rebind all native interpretations, simulating restart with the same fingerprint, attempt and key.
-            runtime = await FulfillmentMaterializationBindings.BindAsync(model, definition, database, connection, target, new byte[32], "test-slots/v1", ct);
+            runtime = await application.Storage.OrderDetails.BindAsync(native, target, new byte[32], "test-slots/v1", ct);
             rebuild = new(runtime.Resolved);
             Assert.Equal(MaterializationRebuildInitializationDisposition.Ready, (await rebuild.BeginAttemptAsync(context, attempt)).Disposition);
             Assert.Equal(MaterializationRebuildShardDisposition.BaselineCompleteCatchUpRequired,

@@ -10,4 +10,6 @@ public sealed class OrderMaterializationApplication : ApplicationModel
     public required FulfillmentApplication Orders { get; init; }
     /// <summary>Materializations resolved from the same query model instance.</summary>
     public required FulfillmentMaterializations Materializations { get; init; }
+    /// <summary>Optional native shadow placement and recovery configuration.</summary>
+    public required FulfillmentMaterializationStorage Storage { get; init; }
 }

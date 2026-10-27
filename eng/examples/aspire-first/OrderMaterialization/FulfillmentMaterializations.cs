@@ -26,14 +26,10 @@ public sealed class FulfillmentMaterializations : MaterializationModel
             .WithFreshnessPolicy(new(maximumLagMilliseconds: 300_000))
             .WithProvenance(new(new("aspire-first/shadow", "1"), new("fulfillment/order-details/shadow"), DocumentOrigin.Generated))
             .Build();
-        Prepared = Materializations.Include(declaration.Prepare(new(new("fulfillment/order-details/shadow/impact/v1"),
+        OrderDetails = Materializations.Include(declaration.Prepare(new(new("fulfillment/order-details/shadow/impact/v1"),
             [MaterializationImpactStrategyKind.InverseTraversal], MaximumItems, MaximumBytes)));
     }
 
-    /// <summary>Shared admitted declaration and change-impact preparation.</summary>
-    public PreparedMaterialization Prepared { get; }
-    /// <summary>Canonical shadow update and recovery requirements.</summary>
-    public MaterializationDocument Document => Prepared.Document;
-    /// <summary>Compiled contributor-to-root impact routes.</summary>
-    public MaterializationImpactPlan Impact => Prepared.Impact;
+    /// <summary>Order-details declaration and derived impact plan.</summary>
+    public PreparedMaterialization OrderDetails { get; }
 }
