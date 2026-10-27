@@ -1,0 +1,16 @@
+[
+  {"name":"empty-open","completion":"Open","effects":[],"verdict":"Inconclusive","uniqueEffects":0},
+  {"name":"empty-closed","completion":"ClosedComplete","effects":[],"verdict":"Satisfied","uniqueEffects":0},
+  {"name":"one-open","completion":"Open","effects":[["op1","e1"]],"verdict":"Inconclusive","uniqueEffects":1},
+  {"name":"one-closed","completion":"ClosedComplete","effects":[["op1","e1"]],"verdict":"Satisfied","uniqueEffects":1},
+  {"name":"duplicate-telemetry","completion":"ClosedComplete","effects":[["op1","e1"],["op1","e1"]],"verdict":"Satisfied","uniqueEffects":1},
+  {"name":"distinct-operations","completion":"ClosedComplete","effects":[["op1","e1"],["op2","e2"]],"verdict":"Satisfied","uniqueEffects":2},
+  {"name":"double-commit-open","completion":"Open","effects":[["op1","e1"],["op1","e2"]],"verdict":"Violated","uniqueEffects":2},
+  {"name":"double-commit-incomplete","completion":"ClosedIncomplete","effects":[["op1","e1"],["op1","e2"]],"verdict":"Violated","uniqueEffects":2},
+  {"name":"missing-operation","completion":"ClosedComplete","effects":[[null,"e1"]],"verdict":"Inconclusive","uniqueEffects":0},
+  {"name":"missing-effect","completion":"ClosedComplete","effects":[["op1",null]],"verdict":"Inconclusive","uniqueEffects":0},
+  {"name":"missing-with-violation","completion":"ClosedComplete","effects":[[null,null],["op1","e1"],["op1","e2"]],"verdict":"Violated","uniqueEffects":2},
+  {"name":"contradictory-effect","completion":"ClosedComplete","effects":[["op1","e1"],["op2","e1"]],"verdict":"Inconclusive","uniqueEffects":1,"diagnostic":"assurance.observation.effect.conflict"},
+  {"name":"violation-then-contradiction","completion":"ClosedComplete","effects":[["op1","e1"],["op1","e2"],["op2","e1"]],"verdict":"Inconclusive","uniqueEffects":2,"diagnostic":"assurance.observation.effect.conflict"},
+  {"name":"empty-incomplete","completion":"ClosedIncomplete","effects":[],"verdict":"Inconclusive","uniqueEffects":0}
+]
