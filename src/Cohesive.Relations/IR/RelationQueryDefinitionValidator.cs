@@ -851,6 +851,45 @@ public static partial class RelationQueryDefinitionValidator
                     ValidateQuery(query);
                     break;
             }
+            ValidateAssembly();
+        }
+
+        void ValidateAssembly()
+        {
+            if (definition.Assembly is not { } assembly) return;
+            try
+            {
+                assembly.Validate();
+                var output = definition switch
+                {
+                    QueryDefinition { Results.Length: 1 } query when query.Results[0] is RowsQueryResultDefinition rows && rows.Id == assembly.Result => rows.Input,
+                    RelationDefinition { Output.Mode: RelationOutputMode.ManyPerRoot, Body.Parameters.Length: 0 } relation => relation.Output.Node,
+                    _ => throw new ArgumentException("Nested assembly requires one projected row branch, or a parameter-free rooted many-row relation.")
+                };
+                if (!nodes.TryGetValue(output, out var node) || node is not ProjectQueryNode projection)
+                    throw new ArgumentException("Nested assembly requires a projected row branch.");
+                var slots = projection.Assignments.Where(assignment => assignment is not null).Select(assignment => assignment.Target).ToHashSet();
+                var references = assembly.Fields.Select(field => field.Source)
+                    .Concat(assembly.Collections.SelectMany(collection => collection.Fields.Select(field => field.Source)))
+                    .Concat(assembly.Collections.Select(collection => collection.Identity)).Append(assembly.Identity);
+                if (references.Any(path => !slots.Contains(path)))
+                    throw new ArgumentException("Nested assembly references an undeclared row slot.");
+                if (definition is RelationDefinition rooted)
+                {
+                    if (rooted.Body.Nodes.Any(candidate => candidate is not (SourceQueryNode or FilterQueryNode or TraverseRelationshipQueryNode or ProjectQueryNode))
+                        || rooted.Body.Nodes.OfType<SourceQueryNode>().Count() != 1)
+                        throw new ArgumentException("Nested rooted relations currently require one root source with filters, relationship traversals and projections; cross-root operators are unsupported.");
+                    var identities = projection.Assignments.Where(assignment => assignment is not null && assignment.Target == assembly.Identity).ToArray();
+                    if (identities.Length != 1) throw new ArgumentException("Nested relation identity must have exactly one projection assignment.");
+                    var identity = identities[0].Value;
+                    if (identity is not FieldExpr field || field.Binding != rooted.RootBinding)
+                        throw new ArgumentException("Nested relation identity must be a direct field of its root binding.");
+                }
+            }
+            catch (ArgumentException error)
+            {
+                Add(code: "relationQuery.query.assemblyInvalid", message: error.Message, location: "/definition/assembly");
+            }
         }
 
         void ValidateRelation(RelationDefinition relation)
@@ -998,27 +1037,6 @@ public static partial class RelationQueryDefinitionValidator
                     code: "relationQuery.query.resultsEmpty",
                     message: "A query definition must declare at least one result.",
                     location: "/definition/results");
-            }
-
-            if (query.Assembly is { } assembly)
-            {
-                try
-                {
-                    assembly.Validate();
-                    if (results.Length != 1 || results[0] is not RowsQueryResultDefinition rowResult || rowResult.Id != assembly.Result
-                        || !nodes.TryGetValue(rowResult.Input, out var rowInput) || rowInput is not ProjectQueryNode projection)
-                        throw new ArgumentException("Nested assembly requires one projected row result.");
-                    var slots = projection.Assignments.Where(assignment => assignment is not null).Select(assignment => assignment.Target).ToHashSet();
-                    var references = assembly.Fields.Select(field => field.Source)
-                        .Concat(assembly.Collections.SelectMany(collection => collection.Fields.Select(field => field.Source)))
-                        .Concat(assembly.Collections.Select(collection => collection.Identity)).Append(assembly.Identity);
-                    if (references.Any(path => !slots.Contains(path)))
-                        throw new ArgumentException("Nested assembly references an undeclared row slot.");
-                }
-                catch (ArgumentException exception)
-                {
-                    Add(code: "relationQuery.query.assemblyInvalid", message: exception.Message, location: "/definition/assembly");
-                }
             }
 
             HashSet<QueryResultId> ids = [];

@@ -12,22 +12,22 @@ public sealed class FulfillmentQueries : QueryModel
     /// <param name="domain">Shared entity and relationship authority.</param>
     public FulfillmentQueries(FulfillmentDomain domain)
     {
+        var query = RelationQuery.Expression();
+        var orders = query.Source(domain.Orders).Where(order => order.Partition == FulfillmentStoragePolicy.LocalPartition);
+        var reservations = orders.TraverseInverse(domain.ReservationOrder);
+        var inventory = reservations.Traverse(domain.ReservationItem);
+        OrderDetailsRelation = query.SingleOrDefault<OrderDetails>()
+            .From(inventory)
+            .Key(orders, order => order.Id, result => result.Id)
+            .Field(result => result.Status, orders, order => order.Status)
+            .Collection(result => result.Reservations, reservations, reservation => reservation.Id, item => item.Id,
+                items => items
+                    .Field(result => result.Sku, inventory, item => item.Sku)
+                    .Field(result => result.Quantity, reservations, reservation => reservation.Quantity)
+                    .Field(result => result.AvailableStock, inventory, item => item.Available))
+            .BuildRelation(new("fulfillment/order-details/relation"));
+        OrderDetails = Query(OrderDetailsRelation.ReadById(new("fulfillment/order-details")));
         var queries = Queries.WithInput<string>("orderId");
-        OrderDetails = queries.SingleOrDefault<OrderDetails>("fulfillment/order-details", (query, orderId, output) =>
-        {
-            var orders = OrdersById(query, orderId, domain);
-            var reservations = orders.TraverseInverse(domain.ReservationOrder);
-            var inventory = reservations.Traverse(domain.ReservationItem);
-            return output
-                .From(inventory)
-                .Key(orders, order => order.Id, result => result.Id)
-                .Field(result => result.Status, orders, order => order.Status)
-                .Collection(result => result.Reservations, reservations, reservation => reservation.Id, item => item.Id,
-                    items => items
-                        .Field(result => result.Sku, inventory, item => item.Sku)
-                        .Field(result => result.Quantity, reservations, reservation => reservation.Quantity)
-                        .Field(result => result.AvailableStock, inventory, item => item.Available));
-        });
 
         ReservationAvailability = queries.Array("fulfillment/reservation-availability", (query, orderId) =>
         {
@@ -41,6 +41,9 @@ public sealed class FulfillmentQueries : QueryModel
                     row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available));
         });
     }
+
+    /// <summary>Shared rooted definition for live keyed reads and per-root materialization hydration.</summary>
+    public RootedRelation<OrderDetails> OrderDetailsRelation { get; }
 
     /// <summary>Canonical query plus portable nested-result assembly; no compilation or PostgreSQL configuration.</summary>
     public RelationQuery<string, OrderDetails?> OrderDetails { get; }

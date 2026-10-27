@@ -1,3 +1,4 @@
+using Cohesive.Relations.IR;
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Control;
@@ -207,6 +208,11 @@ public sealed record MaterializationRelationReference
 
     /// <summary>Canonical complete relation output selected for materialization.</summary>
     public RelationQueryOutputReference Output { get; }
+
+    /// <summary>Shape retained by the target after optional canonical per-root nested assembly.</summary>
+    [JsonIgnore]
+    public QualifiedShapeId ValueShape => CompilationRequest.DefinitionDocument.Definition is RelationDefinition relation ? relation.ValueShape : Output.Shape;
+
 
     /// <summary>Compiles one exact request and selects a canonical output by identity.</summary>
     /// <param name="request">Exact Relations compilation request to retain.</param>

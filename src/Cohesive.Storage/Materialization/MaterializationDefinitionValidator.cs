@@ -212,7 +212,7 @@ public static class MaterializationDefinitionValidator
             return;
         }
 
-        if (relationDefinition.Output.Mode is RelationOutputMode.ManyPerRoot or RelationOutputMode.Set
+        if (relationDefinition.EffectiveOutputMode is RelationOutputMode.ManyPerRoot or RelationOutputMode.Set
             && relationDefinition.Output.Key is null)
         {
             diagnostics.Add(Error(

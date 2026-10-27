@@ -147,11 +147,12 @@ public static class RelationQueryStaticCompiler
         }
 
         if (!diagnostics.Any(static diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
-            && request.DefinitionDocument.Definition is QueryDefinition { Assembly: { } assembly } query)
+            && request.DefinitionDocument.Definition is { Assembly: { } assembly } nested)
         {
             try
             {
-                var projection = (ProjectQueryNode)query.Body.Nodes.Single(node => node.Id == query.Results[0].Input);
+                var outputNode = nested is QueryDefinition query ? query.Results[0].Input : ((RelationDefinition)nested).Output.Node;
+                var projection = (ProjectQueryNode)nested.Body.Nodes.Single(node => node.Id == outputNode);
                 var rowGraph = request.ShapeDocuments.SingleOrDefault(document => document.Graph.Id == projection.ResultShape.GraphId)?.Graph;
                 var resultGraph = request.ShapeDocuments.SingleOrDefault(document => document.Graph.Id == assembly.Shape.GraphId)?.Graph;
                 if (rowGraph is null || !rowGraph.TryGetShape(projection.ResultShape, out var rowShape) || resultGraph is null)

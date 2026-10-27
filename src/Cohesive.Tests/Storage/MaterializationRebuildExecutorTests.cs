@@ -728,14 +728,16 @@ public sealed partial class MaterializationRebuildExecutorTests
         IMaterializationExecutionBoundaryObserver? boundaryObserver = null,
         int maximumPageItems = 2,
         int maximumPagesPerShard = 10,
-        bool transactionAlignedChangeDelivery = false)
+        bool transactionAlignedChangeDelivery = false,
+        RelationQueryCompilationRequest? request = null)
     {
-        RelationQueryCompilationRequest compilationRequest = new(
+        RelationQueryCompilationRequest compilationRequest = request ?? new(
             FederatedLoadRelationFixture.RelationDocument,
             FederatedLoadRelationFixture.ShapeGraphDocuments,
             FederatedLoadRelationFixture.RelationshipCatalogDocument);
-        var semantic = FederatedLoadPhysicalExecutionFixture.Create(
-            FederatedLoadRelationFixture.RelationDocument);
+        var semantic = request is null
+            ? FederatedLoadPhysicalExecutionFixture.Create(FederatedLoadRelationFixture.RelationDocument)
+            : FederatedLoadPhysicalExecutionFixture.Create(RelationQueryStaticCompiler.Compile(request).Plan!);
         var root = Assert.Single(semantic.Plan.InputContract.Sources);
         var output = Assert.Single(
             semantic.Plan.RequirementGraph.Outputs,
