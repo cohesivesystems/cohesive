@@ -129,8 +129,9 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             FreightOrderMaterializationReplicaDialects.Get("postgres"),
             semantics);
         var valid = Bindings(semantics, "postgres", physical, ["acme", "northwind"]);
-        var mixed = new FreightOrderRebuildTenantBinding(
-            tenant: "acme",
+        var mixed = new MaterializationPartitionBinding(
+            partition: "acme",
+            logicalPartition: FreightOrderRebuildPlanCompiler.LogicalPartition("acme"),
             rootRead: valid[1].RootRead,
             hydrator: valid[1].Hydrator,
             sourceBindings: valid[1].Sources,
@@ -216,7 +217,7 @@ public sealed class FreightOrderRebuildPlanCompilerTests
             string.Join(Environment.NewLine, compilation.Diagnostics.Select(static diagnostic => diagnostic.Message)));
     }
 
-    static ImmutableArray<FreightOrderRebuildTenantBinding> Bindings(
+    static ImmutableArray<MaterializationPartitionBinding> Bindings(
         FreightOrderMaterializationSemantics semantics,
         string provider,
         Program.ProviderPlan physical,
@@ -249,7 +250,7 @@ public sealed class FreightOrderRebuildPlanCompilerTests
                     var source = new InMemoryMaterializationSource(new(
                         relationReader: reader,
                         capabilityProfile: profileBySource[placement.Source]));
-                    return new FreightOrderRebuildSourceBinding(
+                    return new MaterializationPartitionSourceBinding(
                         input: requirement.Input,
                         scope: new(
                             physicalPlan: physicalPlan,
@@ -259,8 +260,9 @@ public sealed class FreightOrderRebuildPlanCompilerTests
                             orderingScope: new($"{provider}/{tenant}/{Uri.EscapeDataString(requirement.Input.Value)}/ordering")),
                         source: source);
                 }).ToImmutableArray();
-                return new FreightOrderRebuildTenantBinding(
-                    tenant: tenant,
+                return new MaterializationPartitionBinding(
+                    partition: tenant,
+                    logicalPartition: FreightOrderRebuildPlanCompiler.LogicalPartition(tenant),
                     rootRead: Program.CreateRootRead(physical, semantics.Root),
                     hydrator: new TestHydrator(
                         plan: RelationQueryCompiledPlanReference.From(semantics.Plan),

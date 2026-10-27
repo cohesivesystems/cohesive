@@ -402,3 +402,50 @@ client or claim live validation. Custom history configurations must expose these
 Custom implementations must expose the same policies used by their history preparation;
 the built-in Marten configuration already does so. Conflicting policies for the same
 resource are rejected during offline service storage admission, before native preparation.
+
+### Rooted shadow materialization
+
+`PostgresMaterializationRelation` derives hydration, baseline and inverse-impact
+read bindings from an existing rooted relation and persistence mappings.
+`PostgresMaterializationImpactSource` combines preflighted pgoutput delivery with
+the capabilities of actual same-partition readers; optional current-state root
+enrichment is explicit and does not imply snapshot reconstruction. See the
+[Aspire shadow example](../../../eng/examples/aspire-first/OrderShadow/README.md).
+
+Materialization baseline continuation uses one native `C` text ordering for both
+SQL ordering and exclusive keyset predicates. It does not require or advertise
+CLR ordinal equivalence for arbitrary Unicode strings. Semantic query sorting
+continues to require its own declared ordering evidence.
+
+Durable ledger content uses `sha256-canonical-v2` over canonical JSON object order,
+exact decimal values and sequence-preserving arrays. PostgreSQL `jsonb` may
+reorder properties without breaking integrity. Valid legacy `sha256-v1` rows are
+verified with their original algorithm and upgraded on write; an already-invalid
+legacy row requires explicit recovery and is never silently re-signed.
+
+### Storage-owned materialization
+
+A `StorageModel` can register `PostgresMaterializationStorage` through the existing
+`Storage.Define` builder. Supply a `PreparedMaterialization`, existing persistence
+bindings and `PostgresMaterializationStorageOptions`: explicit partition, planning,
+read and rebuild bounds, publication/slot naming, checkpoint store, provenance and
+capacity evidence. Construction prepares offline plans and freezes slot names;
+it performs no native IO. The same API works without a StorageModel subclass.
+
+`InitializeSourcesAsync` is explicit opt-in publication/slot/checkpoint setup using
+derived source tables. It does not initialize product tables or the external target.
+`BindAsync` accepts a borrowed pool and replication factory, derives database identity
+and authority from the declaration, admits an attached target, and returns
+`BoundMaterialization`. No DDL, client disposal, promotion or live route changes
+are implicit in binding. Host/client ownership and target-specific configuration
+remain at their existing native boundaries.
+
+The source's `Reads.PartitionScope.CanonicalValue` also determines the physical
+placement subject; there is no independent Partition option to drift. Database
+identity and checkpoint authority are likewise supplied once by the declaration.
+The public native binding seam is `PostgresMaterializationStorage.BindAsync(pool,
+replicationFactory, target, key, slotGeneration, ct)`; relation-level reader binding
+is internal. Native preflight checks that the pool and replication factory address the same
+physical host, port and database before opening a connection. The logical database
+ID is not a physical database-name assertion: configuring both native connections
+for the same unintended database cannot be detected from that ID alone.

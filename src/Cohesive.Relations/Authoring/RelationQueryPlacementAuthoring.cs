@@ -130,6 +130,40 @@ public static class RelationQueryPlacementAuthoringDiagnosticCodes
 /// <summary>Entry point for plan-bound source-placement authoring.</summary>
 public static class RelationQueryPlacement
 {
+    /// <summary>Attaches native storage mappings to an already compiled physical read placement.</summary>
+    /// <param name="plan">Exact semantic authority.</param>
+    /// <param name="physical">Compiled physical acquisition interpretation, including auxiliary materialization reads.</param>
+    /// <returns>Plan-bound inputs usable by native binding builders; no semantic declaration is changed.</returns>
+    /// <exception cref="ArgumentNullException">A plan is null.</exception>
+    /// <exception cref="ArgumentException">References, input identities, fields or shapes differ.</exception>
+    public static RelationQueryAuthoredPlacement ForPhysicalReads(CompiledRelationQueryPlan plan,
+        CompiledRelationQueryPhysicalPlan physical)
+    {
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(physical);
+        var exact = RelationQueryCompiledPlanReferenceFingerprinter.Compute(RelationQueryCompiledPlanReference.From(plan));
+        if (exact != RelationQueryCompiledPlanReferenceFingerprinter.Compute(physical.Plan)
+            || exact != RelationQueryCompiledPlanReferenceFingerprinter.Compute(physical.Placement.Plan))
+            throw new ArgumentException("The physical placement belongs to another semantic plan.", nameof(physical));
+        var contracts = plan.InputContract.Sources.Select(source => (source.Input.Id, source.Node, source.Binding, source.Shape, source.Fields))
+            .Concat(plan.InputContract.Traversals.Select(traversal => (traversal.Input.Id, traversal.Input.Traversal,
+                traversal.Result, traversal.ResultShape, traversal.Fields)))
+            .ToDictionary(item => item.Id);
+        if (!contracts.Keys.ToHashSet().SetEquals(physical.Placement.Bindings.Select(binding => binding.Input)))
+            throw new ArgumentException("Physical reads must place every semantic acquisition input exactly once.", nameof(physical));
+        var inputs = physical.Placement.Bindings.Select(binding =>
+        {
+            var contract = contracts[binding.Input];
+            if (contract.Item2 != binding.Node || contract.Item3 != binding.Binding || contract.Item4 != binding.Shape
+                || !contract.Fields.Select(field => (field.Input.Id, field.Input.Field.Path)).ToHashSet()
+                    .SetEquals(binding.Fields.Select(field => (field.Input, field.SemanticPath))))
+                throw new ArgumentException("Physical read placement changes a semantic input contract.", nameof(physical));
+            return new RelationQueryPlacedInput(plan, physical.Placement, binding,
+                physical.Placement.SourceInstances.Single(source => source.Id == binding.Source), contract.Fields);
+        }).ToImmutableArray();
+        return new(plan, physical.Placement, inputs, []);
+    }
+
     /// <summary>Creates a placement builder bound to one exact demand-scoped compiled plan.</summary>
     /// <param name="plan">Exact compiled plan whose acquisition inputs will be placed.</param>
     /// <param name="options">Optional scoped authoring defaults.</param>
