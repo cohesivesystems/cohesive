@@ -434,8 +434,15 @@ it performs no native IO. The same API works without a StorageModel subclass.
 
 `InitializeSourcesAsync` is explicit opt-in publication/slot/checkpoint setup using
 derived source tables. It does not initialize product tables or the external target.
-`BindAsync` checks the supplied runtime database and authority before native
-preflight, borrows its pool/replication factory and an admitted target, and returns
+`BindAsync` accepts a borrowed pool and replication factory, derives database identity
+and authority from the declaration, admits an attached target, and returns
 `BoundMaterialization`. No DDL, client disposal, promotion or live route changes
 are implicit in binding. Host/client ownership and target-specific configuration
 remain at their existing native boundaries.
+
+The source's `Reads.PartitionScope.CanonicalValue` also determines the physical
+placement subject; there is no independent Partition option to drift. Database
+identity and checkpoint authority are likewise supplied once by the declaration.
+The public native binding seam is `PostgresMaterializationStorage.BindAsync(pool,
+replicationFactory, target, key, slotGeneration, ct)`; relation-level reader binding
+is internal. Native preflight still validates actual connection/replication affinity.

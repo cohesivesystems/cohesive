@@ -156,9 +156,16 @@ shadow-only execution, and live PostgreSQL reads are unchanged.
 
 Source initialization is explicit through `model.Storage.OrderDetails.InitializeSourcesAsync`;
 it derives publication tables from the prepared source mappings, rather than a
-hand-maintained entity list. Binding checks native database identity and authority
-before source admission and performs no DDL. Elasticsearch template policy stays
+hand-maintained entity list. Binding derives database identity and authority from the declaration before native
+source admission and performs no DDL. Elasticsearch template policy stays
 native and the host supplies an admitted target; the PostgreSQL adapter does not
 acquire an Elasticsearch dependency. Slot recipes are evaluated once at declaration,
 and invalid or duplicate native names fail before IO. Existing publication, slot,
 authority and durable progress identities are retained.
+
+The source's `Reads.PartitionScope.CanonicalValue` also determines the physical
+placement subject; there is no independent Partition option to drift. Database
+identity and checkpoint authority are likewise supplied once by the declaration.
+The public native binding seam is `PostgresMaterializationStorage.BindAsync(pool,
+replicationFactory, target, key, slotGeneration, ct)`; relation-level reader binding
+is internal. Native preflight still validates actual connection/replication affinity.

@@ -25,10 +25,9 @@ cli.AddMaterializationShadowCommands("order-shadow",
         var incarnation = configuration["Shadow:SlotGeneration"]
             ?? throw new InvalidOperationException("Shadow__SlotGeneration is required and must change if slots are recreated.");
         var target = await ShadowElastic.BindAsync(elastic, model.Materializations.OrderDetails, ct);
-        var native = new PostgresNpgsqlRuntimeBinding(model.Orders.Storage.Bindings.Database, database,
-            FulfillmentMaterializationStorage.Authority,
-            logicalReplicationConnectionFactory: () => new LogicalReplicationConnection(configuration.GetConnectionString(FulfillmentStoragePolicy.OrdersDatabaseName)!));
-        var runtime = await model.Storage.OrderDetails.BindAsync(native, target, key, incarnation, ct);
+        var runtime = await model.Storage.OrderDetails.BindAsync(database,
+            () => new LogicalReplicationConnection(configuration.GetConnectionString(FulfillmentStoragePolicy.OrdersDatabaseName)!),
+            target, key, incarnation, ct);
         return await MaterializationShadowExecution.RunAsync(runtime,
             invocation.Operation, OperationContext.Create(cancellationToken: ct), invocation.Attempt,
             invocation.Invocation, new("order-shadow/operator"));

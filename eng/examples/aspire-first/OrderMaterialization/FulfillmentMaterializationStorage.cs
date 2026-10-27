@@ -22,7 +22,6 @@ public sealed class FulfillmentMaterializationStorage : StorageModel
             materializations.OrderDetails, new()
             {
                 PartitionField = FulfillmentDomain.PartitionField,
-                Partition = FulfillmentStoragePolicy.LocalPartition,
                 Planning = new(new("fulfillment/shadow/physical/v1"), "fulfillment/shadow/v1", 100, 1000, 1000, 100, 100, 1),
                 Reads = new(100, 1000, 100, FulfillmentMaterializations.MaximumBytes,
                     partitionScope: new(new(FulfillmentStoragePolicy.LogicalPartition), FulfillmentDomain.PartitionField,

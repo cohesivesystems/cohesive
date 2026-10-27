@@ -12,8 +12,6 @@ public sealed record PostgresMaterializationStorageOptions
 {
     /// <summary>Field mapped as the partition on every entity.</summary>
     public required string PartitionField { get; init; }
-    /// <summary>Stable physical placement subject, retained across restarts.</summary>
-    public required string Partition { get; init; }
     /// <summary>Physical relation planning limits.</summary>
     public required RelationQueryPhysicalPlanningPolicy Planning { get; init; }
     /// <summary>Read limits and mandatory logical partition scope.</summary>
@@ -64,7 +62,6 @@ public sealed class PostgresMaterializationStorage
         ArgumentNullException.ThrowIfNull(options.Capacity);
         ArgumentNullException.ThrowIfNull(options.Provenance);
         ArgumentNullException.ThrowIfNull(options.Slot);
-        ArgumentException.ThrowIfNullOrWhiteSpace(options.Partition);
         ArgumentException.ThrowIfNullOrWhiteSpace(options.Provider);
         _ = PostgresSqlDialect.Identifier(options.Publication);
         if (options.Reads.PartitionScope is null)
@@ -102,23 +99,25 @@ public sealed class PostgresMaterializationStorage
     }
 
     /// <summary>Preflights borrowed native clients and resolves the declared materialization; performs no DDL.</summary>
-    /// <param name="native">Native pool and replication factory for the declared database.</param>
+    /// <param name="database">Borrowed native pool; database identity and authority come from this declaration.</param>
+    /// <param name="replicationConnectionFactory">Creates caller-configured native replication connections, owned per operation.</param>
     /// <param name="target">Admitted target, owned by the host.</param>
     /// <param name="authenticationKey">Persistent position-authentication key.</param>
     /// <param name="slotGeneration">Explicit slot incarnation retained across restart.</param>
     /// <param name="cancellationToken">Cancels native admission.</param>
     /// <returns>Shared bound runtime borrowing all native resources.</returns>
     /// <exception cref="ArgumentException">Native identity or declared policy is inconsistent.</exception>
-    public async Task<BoundMaterialization> BindAsync(PostgresNpgsqlRuntimeBinding native, IMaterializationTarget target,
+    public async Task<BoundMaterialization> BindAsync(NpgsqlDataSource database, PostgresLogicalReplicationConnectionFactory replicationConnectionFactory, IMaterializationTarget target,
         ReadOnlyMemory<byte> authenticationKey, string slotGeneration, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(native);
+        ArgumentNullException.ThrowIfNull(database);
+        ArgumentNullException.ThrowIfNull(replicationConnectionFactory);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(slotGeneration);
-        if (native.Database != bindings.Database || native.Authority != options.Checkpoints.AuthorityId)
-            throw new ArgumentException("Native database and authority must match the declared materialization storage.", nameof(native));
+        var native = new PostgresNpgsqlRuntimeBinding(bindings.Database, database, options.Checkpoints.AuthorityId,
+            logicalReplicationConnectionFactory: replicationConnectionFactory);
         var partition = await relation.BindAsync(Materialization.Document, native.DataSource, native, options.Reads,
-            options.Partition, authenticationKey, input => new(options.Publication, slots[input], slotGeneration,
+            options.Reads.PartitionScope!.CanonicalValue, authenticationKey, input => new(options.Publication, slots[input], slotGeneration,
                 expectedReplicaIdentity: new(PostgresLogicalReplicationReplicaIdentityKind.Full),
                 beforeImageRequirement: PostgresLogicalReplicationBeforeImageRequirement.Required),
             options.Replication, cancellationToken).ConfigureAwait(false);

@@ -78,31 +78,49 @@ public sealed class FulfillmentShadowTests
         Assert.NotNull(RelationQueryPlacement.ForPhysicalReads(prepared.Plan, prepared.Reads.Impact));
     }
 
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public void Storage_declaration_rejects_invalid_slots_or_missing_partition_before_io(bool duplicateSlots)
+    [Fact]
+    public void Storage_declaration_rejects_duplicate_slots_before_io()
+    {
+        var error = Assert.Throws<ArgumentException>(() => DeclareStorage(StorageOptions() with { Slot = _ => "duplicate_slot" }));
+        Assert.Contains("distinct", error.Message);
+    }
+
+    [Fact]
+    public void Storage_declaration_rejects_missing_partition_before_io()
+    {
+        var error = Assert.Throws<ArgumentException>(() => DeclareStorage(StorageOptions() with { Reads = new(100, 1000, 100, 1_048_576) }));
+        Assert.Contains("partition scope", error.Message);
+    }
+
+    [Fact]
+    public async Task Missing_replication_factory_fails_without_opening_pool()
+    {
+        var storage = DeclareStorage(StorageOptions());
+        await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=unreachable;Username=test");
+        var error = await Assert.ThrowsAsync<ArgumentNullException>(() => storage.BindAsync(database, null!, null!, new byte[32], "test/v1"));
+        Assert.Equal("replicationConnectionFactory", error.ParamName);
+    }
+
+    static PostgresMaterializationStorage DeclareStorage(PostgresMaterializationStorageOptions options)
     {
         var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
-        var error = Assert.Throws<ArgumentException>(() => new PostgresMaterializationStorage(application.Orders.Storage.Bindings,
-            application.Materializations.OrderDetails, new()
-            {
-                PartitionField = FulfillmentDomain.PartitionField,
-                Partition = "local",
-                Planning = new(new("test/storage"), "test/v1", 100, 1000, 1000, 100, 100, 1),
-                Reads = new(100, 1000, 100, 1_048_576, partitionScope: duplicateSlots
-                    ? new(new("local"), FulfillmentDomain.PartitionField, "local") : null),
-                Rebuild = new(100, 1_048_576, 100, 1_048_576, 128, 1, 1, 16),
-                Publication = "test_publication",
-                Slot = _ => "duplicate_slot",
-                Replication = new(),
-                Checkpoints = new("test/storage"),
-                Provider = "test/storage",
-                Capacity = new(new("test/capacity"), 1, ["test/single-writer"]),
-                Provenance = new(new("test/storage", "1"), new("test/storage"))
-            }));
-        Assert.Contains(duplicateSlots ? "distinct" : "partition scope", error.Message);
+        return new(application.Orders.Storage.Bindings, application.Materializations.OrderDetails, options);
     }
+
+    static PostgresMaterializationStorageOptions StorageOptions() => new()
+    {
+        PartitionField = FulfillmentDomain.PartitionField,
+        Planning = new(new("test/storage"), "test/v1", 100, 1000, 1000, 100, 100, 1),
+        Reads = new(100, 1000, 100, 1_048_576, partitionScope: new(new("local"), FulfillmentDomain.PartitionField, "local")),
+        Rebuild = new(100, 1_048_576, 100, 1_048_576, 128, 1, 1, 16),
+        Publication = "test_publication",
+        Slot = input => "test_" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(input.Value)))[..16],
+        Replication = new(),
+        Checkpoints = new("test/storage"),
+        Provider = "test/storage",
+        Capacity = new(new("test/capacity"), 1, ["test/single-writer"]),
+        Provenance = new(new("test/storage", "1"), new("test/storage"))
+    };
 
     [ShadowFact]
     public async Task Native_shadow_resumes_then_tracks_updates_reparenting_and_deletes_without_changing_live_reads()
@@ -117,12 +135,9 @@ public sealed class FulfillmentShadowTests
         var definition = application.Materializations;
         await ShadowBootstrap.InitializeAsync(application, database, http, ct);
         var target = await ShadowElastic.BindAsync(http, definition.OrderDetails, ct);
-        var native = new PostgresNpgsqlRuntimeBinding(model.Storage.Bindings.Database, database,
-            FulfillmentMaterializationStorage.Authority, logicalReplicationConnectionFactory: () => new LogicalReplicationConnection(connection));
-        var foreign = new PostgresNpgsqlRuntimeBinding(model.Storage.Bindings.Database, database,
-            "foreign-authority", logicalReplicationConnectionFactory: () => new LogicalReplicationConnection(connection));
-        await Assert.ThrowsAsync<ArgumentException>(() => application.Storage.OrderDetails.BindAsync(foreign, target, new byte[32], "test-slots/v1", ct));
-        var runtime = await application.Storage.OrderDetails.BindAsync(native, target, new byte[32], "test-slots/v1", ct);
+        var runtime = await application.Storage.OrderDetails.BindAsync(database,
+            () => new LogicalReplicationConnection(connection), target, new byte[32], "test-slots/v1", ct);
+        Assert.Equal("tenant/" + FulfillmentStoragePolicy.LocalPartition, Assert.Single(runtime.Compilation.Plan.Shards).Id.Value);
         var id = Guid.NewGuid().ToString("N");
         var first = "first-" + id;
         var second = "second-" + id;
@@ -144,7 +159,7 @@ public sealed class FulfillmentShadowTests
             await Assert.ThrowsAsync<TestInterruption>(() => new MaterializationRebuildExecutor(runtime.Resolved, interruption)
                 .RunShardAsync(context, attempt, Assert.Single(runtime.Compilation.Plan.Shards).Id));
             // Rebind all native interpretations, simulating restart with the same fingerprint, attempt and key.
-            runtime = await application.Storage.OrderDetails.BindAsync(native, target, new byte[32], "test-slots/v1", ct);
+            runtime = await application.Storage.OrderDetails.BindAsync(database, () => new LogicalReplicationConnection(connection), target, new byte[32], "test-slots/v1", ct);
             rebuild = new(runtime.Resolved);
             Assert.Equal(MaterializationRebuildInitializationDisposition.Ready, (await rebuild.BeginAttemptAsync(context, attempt)).Disposition);
             Assert.Equal(MaterializationRebuildShardDisposition.BaselineCompleteCatchUpRequired,

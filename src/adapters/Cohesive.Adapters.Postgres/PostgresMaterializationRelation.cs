@@ -83,7 +83,7 @@ public sealed class PostgresMaterializationRelation
     /// <param name="cancellationToken">Cancels native preflight.</param>
     /// <returns>A complete partition binding usable by rebuild and catch-up.</returns>
     /// <exception cref="ArgumentException">The document or partition does not match this preparation.</exception>
-    public async Task<MaterializationPartitionBinding> BindAsync(MaterializationDocument document,
+    internal async Task<MaterializationPartitionBinding> BindAsync(MaterializationDocument document,
         NpgsqlDataSource database, PostgresNpgsqlRuntimeBinding native, PostgresRelationQuerySourcePolicy policy,
         string partition, ReadOnlyMemory<byte> authenticationKey,
         Func<RelationQueryInputId, PostgresLogicalReplicationBinding> slotFactory,
