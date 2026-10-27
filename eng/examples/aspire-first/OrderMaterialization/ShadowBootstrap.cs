@@ -4,7 +4,7 @@ using Cohesive.Adapters.Postgres;
 using Cohesive.Prelude;
 using Npgsql;
 
-namespace AspireFirst.Shadow;
+namespace AspireFirst.Materialization;
 
 internal static class ShadowBootstrap
 {

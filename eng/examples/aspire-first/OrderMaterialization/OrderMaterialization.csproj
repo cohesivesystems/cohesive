@@ -9,6 +9,6 @@
   <ItemGroup>
     <ProjectReference Include="../OrderWorker/OrderWorker.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Elastic/Cohesive.Adapters.Elastic.csproj" />
-    <ProjectReference Include="../../../../src/Cohesive.Cli/Cohesive.Cli.csproj" />
+    <ProjectReference Include="../../../../src/Cohesive.Application.Cli/Cohesive.Application.Cli.csproj" />
   </ItemGroup>
 </Project>

@@ -228,7 +228,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Adapters.Aspire.Ap
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "eng", "eng", "{7525B257-249C-EE79-B10A-65D0BC27ABA9}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrderShadow", "eng\examples\aspire-first\OrderShadow\OrderShadow.csproj", "{9618B21E-712F-44B7-B0F4-BE06D418DFA2}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrderMaterialization", "eng\examples\aspire-first\OrderMaterialization\OrderMaterialization.csproj", "{9618B21E-712F-44B7-B0F4-BE06D418DFA2}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

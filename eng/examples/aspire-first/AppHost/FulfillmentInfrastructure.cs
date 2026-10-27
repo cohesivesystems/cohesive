@@ -77,7 +77,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
                 .WithHttpEndpoint(targetPort: 9200, name: "http")
                 .WithVolume("order-shadow-elastic", "/usr/share/elasticsearch/data");
             // A separate operator process owns shadow writes; the HTTP worker keeps its existing native readers.
-            builder.AddProject<Projects.OrderShadow>("order-shadow")
+            builder.AddProject<Projects.OrderMaterialization>("order-shadow")
                 .WithReference(database).WaitFor(worker).WaitFor(elastic)
                 .WithEnvironment("Shadow__Elasticsearch", elastic.GetEndpoint("http"))
                 .WithEnvironment("Shadow__PositionKey", builder.Configuration["Shadow:PositionKey"])

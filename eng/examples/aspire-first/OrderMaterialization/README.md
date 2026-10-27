@@ -8,11 +8,11 @@ promotes an alias or changes endpoint bindings.
 ## Run locally
 
 Enable `Shadow:Enabled` on the existing AppHost to add Elasticsearch and the
-OrderShadow project. The latter defaults to `--help`. PostgreSQL starts with
+OrderMaterialization project. The latter defaults to `--help`. PostgreSQL starts with
 logical replication enabled. This is a local development configuration, including
 an Elasticsearch node without authentication; do not expose it publicly.
 
-Alternatively run OrderShadow against dedicated local PostgreSQL (logical WAL
+Alternatively run OrderMaterialization against dedicated local PostgreSQL (logical WAL
 required) and Elasticsearch instances. Configure:
 
 - `ConnectionStrings__orders`: the same native database used by the worker.
@@ -24,10 +24,10 @@ required) and Elasticsearch instances. Configure:
 From the repository root:
 
 ```sh
-dotnet run --project eng/examples/aspire-first/OrderShadow -- initialize
-dotnet run --project eng/examples/aspire-first/OrderShadow -- rebuild \
+dotnet run --project eng/examples/aspire-first/OrderMaterialization -- initialize
+dotnet run --project eng/examples/aspire-first/OrderMaterialization -- rebuild \
   --attempt demo-1 --started 2026-10-26T00:00:00Z --invocation baseline-1
-dotnet run --project eng/examples/aspire-first/OrderShadow -- catch-up \
+dotnet run --project eng/examples/aspire-first/OrderMaterialization -- catch-up \
   --attempt demo-1 --started 2026-10-26T00:00:00Z --invocation changes-1
 ```
 
@@ -112,3 +112,20 @@ allocation growth, preserves array order and checks decimal/object equivalence.
 The public partition binding uses `partition`/`Partition` instead of `tenant`/`Tenant`; named arguments and property accesses must be updated. Persisted shard and placement identifiers retain the historical `tenant/` prefix so the terminology cleanup does not rename saved progress.
 
 Baseline root reads now use `PostgresRelationQueryReadPolicy.MaximumRowsPerRead` rather than a hidden limit of 1000. Configure that policy explicitly to retain the previous bound. CDC source binding performs scoped deployment inspection and retains no open connection; stream enumeration owns and disposes its native connection. Existing publications must cover every declared input table; initialization rejects missing coverage instead of silently omitting changes.
+
+## Declaration, preparation and command ownership
+
+`FulfillmentShadowDefinition` owns the example's materialization policies and calls
+`Build().Prepare(impactPolicy)`. `PreparedMaterialization` retains the admitted
+declaration and impact plan; PostgreSQL preparation consumes that same object.
+The target and runtime share one declaration instance per activation.
+
+`Cohesive.Application.Cli.AddMaterializationShadowCommands` owns initialize/rebuild/catch-up
+command parsing, stable retry inputs, cancellation and convergence exit status. Help
+does not initialize models or resources. `MaterializationShadowExecution` invokes
+the existing rebuild and synchronization interpreters; it has no promotion step.
+The example owns native client lifetimes, the PostgreSQL writer lease, resource
+names, and explicit provider policy. These commands are bounded activations, not
+a continuously running service. The namespace and project are now
+`AspireFirst.Materialization` / `OrderMaterialization`; durable identities,
+`Shadow:*` configuration, and live PostgreSQL endpoint bindings are unchanged.

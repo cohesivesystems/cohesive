@@ -3,7 +3,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Description>Optional CLI commands for offline Cohesive application inspection.</Description>
+    <Description>Optional CLI commands for Cohesive application inspection and bounded materialization operations.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Cohesive.Application/Cohesive.Application.csproj" />

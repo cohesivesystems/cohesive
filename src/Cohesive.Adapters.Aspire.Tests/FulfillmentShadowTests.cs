@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AspireFirst.Orders;
-using AspireFirst.Shadow;
+using AspireFirst.Materialization;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Prelude;
 using Cohesive.Relations.Authoring;
@@ -55,7 +55,7 @@ public sealed class FulfillmentShadowTests
         await ShadowBootstrap.InitializeAsync(model, database, http, ct);
         var definition = new FulfillmentShadowDefinition(model.Queries);
         var target = await ShadowElastic.BindAsync(http, definition, ct);
-        var runtime = await FulfillmentShadowRuntime.BindAsync(model, database, connection, target, new byte[32], "test-slots/v1", ct);
+        var runtime = await FulfillmentShadowRuntime.BindAsync(model, definition, database, connection, target, new byte[32], "test-slots/v1", ct);
         var id = Guid.NewGuid().ToString("N");
         var first = "first-" + id;
         var second = "second-" + id;
@@ -77,7 +77,7 @@ public sealed class FulfillmentShadowTests
             await Assert.ThrowsAsync<TestInterruption>(() => new MaterializationRebuildExecutor(runtime.Resolved, interruption)
                 .RunShardAsync(context, attempt, Assert.Single(runtime.Compilation.Plan.Shards).Id));
             // Rebind all native interpretations, simulating restart with the same fingerprint, attempt and key.
-            runtime = await FulfillmentShadowRuntime.BindAsync(model, database, connection, target, new byte[32], "test-slots/v1", ct);
+            runtime = await FulfillmentShadowRuntime.BindAsync(model, definition, database, connection, target, new byte[32], "test-slots/v1", ct);
             rebuild = new(runtime.Resolved);
             Assert.Equal(MaterializationRebuildInitializationDisposition.Ready, (await rebuild.BeginAttemptAsync(context, attempt)).Disposition);
             Assert.Equal(MaterializationRebuildShardDisposition.BaselineCompleteCatchUpRequired,
@@ -117,8 +117,9 @@ public sealed class FulfillmentShadowTests
         }
         async Task CatchUp(string invocation)
         {
-            var result = await new MaterializationSynchronizationExecutor(runtime.Resolved, runtime.State, MaterializationIndexSyncWorkloadKind.Rebuild)
-                .ConvergeAsync(context, attempt, new(id + "/" + invocation), new("test-worker"));
+            var result = await MaterializationShadowExecution.RunAsync(runtime.Resolved, runtime.State,
+                invocation == "baseline" ? MaterializationShadowOperation.Rebuild : MaterializationShadowOperation.CatchUp,
+                context, attempt, new(id + "/" + invocation), new("test-worker"));
             Assert.True(result.Disposition == MaterializationSynchronizationRunDisposition.Converged, JsonSerializer.Serialize(result.Diagnostics));
         }
         async Task<JsonElement> Snapshot()

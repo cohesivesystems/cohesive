@@ -533,6 +533,12 @@ public sealed class MaterializationDefinitionAuthoringResult
         Validation = validation;
     }
 
+    /// <summary>Admits the declaration and prepares its contributor-to-root impact plan.</summary>
+    /// <param name="policy">Explicit impact strategies and bounds.</param>
+    /// <returns>One prepared declaration shared by native binding and target preparation.</returns>
+    /// <exception cref="ArgumentException">The declaration or impact policy cannot be admitted.</exception>
+    public PreparedMaterialization Prepare(MaterializationImpactPlanningPolicy policy) => new(CreateDocument(), policy);
+
     /// <summary>Canonical immutable materialization definition.</summary>
     public MaterializationDefinition Definition { get; }
 

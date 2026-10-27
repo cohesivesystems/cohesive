@@ -14,6 +14,17 @@ namespace Cohesive.Adapters.Postgres;
 public sealed class PostgresMaterializationRelation
 {
     readonly MaterializationImpactPlan impact;
+    /// <summary>Prepares PostgreSQL interpretation of an admitted materialization without native IO.</summary>
+    /// <param name="bindings">Canonical entity storage mappings.</param>
+    /// <param name="materialization">Shared declaration and impact preparation.</param>
+    /// <param name="partitionField">Partition field mapped on every input.</param>
+    /// <param name="policy">Bounded native planning policy.</param>
+    /// <exception cref="ArgumentException">Mappings or planning policy cannot satisfy the declaration.</exception>
+    public PostgresMaterializationRelation(PostgresPersistenceBindings bindings, PreparedMaterialization materialization,
+        string partitionField, RelationQueryPhysicalPlanningPolicy policy)
+        : this(bindings, (materialization ?? throw new ArgumentNullException(nameof(materialization))).Document.Definition.Relation.CompilationRequest,
+            materialization.Impact, partitionField, policy) { }
+
     /// <summary>Prepares the bounded, partition-scoped interpretation without opening a database connection.</summary>
     /// <param name="bindings">Canonical repository mappings; the runtime must admit their schema before use.</param>
     /// <param name="request">The rooted relation shared with live reads.</param>

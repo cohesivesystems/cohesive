@@ -4,7 +4,7 @@ using System.Text.Json;
 using Cohesive.Adapters.Elastic;
 using Elastic.Clients.Elasticsearch;
 
-namespace AspireFirst.Shadow;
+namespace AspireFirst.Materialization;
 
 internal static class ShadowElastic
 {

@@ -10,7 +10,7 @@ keyed live query, so the existing HTTP endpoint keeps using native PostgreSQL re
 Materialization can use the retained relation request through Cohesive's existing rebuild and
 incremental hydration components; both paths assemble the same `OrderDetails` value.
 
-The opt-in [OrderShadow command](OrderShadow/README.md) now wires PostgreSQL pgoutput,
+The opt-in [OrderMaterialization command](OrderMaterialization/README.md) now wires PostgreSQL pgoutput,
 Elasticsearch shadow generations, durable rebuild and bounded catch-up over those contracts.
 It leaves endpoint reads unchanged and never promotes a search alias. Inventory enrichment
 remains current-state data, not a historical event-stream snapshot.

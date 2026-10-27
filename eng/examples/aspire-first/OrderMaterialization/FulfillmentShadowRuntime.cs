@@ -11,7 +11,7 @@ using Cohesive.Storage.Materialization;
 using Npgsql;
 using Npgsql.Replication;
 
-namespace AspireFirst.Shadow;
+namespace AspireFirst.Materialization;
 
 /// <summary>Native shadow bindings borrow the host's pool; all progression is interpreted by Cohesive's existing executors.</summary>
 public sealed class FulfillmentShadowRuntime
@@ -39,6 +39,7 @@ public sealed class FulfillmentShadowRuntime
 
     /// <summary>Preflights source capabilities and binds existing rebuild and catch-up interpreters.</summary>
     /// <param name="application">Activated shared application declarations.</param>
+    /// <param name="definition">Prepared declaration shared with target binding.</param>
     /// <param name="database">Borrowed pool, owned by the command host.</param>
     /// <param name="connectionString">Native logical-replication connection configuration.</param>
     /// <param name="target">Admitted dedicated shadow target.</param>
@@ -46,13 +47,12 @@ public sealed class FulfillmentShadowRuntime
     /// <param name="slotGeneration">Operator-owned slot incarnation, stable across restart.</param>
     /// <param name="cancellationToken">Cancels native preflight.</param>
     /// <returns>One reusable native interpretation with durable state.</returns>
-    public static async Task<FulfillmentShadowRuntime> BindAsync(FulfillmentApplication application,
+    public static async Task<FulfillmentShadowRuntime> BindAsync(FulfillmentApplication application, FulfillmentShadowDefinition definition,
         NpgsqlDataSource database, string connectionString, IMaterializationTarget target,
         ReadOnlyMemory<byte> authenticationKey, string slotGeneration, CancellationToken cancellationToken)
     {
-        var definition = new FulfillmentShadowDefinition(application.Queries);
         var prepared = new PostgresMaterializationRelation(application.Storage.Bindings,
-            application.Queries.OrderDetailsRelation.Definition, definition.Impact, FulfillmentDomain.PartitionField,
+            definition.Prepared, FulfillmentDomain.PartitionField,
             new(new("fulfillment/shadow/physical/v1"), "fulfillment/shadow/v1", 100, 1000, 1000, 100, 100, 1));
         var policy = new PostgresRelationQuerySourcePolicy(100, 1000, 100, FulfillmentShadowDefinition.MaximumBytes,
             partitionScope: new(new(FulfillmentStoragePolicy.LogicalPartition), FulfillmentDomain.PartitionField,
