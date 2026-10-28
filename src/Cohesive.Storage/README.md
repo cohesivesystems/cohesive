@@ -302,3 +302,25 @@ Native preparation returns `BoundMaterialization`, containing the admitted
 partitioned compilation, resolved ports and synchronization work store. It borrows
 all native resources; the host owns their lifetimes. This runtime value is separate
 from model activation and can be created directly without a model subclass.
+
+### Shadow parity evidence
+
+`MaterializationShadowVerification.CompareAsync` reuses an admitted rebuild's root
+read and hydration bindings to compare complete bounded live outputs with a candidate
+reader. It retains the existing convergence receipt and rechecks exact plan affinity,
+feed coverage and freshness; it also captures every source position before and after
+comparison. Missing, extra and changed canonical item IDs are reported deterministically.
+Neither payload values nor a promotion authorization are produced. Failed/incomplete
+reads and exceeded bounds throw, rather than returning a partial passing report.
+
+The candidate reader must honor the requested generation and limit, validate its native
+envelope and prove exhaustion. `ElasticMaterializationTarget.ReadValuesAsync` provides
+that reader by reusing its existing validated seal-content scan. Callers own native
+resources and must exclude competing candidate writers for the whole comparison.
+`Matches` describes observed parity under that boundary, not transactional consistency
+or a guarantee that the generation remains fresh after observation. See the
+[operator example](../../eng/examples/aspire-first/OrderMaterialization/README.md#compare-before-considering-a-read-switch).
+
+Each invocation performs one bounded root/hydration traversal, one candidate scan and
+two position inspections per feed. It performs no comparison polling and no target
+GET per item. Values are retained only for the bounded invocation.

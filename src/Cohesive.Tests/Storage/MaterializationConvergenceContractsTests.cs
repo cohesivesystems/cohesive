@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Execution;
+using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
@@ -29,6 +30,67 @@ public sealed class MaterializationConvergenceContractsTests
         acquisition: RelationQuerySourceAcquisitionKind.BoundedEnumeration,
         origin: RelationQuerySourcePlacementOrigin.Explicit,
         identity: new RelationQuerySourceIdentityBinding(Shape, "id"));
+
+    [Fact]
+    public void Shadow_comparison_uses_semantic_object_equality()
+    {
+        using var first = JsonDocument.Parse("{\"a\":1,\"b\":[2,3]}");
+        using var reordered = JsonDocument.Parse("{\"b\":[2,3],\"a\":1}");
+        var report = MaterializationShadowVerification.CompareValues(Receipt([Feed("feed-a", "a")]), Epoch.AddSeconds(5), true, true,
+            new Dictionary<string, ObservationValue> { ["item"] = ObservationValue.FromJsonElement(first.RootElement) },
+            new Dictionary<string, ObservationValue> { ["item"] = ObservationValue.FromJsonElement(reordered.RootElement) });
+        Assert.True(report.Matches);
+    }
+
+    [Theory]
+    [InlineData(true, 0)]
+    [InlineData(false, 2)]
+    public async Task Shadow_comparison_cli_emits_typed_evidence_and_truthful_exit(bool stable, int exitCode)
+    {
+        var report = MaterializationShadowVerification.CompareValues(Receipt([Feed("feed-a", "a")]), Epoch.AddSeconds(5),
+            stable, true, new Dictionary<string, ObservationValue>(), new Dictionary<string, ObservationValue>());
+        var cli = Cohesive.Application.Cli.MaterializationCliExtensions.AddMaterializationShadowCommands(
+            new Cohesive.Cli.CliApplication("test").WithoutEnvironmentVariables(), "test",
+            _ => throw new Exception("Unexpected initialization"), (_, _) => throw new Exception("Unexpected separate execution"),
+            compare: (invocation, _) =>
+            {
+                Assert.Equal(MaterializationShadowOperation.CatchUp, invocation.Operation);
+                return Task.FromResult(report);
+            });
+        using var output = new MemoryStream();
+        using var error = new StringWriter();
+        Assert.Equal(exitCode, await cli.InvokeAsync(["compare", "--attempt", "a", "--started", "2026-10-27T10:00:00Z", "--invocation", "comparison"],
+            new Cohesive.Cli.CommandIo(Stream.Null, output, error)));
+        using var document = JsonDocument.Parse(output.ToArray());
+        Assert.Equal(stable, document.RootElement.GetProperty("Matches").GetBoolean());
+        Assert.True(document.RootElement.GetProperty("Convergence").TryGetProperty("Feeds", out _));
+    }
+
+    [Fact]
+    public void Shadow_comparison_reports_missing_extra_and_changed_without_payloads()
+    {
+        var receipt = Receipt([Feed("feed-a", "a")]);
+        var report = MaterializationShadowVerification.CompareValues(receipt, Epoch.AddSeconds(5), true, true,
+            new Dictionary<string, ObservationValue> { ["same"] = ObservationValue.FromObject(1), ["changed"] = ObservationValue.FromObject(2), ["missing"] = ObservationValue.FromObject(3) },
+            new Dictionary<string, ObservationValue> { ["same"] = ObservationValue.FromObject(1), ["changed"] = ObservationValue.FromObject(4), ["extra"] = ObservationValue.FromObject(5) });
+        Assert.False(report.Matches);
+        Assert.Equal("missing", Assert.Single(report.Missing));
+        Assert.Equal("extra", Assert.Single(report.Extra));
+        Assert.Equal("changed", Assert.Single(report.Changed));
+        Assert.Same(receipt, report.Convergence);
+    }
+
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    public void Equal_values_require_stable_sources_and_fresh_receipt(bool stable, bool fresh, bool expected)
+    {
+        var receipt = Receipt([Feed("feed-a", "a")]);
+        Dictionary<string, ObservationValue> values = new() { ["one"] = ObservationValue.FromObject(new { Value = "same" }) };
+        var report = MaterializationShadowVerification.CompareValues(receipt, Epoch.AddSeconds(5), stable, fresh, values, values);
+        Assert.Equal(expected, report.Matches);
+    }
 
     [Fact]
     public void Receipt_NormalizesFeedsAndFingerprintsCanonicalContent()
