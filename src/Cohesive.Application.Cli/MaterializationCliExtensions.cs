@@ -20,13 +20,15 @@ public static class MaterializationCliExtensions
     /// <param name="attemptNamespace">Stable process-instance namespace; preserve it across restarts.</param>
     /// <param name="initialize">Explicit native initialization. Never called by help or execution commands.</param>
     /// <param name="execute">Opens and disposes native resources and executes the parsed activation.</param>
+    /// <param name="compare">Optional bounded comparison after catch-up; registers the compare command.</param>
     /// <returns>The same CLI application.</returns>
     /// <exception cref="ArgumentException">A required argument or namespace is invalid.</exception>
     /// <remarks>Commands are shadow-only. No promotion, alias switch or live-read binding is performed.
     /// Malformed invocation arguments fail before the native factory runs. Cancellation follows CliApplication's exit contract.</remarks>
     public static CliApplication AddMaterializationShadowCommands(this CliApplication cli, string attemptNamespace,
         Func<CancellationToken, Task> initialize,
-        Func<MaterializationShadowInvocation, CancellationToken, Task<MaterializationSynchronizationRunResult>> execute)
+        Func<MaterializationShadowInvocation, CancellationToken, Task<MaterializationSynchronizationRunResult>> execute,
+        Func<MaterializationShadowInvocation, CancellationToken, Task<MaterializationShadowComparison>>? compare = null)
     {
         ArgumentNullException.ThrowIfNull(cli);
         ArgumentException.ThrowIfNullOrWhiteSpace(attemptNamespace);
@@ -39,9 +41,10 @@ public static class MaterializationCliExtensions
             context.Io.WriteLine("Shadow resources initialized; no generation promoted.");
             return 0;
         });
-        foreach (var operation in Enum.GetValues<MaterializationShadowOperation>())
+        string[] commands = compare is null ? ["rebuild", "catch-up"] : ["rebuild", "catch-up", "compare"];
+        foreach (var command in commands)
         {
-            cli.Command(operation == MaterializationShadowOperation.Rebuild ? "rebuild" : "catch-up",
+            cli.Command(command,
                 options: new Dictionary<string, CliOption>
                 {
                     ["attempt"] = CliOption.For<string>(description: "Stable attempt ID retained on resume") with { Required = true },
@@ -59,8 +62,15 @@ public static class MaterializationCliExtensions
                 var invocation = context.Configuration.Get<string>("invocation")!;
                 ArgumentException.ThrowIfNullOrWhiteSpace(invocation);
                 context.CancellationToken.ThrowIfCancellationRequested();
-                var result = await execute(new(operation,
-                    new(new(new(attemptNamespace + "/" + id), new(id)), started), new(invocation)), context.CancellationToken).ConfigureAwait(false);
+                var request = new MaterializationShadowInvocation(command == "rebuild" ? MaterializationShadowOperation.Rebuild : MaterializationShadowOperation.CatchUp,
+                    new(new(new(attemptNamespace + "/" + id), new(id)), started), new(invocation));
+                if (command == "compare")
+                {
+                    var report = await compare!(request, context.CancellationToken).ConfigureAwait(false);
+                    context.Io.WriteLine(JsonSerializer.Serialize(report));
+                    return report.Matches ? 0 : 2;
+                }
+                var result = await execute(request, context.CancellationToken).ConfigureAwait(false);
                 context.Io.WriteLine(JsonSerializer.Serialize(new { mode = "shadow", generation = result.Generation.Value, disposition = result.Disposition.ToString(), result.Diagnostics, promotion = "disabled" }));
                 return result.Receipt is not null ? 0 : 2;
             });

@@ -10,10 +10,12 @@ public sealed class MaterializationCliTests
     [InlineData("initialize")]
     [InlineData("rebuild")]
     [InlineData("catch-up")]
+    [InlineData("compare")]
     public async Task Help_does_not_prepare_native_resources(string command)
     {
         var cli = new CliApplication("test").WithoutEnvironmentVariables().AddMaterializationShadowCommands("test",
-            _ => throw new Exception("unexpected initialization"), (_, _) => throw new Exception("unexpected binding"));
+            _ => throw new Exception("unexpected initialization"), (_, _) => throw new Exception("unexpected binding"),
+            compare: (_, _) => throw new Exception("unexpected comparison"));
         Assert.Equal(0, await cli.InvokeAsync([command, "--help"], CommandIo.Null()));
     }
 

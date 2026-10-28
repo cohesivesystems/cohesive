@@ -24,6 +24,18 @@ public sealed class ElasticMaterializationTargetTests
     static readonly MaterializationWorkerFence WorkerFence = new("1");
 
     [Fact]
+    public async Task Bounded_candidate_values_reuse_validated_envelopes_without_promotion()
+    {
+        var rig = CreateRig();
+        var prepared = await PrepareValidatedAsync(rig, "comparison", Epoch);
+        var values = await rig.Target.ReadValuesAsync(OperationContext.Create(), prepared.GenerationId, maximumItems: 100);
+        Assert.NotEmpty(values);
+        Assert.Empty((await InspectReadAliasAsync(rig)).Bindings);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Target.ReadValuesAsync(OperationContext.Create(), new("missing"), 100));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() => rig.Target.ReadValuesAsync(OperationContext.Create(), prepared.GenerationId, 0));
+    }
+
+    [Fact]
     public async Task Candidate_RemainsInvisibleUntilValidatedPromotionPublishesOneFilteredReadAlias()
     {
         var rig = CreateRig();
@@ -1749,6 +1761,8 @@ public sealed class ElasticMaterializationTargetTests
         Assert.Equal(
             [512, 256, 256, 256],
             rig.Transport.ScanRequests.Select(static request => request.MaximumItems));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Target.ReadValuesAsync(OperationContext.Create(), generationId, maximumItems: 512));
+        Assert.Equal(itemCount, (await rig.Target.ReadValuesAsync(OperationContext.Create(), generationId, maximumItems: itemCount)).Count);
     }
 
     [Fact]
