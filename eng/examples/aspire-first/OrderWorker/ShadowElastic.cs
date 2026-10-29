@@ -7,14 +7,24 @@ using Elastic.Clients.Elasticsearch;
 
 namespace AspireFirst.Materialization;
 
-internal static class ShadowElastic
+/// <summary>Shared native target admission for the operator and explicitly selected HTTP reads.</summary>
+public static class ShadowElastic
 {
-    internal const string TemplateName = "cohesive-order-shadow-v1";
-    internal const string Template = """
+    /// <summary>Shared target authority, independent of the selected HTTP reader.</summary>
+    public const string Authority = "aspire-first/order-shadow/v1";
+    /// <summary>Native template identity.</summary>
+    public const string TemplateName = "cohesive-order-shadow-v1";
+    /// <summary>Canonical native template declaration.</summary>
+    public const string Template = """
         {"index_patterns":["cohesive-order-shadow-generation-*",".cohesive-order-shadow-control"],"template":{"settings":{"index":{"number_of_shards":"1","number_of_replicas":"0"}},"mappings":{"dynamic":true}}}
         """;
 
-    internal static async Task<ElasticMaterializationTarget> BindAsync(HttpClient http,
+    /// <summary>Checks native cluster/template evidence and binds the caller-owned target.</summary>
+    /// <param name="http">Caller-owned native HTTP client.</param>
+    /// <param name="definition">Exact materialization declaration.</param>
+    /// <param name="cancellationToken">Cancels native inspection.</param>
+    /// <returns>Target binding; no generation is created or promoted.</returns>
+    public static async Task<ElasticMaterializationTarget> BindAsync(HttpClient http,
         PreparedMaterialization definition, CancellationToken cancellationToken)
     {
         using var info = JsonDocument.Parse(await http.GetStringAsync("/", cancellationToken));
@@ -32,12 +42,12 @@ internal static class ShadowElastic
             new("fulfillment/order-details/shadow"), definition.Document.Definition.Id, "orders-shadow",
             "cohesive-order-shadow-generation-", ".cohesive-order-shadow-control",
             new(TemplateName, new("sha256", "aspire-first/elastic-template-json/v1",
-                Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Template)))), FulfillmentMaterializationStorage.Authority),
-            new(FulfillmentMaterializationStorage.Authority, "postgres-session-advisory-lock/order-shadow"),
+                Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Template)))), Authority),
+            new(Authority, "postgres-session-advisory-lock/order-shadow"),
             new(new("fulfillment/shadow/search/v1"), new("elastic/order-shadow"), new("elastic/order-shadow/placement"),
                 ElasticRelationQueryTargetProfile.Target, ElasticRelationQueryTargetProfile.ProfileId, "orders-shadow", []));
         var client = new ElasticsearchClient(new ElasticsearchClientSettings(http.BaseAddress!));
         return new(binding, ElasticMaterializationTargetPolicy.Default,
-            new ElasticElasticsearchRuntimeBinding(cluster, client, FulfillmentMaterializationStorage.Authority));
+            new ElasticElasticsearchRuntimeBinding(cluster, client, Authority));
     }
 }

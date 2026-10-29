@@ -16,6 +16,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
 {
     readonly FulfillmentHistoryPolicy policy;
     readonly FulfillmentApplication application;
+    readonly OrderReadPolicy reads;
     /// <summary>Canonical order storage identity.</summary>
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
@@ -28,9 +29,12 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     /// <summary>Prepares requirements from the same offline composition as the worker.</summary>
     /// <param name="model">Same activated application graph consumed by the worker.</param>
     /// <param name="policy">Explicit environment selection used to activate that graph.</param>
-    public FulfillmentInfrastructure(FulfillmentApplication model, FulfillmentHistoryPolicy policy)
+    /// <param name="reads">Same explicit reader selection used by the worker model.</param>
+    public FulfillmentInfrastructure(FulfillmentApplication model, FulfillmentHistoryPolicy policy, OrderReadPolicy? reads = null)
     {
         this.policy = policy;
+        this.reads = reads ?? new();
+        this.reads.Validate();
         application = model;
         Define(
             id: new("example/orders"),
@@ -66,6 +70,15 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             .WithReference(database).WaitFor(database)
             .WithEnvironment("EntityState__Authority", policy.Authority.ToString())
             .WithEnvironment("EntityState__Reconstitution", policy.Reconstitution.ToString());
+        worker.WithEnvironment("OrderReads__Source", reads.Source.ToString())
+            .WithEnvironment("OrderReads__AcceptEventualConsistency", reads.AcceptEventualConsistency.ToString());
+        if (reads.Source == OrderDetailsReadSource.Materialized)
+        {
+            worker.WithEnvironment("OrderReads__ComparisonFile", builder.Configuration["OrderReads:ComparisonFile"])
+                .WithEnvironment("Shadow__Elasticsearch", builder.Configuration["Shadow:Elasticsearch"])
+                .WithEnvironment("Shadow__PositionKey", builder.Configuration["Shadow:PositionKey"])
+                .WithEnvironment("Shadow__SlotGeneration", builder.Configuration["Shadow:SlotGeneration"]);
+        }
         _ = builder.AddContainer("native-only", "redis", "7.4");
         if (builder.Configuration.GetValue<bool>("Shadow:Enabled"))
         {
@@ -76,7 +89,9 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
                 .WithEnvironment("ES_JAVA_OPTS", "-Xms512m -Xmx512m")
                 .WithHttpEndpoint(targetPort: 9200, name: "http")
                 .WithVolume("order-shadow-elastic", "/usr/share/elasticsearch/data");
-            // A separate operator process owns shadow writes; the HTTP worker keeps its existing native readers.
+            if (reads.Source == OrderDetailsReadSource.Materialized)
+                worker.WithEnvironment("Shadow__Elasticsearch", elastic.GetEndpoint("http")).WaitFor(elastic);
+            // A separate operator process owns all materialization writes, regardless of HTTP read selection.
             builder.AddProject<Projects.OrderMaterialization>("order-shadow")
                 .WithReference(database).WaitFor(worker).WaitFor(elastic)
                 .WithEnvironment("Shadow__Elasticsearch", elastic.GetEndpoint("http"))

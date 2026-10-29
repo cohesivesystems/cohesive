@@ -16,7 +16,8 @@ public static class ServiceQueryConsistencyValidation
     {
         ArgumentNullException.ThrowIfNull(reader);
         if (!Enum.IsDefined(required) || !Enum.IsDefined(reader.Consistency)
-            || (required == RelationQueryConsistency.SingleSnapshot && reader.Consistency != required))
+            || (required == RelationQueryConsistency.SingleSnapshot && reader.Consistency != required)
+            || (reader.Consistency == RelationQueryConsistency.Eventual && required != RelationQueryConsistency.Eventual))
             throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryPlacementUnsupported,
                 $"Query requires {required}, but its prepared reader guarantees {reader.Consistency}.", "/bindings/queries/consistency");
         return reader;

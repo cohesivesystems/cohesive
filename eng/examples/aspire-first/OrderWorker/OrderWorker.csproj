@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="../Orders.Model/Storage/schema.sql" LogicalName="Orders.schema.sql" />
+    <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Elastic/Cohesive.Adapters.Elastic.csproj" />
     <ProjectReference Include="../Orders.Model/Orders.Model.csproj" />
     <ProjectReference Include="../../../../src/Cohesive.Application/Cohesive.Application.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Postgres.Services/Cohesive.Adapters.Postgres.Services.csproj" />
