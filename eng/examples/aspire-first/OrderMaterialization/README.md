@@ -1,6 +1,6 @@
 # OrderDetails shadow materialization
 
-The live HTTP endpoint still reads PostgreSQL. This optional command consumes the
+The HTTP endpoint defaults to live PostgreSQL reads. This optional command consumes the
 same rooted `OrderDetailsRelation`, hydrates its nested result through
 Cohesive.Relations, and maintains a separate Elasticsearch generation. It never
 promotes an alias or changes endpoint bindings.
@@ -200,3 +200,59 @@ PostgreSQL's database-wide WAL position can move for unrelated writes, causing a
 inconclusive result. The source check cannot exclude non-cooperating target writers;
 the caller must preserve the candidate-writer exclusion used by this command. All live
 HTTP reads still use PostgreSQL. Read selection, cutover and rollback remain separate work.
+
+## Explicit HTTP read selection and rollback
+
+`OrderApi` and `/orders/{id}/details` keep the same request, result and 404 contract.
+Only this query can opt into the asynchronous Elasticsearch generation. Entity reads,
+availability, transitions and processes continue to use PostgreSQL. The mixed
+Postgres+Cosmos example is unchanged.
+
+After rebuilding and catching up, save a successful comparison for the same attempt:
+
+```sh
+dotnet run --no-build --project eng/examples/aspire-first/OrderMaterialization -- compare \
+  --attempt demo-1 --started 2026-10-26T00:00:00Z --invocation compare-1 > order-read-comparison.json
+```
+
+Check the command's exit code before selecting the file. Set the worker (or AppHost)
+configuration and restart the worker:
+
+```text
+OrderReads__Source=Materialized
+OrderReads__AcceptEventualConsistency=true
+OrderReads__ComparisonFile=/absolute/path/order-read-comparison.json
+```
+
+The worker also needs the operator's `Shadow__Elasticsearch`, `Shadow__PositionKey`,
+`Shadow__SlotGeneration`, database and entity-authority configuration. These are
+used for read-only native admission; the worker does not run CDC, create slots,
+rebuild, refresh the index or promote an alias. A fresh successful report must match
+the exact materialization and native rebuild plan, including source placement.
+Reports are trusted local operator artifacts, not signed attestations. The existing
+five-minute freshness policy applies at admission; obtain a new comparison before
+restarting a selected host after it expires.
+
+Reads pin the report's generation for the lifetime of that worker. Each read is a
+bounded item lookup and checks retained generation/definition/native ownership.
+Missing items and tombstones yield 404. Provider errors, wrong generations and
+oversized responses fail; they do **not** silently switch to PostgreSQL. There is
+no read-your-writes or ongoing maximum-lag promise. Continue catch-up for the selected
+attempt. A successful comparison proves parity at that cut, not future freshness.
+
+Rollback is explicit:
+
+```text
+OrderReads__Source=Live
+```
+
+Restart the worker. Live mode does not read the comparison file, require shadow
+configuration or contact Elasticsearch. It immediately evaluates the same canonical
+relation against PostgreSQL. No generation is deleted, no CDC progress is reset and
+no API client change is required. This is per-host configuration selection, not an
+atomic fleet-wide rollout or target alias promotion. Keep the pinned generation
+retained until every host using it has switched back.
+
+The application explanation still describes the canonical PostgreSQL source placement
+and rollback capability. The selected serving generation is currently explicit runtime
+configuration and startup logging, not a new infrastructure capability attestation.

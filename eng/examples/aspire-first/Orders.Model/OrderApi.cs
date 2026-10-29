@@ -60,8 +60,11 @@ public sealed class OrderEndpoints : ApiBindingModel
     /// <summary>Authors offline bindings using the same declaration instances as the rest of the application.</summary>
     /// <param name="api">API contract.</param><param name="domain">Canonical entities.</param>
     /// <param name="queries">Declared queries.</param>
-    public OrderEndpoints(OrderApi api, FulfillmentDomain domain, FulfillmentQueries queries)
+    /// <param name="reads">Explicit read realization; defaults to live.</param>
+    public OrderEndpoints(OrderApi api, FulfillmentDomain domain, FulfillmentQueries queries, OrderReadPolicy? reads = null)
     {
+        reads ??= new();
+        reads.Validate();
         Bindings.Implement(api, bindings =>
         {
             bindings.Entity(domain.Orders, partition: FulfillmentStoragePolicy.LocalPartition, (api, endpoints) => endpoints
@@ -77,7 +80,7 @@ public sealed class OrderEndpoints : ApiBindingModel
                         .NotRejected(SubmissionOutcome.Submitted)));
             bindings.Bind(api => api.Details, queries.OrderDetails, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
                 configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound(),
-                consistency: RelationQueryConsistency.IndependentSources);
+                consistency: reads.Consistency);
             bindings.Bind(api => api.Availability, queries.ReservationAvailability, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
                 configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound(),
                 consistency: RelationQueryConsistency.IndependentSources);
