@@ -165,6 +165,7 @@ public static class TransitionReferenceInterpreter
         readonly List<TransitionExecutedPatch> executedPatches = [];
         readonly List<TransitionEmissionIntent> emissions = [];
         readonly List<TransitionMachineMovement> movements = [];
+        readonly List<(ExecutionNodeId Node, TransitionMachineEdgeLink Link, Dictionary<ValueBindingId, PortableExpressionValue> Scope)> machineTargets = [];
         readonly Dictionary<FieldPath, ValueContract> observationContracts = [];
         readonly Dictionary<string, ValueContract> inputContracts = new(StringComparer.Ordinal);
         TransitionObservationFrame observation;
@@ -254,6 +255,7 @@ public static class TransitionReferenceInterpreter
 
                 RecomputeAffectedDerivedFields();
                 ValidateInvariants();
+                ValidateMachineTargets();
 
                 var changed = executedPatches.Where(static patch => patch.Changed).ToImmutableArray();
                 var kind = terminal.Kind;
@@ -764,19 +766,7 @@ public static class TransitionReferenceInterpreter
                 TracePatch(executed, TransitionTraceEventKind.PatchExecuted);
             }
 
-            if (!EvaluateBoolean(
-                    link.TargetConfiguration,
-                    movement.Id,
-                    candidateState: true,
-                    operation: "Machine target configuration",
-                    scope))
-            {
-                throw Invalid(
-                    TransitionExecutionDiagnosticCodes.MachineTargetViolated,
-                    $"Machine edge '{movement.Edge.Value}' did not establish its declared target configuration.",
-                    movement.Id);
-            }
-
+            machineTargets.Add((movement.Id, link, scope));
             movements.Add(new(
                 movement.Id,
                 movement.Machine,
@@ -841,6 +831,19 @@ public static class TransitionReferenceInterpreter
                 if (executed.Changed)
                     changed.Add(executed.Path);
                 TracePatch(executed, TransitionTraceEventKind.DerivedFieldRecomputed);
+            }
+        }
+
+        void ValidateMachineTargets()
+        {
+            foreach (var target in machineTargets)
+            {
+                if (!EvaluateBoolean(target.Link.TargetConfiguration, target.Node, candidateState: true,
+                        operation: "Machine final target", target.Scope))
+                {
+                    throw Invalid(TransitionExecutionDiagnosticCodes.MachineTargetViolated,
+                        $"Machine edge '{target.Link.Edge.Value}' did not establish its target in the final candidate.", target.Node);
+                }
             }
         }
 
