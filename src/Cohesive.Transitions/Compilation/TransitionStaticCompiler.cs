@@ -628,6 +628,15 @@ public static class TransitionStaticCompiler
             TransitionCondition input,
             ScopeState scope)
         {
+            if (machineLinks.Edges.Any(edge => edge.Assignments.Any(assignment => assignment.Path.Overlaps(update.Path))))
+            {
+                AddDiagnostic(
+                    TransitionCompilationDiagnosticCodes.MachineConfigurationMismatch,
+                    $"Direct update to '{update.Path}' conflicts with an edge-owned Machine discriminator.",
+                    $"{location}/path", update.Id, stage: "definitionLinking",
+                    resolutions: ["Use the declared Machine movement instead of assigning its discriminator directly."]);
+            }
+
             var target = ResolvePatchTarget(update, location);
             if (TargetsComputedField(update.Path, out var computed))
             {

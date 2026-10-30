@@ -79,13 +79,13 @@ public sealed record TransitionMachineEdgeLink
     /// <param name="edge">Stable edge identity within <paramref name="machine"/>.</param>
     /// <param name="sourceConfiguration">Pure predicate recognizing legal source configurations.</param>
     /// <param name="targetConfiguration">Pure predicate recognizing the established target configuration.</param>
-    /// <param name="assignments">Non-empty edge-owned target configuration assignments.</param>
+    /// <param name="assignments">Edge-owned assignments; empty for predicate-established configurations.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="machine"/>, <paramref name="sourceConfiguration"/>, or
     /// <paramref name="targetConfiguration"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="edge"/> is default; <paramref name="assignments"/> is empty, contains null, or contains
+    /// <paramref name="edge"/> is default; <paramref name="assignments"/> is default, contains null, or contains
     /// overlapping paths.
     /// </exception>
     [JsonConstructor]
@@ -99,10 +99,10 @@ public sealed record TransitionMachineEdgeLink
         Machine = Guard.RequireNotNull(machine);
         if (string.IsNullOrWhiteSpace(edge.Value))
             throw new ArgumentException("A linked Machine edge requires a stable identity.", nameof(edge));
-        if (assignments.IsDefaultOrEmpty || assignments.Any(static assignment => assignment is null))
+        if (assignments.IsDefault || assignments.Any(static assignment => assignment is null))
         {
             throw new ArgumentException(
-                "A linked Machine edge requires at least one non-null configuration assignment.",
+                "A linked Machine edge requires an initialized array of non-null configuration assignments.",
                 nameof(assignments));
         }
 
