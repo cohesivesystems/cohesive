@@ -10,6 +10,27 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class OrderReadSelectionTests
 {
     [Fact]
+    public async Task Shared_preparation_rejects_invalid_comparison_before_native_binding()
+    {
+        var model = TestModels.Fulfillment();
+        var definition = new AspireFirst.Materialization.FulfillmentMaterializations(model.Queries).OrderDetails;
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(path, "null");
+            var calls = 0;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Cohesive.Adapters.Elastic.ElasticMaterializationReadSelection.PrepareAsync(
+                model.Queries.OrderDetails, model.Queries.OrderDetailsRelation, definition, path, _ =>
+                {
+                    calls++;
+                    throw new InvalidOperationException("Native preparation must not run.");
+                }));
+            Assert.Equal(0, calls);
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
     public void Materialized_selection_requires_explicit_eventual_consent()
     {
         new OrderReadPolicy().Validate();

@@ -1,3 +1,4 @@
+using Cohesive.Adapters.Elastic;
 using Cohesive.Adapters.Marten;
 using Marten;
 using Microsoft.Extensions.Configuration;
@@ -200,11 +201,11 @@ public sealed class FulfillmentShadowTests
             approvedComparison = JsonSerializer.Deserialize<MaterializationShadowComparison>(JsonSerializer.Serialize(approvedComparison))!;
             var native = new ServicePersistenceBuilder().Query(model.Queries.OrderDetails, (_, _) => live).Build();
             var selected = new ServicePersistenceBuilder(native).Query(model.Queries.OrderDetails,
-                OrderDetailsReadSelection.PrepareReaders(model.Queries, runtime, approvedComparison)).Build();
+                await ElasticMaterializationReadSelection.PrepareAsync(model.Queries.OrderDetails, model.Queries.OrderDetailsRelation, runtime, approvedComparison, ct)).Build();
             Assert.Throws<ServiceBindingValidationException>(() => selected.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.SingleSnapshot));
             var otherIncarnation = await application.Storage.OrderDetails.BindAsync(database,
                 () => new LogicalReplicationConnection(connection), target, new byte[32], "different-incarnation", ct);
-            Assert.Throws<InvalidOperationException>(() => OrderDetailsReadSelection.PrepareReaders(model.Queries, otherIncarnation, approvedComparison));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => ElasticMaterializationReadSelection.PrepareAsync(model.Queries.OrderDetails, model.Queries.OrderDetailsRelation, otherIncarnation, approvedComparison, ct));
             await Assert.ThrowsAsync<Cohesive.Adapters.Elastic.ElasticMaterializationTransportException>(() => target.ReadValueAsync(context, approvedComparison.Convergence.Generation,
                 definition.OrderDetails.Document.DefinitionFingerprint, MaterializationItemId.FromRootIdentity(first), maximumBytes: 1));
             var eventual = selected.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.Eventual);
@@ -224,7 +225,7 @@ public sealed class FulfillmentShadowTests
             Assert.Same(live, rolledBack);
             Assert.NotEqual(selectedBefore, JsonSerializer.Serialize(await rolledBack.ReadAsync(first, ct), Json));
             await AssertHttpRead(null, first, await rolledBack.ReadAsync(first, ct));
-            Assert.Throws<InvalidOperationException>(() => OrderDetailsReadSelection.Validate(stale, definition.OrderDetails, DateTimeOffset.UtcNow));
+            Assert.Throws<InvalidOperationException>(() => MaterializationReadSelection.Validate(stale, definition.OrderDetails.Document, DateTimeOffset.UtcNow));
             await Execute("UPDATE cohesive_reservations SET order_id=$1,observation_version=1 WHERE reservation_id=$2", second, reservation);
             await CatchUp("reparent");
             await AssertMatchesLive(first, second);

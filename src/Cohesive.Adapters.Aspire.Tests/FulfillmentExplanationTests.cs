@@ -120,7 +120,11 @@ public sealed class FulfillmentExplanationTests
         var association = model.Configure(builder);
         var report = model.Explain(association);
         Assert.All(report.Storage.Queries, query =>
-            Assert.Equal(Cohesive.Relations.Execution.RelationQueryConsistency.IndependentSources, query.Consistency));
+        {
+            Assert.Equal(RelationQueryConsistency.IndependentSources, query.Consistency);
+            Assert.Equal("Composed", query.Read!.Backend);
+            Assert.Equal(RelationQueryConsistency.IndependentSources, query.Read.Consistency);
+        });
         Assert.Contains("resources/inventory", report.Deployment.ToJson());
         Assert.Empty(report.History);
     }

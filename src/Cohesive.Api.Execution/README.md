@@ -454,3 +454,18 @@ readiness. `PrepareQueries` must complete before `BindAsync`; host-owned clients
 owned by the host. The [fulfillment walkthrough](../../eng/examples/aspire-first/OrderMaterialization/README.md#explicit-http-read-selection-and-rollback)
 shows eventual Elasticsearch serving and explicit rollback to PostgreSQL without changing
 the API contract.
+
+Query lookup retains canonical identities in the shared weak preparation cache, keyed
+by immutable compilation requests. Successful preparation is shared concurrently;
+failed preparation is retryable and keys are not strongly retained. No parameters or
+query results are cached. A warmed 100-lookup OrderDetails fixture on .NET 10/macOS
+allocated 104,048,224 bytes before this cache and zero afterwards, including the
+fallback through storage composition. This is a lookup allocation measurement, not
+an end-to-end latency claim; cold compilation is outside that measured boundary.
+
+`IServiceStorageComposition.DescribeRead` is now required (an unreleased interface
+change). Native and composed implementations must describe their reader; admission
+rejects a null description. Backend names remain provider display labels, not
+semantic identities; the existing resource identity and consistency carry the
+binding semantics. Composed PostgreSQL/remote reads report `Composed` and
+`IndependentSources`, never a cross-store snapshot.

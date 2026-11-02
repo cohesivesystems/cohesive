@@ -20,6 +20,34 @@ public sealed class ServiceReadSelectionTests
     static readonly ServiceQueryReadBinding Elastic = new("Elasticsearch", "orders-materialized", RelationQueryConsistency.Eventual);
 
     [Fact]
+    public async Task Warm_fallback_through_storage_composition_reuses_the_same_canonical_identity()
+    {
+        var model = Model();
+        var source = new Source(model) { SelectedReader = new Reader(model.Queries.OrderDetails, RelationQueryConsistency.Eventual) };
+        var composition = new ServiceStorageComposition([source]);
+        composition.Validate([model.Endpoints.Plan]);
+        using var services = new ServiceCollection().BuildServiceProvider();
+        var persistence = new ServicePersistenceBuilder(await composition.BindAsync(services)).Build();
+        for (var i = 0; i < 20; i++) persistence.Query(model.Queries.OrderDetails, 100, 10000, RelationQueryConsistency.Eventual);
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 100; i++) persistence.Query(model.Queries.OrderDetails, 100, 10000, RelationQueryConsistency.Eventual);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - start);
+    }
+
+    [Fact]
+    public void Warm_canonical_query_resolution_has_bounded_allocation()
+    {
+        var query = Model().Queries.OrderDetails;
+        var reader = new Reader(query, RelationQueryConsistency.Eventual);
+        var persistence = new ServicePersistenceBuilder().Query(query, (_, _) => reader).Build();
+        for (var i = 0; i < 20; i++) persistence.Query(query, 100, 10000, RelationQueryConsistency.Eventual);
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 100; i++) persistence.Query(query, 100, 10000, RelationQueryConsistency.Eventual);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+        Assert.Equal(0, allocated);
+    }
+
+    [Fact]
     public async Task Canonically_equal_queries_share_one_preparation_and_keep_serving_failure_without_fallback()
     {
         var model = Model();
@@ -102,6 +130,10 @@ public sealed class ServiceReadSelectionTests
     }
     sealed class Source(FulfillmentApplication model) : IServiceStorageComposition, IServicePersistence
     {
+        public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query) =>
+            new("Test", "test-resource", Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
+
+        public object? SelectedReader { get; init; }
         public int Binds { get; private set; }
         public int NativeQueries { get; private set; }
         public ImmutableArray<ServiceQuerySelection> Queries { get; private set; } = [];
@@ -112,6 +144,6 @@ public sealed class ServiceReadSelectionTests
         public ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default) { Binds++; return ValueTask.FromResult<IServicePersistence>(this); }
         public IEntityRepository Repository(ValueContract observation) => throw new NotSupportedException();
         public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes, RelationQueryConsistency consistency)
-        { NativeQueries++; throw new NotSupportedException(); }
+        { NativeQueries++; return SelectedReader as IRelationQueryReader<TInput, TResult> ?? throw new NotSupportedException(); }
     }
 }

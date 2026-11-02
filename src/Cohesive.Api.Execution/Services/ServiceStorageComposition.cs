@@ -156,7 +156,8 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
         {
             var placement = explainedQueries[index];
             var key = RelationQueryCompiledPlanReferenceFingerprinter.Compute(placement.Plan);
-            explainedQueries[index] = placement with { Read = preparations[queryOwners[key]].DescribeRead(identities[key]) };
+            explainedQueries[index] = placement with { Read = preparations[queryOwners[key]].DescribeRead(identities[key])
+                ?? throw Failure("services.storage.readDescriptionMissing", "The admitted query must declare its serving backend and consistency.") };
         }
         var completedExplanation = new ServiceStorageExplanation(
             [.. explainedQueries.OrderBy(query => query.Query.DefinitionId.Value, StringComparer.Ordinal)],
@@ -166,6 +167,14 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
         foreach (var entry in queryOwners) queries.Add(entry.Key, entry.Value);
         prepared = preparations;
         explanation = completedExplanation;
+    }
+    /// <inheritdoc />
+    public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query)
+    {
+        var key = ServiceQueryIdentity.For(query.Request);
+        if (prepared.IsDefault || !queries.TryGetValue(key, out var owner))
+            throw Failure("services.storage.queryMissing", "Admit the query before describing its read binding.");
+        return prepared[owner].DescribeRead(query);
     }
     /// <inheritdoc />
     public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)

@@ -267,3 +267,8 @@ checks the concrete reader's query identity and consistency before source prepar
 Explanation does not load comparison files or contact either backend: it describes the
 selection, not live readiness or a verified generation. Generation admission remains a
 startup check, with no silent fallback.
+
+The example now delegates comparison loading, exact query/rebuild admission and typed
+result reads to `ElasticMaterializationReadSelection`. Its storage binding only selects
+configuration and host-owned native clients. See the [adapter's prepared-read contract](../../../../src/adapters/Cohesive.Adapters.Elastic/README.md#prepared-materialized-query-reads)
+for per-request native checks and the three-call bound.

@@ -68,6 +68,8 @@ public sealed class ServicePersistenceBuilder
         Dictionary<RelationQueryPlanComponentFingerprint, Func<int, long, object>> queries, IServicePersistence? fallback) : IServicePersistence
     {
         readonly Dictionary<RelationQueryPlanComponentFingerprint, Dictionary<(int, long), Lazy<object>>> prepared = [];
+        static Lazy<object> Prepare(Func<int, long, object> factory, int rows, long bytes) =>
+            new(() => factory(rows, bytes));
         public IEntityRepository Repository(ValueContract observation) => repositories.TryGetValue(observation, out var repository)
             ? repository : fallback?.Repository(observation) ?? throw new InvalidOperationException("No repository is selected for the observation contract.");
         public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes, RelationQueryConsistency consistency)
@@ -84,7 +86,7 @@ public sealed class ServicePersistenceBuilder
             {
                 if (!prepared.TryGetValue(identity, out var bounds)) prepared.Add(identity, bounds = []);
                 if (!bounds.TryGetValue((maximumRows, maximumBytes), out value!))
-                    bounds.Add((maximumRows, maximumBytes), value = new(() => factory(maximumRows, maximumBytes)));
+                    bounds.Add((maximumRows, maximumBytes), value = Prepare(factory, maximumRows, maximumBytes));
             }
             return ServiceQueryConsistencyValidation.Require((IRelationQueryReader<TInput, TResult>)value.Value, consistency);
         }

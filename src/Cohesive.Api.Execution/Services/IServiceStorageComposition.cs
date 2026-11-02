@@ -17,8 +17,8 @@ public interface IServiceStorageComposition : IStorageComposition
 
     /// <summary>Describes the same serving selection used during binding, without opening native resources.</summary>
     /// <param name="query">Admitted query selection.</param>
-    /// <returns>Declared backend and guarantee, or null when this composition does not describe its reader.</returns>
-    ServiceQueryReadBinding? DescribeRead(ServiceQuerySelection query) => null;
+    /// <returns>Declared backend and guarantee for the admitted query.</returns>
+    ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query);
 
     /// <summary>Validates native metadata and prepares persistence without allocating or disposing clients.</summary>
     /// <param name="services">Native resources registered under their existing infrastructure connection identities.</param>

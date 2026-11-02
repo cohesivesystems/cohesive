@@ -43,7 +43,7 @@ public static class ServiceReadSelectionComposition
         public ImmutableArray<ValueContract> Observations => source.Observations;
         public ImmutableArray<QualifiedShapeId> Shapes => source.Shapes;
         public ImmutableArray<object> Bindings => source.Bindings;
-        public ServiceQueryReadBinding? DescribeRead(ServiceQuerySelection selection) =>
+        public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection selection) =>
             ServiceQueryIdentity.For(selection.Request) == key ? binding : source.DescribeRead(selection);
 
         public IServiceStorageComposition PrepareQueries(ImmutableArray<ServiceQuerySelection> selections)
