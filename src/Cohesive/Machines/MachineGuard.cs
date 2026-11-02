@@ -20,6 +20,10 @@ public sealed record MachineGuard(Expr Predicate, ValueBindingId FactsBinding, V
         new ExprScope(bindings: [new(FactsBinding, FactsContract), new(InputBinding, InputContract)], implicitBinding: FactsBinding),
         ExprExpectation.Boolean));
 
+    // Stateless evaluator and immutable capabilities are shared; activation values remain local.
+    static readonly PortableExpressionReferenceEvaluator Evaluator = new(
+        new(ExprSemanticsCatalog.Default.Capabilities), "machines.reference/v1");
+
     internal bool Evaluate(ObservationValue facts, ObservationValue input)
     {
         if (!FactsContract.IsSatisfiedByConstant(facts) || !InputContract.IsSatisfiedByConstant(input))
@@ -28,8 +32,7 @@ public sealed record MachineGuard(Expr Predicate, ValueBindingId FactsBinding, V
             ? PortableExpressionValue.FromObservation(facts)
             : binding == InputBinding ? PortableExpressionValue.FromObservation(input)
             : throw new InvalidOperationException("Unknown machine expression binding.");
-        var evaluator = new PortableExpressionReferenceEvaluator(new(ExprSemanticsCatalog.Default.Capabilities), "machines.reference/v1");
-        var value = evaluator.Evaluate(Predicate, new()
+        var value = Evaluator.Evaluate(Predicate, new()
         {
             ResolveBinding = Resolve,
             ResolveField = (binding, path) => Resolve(binding ?? FactsBinding).Project(path),
@@ -74,9 +77,8 @@ public sealed partial class MachineDefinition
     public MachineDecision Evaluate(string state, string action, ObservationValue facts, ObservationValue input)
     {
         RequireState(state);
-        if (!Edges.Any(e => e.Action == action)) return new(MachineDecisionKind.UnknownAction);
-        var candidates = Edges.Where(e => e.From == state && e.Action == action).ToArray();
-        if (candidates.Length == 0) return new(MachineDecisionKind.Illegal);
+        if (!actionIds.Contains(action)) return new(MachineDecisionKind.UnknownAction);
+        if (!candidatesByAction.TryGetValue((state, action), out var candidates)) return new(MachineDecisionKind.Illegal);
         MachineEdge? selected = null;
         try
         {

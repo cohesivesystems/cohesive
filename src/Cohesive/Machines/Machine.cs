@@ -26,10 +26,18 @@ public sealed record MachineEdge(string Id, string Action, string From, string T
 /// <summary>Immutable flat deterministic machine IR, derived from fluent source.</summary>
 public sealed partial class MachineDefinition
 {
+    readonly HashSet<string> stateIds;
+    readonly HashSet<string> actionIds;
+    readonly Dictionary<(string State, string Action), ImmutableArray<MachineEdge>> candidatesByAction;
+
     internal MachineDefinition(string id, string revision, ImmutableArray<string> states, string initial,
         ImmutableArray<string> finals, ImmutableArray<MachineEdge> edges, ExecutionSourceMap? sourceMap = null)
     {
         Id = id; Revision = revision; States = states; Initial = initial; Finals = finals; Edges = edges;
+        stateIds = new(states, StringComparer.Ordinal);
+        actionIds = new(edges.Select(edge => edge.Action), StringComparer.Ordinal);
+        candidatesByAction = edges.GroupBy(edge => (edge.From, edge.Action))
+            .ToDictionary(group => group.Key, group => group.ToImmutableArray());
         Document = ExecutionDefinitionDocument.Create(new("machine/v1"), new(id), new(revision),
             new MachinePayload(states, initial, finals, edges),
             new(new("cohesive.machines.csharp", "1"), new(id), DocumentOrigin.User), sourceMap: sourceMap);
@@ -81,12 +89,12 @@ public sealed partial class MachineDefinition
 
     void RequireState(string state)
     {
-        if (!States.Contains(state)) throw new ArgumentException("Unknown machine configuration.", nameof(state));
+        if (!stateIds.Contains(state)) throw new ArgumentException("Unknown machine configuration.", nameof(state));
     }
 }
 
 /// <summary>Mutable authoring source for the flat, unguarded deterministic fragment. Build returns immutable IR.</summary>
-public sealed partial class MachineBuilder
+internal sealed partial class MachineBuilder
 {
     readonly string id;
     readonly string revision;

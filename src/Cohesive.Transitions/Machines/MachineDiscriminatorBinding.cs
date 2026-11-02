@@ -1,3 +1,4 @@
+using Cohesive.Machines;
 using System.Linq.Expressions;
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -5,7 +6,7 @@ using Cohesive.Relations.Authoring;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Compilation;
 
-namespace Cohesive.Machines.Transitions;
+namespace Cohesive.Transitions.Machines;
 
 /// <summary>Typed discriminator authoring projected into the existing Transition linker.</summary>
 /// <typeparam name="TEntity">Entity observation type.</typeparam>

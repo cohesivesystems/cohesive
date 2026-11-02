@@ -1,9 +1,10 @@
+using Cohesive.Machines;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.IR;
 
-namespace Cohesive.Machines.Transitions;
+namespace Cohesive.Transitions.Machines;
 
 /// <summary>Projects discriminator-backed machines into existing Transition linking evidence.</summary>
 public static class MachineTransitionLinker

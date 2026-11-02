@@ -21,10 +21,9 @@ var exactMovement = submit.Resolve();
 ```
 
 Handles reject foreign endpoints. Build freezes typed authoring, caches the immutable result,
-and rejects malformed graphs. The structural `MachineBuilder` is another source projection:
-its Build returns detached immutable definitions and its Validate supports incomplete drafts.
-Both lower to the same payload. A named movement is sufficient input for the simplest machine.
-Distinct edges can share an action through `.On("action")` or the structural `action` argument.
+and rejects malformed graphs. `Machine.Define` is the public authoring entry point; its Validate supports incomplete drafts.
+The structural builder is internal lowering/persistence machinery, exercised directly only by compiler tests. A named movement is sufficient input for the simplest machine.
+Distinct edges can share an action through `.On("action")`.
 
 A host commits decisions using its own concurrency boundary. Neither evaluation nor a relationship
 performs I/O. Standalone machines can drive UI navigation, devices, simulations and abstract protocols.
@@ -36,8 +35,8 @@ submit.When((OrderFacts facts, SubmitOrder input) =>
     facts.ItemCount > 0 && input.AcceptTerms);
 ```
 
-Configure guards before Build. Import `Cohesive.Relations.Authoring` for the typed `When` extension and
-`MachineGuardAuthoring.From<TFacts,TInput>`. Typed expressions use the existing Relations expression lowerer,
+Configure guards before Build. Import `Cohesive.Machines` for the typed `When` extension (provided by the Relations assembly).
+The expression lowering helper is internal; `When` is the public typed guard entry point. Typed expressions use the existing Relations expression lowerer,
 shared Expr IR, shared analyzer, and portable evaluator. Facts contain the immutable snapshot and
 explicit environmental observations. Captured objects, arbitrary callbacks and hidden I/O are
 rejected by lowering. Input contracts are retained in IR and checked at evaluation.
@@ -54,7 +53,7 @@ always rejects overlapping enabled edges. No guard priority is inferred from dec
 
 ## Entity integration
 
-The `Cohesive.Machines.Transitions` namespace lives in `Cohesive.Transitions/Machines`; core has no dependency on Transitions.
+The `Cohesive.Transitions.Machines` namespace lives in `Cohesive.Transitions/Machines`; core has no dependency on Transitions.
 
 ```csharp
 var links = new MachineDiscriminatorBinding<Order, OrderStatus>(
@@ -126,7 +125,7 @@ not become successful decisions. Analysis reports identify their scope and bound
 
 ## Design boundaries
 
-The delivered component covers flat machines, fluent and structural source, typed guarded admission,
+The delivered component covers flat machines, fluent source, typed guarded admission,
 entity discriminator/predicate bindings, finite projection/coherence relationships, persistence,
 diagnostics, diagrams and admission matrices. Rich statecharts, timers, history, Process invocation,
 temporal logic, automated guarded refinement proofs, generated TypeScript and migration planning are
@@ -137,5 +136,7 @@ Transition compilation, patches, decisions and commit boundaries. Typed guard lo
 No third expression translator was introduced.
 Predicate rebinding is a deliberately bounded integration operation rather than a second evaluator.
 
-Verification lives in Cohesive.Machines.Tests and the existing Transition compiler/interpreter
-conformance suites. Authoring and reference analysis prioritize clarity; no performance claim is made.
+Verification lives in Cohesive.Tests/Machines and the existing Transition compiler/interpreter
+conformance suites. Guarded admission indexes candidates by state/action and shares the stateless reference
+evaluator; it still interprets predicates and allocates invocation context and decisions. See the
+[before/after benchmark](../../../docs/performance/machine-admission/README.md) for measured cost and scope.

@@ -1,12 +1,12 @@
-using Cohesive.Relations.Authoring;
+using Cohesive.Machines;
 using Cohesive.Execution;
 using Cohesive.Model;
-using Cohesive.Machines.Transitions;
+using Cohesive.Transitions.Machines;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Execution;
 using Cohesive.Transitions.IR;
 
-namespace Cohesive.Machines.Tests;
+namespace Cohesive.Tests.Machines;
 
 public class ExpandedMachineTests
 {
@@ -15,6 +15,49 @@ public class ExpandedMachineTests
     public sealed record Order(string Status);
     static ObservationValue FactsValue(int count) => ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["Count"] = ObservationValue.FromInt64(count) });
     static ObservationValue CommandValue(bool allowed) => ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["Allowed"] = ObservationValue.FromBool(allowed) });
+
+    [Fact]
+    public void PublicAuthoringHasOneEntryAndGuardAllocationsDoNotScaleWithCatalogSize()
+    {
+        Assert.DoesNotContain(typeof(MachineDefinition).Assembly.GetExportedTypes(), type => type.Name == "MachineBuilder");
+        Assert.DoesNotContain(typeof(MachineGuardAuthoring).GetMethods(), method => method.Name == "From");
+        MachineDefinition Create(int count)
+        {
+            var source = Machine.Define("allocation", "1");
+            var ready = source.State("ready").Initial();
+            for (var index = 0; index < count; index++)
+                source.Edge("action-" + index).From(ready).To(ready)
+                    .When((Facts facts, Command input) => facts.Count > 0 && input.Allowed);
+            Assert.Empty(source.Validate());
+            return source.Build();
+        }
+        var facts = FactsValue(2);
+        var input = CommandValue(true);
+        long Measure(MachineDefinition machine, string action)
+        {
+            for (var i = 0; i < 1000; i++) machine.Evaluate("ready", action, facts, input);
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++) machine.Evaluate("ready", action, facts, input);
+            return (GC.GetAllocatedBytesForCurrentThread() - before) / 1000;
+        }
+        var small = Measure(Create(1), "action-0");
+        var large = Measure(Create(1024), "action-1023");
+        Assert.InRange(small, 0, 1024);
+        Assert.Equal(small, large);
+    }
+
+    [Fact]
+    public void IncompleteDraftCanBeDiagnosedAndRepairedBeforeBuild()
+    {
+        var source = Machine.Define("draft", "1");
+        var ready = source.State("ready").Initial();
+        var done = source.State("done").Final();
+        var movement = source.Edge("finish").From(ready);
+        Assert.Contains(source.Validate(), diagnostic => diagnostic.Code == "machines.edge.incomplete");
+        movement.To(done);
+        Assert.Empty(source.Validate());
+        Assert.Equal("done", source.Build().Decide("ready", "finish")!.To);
+    }
 
     [Fact]
     public void CoreMachinesRemainIndependentOfRelationsAndTransitions()

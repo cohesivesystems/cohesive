@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Runtime.CompilerServices;
 
 namespace Cohesive.Machines;
@@ -44,6 +45,20 @@ public sealed class MachineAuthor
         Mutable(); ArgumentException.ThrowIfNullOrWhiteSpace(id);
         var movement = new MachineMovement(this, id); movements.Add(movement); return movement;
     }
+    /// <summary>Inspects incomplete source without freezing the authoring session.</summary>
+    /// <returns>Structured endpoint and graph diagnostics.</returns>
+    public ImmutableArray<MachineDiagnostic> Validate()
+    {
+        var incomplete = movements.Where(movement => movement.Source is null || movement.Target is null)
+            .Select(movement => new MachineDiagnostic("machines.edge.incomplete", movement.Id, "Declare both movement endpoints."))
+            .ToImmutableArray();
+        if (!incomplete.IsEmpty) return incomplete;
+        var source = Builder.Copy();
+        foreach (var movement in movements)
+            source.Edge(movement.Id, movement.Source!.Id, movement.Target!.Id, movement.Action, movement.Guard);
+        return source.Validate();
+    }
+
     /// <summary>Lowers and freezes source. Repeated calls return the same definition.</summary>
     /// <returns>Immutable canonical machine.</returns>
     /// <exception cref="InvalidOperationException">Source is incomplete or malformed.</exception>
@@ -126,7 +141,7 @@ public sealed class MachineMovement
     { if (Source is null || Target is null) throw new InvalidOperationException($"Movement '{Id}' requires both endpoints."); }
 }
 
-public sealed partial class MachineBuilder
+internal sealed partial class MachineBuilder
 {
     internal MachineBuilder Copy()
     {

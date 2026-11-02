@@ -1,6 +1,6 @@
 using Cohesive.Machines;
 
-namespace Cohesive.Machines.Tests;
+namespace Cohesive.Tests.Machines;
 
 public class MachineTests
 {

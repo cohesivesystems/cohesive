@@ -1,3 +1,4 @@
+using Cohesive.Machines;
 using Cohesive.Relations.Authoring;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
@@ -6,7 +7,7 @@ using Cohesive.Model;
 using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.IR;
 
-namespace Cohesive.Machines.Transitions;
+namespace Cohesive.Transitions.Machines;
 
 /// <summary>Predicate-backed entity binding. Transitions establish fields; the machine checks the final candidate.</summary>
 /// <typeparam name="TEntity">Entity facts type.</typeparam>

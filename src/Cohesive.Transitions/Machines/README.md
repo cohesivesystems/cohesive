@@ -1,4 +1,4 @@
-# Cohesive.Machines.Transitions
+# Machine bindings in Cohesive.Transitions
 
 Entity bindings in the existing `Cohesive.Transitions` assembly for [Cohesive.Machines](../../Cohesive/Machines/README.md).
 Typed discriminator and predicate authoring project exact machine references into the existing

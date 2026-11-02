@@ -1,7 +1,7 @@
 using System.Linq.Expressions;
-using Cohesive.Machines;
+using Cohesive.Relations.Authoring;
 
-namespace Cohesive.Relations.Authoring;
+namespace Cohesive.Machines;
 
 /// <summary>Typed machine guard authoring using the shared Relations expression frontend.</summary>
 public static class MachineGuardAuthoring
@@ -12,7 +12,7 @@ public static class MachineGuardAuthoring
     /// <param name="predicate">Pure expression over facts and input.</param>
     /// <returns>Portable predicate with structural input contracts.</returns>
     /// <exception cref="RelationQueryExpressionAuthoringException">An expression is outside the portable language.</exception>
-    public static MachineGuard From<TFacts, TInput>(Expression<Func<TFacts, TInput, bool>> predicate)
+    internal static MachineGuard From<TFacts, TInput>(Expression<Func<TFacts, TInput, bool>> predicate)
         where TFacts : notnull where TInput : notnull
     {
         var author = new RelationQueryExpressionAuthoring();
