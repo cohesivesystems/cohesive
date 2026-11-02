@@ -1,3 +1,4 @@
+using Cohesive.Relations.Authoring;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Machines.Transitions;
@@ -14,6 +15,24 @@ public class ExpandedMachineTests
     public sealed record Order(string Status);
     static ObservationValue FactsValue(int count) => ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["Count"] = ObservationValue.FromInt64(count) });
     static ObservationValue CommandValue(bool allowed) => ObservationValue.FromObject(new Dictionary<string, ObservationValue> { ["Allowed"] = ObservationValue.FromBool(allowed) });
+
+    [Fact]
+    public void CoreMachinesRemainIndependentOfRelationsAndTransitions()
+    {
+        var assembly = typeof(MachineDefinition).Assembly;
+        Assert.Equal(typeof(ObservationValue).Assembly, assembly);
+        Assert.DoesNotContain(assembly.GetReferencedAssemblies(), reference =>
+            reference.Name is "Cohesive.Relations" or "Cohesive.Transitions");
+        Assert.Equal(typeof(TransitionStaticCompiler).Assembly, typeof(MachineTransitionLinker).Assembly);
+
+        var source = Machine.Define("typed-extension", "1");
+        var draft = source.State("draft").Initial();
+        var done = source.State("done").Final();
+        source.Edge("submit").From(draft).To(done)
+            .When((Facts facts, Command input) => facts.Count > 0 && input.Allowed);
+        Assert.Equal(MachineDecisionKind.Accepted,
+            source.Build().Evaluate("draft", "submit", FactsValue(2), CommandValue(true)).Kind);
+    }
 
     [Fact]
     public void TypedAuthoringFreezesAndRejectsForeignStates()
@@ -34,7 +53,7 @@ public class ExpandedMachineTests
     [Fact]
     public void GuardedAdmissionSurvivesPersistenceAndDistinguishesUncertainty()
     {
-        var guard = MachineGuard.From<Facts, Command>((facts, input) => facts.Count > 0 && input.Allowed);
+        var guard = MachineGuardAuthoring.From<Facts, Command>((facts, input) => facts.Count > 0 && input.Allowed);
         var definition = new MachineBuilder("guarded", "1").State("draft").State("done")
             .Initial("draft").Final("done").Edge("submit", "draft", "done", guard: guard).Build();
         var loaded = MachineDefinition.Deserialize(definition.CanonicalJson);
@@ -51,7 +70,7 @@ public class ExpandedMachineTests
     public void CapturedExecutableStateIsRejected()
     {
         var captured = new Facts(4);
-        Assert.ThrowsAny<Exception>(() => MachineGuard.From<Facts, Command>((facts, input) => facts.Count > captured.Count));
+        Assert.ThrowsAny<Exception>(() => MachineGuardAuthoring.From<Facts, Command>((facts, input) => facts.Count > captured.Count));
     }
 
     [Fact]

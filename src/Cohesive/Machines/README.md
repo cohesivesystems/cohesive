@@ -1,6 +1,6 @@
 # Cohesive.Machines
 
-Cohesive.Machines declares lifecycle legality independently of entity updates, storage, and
+The `Cohesive.Machines` namespace in the core `Cohesive` assembly declares lifecycle legality independently of entity updates, storage, and
 orchestration. It implements the flat-machine slice of the
 [Machines specification](https://app.notion.com/p/3758cf7881f98014afadcdd4dff8655f).
 
@@ -36,7 +36,8 @@ submit.When((OrderFacts facts, SubmitOrder input) =>
     facts.ItemCount > 0 && input.AcceptTerms);
 ```
 
-Configure guards before Build. Typed expressions use the existing Relations expression lowerer,
+Configure guards before Build. Import `Cohesive.Relations.Authoring` for the typed `When` extension and
+`MachineGuardAuthoring.From<TFacts,TInput>`. Typed expressions use the existing Relations expression lowerer,
 shared Expr IR, shared analyzer, and portable evaluator. Facts contain the immutable snapshot and
 explicit environmental observations. Captured objects, arbitrary callbacks and hidden I/O are
 rejected by lowering. Input contracts are retained in IR and checked at evaluation.
@@ -53,7 +54,7 @@ always rejects overlapping enabled edges. No guard priority is inferred from dec
 
 ## Entity integration
 
-Cohesive.Machines.Transitions owns the integration; Machines has no dependency on Transitions.
+The `Cohesive.Machines.Transitions` namespace lives in `Cohesive.Transitions/Machines`; core has no dependency on Transitions.
 
 ```csharp
 var links = new MachineDiscriminatorBinding<Order, OrderStatus>(
@@ -132,8 +133,8 @@ temporal logic, automated guarded refinement proofs, generated TypeScript and mi
 later extensions from the broader Notion research program, not implemented capabilities.
 
 Reuse: shared expression lowering/analysis/evaluation, canonical execution documents, source maps,
-Transition compilation, patches, decisions and commit boundaries. The Relations dependency is the
-existing typed expression frontend authority; no third expression translator was introduced.
+Transition compilation, patches, decisions and commit boundaries. Typed guard lowering lives in Relations, which depends on core; core does not depend on Relations.
+No third expression translator was introduced.
 Predicate rebinding is a deliberately bounded integration operation rather than a second evaluator.
 
 Verification lives in Cohesive.Machines.Tests and the existing Transition compiler/interpreter

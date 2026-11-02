@@ -1,4 +1,3 @@
-using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 
 namespace Cohesive.Machines;
@@ -107,15 +106,18 @@ public sealed class MachineMovement
     /// <returns>This movement.</returns>
     /// <exception cref="InvalidOperationException">Source is frozen.</exception>
     public MachineMovement On(string action) { owner.Mutable(); ArgumentException.ThrowIfNullOrWhiteSpace(action); Action = action; return this; }
-    /// <summary>Lowers a typed guard over explicit facts and input.</summary>
-    /// <typeparam name="TFacts">Facts type.</typeparam>
-    /// <typeparam name="TInput">Action payload type.</typeparam>
-    /// <param name="predicate">Pure admission predicate.</param>
+    /// <summary>Attaches a portable guard produced by an authoring frontend.</summary>
+    /// <param name="guard">Lowered pure admission predicate.</param>
     /// <returns>This movement.</returns>
     /// <exception cref="InvalidOperationException">Source is frozen.</exception>
-    public MachineMovement When<TFacts, TInput>(Expression<Func<TFacts, TInput, bool>> predicate)
-        where TFacts : notnull where TInput : notnull
-    { owner.Mutable(); Guard = MachineGuard.From(predicate); return this; }
+    /// <exception cref="ArgumentNullException">Guard is null.</exception>
+    public MachineMovement When(MachineGuard guard)
+    {
+        owner.Mutable();
+        ArgumentNullException.ThrowIfNull(guard);
+        Guard = guard;
+        return this;
+    }
     /// <summary>Resolves this handle to its frozen exact definition and edge.</summary>
     /// <returns>The owning definition and selected edge.</returns>
     public (MachineDefinition Machine, MachineEdge Edge) Resolve()
