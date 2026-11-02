@@ -16,8 +16,7 @@ internal static class OrderHttpTestHost
 {
     internal static async Task<ServiceApiBindings> Prepare(WebApplicationBuilder builder, FulfillmentApplication model,
         PostgresPersistenceRegistration persistence, NpgsqlDataSource database,
-        Func<IEntityRepository, IEntityRepository>? decorateOrders = null, PostgresEntityHistoryStorage? history = null,
-        Func<IServicePersistence, IServicePersistence>? selectReads = null)
+        Func<IEntityRepository, IEntityRepository>? decorateOrders = null, PostgresEntityHistoryStorage? history = null)
     {
         builder.Services.AddRequestOperationContext();
         builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
@@ -27,6 +26,6 @@ internal static class OrderHttpTestHost
         if (decorateOrders is not null)
             storage = new ServicePersistenceBuilder(storage)
                 .Repository(decorateOrders(storage.Repository(ValueContract.FromShape(model.Domain.Orders.Definition.Shape)))).Build();
-        return model.Endpoints.Build(builder.Services, selectReads is null ? storage : selectReads(storage));
+        return model.Endpoints.Build(builder.Services, storage);
     }
 }

@@ -10,6 +10,8 @@ namespace AspireFirst.Materialization;
 /// <summary>Shared native target admission for the operator and explicitly selected HTTP reads.</summary>
 public static class ShadowElastic
 {
+    /// <summary>Canonical logical target and keyed native-client identity.</summary>
+    public const string Resource = "fulfillment/order-details/shadow";
     /// <summary>Shared target authority, independent of the selected HTTP reader.</summary>
     public const string Authority = "aspire-first/order-shadow/v1";
     /// <summary>Native template identity.</summary>
@@ -39,7 +41,7 @@ public static class ShadowElastic
             if (!actual.TryGetProperty(field.Name, out var value) || !JsonElement.DeepEquals(value, field.Value))
                 throw new InvalidOperationException("Shadow template differs; initialize or explicitly migrate the dedicated shadow template.");
         var binding = new ElasticMaterializationTargetBinding(new("fulfillment/shadow/elastic/v1"), cluster,
-            new("fulfillment/order-details/shadow"), definition.Document.Definition.Id, "orders-shadow",
+            new(Resource), definition.Document.Definition.Id, "orders-shadow",
             "cohesive-order-shadow-generation-", ".cohesive-order-shadow-control",
             new(TemplateName, new("sha256", "aspire-first/elastic-template-json/v1",
                 Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Template)))), Authority),

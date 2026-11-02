@@ -436,3 +436,21 @@ incomplete or foreign infrastructure compilation before admission. the Applicati
 registers the named offline command and writes a report only when requested; both native Aspire
 examples use this entry point. History metadata derives from the storage-owned declaration;
 a composition without a history attachment does not invent a history selection.
+
+### Storage-owned query read selection
+
+A storage composition can select a serving interpretation with
+`source.SelectQuery(query, new ServiceQueryReadBinding(backend, resource, consistency), prepare)`.
+The source retains repository and entity-placement ownership. Selection uses canonical
+query identity, so separately constructed equivalent query declarations resolve identically.
+Admission checks the endpoint's consistency demand before native preparation; binding
+prepares bounded readers once and checks their canonical identity and promised consistency
+before preparing source persistence. A selected reader failure propagates, never falling
+back to a stronger or fresher backend silently. Unused selections require no native target.
+
+`ServiceStorageExplanation.Queries[].Read` reports the chosen backend, existing logical
+resource identity and declared guarantee. This is offline admission evidence, not runtime
+readiness. `PrepareQueries` must complete before `BindAsync`; host-owned clients remain
+owned by the host. The [fulfillment walkthrough](../../eng/examples/aspire-first/OrderMaterialization/README.md#explicit-http-read-selection-and-rollback)
+shows eventual Elasticsearch serving and explicit rollback to PostgreSQL without changing
+the API contract.

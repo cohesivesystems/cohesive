@@ -15,6 +15,11 @@ public interface IServiceStorageComposition : IStorageComposition
     /// <returns>A host-independent prepared composition; the original declaration remains reusable.</returns>
     IServiceStorageComposition PrepareQueries(System.Collections.Immutable.ImmutableArray<ServiceQuerySelection> queries);
 
+    /// <summary>Describes the same serving selection used during binding, without opening native resources.</summary>
+    /// <param name="query">Admitted query selection.</param>
+    /// <returns>Declared backend and guarantee, or null when this composition does not describe its reader.</returns>
+    ServiceQueryReadBinding? DescribeRead(ServiceQuerySelection query) => null;
+
     /// <summary>Validates native metadata and prepares persistence without allocating or disposing clients.</summary>
     /// <param name="services">Native resources registered under their existing infrastructure connection identities.</param>
     /// <param name="cancellationToken">Cancels preparation; no traffic may be admitted until it completes.</param>

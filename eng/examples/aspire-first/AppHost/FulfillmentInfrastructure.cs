@@ -43,7 +43,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             infra =>
             {
                 infra.Resource(Store).Persistent()
-                    .Prepared(model.Storage.RequireComposition<PostgresStorageComposition>().PrepareEvidence(model.Endpoints.Plan.QueryDependencies.Queries));
+                    .Prepared(model.Storage.Native.PrepareEvidence(model.Endpoints.Plan.QueryDependencies.Queries));
                 infra.Workload(Worker).Requires(ApplicationExecution).RequiresReady(Store);
             });
     }

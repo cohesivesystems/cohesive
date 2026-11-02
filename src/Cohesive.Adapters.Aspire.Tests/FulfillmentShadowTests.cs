@@ -1,3 +1,6 @@
+using Cohesive.Adapters.Marten;
+using Marten;
+using Microsoft.Extensions.Configuration;
 using Microsoft.AspNetCore.Builder;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
@@ -196,11 +199,12 @@ public sealed class FulfillmentShadowTests
             // CLI JSON is the operator artifact consumed by worker admission.
             approvedComparison = JsonSerializer.Deserialize<MaterializationShadowComparison>(JsonSerializer.Serialize(approvedComparison))!;
             var native = new ServicePersistenceBuilder().Query(model.Queries.OrderDetails, (_, _) => live).Build();
-            var selected = OrderDetailsReadSelection.Bind(native, model.Queries, runtime, approvedComparison);
+            var selected = new ServicePersistenceBuilder(native).Query(model.Queries.OrderDetails,
+                OrderDetailsReadSelection.PrepareReaders(model.Queries, runtime, approvedComparison)).Build();
             Assert.Throws<ServiceBindingValidationException>(() => selected.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.SingleSnapshot));
             var otherIncarnation = await application.Storage.OrderDetails.BindAsync(database,
                 () => new LogicalReplicationConnection(connection), target, new byte[32], "different-incarnation", ct);
-            Assert.Throws<InvalidOperationException>(() => OrderDetailsReadSelection.Bind(native, model.Queries, otherIncarnation, approvedComparison));
+            Assert.Throws<InvalidOperationException>(() => OrderDetailsReadSelection.PrepareReaders(model.Queries, otherIncarnation, approvedComparison));
             await Assert.ThrowsAsync<Cohesive.Adapters.Elastic.ElasticMaterializationTransportException>(() => target.ReadValueAsync(context, approvedComparison.Convergence.Generation,
                 definition.OrderDetails.Document.DefinitionFingerprint, MaterializationItemId.FromRootIdentity(first), maximumBytes: 1));
             var eventual = selected.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.Eventual);
@@ -291,13 +295,34 @@ public sealed class FulfillmentShadowTests
                 .AddSingleton(new OrderReadPolicy { Source = selection is null ? OrderDetailsReadSource.Live : OrderDetailsReadSource.Materialized,
                     AcceptEventualConsistency = selection is not null }));
             var builder = WebApplication.CreateBuilder();
-            var services = await OrderHttpTestHost.Prepare(builder, hostedModel,
-                hostedModel.Storage.Bindings.Bind(database, "tests/read-selection"), database,
-                selectReads: selection is null ? null : native => OrderDetailsReadSelection.Bind(native, hostedModel.Queries, runtime, selection));
+            var artifact = Path.GetTempFileName();
+            await File.WriteAllTextAsync(artifact, JsonSerializer.Serialize(selection), ct);
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["OrderReads:ComparisonFile"] = artifact,
+                ["Shadow:PositionKey"] = Convert.ToBase64String(new byte[32]),
+                ["Shadow:SlotGeneration"] = "test-slots/v1"
+            });
+            var historyPolicy = new FulfillmentHistoryPolicy();
+            builder.Services.AddKeyedSingleton<NpgsqlDataSource>(historyPolicy.DatabaseName, database);
+            builder.Services.AddKeyedSingleton<IDocumentStore>(historyPolicy.DatabaseName, (_, _) => DocumentStore.For(options =>
+            {
+                options.Connection(database);
+                historyPolicy.History.Configure(options);
+            }));
+            if (selection is not null)
+            {
+                builder.Services.AddKeyedSingleton<HttpClient>(ShadowElastic.Resource, http);
+                builder.Services.AddKeyedSingleton<PostgresLogicalReplicationConnectionFactory>(historyPolicy.DatabaseName,
+                    (_, _) => () => new LogicalReplicationConnection(connection));
+            }
+            builder.Services.AddRequestOperationContext();
+            builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
+            builder.Services.AddCohesiveServices(hostedModel);
             await using var app = builder.Build();
             app.UseRequestOperationContext();
             app.UseAuthorization();
-            app.MapServices(services);
+            await app.MapServicesAsync();
             app.Urls.Add("http://127.0.0.1:0");
             await app.StartAsync(ct);
             try
@@ -311,7 +336,7 @@ public sealed class FulfillmentShadowTests
                     { Converters = { new JsonStringEnumConverter() } });
                 Assert.Equal(JsonSerializer.Serialize(expected, Json), JsonSerializer.Serialize(actual, Json));
             }
-            finally { await app.StopAsync(ct); }
+            finally { await app.StopAsync(ct); File.Delete(artifact); }
         }
         Task<MaterializationShadowComparison> Compare() => MaterializationShadowVerification.CompareAsync(runtime, context, convergence!,
             (generation, limit, token) => target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit));

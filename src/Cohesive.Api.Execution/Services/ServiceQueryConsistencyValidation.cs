@@ -15,11 +15,20 @@ public static class ServiceQueryConsistencyValidation
         IRelationQueryReader<TInput, TResult> reader, RelationQueryConsistency required)
     {
         ArgumentNullException.ThrowIfNull(reader);
-        if (!Enum.IsDefined(required) || !Enum.IsDefined(reader.Consistency)
-            || (required == RelationQueryConsistency.SingleSnapshot && reader.Consistency != required)
-            || (reader.Consistency == RelationQueryConsistency.Eventual && required != RelationQueryConsistency.Eventual))
-            throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryPlacementUnsupported,
-                $"Query requires {required}, but its prepared reader guarantees {reader.Consistency}.", "/bindings/queries/consistency");
+        Require(reader.Consistency, required);
         return reader;
+    }
+
+    /// <summary>Validates a declared guarantee against endpoint demand without preparing native readers.</summary>
+    /// <param name="provided">Minimum reader guarantee.</param>
+    /// <param name="required">Endpoint demand.</param>
+    /// <exception cref="ServiceBindingValidationException">The guarantee is unknown or insufficient.</exception>
+    public static void Require(RelationQueryConsistency provided, RelationQueryConsistency required)
+    {
+        if (!Enum.IsDefined(required) || !Enum.IsDefined(provided)
+            || (required == RelationQueryConsistency.SingleSnapshot && provided != required)
+            || (provided == RelationQueryConsistency.Eventual && required != RelationQueryConsistency.Eventual))
+            throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryPlacementUnsupported,
+                $"Query requires {required}, but its prepared reader guarantees {provided}.", "/bindings/queries/consistency");
     }
 }

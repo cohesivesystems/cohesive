@@ -253,6 +253,17 @@ no API client change is required. This is per-host configuration selection, not 
 atomic fleet-wide rollout or target alias promotion. Keep the pinned generation
 retained until every host using it has switched back.
 
-The application explanation still describes the canonical PostgreSQL source placement
-and rollback capability. The selected serving generation is currently explicit runtime
-configuration and startup logging, not a new infrastructure capability attestation.
+`FulfillmentStorage` declares the selection through `SelectQuery`, alongside its
+native PostgreSQL composition. `Program.cs` only registers native clients and calls
+`AddCohesiveServices(model)` / `MapServicesAsync()`; storage preparation admits the
+comparison and pinned generation before preparing the source store.
+
+The offline application explanation now records the selected backend, logical serving
+resource and declared consistency in `storage.queries[].read`, alongside the endpoint's
+required consistency and canonical source placement. Live reads report PostgreSQL with
+`SingleSnapshot`; selected materialized details report Elasticsearch with `Eventual`.
+Availability still reads PostgreSQL. The same declaration drives runtime binding, which
+checks the concrete reader's query identity and consistency before source preparation.
+Explanation does not load comparison files or contact either backend: it describes the
+selection, not live readiness or a verified generation. Generation admission remains a
+startup check, with no silent fallback.

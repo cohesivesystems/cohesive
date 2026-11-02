@@ -1,3 +1,4 @@
+using Cohesive.Relations.Compilation;
 using Cohesive.Model;
 using Cohesive.Prelude;
 using Cohesive.Relations.Authoring;
@@ -8,17 +9,17 @@ namespace Cohesive.Api.Execution.Services;
 
 /// <summary>Selects explicit repository and query implementations over an optional default persistence.</summary>
 /// <remarks>Build once per host. Registrations retain caller-owned backends; no IO or disposal is performed.
-/// Exact query instance and observation contracts select overrides, never CLR names or registration order.</remarks>
+/// Canonical query identity and observation contracts select overrides, never CLR names or registration order.</remarks>
 public sealed class ServicePersistenceBuilder
 {
     readonly Dictionary<ValueContract, IEntityRepository> repositories = [];
-    readonly Dictionary<object, Func<int, long, object>> queries = new(ReferenceEqualityComparer.Instance);
+    readonly Dictionary<RelationQueryPlanComponentFingerprint, Func<int, long, object>> queries = [];
     readonly AuthoringState<IServicePersistence> state;
 
     /// <summary>Starts a composition with a fallback for bindings not explicitly selected here.</summary>
     /// <param name="fallback">Existing native persistence, or null for an exhaustive explicit composition.</param>
     public ServicePersistenceBuilder(IServicePersistence? fallback = null) =>
-        state = new(() => new Persistence(new(repositories), new(queries, ReferenceEqualityComparer.Instance), fallback));
+        state = new(() => new Persistence(new(repositories), new(queries), fallback));
 
     /// <summary>Selects a repository for its exact observation contract.</summary>
     /// <param name="repository">Caller-owned repository, including native receipt capabilities.</param>
@@ -47,10 +48,11 @@ public sealed class ServicePersistenceBuilder
         ArgumentNullException.ThrowIfNull(prepare);
         return state.Edit(() =>
         {
-            queries.Add(query, (rows, bytes) =>
+            var identity = ServiceQueryIdentity.For(query.CompilationRequest);
+            queries.Add(identity, (rows, bytes) =>
             {
                 var reader = prepare(rows, bytes);
-                if (reader is null || !ReferenceEquals(reader.Definition, query))
+                if (reader is null || ServiceQueryIdentity.For(reader.Definition.CompilationRequest) != identity)
                     throw new InvalidOperationException("Prepared query must retain its exact registered declaration.");
                 return reader;
             });
@@ -63,9 +65,9 @@ public sealed class ServicePersistenceBuilder
     public IServicePersistence Build() => state.Value;
 
     sealed class Persistence(Dictionary<ValueContract, IEntityRepository> repositories,
-        Dictionary<object, Func<int, long, object>> queries, IServicePersistence? fallback) : IServicePersistence
+        Dictionary<RelationQueryPlanComponentFingerprint, Func<int, long, object>> queries, IServicePersistence? fallback) : IServicePersistence
     {
-        readonly Dictionary<object, Dictionary<(int, long), Lazy<object>>> prepared = new(ReferenceEqualityComparer.Instance);
+        readonly Dictionary<RelationQueryPlanComponentFingerprint, Dictionary<(int, long), Lazy<object>>> prepared = [];
         public IEntityRepository Repository(ValueContract observation) => repositories.TryGetValue(observation, out var repository)
             ? repository : fallback?.Repository(observation) ?? throw new InvalidOperationException("No repository is selected for the observation contract.");
         public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes, RelationQueryConsistency consistency)
@@ -73,13 +75,14 @@ public sealed class ServicePersistenceBuilder
             ArgumentNullException.ThrowIfNull(query);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRows);
             ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumBytes);
-            if (!queries.TryGetValue(query, out var factory))
+            var identity = ServiceQueryIdentity.For(query.CompilationRequest);
+            if (!queries.TryGetValue(identity, out var factory))
                 return ServiceQueryConsistencyValidation.Require(fallback?.Query(query, maximumRows, maximumBytes, consistency)
                     ?? throw new InvalidOperationException("No persistence is selected for the query declaration."), consistency);
             Lazy<object> value;
             lock (prepared)
             {
-                if (!prepared.TryGetValue(query, out var bounds)) prepared.Add(query, bounds = []);
+                if (!prepared.TryGetValue(identity, out var bounds)) prepared.Add(identity, bounds = []);
                 if (!bounds.TryGetValue((maximumRows, maximumBytes), out value!))
                     bounds.Add((maximumRows, maximumBytes), value = new(() => factory(maximumRows, maximumBytes)));
             }

@@ -1,3 +1,5 @@
+using Microsoft.Extensions.DependencyInjection;
+using Cohesive.Relations.Execution;
 using System.Text.Json.Nodes;
 using Aspire.Hosting;
 using Cohesive.Adapters.Aspire;
@@ -17,6 +19,34 @@ public sealed class FulfillmentExplanationTests
         var model = TestModels.Infrastructure(authority);
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
         return model.Explain(model.Configure(builder));
+    }
+
+    [Fact]
+    public void Serving_selection_is_explained_offline_without_loading_comparison_or_native_clients()
+    {
+        var infrastructure = ModelActivator.Create<FulfillmentInfrastructure>(services => services
+            .AddSingleton(new FulfillmentHistoryPolicy())
+            .AddSingleton(new OrderReadPolicy { Source = OrderDetailsReadSource.Materialized, AcceptEventualConsistency = true }));
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
+        var selected = infrastructure.Explain(infrastructure.Configure(builder));
+        var live = Native(EntityStateAuthority.State);
+        var detailId = selected.Endpoints.Single(endpoint => endpoint.Http?.Route == "/orders/{id}/details").Execution;
+        var details = selected.Storage.Queries.Single(query => query.Query == detailId);
+        Assert.Equal("Elasticsearch", details.Read!.Backend);
+        Assert.Equal(AspireFirst.Materialization.ShadowElastic.Resource, details.Read.Resource);
+        Assert.Equal(RelationQueryConsistency.Eventual, details.Read.Consistency);
+        Assert.Equal(RelationQueryConsistency.Eventual, details.Consistency);
+        Assert.All(live.Storage.Queries, query =>
+        {
+            Assert.Equal("PostgreSQL", query.Read!.Backend);
+            Assert.Equal("orders", query.Read.Resource);
+            Assert.Equal(RelationQueryConsistency.SingleSnapshot, query.Read.Consistency);
+        });
+        Assert.Equal("PostgreSQL", selected.Storage.Queries.Single(query => query.Query != detailId).Read!.Backend);
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(live.ToJson())!["endpoints"], JsonNode.Parse(selected.ToJson())!["endpoints"]));
+        var encoded = JsonNode.Parse(selected.ToJson())!["storage"]!["queries"]!.AsArray();
+        Assert.Contains(encoded, entry => entry!["read"]!["backend"]!.GetValue<string>() == "Elasticsearch"
+            && entry["read"]!["consistency"]!.GetValue<string>() == "Eventual");
     }
 
     [Fact]

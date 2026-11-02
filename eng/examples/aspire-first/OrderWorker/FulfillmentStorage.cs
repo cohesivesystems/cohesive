@@ -1,3 +1,6 @@
+using AspireFirst.Materialization;
+using Cohesive.Api.Execution.Services;
+using Cohesive.Relations.Execution;
 using Cohesive.Adapters.Postgres;
 using Cohesive.Storage;
 using Cohesive.Adapters.Sql;
@@ -13,8 +16,13 @@ public sealed class FulfillmentStorage : StorageModel
     /// <param name="domain">Shared canonical entities.</param>
     /// <param name="history">Environment-selected authority and reconstitution, captured by this model.</param>
     /// <param name="mappings">Shared native table mappings.</param>
-    public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, FulfillmentHistoryPolicy history)
+    /// <param name="queries">Shared query declarations eligible for serving selection.</param>
+    /// <param name="reads">Explicit live or materialized serving policy.</param>
+    public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, FulfillmentHistoryPolicy history,
+        FulfillmentQueries queries, OrderReadPolicy? reads = null)
     {
+        reads ??= new();
+        reads.Validate();
         Bindings = Storage.Define(() => PostgresPersistenceBindings.Define(
             new(history.DatabaseName), storage =>
             {
@@ -36,8 +44,21 @@ public sealed class FulfillmentStorage : StorageModel
                 storage.Entity(domain.Reservations, mappings.Reservations);
                 storage.Entity(domain.Inventory, mappings.Inventory);
             }));
-        Storage.Compose(() => new PostgresStorageComposition(Bindings));
+        Native = new PostgresStorageComposition(Bindings);
+        Storage.Compose(() =>
+        {
+            if (reads.Source == OrderDetailsReadSource.Live) return Native;
+            var materializations = new FulfillmentMaterializations(queries);
+            var materializationStorage = new FulfillmentMaterializationStorage(this, materializations);
+            return Native.SelectQuery(queries.OrderDetails,
+                new("Elasticsearch", ShadowElastic.Resource, RelationQueryConsistency.Eventual),
+                (services, ct) => OrderDetailsReadSelection.PrepareAsync(services, queries,
+                    materializationStorage.OrderDetails, Bindings.Database.Value, ct));
+        });
     }
+
+    /// <summary>Canonical source placement and live rollback interpretation, also used for infrastructure evidence.</summary>
+    public PostgresStorageComposition Native { get; }
 
     /// <summary>Native mappings for the primary database.</summary>
     public PostgresPersistenceBindings Bindings { get; }

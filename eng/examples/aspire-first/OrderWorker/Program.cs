@@ -1,8 +1,6 @@
-using System.Text.Json;
+using Cohesive.Adapters.Postgres;
+using Npgsql.Replication;
 using AspireFirst.Materialization;
-using Cohesive.Storage.Materialization;
-using Cohesive.Adapters.Postgres.Services;
-using Cohesive.Api.Execution.Services;
 using Cohesive.Adapters.Marten;
 using Marten;
 using Cohesive.Application;
@@ -30,51 +28,23 @@ builder.Services.AddKeyedSingleton<IDocumentStore>(policy.DatabaseName, (service
     options.Connection(services.GetRequiredKeyedService<NpgsqlDataSource>(policy.DatabaseName));
     policy.History.Configure(options);
 }));
-if (reads.Source == OrderDetailsReadSource.Live)
-    builder.Services.AddCohesiveServices(model);
-else
+// Native clients remain DI-owned; the storage model owns read admission and selection.
+if (reads.Source == OrderDetailsReadSource.Materialized)
 {
-    var materializations = new FulfillmentMaterializations(model.Queries);
-    var definition = materializations.OrderDetails;
-    var materializationStorage = new FulfillmentMaterializationStorage(model.Storage, materializations);
-    var positionKey = Convert.FromBase64String(builder.Configuration["Shadow:PositionKey"]
-        ?? throw new InvalidOperationException("Shadow:PositionKey is required for exact read-plan admission."));
-    var slotGeneration = builder.Configuration["Shadow:SlotGeneration"]
-        ?? throw new InvalidOperationException("Shadow:SlotGeneration is required for exact read-plan admission.");
-    var comparisonPath = builder.Configuration["OrderReads:ComparisonFile"]
-        ?? throw new InvalidOperationException("OrderReads:ComparisonFile is required for materialized reads.");
-    var comparison = JsonSerializer.Deserialize<MaterializationShadowComparison>(await File.ReadAllTextAsync(comparisonPath))
-        ?? throw new InvalidOperationException("Read comparison evidence is missing.");
-    OrderDetailsReadSelection.Validate(comparison, definition, DateTimeOffset.UtcNow);
-    var endpoint = new Uri(builder.Configuration["Shadow:Elasticsearch"]
-        ?? throw new InvalidOperationException("Shadow:Elasticsearch is required for materialized reads."));
-    builder.Services.AddSingleton(_ => new HttpClient { BaseAddress = endpoint });
-    var native = model.Storage.RequireComposition<PostgresStorageComposition>();
-    // Admit all logical repository/query dependencies before native preparation. The explicit override below changes only Details.
-    var admission = new ServiceStorageComposition([native]);
-    admission.Validate([model.Endpoints.Plan]);
-    builder.Services.AddCohesiveServices(model.Endpoints, async (services, ct) =>
+    builder.Services.AddKeyedSingleton<PostgresLogicalReplicationConnectionFactory>(policy.DatabaseName,
+        (_, _) => () => new LogicalReplicationConnection(connectionString));
+    builder.Services.AddKeyedSingleton<HttpClient>(ShadowElastic.Resource, (_, _) => new HttpClient
     {
-        var target = await ShadowElastic.BindAsync(services.GetRequiredService<HttpClient>(), definition, ct);
-        // Native affinity and retention must pass before admitting HTTP traffic, even for an empty generation.
-        _ = await target.ReadValueAsync(Cohesive.Prelude.OperationContext.Create(cancellationToken: ct),
-            comparison.Convergence.Generation, definition.Document.DefinitionFingerprint,
-            MaterializationItemId.FromRootIdentity("read-admission"));
-        var runtime = await materializationStorage.OrderDetails.BindAsync(
-            services.GetRequiredKeyedService<NpgsqlDataSource>(policy.DatabaseName),
-            () => new Npgsql.Replication.LogicalReplicationConnection(connectionString), target, positionKey, slotGeneration, ct);
-        if (!comparison.Convergence.ValidateAgainst(runtime.Resolved.Plan, DateTimeOffset.UtcNow).IsValid)
-            throw new InvalidOperationException("Read comparison does not match this worker's exact native source placement.");
-        var live = await admission.BindAsync(services, ct);
-        return OrderDetailsReadSelection.Bind(live, model.Queries, runtime, comparison);
+        BaseAddress = new Uri(builder.Configuration["Shadow:Elasticsearch"]
+            ?? throw new InvalidOperationException("Shadow:Elasticsearch is required for materialized reads."))
     });
 }
+builder.Services.AddCohesiveServices(model);
 
 await using var app = builder.Build();
 app.Logger.LogInformation("OrderDetails read source: {Source}; consistency: {Consistency}. Selection is fixed for this host lifetime.", reads.Source, reads.Consistency);
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
 app.UseAuthorization();
-if (reads.Source == OrderDetailsReadSource.Live) await app.MapServicesAsync();
-else await app.MapServicesAsync<OrderEndpoints>();
+await app.MapServicesAsync();
 await app.RunAsync();
