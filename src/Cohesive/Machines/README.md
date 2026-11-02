@@ -36,7 +36,10 @@ submit.When((OrderFacts facts, SubmitOrder input) =>
 ```
 
 Configure guards before Build. Import `Cohesive.Machines` for the typed `When` extension (provided by the Relations assembly).
-The expression lowering helper is internal; `When` is the public typed guard entry point. Typed expressions use the existing Relations expression lowerer,
+`When` is the fluent typed guard entry point. Integration adapters use the public
+`Cohesive.Relations.Authoring.MachineGuardCompiler.Compile` lowering boundary to derive the same guard IR
+without friend-assembly access. This compiler seam is also useful to inspect standalone lowered predicates;
+it does not create an independent machine authoring model. Typed expressions use the existing Relations expression lowerer,
 shared Expr IR, shared analyzer, and portable evaluator. Facts contain the immutable snapshot and
 explicit environmental observations. Captured objects, arbitrary callbacks and hidden I/O are
 rejected by lowering. Input contracts are retained in IR and checked at evaluation.
@@ -45,7 +48,11 @@ rejected by lowering. Input contracts are retained in IR and checked at evaluati
 Ambiguous or Indeterminate. Facts and input are portable ObservationValues. Accepted carries an
 edge; it does not mutate a configuration. A guard that cannot be evaluated is Indeterminate.
 `AdmissionMatrix(facts, input)` projects the same decisions for inspection and UI tooling.
-The simple Enabled/Decide overloads refuse guarded inputs rather than guessing.
+The simple Enabled/Decide overloads refuse guarded inputs rather than guessing. Enabled returns
+cached, ordinally sorted actions for the current state. Decide shares indexed selection with Evaluate and
+retains its convenience contract: unknown actions throw and illegal known actions return null.
+Its guard requirement applies to the action across the machine, even when illegal in the current state.
+Evaluate is the canonical admission operation for guarded and unguarded machines.
 
 Structural ambiguity is rejected during Build. `AnalyzeDeterminism()` proves the single-edge case;
 competing guarded edges retain Unknown until disjointness can be established. Runtime admission

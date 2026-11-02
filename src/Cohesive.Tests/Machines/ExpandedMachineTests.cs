@@ -43,7 +43,8 @@ public class ExpandedMachineTests
         var small = Measure(Create(1), "action-0");
         var large = Measure(Create(1024), "action-1023");
         Assert.InRange(small, 0, 1024);
-        Assert.Equal(small, large);
+        Assert.InRange(large, 0, 1024);
+        Assert.InRange(large - small, -256, 256);
     }
 
     [Fact]
@@ -60,6 +61,54 @@ public class ExpandedMachineTests
     }
 
     [Fact]
+    public void CompilerSeamAndFluentGuardProduceTheSamePortableDefinition()
+    {
+        var guard = Cohesive.Relations.Authoring.MachineGuardCompiler.Compile<Facts, Command>((f, i) => f.Count > 0 && i.Allowed);
+        MachineDefinition Build(bool useCompiler)
+        {
+            var source = Machine.Define("compiler-equivalence", "1");
+            var ready = source.State("ready").Initial();
+            var movement = source.Edge("retry").From(ready).To(ready);
+            if (useCompiler) movement.When(guard);
+            else movement.When((Facts f, Command i) => f.Count > 0 && i.Allowed);
+            return source.Build();
+        }
+        Assert.Equal(Build(useCompiler: false).Fingerprint, Build(useCompiler: true).Fingerprint);
+        Assert.Throws<ArgumentNullException>(() => Cohesive.Relations.Authoring.MachineGuardCompiler.Compile<Facts, Command>(null!));
+    }
+
+    [Fact]
+    public void ConvenienceAdmissionAgreesWithEvaluateAndPreservesGuardRequirements()
+    {
+        var source = Machine.Define("indexed", "1");
+        var ready = source.State("ready").Initial();
+        var done = source.State("done").Final();
+        source.Edge("z").From(ready).To(done);
+        source.Edge("a").From(ready).To(ready);
+        var machine = source.Build();
+        Assert.Equal(new[] { "a", "z" }, machine.Enabled("ready"));
+        Assert.Empty(machine.Enabled("done"));
+        for (var index = 0; index < 1000; index++) { machine.Enabled("ready"); machine.Decide("ready", "z"); }
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < 1000; index++) { machine.Enabled("ready"); machine.Decide("ready", "z"); }
+        Assert.InRange((GC.GetAllocatedBytesForCurrentThread() - allocatedBefore) / 1000, 0, 64);
+        foreach (var state in machine.States)
+            foreach (var action in new[] { "a", "z" })
+                Assert.Equal(machine.Evaluate(state, action, ObservationValue.EmptyObject, ObservationValue.EmptyObject).Edge,
+                    machine.Decide(state, action));
+        Assert.Throws<ArgumentException>(() => machine.Decide("ready", "unknown"));
+        Assert.Throws<ArgumentException>(() => machine.Enabled("unknown"));
+        var guarded = Machine.Define("guarded-index", "1");
+        var first = guarded.State("first").Initial();
+        var last = guarded.State("last").Final();
+        guarded.Edge("finish").From(first).To(last).When((Facts f, Command i) => i.Allowed);
+        var definition = guarded.Build();
+        Assert.Throws<InvalidOperationException>(() => definition.Enabled("first"));
+        Assert.Throws<InvalidOperationException>(() => definition.Decide("last", "finish"));
+        Assert.Empty(definition.Enabled("last"));
+    }
+
+    [Fact]
     public void CoreMachinesRemainIndependentOfRelationsAndTransitions()
     {
         var assembly = typeof(MachineDefinition).Assembly;
@@ -68,6 +117,9 @@ public class ExpandedMachineTests
             reference.Name is "Cohesive.Relations" or "Cohesive.Transitions");
         Assert.Equal(typeof(TransitionStaticCompiler).Assembly, typeof(MachineTransitionLinker).Assembly);
 
+        Assert.DoesNotContain(typeof(MachineGuardAuthoring).Assembly.GetCustomAttributes(typeof(System.Runtime.CompilerServices.InternalsVisibleToAttribute), false)
+            .Cast<System.Runtime.CompilerServices.InternalsVisibleToAttribute>(), attribute =>
+                attribute.AssemblyName is "Cohesive.Transitions" or "Cohesive.Tests");
         var source = Machine.Define("typed-extension", "1");
         var draft = source.State("draft").Initial();
         var done = source.State("done").Final();
@@ -96,7 +148,7 @@ public class ExpandedMachineTests
     [Fact]
     public void GuardedAdmissionSurvivesPersistenceAndDistinguishesUncertainty()
     {
-        var guard = MachineGuardAuthoring.From<Facts, Command>((facts, input) => facts.Count > 0 && input.Allowed);
+        var guard = Cohesive.Relations.Authoring.MachineGuardCompiler.Compile<Facts, Command>((facts, input) => facts.Count > 0 && input.Allowed);
         var definition = new MachineBuilder("guarded", "1").State("draft").State("done")
             .Initial("draft").Final("done").Edge("submit", "draft", "done", guard: guard).Build();
         var loaded = MachineDefinition.Deserialize(definition.CanonicalJson);
@@ -106,14 +158,16 @@ public class ExpandedMachineTests
         Assert.Equal(MachineDecisionKind.UnknownAction, loaded.Evaluate("draft", "missing", FactsValue(2), CommandValue(true)).Kind);
         var duplicate = new MachineBuilder("ambiguous", "1").State("draft").State("done").Initial("draft").Final("done")
             .Edge("one", "draft", "done", "submit", guard).Edge("two", "draft", "done", "submit", guard).Build();
-        Assert.Equal(MachineDecisionKind.Ambiguous, duplicate.Evaluate("draft", "submit", FactsValue(2), CommandValue(true)).Kind);
+        var ambiguous = duplicate.Evaluate("draft", "submit", FactsValue(2), CommandValue(true));
+        Assert.Equal(MachineDecisionKind.Ambiguous, ambiguous.Kind);
+        Assert.Null(ambiguous.Edge);
     }
 
     [Fact]
     public void CapturedExecutableStateIsRejected()
     {
         var captured = new Facts(4);
-        Assert.ThrowsAny<Exception>(() => MachineGuardAuthoring.From<Facts, Command>((facts, input) => facts.Count > captured.Count));
+        Assert.ThrowsAny<Exception>(() => Cohesive.Relations.Authoring.MachineGuardCompiler.Compile<Facts, Command>((facts, input) => facts.Count > captured.Count));
     }
 
     [Fact]

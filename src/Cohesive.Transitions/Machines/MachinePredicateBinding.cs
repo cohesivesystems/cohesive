@@ -27,7 +27,7 @@ public sealed class MachinePredicateBinding<TEntity, TInput> where TEntity : not
     public MachinePredicateBinding<TEntity, TInput> State(string state, Expression<Func<TEntity, TInput, bool>> predicate)
     {
         if (!machine.States.Contains(state)) throw new ArgumentException("Unknown machine state.", nameof(state));
-        var guard = MachineGuardAuthoring.From(predicate);
+        var guard = MachineGuardCompiler.Compile(predicate);
         if (guard.Analyze().Requirements.Bindings.Contains(guard.InputBinding))
             throw new ArgumentException("A state predicate cannot depend on an action payload.", nameof(predicate));
         predicates.Add(state, Rebind(guard.Predicate, guard)); return this;

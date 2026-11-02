@@ -28,6 +28,9 @@ public sealed partial class MachineDefinition
 {
     readonly HashSet<string> stateIds;
     readonly HashSet<string> actionIds;
+    readonly HashSet<string> guardedActions;
+    readonly HashSet<string> guardedStates;
+    readonly Dictionary<string, ImmutableArray<string>> actionsByState;
     readonly Dictionary<(string State, string Action), ImmutableArray<MachineEdge>> candidatesByAction;
 
     internal MachineDefinition(string id, string revision, ImmutableArray<string> states, string initial,
@@ -38,6 +41,10 @@ public sealed partial class MachineDefinition
         actionIds = new(edges.Select(edge => edge.Action), StringComparer.Ordinal);
         candidatesByAction = edges.GroupBy(edge => (edge.From, edge.Action))
             .ToDictionary(group => group.Key, group => group.ToImmutableArray());
+        guardedActions = new(edges.Where(edge => edge.Guard is not null).Select(edge => edge.Action), StringComparer.Ordinal);
+        guardedStates = new(edges.Where(edge => edge.Guard is not null).Select(edge => edge.From), StringComparer.Ordinal);
+        actionsByState = candidatesByAction.Keys.GroupBy(key => key.State)
+            .ToDictionary(group => group.Key, group => group.Select(key => key.Action).Order(StringComparer.Ordinal).ToImmutableArray(), StringComparer.Ordinal);
         Document = ExecutionDefinitionDocument.Create(new("machine/v1"), new(id), new(revision),
             new MachinePayload(states, initial, finals, edges),
             new(new("cohesive.machines.csharp", "1"), new(id), DocumentOrigin.User), sourceMap: sourceMap);
@@ -66,11 +73,12 @@ public sealed partial class MachineDefinition
     /// <param name="state">Current configuration.</param>
     /// <returns>Distinct actions in ordinal order.</returns>
     /// <exception cref="ArgumentException">The configuration is unknown.</exception>
+    /// <exception cref="InvalidOperationException">The state has guarded actions requiring explicit facts and input.</exception>
     public ImmutableArray<string> Enabled(string state)
     {
         RequireState(state);
-        if (Edges.Any(e => e.From == state && e.Guard is not null)) throw new InvalidOperationException("Guarded actions require explicit facts and input; use Evaluate.");
-        return [.. Edges.Where(e => e.From == state).Select(e => e.Action).Distinct().Order(StringComparer.Ordinal)];
+        if (guardedStates.Contains(state)) throw new InvalidOperationException("Guarded actions require explicit facts and input; use Evaluate.");
+        return actionsByState.GetValueOrDefault(state, []);
     }
 
     /// <summary>Selects one movement without committing or performing effects.</summary>
@@ -78,13 +86,15 @@ public sealed partial class MachineDefinition
     /// <param name="action">Requested protocol action.</param>
     /// <returns>The selected edge, or null when the known action is illegal in this configuration.</returns>
     /// <exception cref="ArgumentException">The state or action is unknown.</exception>
+    /// <exception cref="InvalidOperationException">The action has guards requiring explicit facts and input.</exception>
     public MachineEdge? Decide(string state, string action)
     {
         RequireState(state);
-        if (!Edges.Any(e => e.Action == action)) throw new ArgumentException("Unknown machine action.", nameof(action));
-        if (Edges.Any(e => e.Action == action && e.Guard is not null))
+        if (!actionIds.Contains(action)) throw new ArgumentException("Unknown machine action.", nameof(action));
+        if (guardedActions.Contains(action))
             throw new InvalidOperationException("Guarded actions require explicit facts and input; use Evaluate.");
-        return Edges.SingleOrDefault(e => e.From == state && e.Action == action);
+        Select(state, action, ObservationValue.EmptyObject, ObservationValue.EmptyObject, out var selected, out _);
+        return selected;
     }
 
     void RequireState(string state)

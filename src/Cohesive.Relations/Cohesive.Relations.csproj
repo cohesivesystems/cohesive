@@ -14,8 +14,4 @@
     <None Include="docs\*.md" Pack="true" PackagePath="docs\%(Filename)%(Extension)" />
   </ItemGroup>
 
-  <ItemGroup>
-    <InternalsVisibleTo Include="Cohesive.Transitions" />
-    <InternalsVisibleTo Include="Cohesive.Tests" />
-  </ItemGroup>
 </Project>

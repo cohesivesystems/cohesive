@@ -76,23 +76,39 @@ public sealed partial class MachineDefinition
     /// <exception cref="ArgumentException">State is unknown.</exception>
     public MachineDecision Evaluate(string state, string action, ObservationValue facts, ObservationValue input)
     {
+        var kind = Select(state, action, facts, input, out var selected, out var diagnostic);
+        return new(kind, selected, diagnostic);
+    }
+
+    // One selection operation serves both public admission projections without allocating an
+    // intermediate decision when Decide only needs the selected edge.
+    MachineDecisionKind Select(string state, string action, ObservationValue facts, ObservationValue input,
+        out MachineEdge? selected, out string? diagnostic)
+    {
+        selected = null;
+        diagnostic = null;
         RequireState(state);
-        if (!actionIds.Contains(action)) return new(MachineDecisionKind.UnknownAction);
-        if (!candidatesByAction.TryGetValue((state, action), out var candidates)) return new(MachineDecisionKind.Illegal);
-        MachineEdge? selected = null;
+        if (!actionIds.Contains(action)) return MachineDecisionKind.UnknownAction;
+        if (!candidatesByAction.TryGetValue((state, action), out var candidates)) return MachineDecisionKind.Illegal;
         try
         {
             foreach (var edge in candidates)
             {
                 if (edge.Guard is not null && !edge.Guard.Evaluate(facts, input)) continue;
-                if (selected is not null) return new(MachineDecisionKind.Ambiguous);
+                if (selected is not null)
+                {
+                    selected = null;
+                    return MachineDecisionKind.Ambiguous;
+                }
                 selected = edge;
             }
         }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException)
         {
-            return new(MachineDecisionKind.Indeterminate, Diagnostic: error.Message);
+            selected = null;
+            diagnostic = error.Message;
+            return MachineDecisionKind.Indeterminate;
         }
-        return selected is null ? new(MachineDecisionKind.Disabled) : new(MachineDecisionKind.Accepted, selected);
+        return selected is null ? MachineDecisionKind.Disabled : MachineDecisionKind.Accepted;
     }
 }
