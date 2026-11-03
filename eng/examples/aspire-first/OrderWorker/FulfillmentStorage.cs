@@ -1,3 +1,6 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Cohesive.Adapters.Elastic;
 using AspireFirst.Materialization;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Relations.Execution;
@@ -19,7 +22,7 @@ public sealed class FulfillmentStorage : StorageModel
     /// <param name="queries">Shared query declarations eligible for serving selection.</param>
     /// <param name="reads">Explicit live or materialized serving policy.</param>
     public FulfillmentStorage(FulfillmentDomain domain, FulfillmentPostgresMappings mappings, FulfillmentHistoryPolicy history,
-        FulfillmentQueries queries, OrderReadPolicy? reads = null)
+        FulfillmentQueries queries, RelationQueryReadPolicy? reads = null)
     {
         reads ??= new();
         reads.Validate();
@@ -47,13 +50,28 @@ public sealed class FulfillmentStorage : StorageModel
         Native = new PostgresStorageComposition(Bindings);
         Storage.Compose(() =>
         {
-            if (reads.Source == OrderDetailsReadSource.Live) return Native;
+            if (reads.Source == RelationQueryReadSource.Live) return Native;
             var materializations = new FulfillmentMaterializations(queries);
             var materializationStorage = new FulfillmentMaterializationStorage(this, materializations);
             return Native.SelectQuery(queries.OrderDetails,
                 new("Elasticsearch", ShadowElastic.Resource, RelationQueryConsistency.Eventual),
-                (services, ct) => OrderDetailsReadSelection.PrepareAsync(services, queries,
-                    materializationStorage.OrderDetails, Bindings.Database.Value, ct));
+                async (services, ct) =>
+                {
+                    var configuration = services.GetRequiredService<IConfiguration>();
+                    var comparisonFile = configuration["OrderReads:ComparisonFile"]
+                        ?? throw new InvalidOperationException("OrderReads:ComparisonFile is required for materialized reads.");
+                    var key = Convert.FromBase64String(configuration["Shadow:PositionKey"]
+                        ?? throw new InvalidOperationException("Shadow:PositionKey is required for read-plan admission."));
+                    var incarnation = configuration["Shadow:SlotGeneration"]
+                        ?? throw new InvalidOperationException("Shadow:SlotGeneration is required for read-plan admission.");
+                    return await ElasticMaterializationReadSelection.PrepareAsync(queries.OrderDetails, queries.OrderDetailsRelation,
+                        materializations.OrderDetails, comparisonFile, async token =>
+                        {
+                            var target = await ShadowElastic.BindAsync(services.GetRequiredKeyedService<HttpClient>(ShadowElastic.Resource),
+                                materializations.OrderDetails, token);
+                            return await materializationStorage.OrderDetails.BindAsync(services, target, key, incarnation, token);
+                        }, ct);
+                });
         });
     }
 

@@ -14,7 +14,7 @@ public sealed class ServiceReadSelectionTests
 {
     static FulfillmentApplication Model() => ModelActivator.Create<FulfillmentApplication>(services => services
         .AddSingleton(new FulfillmentHistoryPolicy())
-        .AddSingleton(new OrderReadPolicy { Source = OrderDetailsReadSource.Materialized, AcceptEventualConsistency = true }));
+        .AddSingleton(new RelationQueryReadPolicy { Source = RelationQueryReadSource.Materialized, AcceptEventualConsistency = true }));
     static ServiceQuerySelection Details(FulfillmentApplication model) => model.Endpoints.Plan.QueryDependencies.Queries.Single(
         item => item.Request.DefinitionDocument.DefinitionFingerprint == model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
     static readonly ServiceQueryReadBinding Elastic = new("Elasticsearch", "orders-materialized", RelationQueryConsistency.Eventual);

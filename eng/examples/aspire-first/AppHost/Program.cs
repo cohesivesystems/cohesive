@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Microsoft.Extensions.Configuration;
 using AspireFirst.Orders;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,7 +9,7 @@ using AspireFirst;
 return await AspireApplication.RunAsync(args, builder =>
 {
     var policy = AspireFirst.Orders.FulfillmentHistoryPolicy.FromConfiguration(builder.Configuration);
-    var reads = builder.Configuration.GetSection("OrderReads").Get<OrderReadPolicy>() ?? new();
+    var reads = builder.Configuration.GetSection("OrderReads").Get<RelationQueryReadPolicy>() ?? new();
     reads.Validate();
     var model = ModelActivator.Create<FulfillmentInfrastructure>(services => services.AddSingleton(policy).AddSingleton(reads));
     return model.Explain(model.Configure(builder));

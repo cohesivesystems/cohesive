@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Cohesive.Adapters.Postgres;
 using Npgsql.Replication;
 using AspireFirst.Materialization;
@@ -13,7 +14,7 @@ using Cohesive.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
 var policy = FulfillmentHistoryPolicy.FromConfiguration(builder.Configuration);
-var reads = builder.Configuration.GetSection("OrderReads").Get<OrderReadPolicy>() ?? new();
+var reads = builder.Configuration.GetSection("OrderReads").Get<RelationQueryReadPolicy>() ?? new();
 reads.Validate();
 var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(policy).AddSingleton(reads));
 builder.Services.AddRequestOperationContext();
@@ -29,7 +30,7 @@ builder.Services.AddKeyedSingleton<IDocumentStore>(policy.DatabaseName, (service
     policy.History.Configure(options);
 }));
 // Native clients remain DI-owned; the storage model owns read admission and selection.
-if (reads.Source == OrderDetailsReadSource.Materialized)
+if (reads.Source == RelationQueryReadSource.Materialized)
 {
     builder.Services.AddKeyedSingleton<PostgresLogicalReplicationConnectionFactory>(policy.DatabaseName,
         (_, _) => () => new LogicalReplicationConnection(connectionString));
@@ -42,7 +43,7 @@ if (reads.Source == OrderDetailsReadSource.Materialized)
 builder.Services.AddCohesiveServices(model);
 
 await using var app = builder.Build();
-app.Logger.LogInformation("OrderDetails read source: {Source}; consistency: {Consistency}. Selection is fixed for this host lifetime.", reads.Source, reads.Consistency);
+app.Logger.LogInformation("OrderDetails read source: {Source}. Selection is fixed for this host lifetime.", reads.Source);
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
 app.UseAuthorization();

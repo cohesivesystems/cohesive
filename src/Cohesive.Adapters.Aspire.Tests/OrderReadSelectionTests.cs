@@ -31,20 +31,12 @@ public sealed class OrderReadSelectionTests
     }
 
     [Fact]
-    public void Materialized_selection_requires_explicit_eventual_consent()
-    {
-        new OrderReadPolicy().Validate();
-        Assert.Throws<ArgumentException>(() => new OrderReadPolicy { Source = OrderDetailsReadSource.Materialized }.Validate());
-        Assert.Throws<ArgumentException>(() => new OrderReadPolicy { Source = (OrderDetailsReadSource)99 }.Validate());
-    }
-
-    [Fact]
     public void Read_selection_changes_binding_consistency_without_changing_OrderApi()
     {
         var live = TestModels.Fulfillment();
         var selected = ModelActivator.Create<FulfillmentApplication>(services => services
             .AddSingleton(new FulfillmentHistoryPolicy())
-            .AddSingleton(new OrderReadPolicy { Source = OrderDetailsReadSource.Materialized, AcceptEventualConsistency = true }));
+            .AddSingleton(new RelationQueryReadPolicy { Source = RelationQueryReadSource.Materialized, AcceptEventualConsistency = true }));
         Assert.Equal(live.Api.Details.Id, selected.Api.Details.Id);
         Assert.Equal(live.Api.Details.Operation.Http!.Route, selected.Api.Details.Operation.Http!.Route);
         Assert.Equal(live.Api.Details.Operation.Http.Method, selected.Api.Details.Operation.Http.Method);

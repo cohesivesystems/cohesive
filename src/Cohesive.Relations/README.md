@@ -286,3 +286,15 @@ Grouping and child dictionaries consume memory proportional to the bounded hydra
 this is not a streaming or zero-allocation claim. Existing physical read/row limits still apply,
 and target write limits must also account for the assembled object's size. The mechanism does not
 add snapshot isolation across stores, activate a feed, choose a target, or publish a generation.
+
+### Live and materialized read selection
+
+`RelationQueryReadPolicy` is a per-query host selection, not part of the portable API
+contract. Its default `Source` is `Live`; `ConsistencyFor(liveRequirement)` preserves
+the caller's explicit live guarantee. Selecting `Materialized` requires
+`AcceptEventualConsistency=true` and yields `Eventual`. Unknown source/consistency
+values fail at admission. It does not assume PostgreSQL, a particular API endpoint,
+a configuration section name, or a default live snapshot guarantee. Applications can
+bind the record with ordinary `IConfiguration` and share that selection between
+infrastructure admission, endpoint binding and storage composition. It is neither
+generation-readiness evidence nor automatic fallback policy.

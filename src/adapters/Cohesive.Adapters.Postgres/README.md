@@ -449,3 +449,10 @@ is internal. Native preflight checks that the pool and replication factory addre
 physical host, port and database before opening a connection. The logical database
 ID is not a physical database-name assertion: configuring both native connections
 for the same unintended database cannot be detected from that ID alone.
+
+`PostgresMaterializationStorage.BindAsync(IServiceProvider, target, key, slotGeneration)`
+resolves the host-owned `NpgsqlDataSource` and `PostgresLogicalReplicationConnectionFactory`
+under the declaration's existing database identity. It delegates to the same native
+preflight as direct-client binding; missing keyed resources fail before native IO,
+and client ownership stays with the host. Callers need not repeat the database ID
+or construct another resource catalog.

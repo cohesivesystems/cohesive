@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Relations.Compilation;
@@ -96,6 +97,21 @@ public sealed class PostgresMaterializationStorage
         await PostgresLogicalReplicationPreparation.InitializeAsync(database, tables, options.Publication,
             slots.Values, state, cancellationToken).ConfigureAwait(false);
         await state.EnsureCreatedAsync(Cohesive.Prelude.OperationContext.Create(cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>Binds the declaration using host-owned clients keyed by its existing database identity.</summary>
+    /// <param name="services">Keyed NpgsqlDataSource and PostgresLogicalReplicationConnectionFactory registrations.</param>
+    /// <param name="target">Host-owned materialization target.</param><param name="authenticationKey">CDC position authentication key.</param>
+    /// <param name="slotGeneration">Explicit replication-slot incarnation.</param><param name="cancellationToken">Cancels native preflight.</param>
+    /// <returns>Admitted native ports; no ownership of registered clients is transferred.</returns>
+    /// <exception cref="InvalidOperationException">A required keyed native resource is missing.</exception>
+    public Task<BoundMaterialization> BindAsync(IServiceProvider services, IMaterializationTarget target,
+        ReadOnlyMemory<byte> authenticationKey, string slotGeneration, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        return BindAsync(services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value),
+            services.GetRequiredKeyedService<PostgresLogicalReplicationConnectionFactory>(bindings.Database.Value),
+            target, authenticationKey, slotGeneration, cancellationToken);
     }
 
     /// <summary>Preflights borrowed native clients and resolves the declared materialization; performs no DDL.</summary>

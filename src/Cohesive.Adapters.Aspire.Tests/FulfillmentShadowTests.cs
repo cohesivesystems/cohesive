@@ -102,6 +102,17 @@ public sealed class FulfillmentShadowTests
     }
 
     [Fact]
+    public async Task Missing_keyed_replication_factory_fails_before_native_io()
+    {
+        var storage = DeclareStorage(StorageOptions());
+        await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=orders;Username=test");
+        using var services = new ServiceCollection().AddKeyedSingleton<NpgsqlDataSource>("orders", database).BuildServiceProvider();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => storage.BindAsync(services,
+            UnusedTarget(), new byte[32], "test/v1"));
+        Assert.Contains(nameof(PostgresLogicalReplicationConnectionFactory), error.Message);
+    }
+
+    [Fact]
     public async Task Missing_replication_factory_fails_without_opening_pool()
     {
         var storage = DeclareStorage(StorageOptions());
@@ -156,7 +167,7 @@ public sealed class FulfillmentShadowTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var ct = timeout.Token;
         var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy())
-            .AddSingleton(new OrderReadPolicy { Source = OrderDetailsReadSource.Materialized, AcceptEventualConsistency = true }));
+            .AddSingleton(new RelationQueryReadPolicy { Source = RelationQueryReadSource.Materialized, AcceptEventualConsistency = true }));
         var model = application.Orders;
         var connection = Environment.GetEnvironmentVariable("COHESIVE_SHADOW_POSTGRES")!;
         await using var database = NpgsqlDataSource.Create(connection);
@@ -293,7 +304,7 @@ public sealed class FulfillmentShadowTests
         {
             var hostedModel = ModelActivator.Create<FulfillmentApplication>(services => services
                 .AddSingleton(new FulfillmentHistoryPolicy())
-                .AddSingleton(new OrderReadPolicy { Source = selection is null ? OrderDetailsReadSource.Live : OrderDetailsReadSource.Materialized,
+                .AddSingleton(new RelationQueryReadPolicy { Source = selection is null ? RelationQueryReadSource.Live : RelationQueryReadSource.Materialized,
                     AcceptEventualConsistency = selection is not null }));
             var builder = WebApplication.CreateBuilder();
             var artifact = Path.GetTempFileName();

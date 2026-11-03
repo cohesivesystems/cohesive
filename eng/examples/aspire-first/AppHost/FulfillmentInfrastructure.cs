@@ -1,3 +1,4 @@
+using Cohesive.Relations.Execution;
 using Aspire.Hosting;
 using Microsoft.Extensions.Configuration;
 using Cohesive.Adapters.Aspire;
@@ -16,7 +17,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
 {
     readonly FulfillmentHistoryPolicy policy;
     readonly FulfillmentApplication application;
-    readonly OrderReadPolicy reads;
+    readonly RelationQueryReadPolicy reads;
     /// <summary>Canonical order storage identity.</summary>
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
@@ -30,7 +31,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     /// <param name="model">Same activated application graph consumed by the worker.</param>
     /// <param name="policy">Explicit environment selection used to activate that graph.</param>
     /// <param name="reads">Same explicit reader selection used by the worker model.</param>
-    public FulfillmentInfrastructure(FulfillmentApplication model, FulfillmentHistoryPolicy policy, OrderReadPolicy? reads = null)
+    public FulfillmentInfrastructure(FulfillmentApplication model, FulfillmentHistoryPolicy policy, RelationQueryReadPolicy? reads = null)
     {
         this.policy = policy;
         this.reads = reads ?? new();
@@ -72,7 +73,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             .WithEnvironment("EntityState__Reconstitution", policy.Reconstitution.ToString());
         worker.WithEnvironment("OrderReads__Source", reads.Source.ToString())
             .WithEnvironment("OrderReads__AcceptEventualConsistency", reads.AcceptEventualConsistency.ToString());
-        if (reads.Source == OrderDetailsReadSource.Materialized)
+        if (reads.Source == RelationQueryReadSource.Materialized)
         {
             worker.WithEnvironment("OrderReads__ComparisonFile", builder.Configuration["OrderReads:ComparisonFile"])
                 .WithEnvironment("Shadow__Elasticsearch", builder.Configuration["Shadow:Elasticsearch"])
@@ -89,7 +90,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
                 .WithEnvironment("ES_JAVA_OPTS", "-Xms512m -Xmx512m")
                 .WithHttpEndpoint(targetPort: 9200, name: "http")
                 .WithVolume("order-shadow-elastic", "/usr/share/elasticsearch/data");
-            if (reads.Source == OrderDetailsReadSource.Materialized)
+            if (reads.Source == RelationQueryReadSource.Materialized)
                 worker.WithEnvironment("Shadow__Elasticsearch", elastic.GetEndpoint("http")).WaitFor(elastic);
             // A separate operator process owns all materialization writes, regardless of HTTP read selection.
             builder.AddProject<Projects.OrderMaterialization>("order-shadow")

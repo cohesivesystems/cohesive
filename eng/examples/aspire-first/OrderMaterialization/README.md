@@ -272,3 +272,11 @@ The example now delegates comparison loading, exact query/rebuild admission and 
 result reads to `ElasticMaterializationReadSelection`. Its storage binding only selects
 configuration and host-owned native clients. See the [adapter's prepared-read contract](../../../../src/adapters/Cohesive.Adapters.Elastic/README.md#prepared-materialized-query-reads)
 for per-request native checks and the three-call bound.
+
+Live/materialized selection uses the shared `RelationQueryReadPolicy`; there is no
+order-specific policy type. `OrderEndpoints` supplies its live consistency requirement
+explicitly, while materialized selection requires eventual-consistency consent.
+`FulfillmentStorage` calls the shared preparation API directly. The remaining
+`OrderReads`/`Shadow` configuration names and target/client choices are application
+configuration, not another policy or reader implementation. PostgreSQL materialization
+binding resolves its native clients from DI using the database identity it already owns.

@@ -26,7 +26,7 @@ public sealed class FulfillmentExplanationTests
     {
         var infrastructure = ModelActivator.Create<FulfillmentInfrastructure>(services => services
             .AddSingleton(new FulfillmentHistoryPolicy())
-            .AddSingleton(new OrderReadPolicy { Source = OrderDetailsReadSource.Materialized, AcceptEventualConsistency = true }));
+            .AddSingleton(new RelationQueryReadPolicy { Source = RelationQueryReadSource.Materialized, AcceptEventualConsistency = true }));
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
         var selected = infrastructure.Explain(infrastructure.Configure(builder));
         var live = Native(EntityStateAuthority.State);

@@ -61,7 +61,7 @@ public sealed class OrderEndpoints : ApiBindingModel
     /// <param name="api">API contract.</param><param name="domain">Canonical entities.</param>
     /// <param name="queries">Declared queries.</param>
     /// <param name="reads">Explicit read realization; defaults to live.</param>
-    public OrderEndpoints(OrderApi api, FulfillmentDomain domain, FulfillmentQueries queries, OrderReadPolicy? reads = null)
+    public OrderEndpoints(OrderApi api, FulfillmentDomain domain, FulfillmentQueries queries, RelationQueryReadPolicy? reads = null)
     {
         reads ??= new();
         reads.Validate();
@@ -80,7 +80,7 @@ public sealed class OrderEndpoints : ApiBindingModel
                         .NotRejected(SubmissionOutcome.Submitted)));
             bindings.Bind(api => api.Details, queries.OrderDetails, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
                 configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound(),
-                consistency: reads.Consistency);
+                consistency: reads.ConsistencyFor(RelationQueryConsistency.IndependentSources));
             bindings.Bind(api => api.Availability, queries.ReservationAvailability, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
                 configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound(),
                 consistency: RelationQueryConsistency.IndependentSources);
