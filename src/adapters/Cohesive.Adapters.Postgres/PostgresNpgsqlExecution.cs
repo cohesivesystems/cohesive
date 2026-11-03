@@ -914,8 +914,7 @@ internal static class PostgresRelationQueryScalarCatalog
         {
             ScalarType: PostgresRelationQueryScalarType.Text,
             TextSemantics.Equality: PostgresRelationQueryTextEqualitySemantics.Ordinal,
-            TextSemantics.Ordering: PostgresRelationQueryTextOrderingSemantics.Ordinal,
-            TextSemantics.OrderingDomain: not null
+            TextSemantics.Collation: "C" or "POSIX"
         };
 
     static DateTime RequireCivilTimestamp(DateTime value)

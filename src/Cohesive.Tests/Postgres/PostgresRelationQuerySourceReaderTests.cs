@@ -1398,6 +1398,51 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         }
     }
 
+    [PostgresTheory]
+    [InlineData("C")]
+    [InlineData("POSIX")]
+    public async Task LocalPostgres_Unicode_keysets_use_native_C_order_without_claiming_CLR_order(string collation)
+    {
+        await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);
+        var schema = $"unicode_{Guid.NewGuid():N}";
+        var contracts = CreateContracts(schema, "items", identitySemantics:
+            new(collation, PostgresRelationQueryTextEqualitySemantics.Ordinal));
+        try
+        {
+            await using var setup = database.CreateCommand($$"""
+                CREATE SCHEMA "{{schema}}";
+                CREATE TABLE "{{schema}}".items(id text COLLATE "{{collation}}" PRIMARY KEY, name text, optional text, parent_id text COLLATE "C");
+                """);
+            await setup.ExecuteNonQueryAsync();
+            await using var insert = database.CreateCommand($"INSERT INTO \"{schema}\".items VALUES ($1,'first',NULL,'p'),($2,'second',NULL,'p')");
+            insert.Parameters.AddWithValue("\uE000");
+            insert.Parameters.AddWithValue("\U00010000");
+            await insert.ExecuteNonQueryAsync();
+            var reader = new PostgresRelationQuerySourceReader(PhysicalPlan, contracts.Placement, contracts.Source,
+                contracts.Storage, (command, ct) => PostgresNpgsqlExecution.ExecuteAsync(database, command, ct), Policy);
+            var fixture = contracts.ToFixture(reader);
+            var source = new PostgresMaterializationSource(reader, fixture.SourcePlacement, ContinuationAuthenticationKey);
+            var read = fixture.Read(fixture.SourcePlacement, [Field(fixture.NameInput, "name")], new RelationQueryBoundedEnumeration(10));
+            MaterializationSourceContinuation? continuation = null;
+            List<string> ids = [];
+            do
+            {
+                var page = await source.ReadPageAsync(OperationContext.Create(), new(read, source.Scope, continuation, 1, 1_000_000));
+                Assert.True(page.State == MaterializationSourcePageState.MoreAvailable
+                    || page.Read.State == RelationQuerySourceReadState.Complete, page.Read.EvidenceReference);
+                ids.AddRange(page.Read.Observations.Select(row => row.Identity));
+                continuation = page.Continuation;
+            } while (continuation is not null);
+            Assert.Equal(["\uE000", "\U00010000"], ids);
+            Assert.True(StringComparer.Ordinal.Compare(ids[0], ids[1]) > 0);
+        }
+        finally
+        {
+            await using var cleanup = database.CreateCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
     [PostgresFact]
     public async Task LocalPostgres_ExecutesRelationsReadAndMaterialization_WhenConfigured()
     {
@@ -2312,7 +2357,8 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         long maximumFanOut = 10,
         string sourcePlacementId = "placement:items",
         PostgresRelationQueryScalarType relationshipScalarType = PostgresRelationQueryScalarType.Text,
-        bool partitioned = false)
+        bool partitioned = false,
+        PostgresRelationQueryTextSemantics? identitySemantics = null)
     {
         var sourceInput = new RelationQueryInputId("input:items");
         var pointInput = new RelationQueryInputId("input:point-items");
@@ -2326,7 +2372,7 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         var orderingDomain = new PostgresRelationQueryTextOrderingDomainEvidence(
             "ck_items_id_ascii",
             "tests/postgres/source-reader/v1");
-        var identityText = new PostgresRelationQueryTextSemantics(
+        var identityText = identitySemantics ?? new PostgresRelationQueryTextSemantics(
             "C",
             PostgresRelationQueryTextEqualitySemantics.Ordinal,
             PostgresRelationQueryTextOrderingSemantics.Ordinal,
@@ -2674,6 +2720,15 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
         CompiledRelationQueryPhysicalPlan PhysicalPlan,
         RelationQuerySourceInstanceId Source,
         PostgresRelationQueryStorageBinding Storage);
+
+    sealed class PostgresTheoryAttribute : TheoryAttribute
+    {
+        public PostgresTheoryAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")))
+                Skip = "Requires disposable PostgreSQL.";
+        }
+    }
 
     sealed class PostgresFactAttribute : FactAttribute
     {

@@ -275,3 +275,30 @@ Its `BindAsync` borrows host-registered resources and validates required metadat
 `IServiceStorageComposition` in Api.Execution to return prepared service persistence. The Storage layer does
 not reference API or infrastructure packages. Each provider remains responsible for its native configuration
 and guarantees; composition never upgrades independent sources to a shared snapshot.
+
+### Partitioned materialization composition
+
+`MaterializationPartitionedRebuildCompiler` binds a canonical materialization and
+its impact plan to explicit logical partitions, native source profiles and a
+target descriptor. It reuses the rebuild, synchronization, hydration and durable
+state interpreters. `MaterializationRelationReadPlans` derives separate baseline
+and inverse-impact acquisition plans from the same semantic relation;
+`RelationQueryMaterializationImpactReader` executes those reads through admitted
+Relations source readers. The freight harness and the Aspire OrderShadow example
+share this recipe. Neither the recipe nor current-state enrichment promises a
+cross-source historical snapshot or promotes a generation automatically.
+
+### Materialization model declarations
+
+`MaterializationModel` is optional constructor-authoring syntax over
+`MaterializationModelBuilder`. Include immutable preparations produced by the
+existing `Materialization.Define(...).Build().Prepare(impactPolicy)` path.
+`Definition` freezes ordered membership once; model activation calls the same
+completion boundary. Duplicate semantic IDs fail during registration. Declaration
+and completion perform no native IO; each prepared document remains the semantic
+authority and the catalog adds no alternate format or IDs.
+
+Native preparation returns `BoundMaterialization`, containing the admitted
+partitioned compilation, resolved ports and synchronization work store. It borrows
+all native resources; the host owns their lifetimes. This runtime value is separate
+from model activation and can be created directly without a model subclass.
