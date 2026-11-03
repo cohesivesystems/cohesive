@@ -31,7 +31,7 @@ jobs:
         env:
           COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=orders;Username=postgres;Password=fulfillment-ci-only
           DURABLE_TASK_SCHEDULER_CONNECTION_STRING: Endpoint=http://127.0.0.1:8080;TaskHub=default;Authentication=None
-        run: dotnet test src/Cohesive.Adapters.Aspire.Tests -c Release -m:1 --filter FullyQualifiedName~DurableFulfillmentIntegrationTests --logger 'trx;LogFileName=durable-fulfillment.trx'
+        run: dotnet test src/Cohesive.Adapters.Aspire.Tests -c Release -m:1 --filter 'FullyQualifiedName~DurableFulfillmentIntegrationTests|FullyQualifiedName~Actual_program_bootstraps_schema_context_and_order_HTTP_contract' --logger 'trx;LogFileName=durable-fulfillment.trx'
       - name: Retain test evidence
         if: always()
         uses: actions/upload-artifact@v4

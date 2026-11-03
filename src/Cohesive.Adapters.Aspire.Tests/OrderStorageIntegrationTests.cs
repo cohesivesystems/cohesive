@@ -230,6 +230,10 @@ public sealed partial class OrderStorageIntegrationTests
         var start = new ProcessStartInfo("dotnet") { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
         start.ArgumentList.Add(typeof(FulfillmentApplication).Assembly.Location);
         start.Environment["ConnectionStrings__orders"] = connection;
+        start.Environment[$"ConnectionStrings__{FulfillmentExecutionPolicy.SchedulerResource}"] =
+            Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_SCHEDULER_CONNECTION_STRING")
+            ?? Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")
+            ?? throw new InvalidOperationException("The real worker test requires a local Durable Task scheduler connection.");
         start.Environment["EntityState__Authority"] = authority.ToString();
         start.Environment["ASPNETCORE_URLS"] = "http://127.0.0.1:0";
         start.Environment["Logging__LogLevel__Default"] = "Information";
