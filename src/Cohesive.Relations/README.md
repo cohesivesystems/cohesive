@@ -257,3 +257,32 @@ from observation fields. Customized members retain their owning JSON converters;
 projections can be reused without rebuilding their graph. Portable contract admission still runs per decode.
 See [prepared observation projections](../../docs/performance/prepared-observation-projections.md) for scope
 and qualification.
+
+## One rooted nested relation for live reads and materialization
+
+Finish a parameter-free nested mapping with `BuildRelation(new("orders/details/relation"))`.
+The returned `RootedRelation<OrderDetails>` retains one canonical relation request, including its
+field and child-collection assembly. `relation.ReadById(new("orders/details"))` derives a typed
+live query by inserting a string identity predicate at the root source. Joins, partition filters,
+result mappings and child ordering are retained; the generated query cites the exact relation
+fingerprint in its provenance. No provider is chosen or query compiled during authoring.
+
+The first supported rooted nested form is one root source, filters, relationship traversals and
+projections. Parameters and cross-root operators (paging, aggregation, distinct selection and
+independent source joins) are rejected at definition validation. Supporting those requires an
+explicit per-root interpretation rather than silently changing their meaning during keyed reads.
+The identity mapping must be a direct root string field and must match the supplied root identity
+when materialization executes.
+
+The raw relation still returns flat rows (`ManyPerRoot`). Its optional canonical `Assembly` describes
+the nested value independently of that raw shape. Both live reads and the existing materialization
+hydration pipeline apply the same assembly. Materialization groups complete rows by root, preserves
+contributing occurrences, emits at most one nested object per root, and rejects conflicting copies
+or incomplete evidence. `MaterializationRelationReference.ValueShape` identifies the assembled
+value; `Output.Shape` continues to describe the raw Relations output. Existing relations without an
+assembly keep their previous behavior and fingerprints.
+
+Grouping and child dictionaries consume memory proportional to the bounded hydrated row batch;
+this is not a streaming or zero-allocation claim. Existing physical read/row limits still apply,
+and target write limits must also account for the assembled object's size. The mechanism does not
+add snapshot isolation across stores, activate a feed, choose a target, or publish a generation.

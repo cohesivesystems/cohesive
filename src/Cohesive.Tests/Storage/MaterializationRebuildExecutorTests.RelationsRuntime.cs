@@ -11,9 +11,75 @@ namespace Cohesive.Tests.Storage;
 public sealed partial class MaterializationRebuildExecutorTests
 {
     [Fact]
-    public async Task ProductionRelationsRuntime_RebuildAndIncrementalHydrationRemainEquivalent()
+    public async Task ProductionHydration_assembles_nested_values_with_the_same_live_mapping()
     {
-        var fixture = CreateFixture();
+        var shape = new Cohesive.Relations.Authoring.RelationQueryClrAuthoringContext().Shape<NestedLoad>();
+        var original = (Cohesive.Relations.IR.RelationDefinition)FederatedLoadRelationFixture.RelationDocument.Definition;
+        var identity = FederatedLoadRelationFixture.SearchIdPath;
+        var customer = FederatedLoadRelationFixture.SearchCustomerNamePath;
+        var assembly = new Cohesive.Relations.IR.NestedQueryResultAssembly(new("rows"), shape.Id, identity,
+            [new(identity, FieldPath.FromField("Id"))],
+            [new(FieldPath.FromField("Customers"), customer, [new(customer, FieldPath.FromField("Name"))])]);
+        var relation = original with
+        {
+            Output = original.Output with { Mode = Cohesive.Relations.IR.RelationOutputMode.ManyPerRoot },
+            Assembly = assembly
+        };
+        var request = new Cohesive.Relations.Compilation.RelationQueryCompilationRequest(
+            Cohesive.Relations.Serialization.RelationQueryDocument.FromDefinition(relation),
+            [.. FederatedLoadRelationFixture.ShapeGraphDocuments, shape.Document],
+            FederatedLoadRelationFixture.RelationshipCatalogDocument);
+        var compiled = Cohesive.Relations.Compilation.RelationQueryStaticCompiler.Compile(request);
+        Assert.True(compiled.IsSuccessful, string.Join("; ", compiled.Diagnostics));
+        var semantic = FederatedLoadPhysicalExecutionFixture.Create(compiled.Plan!);
+        var scenario = FederatedLoadConformanceData.CreatePhysicalScenario(semantic, 3, 2, 2);
+        var output = Assert.Single(semantic.Plan.RequirementGraph.Outputs, candidate => candidate.Field is null);
+        var hydration = new RelationQueryMaterializationHydration(semantic.Plan, semantic.PhysicalPlan,
+            semantic.Realization, output, scenario.Readers);
+        var result = await hydration.HydrateAsync(OperationContext.Create(), new("tests/nested-materialization"),
+            [scenario.SuppliedLoads]);
+        Assert.Equal(3, result.Length);
+        Assert.All(result, row =>
+        {
+            Assert.Equal(shape.Id, row.Shape);
+            Assert.True(row.Value.TryGetField(FieldPath.FromField("Id"), out var id));
+            Assert.Equal(row.Root!.ObservationIdentity, id.GetRequiredString());
+        });
+        var reference = MaterializationRelationReference.From(request, output.Id);
+        Assert.Equal(shape.Id, reference.ValueShape);
+        Assert.Equal(original.Output.Shape, reference.Output.Shape);
+    }
+
+    static Cohesive.Relations.Compilation.RelationQueryCompilationRequest NestedRequest()
+    {
+        var shape = new Cohesive.Relations.Authoring.RelationQueryClrAuthoringContext().Shape<NestedLoad>();
+        var original = (Cohesive.Relations.IR.RelationDefinition)FederatedLoadRelationFixture.RelationDocument.Definition;
+        var identity = FederatedLoadRelationFixture.SearchIdPath;
+        var customer = FederatedLoadRelationFixture.SearchCustomerNamePath;
+        var assembly = new Cohesive.Relations.IR.NestedQueryResultAssembly(new("rows"), shape.Id, identity,
+            [new(identity, FieldPath.FromField("Id"))],
+            [new(FieldPath.FromField("Customers"), customer, [new(customer, FieldPath.FromField("Name"))])]);
+        var relation = original with
+        {
+            Output = original.Output with { Mode = Cohesive.Relations.IR.RelationOutputMode.ManyPerRoot },
+            Assembly = assembly
+        };
+        var request = new Cohesive.Relations.Compilation.RelationQueryCompilationRequest(
+            Cohesive.Relations.Serialization.RelationQueryDocument.FromDefinition(relation),
+            [.. FederatedLoadRelationFixture.ShapeGraphDocuments, shape.Document],
+            FederatedLoadRelationFixture.RelationshipCatalogDocument);
+        return request;
+    }
+
+    public sealed record NestedLoad(string Id, IReadOnlyList<NestedCustomer> Customers);
+    public sealed record NestedCustomer(string Name);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProductionRelationsRuntime_RebuildAndIncrementalHydrationRemainEquivalent(bool nested)
+    {
+        var fixture = CreateFixture(request: nested ? NestedRequest() : null);
         var scenario = FederatedLoadConformanceData.CreatePhysicalScenario(
             fixture.Semantic,
             rootCount: 3,

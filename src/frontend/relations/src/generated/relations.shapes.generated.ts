@@ -759,14 +759,15 @@ export interface RelationDefinition {
   output: RelationOutputDefinition;
   invariants: InvariantDefinition[];
   body: LogicalQueryDefinition;
+  assembly?: NestedQueryResultAssembly | null;
 }
 
 export interface QueryDefinition {
   id: QueryId;
   name: QueryName;
   results: QueryResultDefinition[];
-  assembly?: NestedQueryResultAssembly | null;
   body: LogicalQueryDefinition;
+  assembly?: NestedQueryResultAssembly | null;
 }
 
 export interface RelationQueryDefinitionFingerprint {
@@ -1803,6 +1804,14 @@ export interface RelationOutputDefinition {
   key?: Expr | null;
 }
 
+export interface NestedQueryResultAssembly {
+  result: QueryResultId;
+  shape: QualifiedShapeId;
+  identity: FieldPath;
+  fields: QueryResultFieldMapping[];
+  collections: QueryResultCollectionAssembly[];
+}
+
 export type QueryId = string;
 
 export type QueryName = string;
@@ -1821,14 +1830,6 @@ export interface RowsQueryResultDefinition {
 export interface AggregationQueryResultDefinition {
   id: QueryResultId;
   input: QueryNodeId;
-}
-
-export interface NestedQueryResultAssembly {
-  result: QueryResultId;
-  shape: QualifiedShapeId;
-  identity: FieldPath;
-  fields: QueryResultFieldMapping[];
-  collections: QueryResultCollectionAssembly[];
 }
 
 export interface RelationshipDefinition {
