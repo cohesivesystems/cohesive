@@ -36,7 +36,8 @@ internal static class ValueContractSemantics
         // Dispatch directly: capturing value in Match callbacks allocates for every field and nested item.
         return type switch
         {
-            NamedTypeRef or OpaqueRuntimeTypeRef => ValueConstantCompatibility.Unknown,
+            NamedTypeRef => ValueConstantCompatibility.Unknown,
+            OpaqueRuntimeTypeRef => ValueConstantCompatibility.Unknown,
             ScalarTypeRef scalar => FromBoolean(MatchesScalar(scalar.Kind, value)),
             EnumTypeRef @enum => FromBoolean(
                 value.Kind == ObservationValueKind.String
