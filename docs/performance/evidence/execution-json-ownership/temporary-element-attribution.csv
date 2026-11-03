@@ -1,0 +1,5 @@
+source,variant,phase,sampled_write_element_bytes
+004010,before,cold,2833400
+004010,after,cold,0
+005030,before,cold,2603664
+005030,after,cold,0
