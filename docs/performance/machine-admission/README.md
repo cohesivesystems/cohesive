@@ -58,8 +58,10 @@ allocations and catalog-size-dependent scans. The indexed selection path favors 
 larger catalogs and one semantic selection authority; a special single-edge fast path is not added.
 
 Short-run timings remain indicative, not an SLA; consult raw dispersion before drawing timing
-conclusions. The allocation regression test bounds each guarded admission at 1 KB for both catalog
-sizes and allows a 256-byte difference rather than requiring runtime-specific exact byte equality.
+conclusions. The allocation regression test bounds each guarded admission at 1 KB for catalogs of 1, 16, 128 and
+1,024 edges. The spread across all four warmed measurements may be at most 8 bytes per call, smaller
+than an additional managed object per call. It compares batch totals without rounding per-call averages
+and does not pin the runtime-specific absolute allocation count.
 
 ## Guarantees and remaining costs
 

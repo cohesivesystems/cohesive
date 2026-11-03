@@ -33,18 +33,29 @@ public class ExpandedMachineTests
         }
         var facts = FactsValue(2);
         var input = CommandValue(true);
+        const int measuredCalls = 1000;
+        const int allocationBudgetPerCall = 1024;
+        const int catalogGrowthBudgetPerCall = 8;
         long Measure(MachineDefinition machine, string action)
         {
-            for (var i = 0; i < 1000; i++) machine.Evaluate("ready", action, facts, input);
+            for (var i = 0; i < measuredCalls; i++) machine.Evaluate("ready", action, facts, input);
             var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < 1000; i++) machine.Evaluate("ready", action, facts, input);
-            return (GC.GetAllocatedBytesForCurrentThread() - before) / 1000;
+            for (var i = 0; i < measuredCalls; i++) machine.Evaluate("ready", action, facts, input);
+            return GC.GetAllocatedBytesForCurrentThread() - before;
         }
-        var small = Measure(Create(1), "action-0");
-        var large = Measure(Create(1024), "action-1023");
-        Assert.InRange(small, 0, 1024);
-        Assert.InRange(large, 0, 1024);
-        Assert.InRange(large - small, -256, 256);
+        long minimum = long.MaxValue;
+        long maximum = 0;
+        foreach (var count in new[] { 1, 16, 128, 1024 })
+        {
+            var allocated = Measure(Create(count), "action-" + (count - 1));
+            Assert.InRange(allocated, 0, (long)allocationBudgetPerCall * measuredCalls);
+            minimum = Math.Min(minimum, allocated);
+            maximum = Math.Max(maximum, allocated);
+        }
+        // Compare within this runtime rather than pinning its object sizes. An eight-byte
+        // allowance is smaller than an extra managed object per call. Compare batch totals
+        // without integer averaging, and include intermediate sizes to catch nonlinear growth.
+        Assert.InRange(maximum - minimum, 0, (long)catalogGrowthBudgetPerCall * measuredCalls);
     }
 
     [Fact]
