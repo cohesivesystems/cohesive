@@ -167,6 +167,7 @@ public sealed class FulfillmentShadowTests
         var index = target.Binding.GetGenerationIndexName(MaterializationRebuildIdentities.Generation(runtime.Compilation.Plan, attempt));
         var live = model.Storage.Bindings.Bind(database, "tests/shadow/live")
             .Query(model.Queries.OrderDetails, maximumRows: 1000, maximumBytes: 1_000_000);
+        MaterializationConvergenceReceipt? convergence = null;
         try
         {
             await Execute("INSERT INTO cohesive_orders(order_id,partition_key,status,observation_version) VALUES ($1,'local','Draft',0),($2,'local','Draft',0)", first, second);
@@ -186,11 +187,26 @@ public sealed class FulfillmentShadowTests
             await CatchUp("baseline");
             await AssertMatchesLive(first, second);
             await Execute("UPDATE cohesive_inventory SET available=8,observation_version=1 WHERE sku=$1", sku);
+            var stale = await Compare();
+            Assert.False(stale.Matches);
+            Assert.Single(stale.Changed);
             await Execute("UPDATE cohesive_reservations SET order_id=$1,observation_version=1 WHERE reservation_id=$2", second, reservation);
             await CatchUp("reparent");
             await AssertMatchesLive(first, second);
+            var moving = await MaterializationShadowVerification.CompareAsync(runtime, context, convergence!, async (generation, limit, token) =>
+            {
+                var values = await target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit);
+                await Execute("UPDATE cohesive_inventory SET available=7,observation_version=2 WHERE sku=$1", sku);
+                return values;
+            });
+            Assert.False(moving.SourceStable);
+            Assert.False(moving.Matches);
+            await CatchUp("after-movement");
+            await AssertMatchesLive(first, second);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => MaterializationShadowVerification.CompareAsync(runtime, context, convergence!,
+                (generation, limit, token) => target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit), maximumItems: 1));
             var beforeReplay = await Snapshot();
-            await CatchUp("reparent");
+            await CatchUp("after-movement");
             Assert.True(JsonElement.DeepEquals(beforeReplay, await Snapshot()));
             await Execute("DELETE FROM cohesive_reservations WHERE reservation_id=$1", reservation);
             await Execute("DELETE FROM cohesive_orders WHERE order_id=$1", first);
@@ -200,6 +216,12 @@ public sealed class FulfillmentShadowTests
             Assert.DoesNotContain((await Snapshot()).EnumerateArray(), row =>
                 !row.GetProperty("_source").GetProperty("_cohesive").GetProperty("deleted").GetBoolean()
                 && row.GetProperty("_source").GetProperty("value").GetProperty("Id").GetString() == first);
+            await Execute("DELETE FROM cohesive_orders WHERE order_id=$1", second);
+            await CatchUp("empty");
+            var empty = await Compare();
+            Assert.True(empty.Matches);
+            Assert.Equal(0, empty.LiveCount);
+            Assert.Equal(0, empty.ShadowCount);
             using var aliases = await http.GetAsync("/_alias/orders-shadow", ct);
             Assert.Equal(System.Net.HttpStatusCode.NotFound, aliases.StatusCode);
         }
@@ -222,6 +244,7 @@ public sealed class FulfillmentShadowTests
                 invocation == "baseline" ? MaterializationShadowOperation.Rebuild : MaterializationShadowOperation.CatchUp,
                 context, attempt, new(id + "/" + invocation), new("test-worker"));
             Assert.True(result.Disposition == MaterializationSynchronizationRunDisposition.Converged, JsonSerializer.Serialize(result.Diagnostics));
+            convergence = Assert.IsType<MaterializationConvergenceReceipt>(result.Receipt);
         }
         async Task<JsonElement> Snapshot()
         {
@@ -230,8 +253,12 @@ public sealed class FulfillmentShadowTests
             using var document = JsonDocument.Parse(await http.GetStringAsync("/" + index + "/_search?size=1000&sort=_doc", ct));
             return document.RootElement.GetProperty("hits").GetProperty("hits").Clone();
         }
+        Task<MaterializationShadowComparison> Compare() => MaterializationShadowVerification.CompareAsync(runtime, context, convergence!,
+            (generation, limit, token) => target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit));
         async Task AssertMatchesLive(params string[] orders)
         {
+            var comparison = await Compare();
+            Assert.True(comparison.Matches, JsonSerializer.Serialize(comparison));
             var rows = await Snapshot();
             foreach (var order in orders)
             {

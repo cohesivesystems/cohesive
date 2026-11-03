@@ -165,3 +165,38 @@ authority and durable progress identities are retained.
 
 See the PostgreSQL adapter's [storage-owned materialization contract](../../../../src/adapters/Cohesive.Adapters.Postgres/README.md#storage-owned-materialization)
 for partition derivation, native binding and connection-affinity guarantees.
+
+## Compare before considering a read switch
+
+After rebuild, run a new bounded catch-up and full-scope comparison:
+
+```sh
+dotnet run --project eng/examples/aspire-first/OrderMaterialization -- compare \
+  --attempt demo-1 --started 2026-10-26T00:00:00Z --invocation comparison-1
+```
+
+The command holds the same cooperating-writer lease through catch-up and comparison.
+It enumerates and hydrates the canonical rooted relation again, using its existing
+source mappings and nested-result assembly, and reads the exact candidate generation
+through the Elasticsearch adapter's validated envelope. It does not read a live alias.
+
+The JSON report retains the existing convergence receipt (definition/plan/generation,
+per-feed cuts, committed checkpoints and freshness demand), counts, observation time,
+and sorted missing/extra/changed **materialization item IDs**, without document values.
+Exit 0 means `Matches`: complete bounded values agree, the convergence receipt remains
+fresh, and source positions did not move during comparison. Exit 2 means observed
+non-parity or inconclusive freshness/stability. IO, cancellation and bound failures
+fail the command without emitting a success report.
+
+This first command bounds the entire comparison to 1,000 scanned roots/candidate items
+(including candidate tombstones) and 100 root pages. Native source and target page-byte
+limits still apply. It retains bounded values for comparison; it is not a streaming
+large-dataset verifier. Exceeding a bound requires an explicit larger invocation policy
+through the library API, not sampling or silently accepting a partial result.
+
+A match is evidence at observation time, **not permission to promote**, future freshness,
+or a cross-store transaction. Keep sources quiescent for an interpretable comparison.
+PostgreSQL's database-wide WAL position can move for unrelated writes, causing a safe
+inconclusive result. The source check cannot exclude non-cooperating target writers;
+the caller must preserve the candidate-writer exclusion used by this command. All live
+HTTP reads still use PostgreSQL. Read selection, cutover and rollback remain separate work.

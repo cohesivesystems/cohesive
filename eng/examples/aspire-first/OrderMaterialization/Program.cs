@@ -18,21 +18,33 @@ cli.AddMaterializationShadowCommands("order-shadow",
         await ShadowBootstrap.InitializeAsync(model, database, elastic, ct);
         return 0;
     }, ct),
-    execute: (invocation, ct) => WithResources(async (model, database, elastic, configuration) =>
+    execute: (invocation, ct) => WithRuntime(invocation, (runtime, target, result) => Task.FromResult(result), ct),
+    compare: (invocation, ct) => WithRuntime(invocation, async (runtime, target, result) =>
     {
-        var key = Convert.FromBase64String(configuration["Shadow:PositionKey"]
-            ?? throw new InvalidOperationException("Shadow__PositionKey must be a persistent base64 key of at least 32 bytes."));
-        var incarnation = configuration["Shadow:SlotGeneration"]
-            ?? throw new InvalidOperationException("Shadow__SlotGeneration is required and must change if slots are recreated.");
-        var target = await ShadowElastic.BindAsync(elastic, model.Materializations.OrderDetails, ct);
-        var runtime = await model.Storage.OrderDetails.BindAsync(database,
-            () => new LogicalReplicationConnection(configuration.GetConnectionString(FulfillmentStoragePolicy.OrdersDatabaseName)!),
-            target, key, incarnation, ct);
-        return await MaterializationShadowExecution.RunAsync(runtime,
-            invocation.Operation, OperationContext.Create(cancellationToken: ct), invocation.Attempt,
-            invocation.Invocation, new("order-shadow/operator"));
+        if (result.Receipt is not { } receipt)
+            throw new InvalidOperationException("Comparison requires completed catch-up; inspect the catch-up result before retrying.");
+        return await MaterializationShadowVerification.CompareAsync(runtime,
+            OperationContext.Create(cancellationToken: ct), receipt,
+            (generation, limit, token) => target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit));
     }, ct));
 return await cli.RunAsync(args);
+
+static Task<T> WithRuntime<T>(MaterializationShadowInvocation invocation,
+    Func<BoundMaterialization, Cohesive.Adapters.Elastic.ElasticMaterializationTarget, MaterializationSynchronizationRunResult, Task<T>> action,
+    CancellationToken ct) => WithResources(async (model, database, elastic, configuration) =>
+{
+    var key = Convert.FromBase64String(configuration["Shadow:PositionKey"]
+        ?? throw new InvalidOperationException("Shadow__PositionKey must be a persistent base64 key of at least 32 bytes."));
+    var incarnation = configuration["Shadow:SlotGeneration"]
+        ?? throw new InvalidOperationException("Shadow__SlotGeneration is required and must change if slots are recreated.");
+    var target = await ShadowElastic.BindAsync(elastic, model.Materializations.OrderDetails, ct);
+    var runtime = await model.Storage.OrderDetails.BindAsync(database,
+        () => new LogicalReplicationConnection(configuration.GetConnectionString(FulfillmentStoragePolicy.OrdersDatabaseName)!),
+        target, key, incarnation, ct);
+    var result = await MaterializationShadowExecution.RunAsync(runtime, invocation.Operation,
+        OperationContext.Create(cancellationToken: ct), invocation.Attempt, invocation.Invocation, new("order-shadow/operator"));
+    return await action(runtime, target, result);
+}, ct);
 
 static async Task<T> WithResources<T>(Func<OrderMaterializationApplication, NpgsqlDataSource, HttpClient, IConfiguration, Task<T>> action,
     CancellationToken ct)

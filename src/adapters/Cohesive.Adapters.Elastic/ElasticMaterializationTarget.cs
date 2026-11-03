@@ -1633,10 +1633,48 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
         }
     }
 
+    /// <summary>Reads all visible values of one retained generation through the validated adapter envelope.</summary>
+    /// <param name="context">Cancellation and execution context.</param>
+    /// <param name="generationId">Exact candidate generation; never resolves a live alias.</param>
+    /// <param name="maximumItems">Maximum scanned items, including tombstones.</param>
+    /// <returns>Complete visible values keyed by canonical item identity.</returns>
+    /// <exception cref="ArgumentNullException">The context is null.</exception>
+    /// <exception cref="ArgumentException">The generation identity is absent.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The limit is not positive.</exception>
+    /// <exception cref="OperationCanceledException">The invocation is canceled.</exception>
+    /// <exception cref="ElasticMaterializationTransportException">Native IO fails or exceeds response bounds.</exception>
+    /// <exception cref="InvalidOperationException">The generation is missing, malformed, or exceeds the bound.</exception>
+    /// <remarks>The caller must exclude competing writers. Pages retain existing transport byte bounds.
+    /// This read refreshes visibility but does not seal, validate, promote or mutate generation content.</remarks>
+    public async Task<IReadOnlyDictionary<string, ObservationValue>> ReadValuesAsync(
+        OperationContext context, MaterializationGenerationId generationId, int maximumItems)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumItems);
+        RequireDefined(generationId.Value, nameof(generationId));
+        return await ExecuteAsync<IReadOnlyDictionary<string, ObservationValue>>(context, "compare-values", generationId, async cancellationToken =>
+        {
+            _ = await LoadTargetAsync(cancellationToken).ConfigureAwait(false);
+            var generation = await ReadGenerationAsync(generationId, cancellationToken).ConfigureAwait(false);
+            if (generation is null || !generation.Value.Retained)
+                throw new InvalidOperationException("The comparison generation is not retained.");
+            await RefreshRequiredAsync(generation.Value.IndexName, cancellationToken).ConfigureAwait(false);
+            var values = ImmutableDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal);
+            await ReadSealContentAsync(generation.Value, cancellationToken, item =>
+            {
+                if (!item.Metadata.Deleted) values.Add(item.Metadata.ItemId, item.Value ?? ObservationValue.Null);
+            }, maximumItems).ConfigureAwait(false);
+            return values.ToImmutable();
+        }).ConfigureAwait(false);
+    }
+
     async ValueTask<SealContent> ReadSealContentAsync(
         GenerationState generation,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<ItemDocument>? observe = null,
+        int? maximumItems = null)
     {
+        long scanned = 0;
         using MaterializationSealFingerprintAccumulator fingerprint = new();
         string? after = null;
         MaterializationItemId? last = null;
@@ -1697,6 +1735,9 @@ public sealed class ElasticMaterializationTarget : IMaterializationTarget
                         "Elasticsearch returned non-canonical generation item identity order.");
                 }
                 ValidateRetainedItemFingerprint(item);
+                if (maximumItems is { } limit && ++scanned > limit)
+                    throw new InvalidOperationException("The generation exceeds the comparison item limit.");
+                observe?.Invoke(item);
                 last = itemId;
                 var kind = item.Metadata.Deleted
                     ? MaterializationItemMutationKind.Delete
