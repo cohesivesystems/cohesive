@@ -345,3 +345,10 @@ can expose endpoint and storage models on the root; a new query module over the 
 requires no edit to the existing storage declaration. Incidental transitive models are excluded.
 Preparation follows ordinal root member names. Missing/ambiguous placement and missing process
 dependencies fail before native preparation; cross-store queries still need explicit composed policy.
+
+### Select eventual order-details reads
+
+The optional [read selection and rollback walkthrough](OrderMaterialization/README.md#explicit-http-read-selection-and-rollback)
+keeps `OrderApi` unchanged. Live PostgreSQL is the default. An explicitly selected,
+comparison-qualified Elasticsearch generation offers eventual reads without automatic
+fallback; selecting `Live` and restarting restores the original reader.

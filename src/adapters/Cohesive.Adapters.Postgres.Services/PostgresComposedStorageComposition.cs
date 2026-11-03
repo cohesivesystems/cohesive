@@ -9,6 +9,9 @@ namespace Cohesive.Adapters.Postgres.Services;
 /// by ComposeServices, which supplies the native declarations required for host binding.</remarks>
 public sealed class PostgresComposedStorageComposition : IServiceStorageComposition
 {
+    /// <inheritdoc />
+    public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query) =>
+        new("Composed", postgres.Database.Value, Cohesive.Relations.Execution.RelationQueryConsistency.IndependentSources);
     readonly PostgresPersistenceBindings postgres;
     readonly ImmutableArray<IEntityStorageBinding> sources;
     /// <inheritdoc />
@@ -61,6 +64,7 @@ public sealed class PostgresComposedStorageComposition : IServiceStorageComposit
 
     sealed class SelectedComposition(PostgresComposedStorageComposition owner, PostgresComposedServicePreparation preparation) : IServiceStorageComposition
     {
+        public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query) => owner.DescribeRead(query);
         public ImmutableArray<Cohesive.Model.ValueContract> Observations => owner.Observations;
         public ImmutableArray<Cohesive.Model.QualifiedShapeId> Shapes => owner.Shapes;
         public ImmutableArray<object> Bindings => owner.Bindings;

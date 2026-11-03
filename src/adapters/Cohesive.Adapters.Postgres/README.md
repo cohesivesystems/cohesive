@@ -449,3 +449,21 @@ is internal. Native preflight checks that the pool and replication factory addre
 physical host, port and database before opening a connection. The logical database
 ID is not a physical database-name assertion: configuring both native connections
 for the same unintended database cannot be detected from that ID alone.
+
+`PostgresMaterializationStorage.BindAsync(IServiceProvider, target, key, slotGeneration)`
+resolves the host-owned `NpgsqlDataSource` and `PostgresLogicalReplicationConnectionFactory`
+under the declaration's existing database identity. It delegates to the same native
+preflight as direct-client binding; missing keyed resources fail before native IO,
+and client ownership stays with the host. Callers need not repeat the database ID
+or construct another resource catalog.
+
+For declarative materialized query selection, call `ForReads(configurationSection)`
+on that storage declaration. This returns an offline source binding; `Prepare`
+loads the section's base64 `PositionKey` and explicit `SlotGeneration` without
+resolving native clients or doing IO. Native admission later delegates to the same
+DI-backed BindAsync path. Secrets are not retained in offline explanation, and
+configuration is not read until the selection is used by the host.
+
+`ForReads` exposes its configuration keys as `PositionKeyConfigurationKey` (base64 authentication key)
+and `SlotGenerationConfigurationKey` (required nonempty slot incarnation). Both are validated before native
+client resolution; the returned `PreparedMaterializationReadSource` admits the source when invoked.

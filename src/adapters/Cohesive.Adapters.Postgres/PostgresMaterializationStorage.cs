@@ -1,3 +1,5 @@
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Relations.Compilation;
@@ -96,6 +98,51 @@ public sealed class PostgresMaterializationStorage
         await PostgresLogicalReplicationPreparation.InitializeAsync(database, tables, options.Publication,
             slots.Values, state, cancellationToken).ConfigureAwait(false);
         await state.EnsureCreatedAsync(Cohesive.Prelude.OperationContext.Create(cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>Required key in the ForReads section: base64 CDC position authentication key.</summary>
+    public const string PositionKeyConfigurationKey = "PositionKey";
+    /// <summary>Required key in the ForReads section: nonempty replication-slot incarnation.</summary>
+    public const string SlotGenerationConfigurationKey = "SlotGeneration";
+
+    /// <summary>Declares DI-backed source admission with configuration deferred until selected reads are prepared.</summary>
+    /// <param name="configurationSection">Section containing PositionKey (base64) and SlotGeneration.</param>
+    /// <returns>Offline source binding reusing this declaration and its existing native resource identity.</returns>
+    public IMaterializationReadSourceBinding ForReads(string configurationSection)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(configurationSection);
+        return new ReadSource(this, configurationSection);
+    }
+
+    sealed class ReadSource(PostgresMaterializationStorage owner, string configurationSection) : IMaterializationReadSourceBinding
+    {
+        public PreparedMaterialization Materialization => owner.Materialization;
+        public PreparedMaterializationReadSource Prepare(IServiceProvider services)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            var section = services.GetRequiredService<IConfiguration>().GetSection(configurationSection);
+            var key = Convert.FromBase64String(section[PositionKeyConfigurationKey]
+                ?? throw new InvalidOperationException($"{section.Path}:{PositionKeyConfigurationKey} is required for read-plan admission."));
+            var incarnation = section[SlotGenerationConfigurationKey]
+                ?? throw new InvalidOperationException($"{section.Path}:{SlotGenerationConfigurationKey} is required for read-plan admission.");
+            ArgumentException.ThrowIfNullOrWhiteSpace(incarnation);
+            return (target, ct) => owner.BindAsync(services, target, key, incarnation, ct);
+        }
+    }
+
+    /// <summary>Binds the declaration using host-owned clients keyed by its existing database identity.</summary>
+    /// <param name="services">Keyed NpgsqlDataSource and PostgresLogicalReplicationConnectionFactory registrations.</param>
+    /// <param name="target">Host-owned materialization target.</param><param name="authenticationKey">CDC position authentication key.</param>
+    /// <param name="slotGeneration">Explicit replication-slot incarnation.</param><param name="cancellationToken">Cancels native preflight.</param>
+    /// <returns>Admitted native ports; no ownership of registered clients is transferred.</returns>
+    /// <exception cref="InvalidOperationException">A required keyed native resource is missing.</exception>
+    public Task<BoundMaterialization> BindAsync(IServiceProvider services, IMaterializationTarget target,
+        ReadOnlyMemory<byte> authenticationKey, string slotGeneration, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        return BindAsync(services.GetRequiredKeyedService<NpgsqlDataSource>(bindings.Database.Value),
+            services.GetRequiredKeyedService<PostgresLogicalReplicationConnectionFactory>(bindings.Database.Value),
+            target, authenticationKey, slotGeneration, cancellationToken);
     }
 
     /// <summary>Preflights borrowed native clients and resolves the declared materialization; performs no DDL.</summary>

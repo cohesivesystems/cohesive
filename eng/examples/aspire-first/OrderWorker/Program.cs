@@ -1,3 +1,7 @@
+using Cohesive.Relations.Execution;
+using Cohesive.Adapters.Postgres;
+using Npgsql.Replication;
+using AspireFirst.Materialization;
 using Cohesive.Adapters.Marten;
 using Marten;
 using Cohesive.Application;
@@ -10,7 +14,9 @@ using Cohesive.Storage;
 
 var builder = WebApplication.CreateBuilder(args);
 var policy = FulfillmentHistoryPolicy.FromConfiguration(builder.Configuration);
-var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(policy));
+var reads = builder.Configuration.GetSection("OrderReads").Get<RelationQueryReadPolicy>() ?? new();
+reads.Validate();
+var model = ModelActivator.Create<FulfillmentApplication>(services => services.AddSingleton(policy).AddSingleton(reads));
 builder.Services.AddRequestOperationContext();
 builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
 builder.Services.AddCohesiveExceptionHandling();
@@ -23,9 +29,21 @@ builder.Services.AddKeyedSingleton<IDocumentStore>(policy.DatabaseName, (service
     options.Connection(services.GetRequiredKeyedService<NpgsqlDataSource>(policy.DatabaseName));
     policy.History.Configure(options);
 }));
+// Native clients remain DI-owned; the storage model owns read admission and selection.
+if (reads.Source == RelationQueryReadSource.Materialized)
+{
+    builder.Services.AddKeyedSingleton<PostgresLogicalReplicationConnectionFactory>(policy.DatabaseName,
+        (_, _) => () => new LogicalReplicationConnection(connectionString));
+    builder.Services.AddKeyedSingleton<HttpClient>(ShadowElastic.Resource, (_, _) => new HttpClient
+    {
+        BaseAddress = new Uri(builder.Configuration["Shadow:Elasticsearch"]
+            ?? throw new InvalidOperationException("Shadow:Elasticsearch is required for materialized reads."))
+    });
+}
 builder.Services.AddCohesiveServices(model);
 
 await using var app = builder.Build();
+app.Logger.LogInformation("OrderDetails read source: {Source}. Selection is fixed for this host lifetime.", reads.Source);
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
 app.UseAuthorization();

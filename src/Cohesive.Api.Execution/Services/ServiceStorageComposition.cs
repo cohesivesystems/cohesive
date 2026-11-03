@@ -108,7 +108,7 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
                 diagnostics.AddRange(compilation.Diagnostics);
                 continue;
             }
-            var key = Key(compilation, out var planReference);
+            var key = ServiceQueryIdentity.For(compilation, out var planReference);
             var revision = (selection.Reference.DefinitionId.Value, selection.Reference.RevisionId.Value);
             if (revisions.TryGetValue(revision, out var priorKey) && priorKey != key)
             {
@@ -151,24 +151,30 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
             }
         }
         if (diagnostics.Count > 0) throw new ServiceBindingValidationException(new([.. diagnostics]));
-        foreach (var (contract, owners) in repositoryOwners) repositories.Add(contract, owners[0]);
-        foreach (var entry in queryOwners) queries.Add(entry.Key, entry.Value);
-        prepared = admitted.ToImmutable();
-        explanation = new(
+        var preparations = admitted.ToImmutable();
+        for (var index = 0; index < explainedQueries.Count; index++)
+        {
+            var placement = explainedQueries[index];
+            var key = RelationQueryCompiledPlanReferenceFingerprinter.Compute(placement.Plan);
+            explainedQueries[index] = placement with { Read = preparations[queryOwners[key]].DescribeRead(identities[key])
+                ?? throw Failure("services.storage.readDescriptionMissing", "The admitted query must declare its serving backend and consistency.") };
+        }
+        var completedExplanation = new ServiceStorageExplanation(
             [.. explainedQueries.OrderBy(query => query.Query.DefinitionId.Value, StringComparer.Ordinal)],
             [.. repositoryOwners.OrderBy(pair => pair.Key.ToString(), StringComparer.Ordinal)
                 .Select(pair => new ServiceRepositoryPlacement(pair.Key, sources[pair.Value[0]].Name))]);
+        foreach (var (contract, owners) in repositoryOwners) repositories.Add(contract, owners[0]);
+        foreach (var entry in queryOwners) queries.Add(entry.Key, entry.Value);
+        prepared = preparations;
+        explanation = completedExplanation;
     }
-    static RelationQueryPlanComponentFingerprint Key(RelationQueryCompilationResult compilation, out RelationQueryCompiledPlanReference reference)
+    /// <inheritdoc />
+    public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query)
     {
-        reference = RelationQueryCompiledPlanReference.From(compilation.Plan!);
-        return RelationQueryCompiledPlanReferenceFingerprinter.Compute(reference);
-    }
-    static RelationQueryPlanComponentFingerprint Key(RelationQueryCompilationRequest request)
-    {
-        var compiled = RelationQueryStaticCompiler.Compile(request);
-        if (!compiled.IsSuccessful) throw new RelationQueryPreparationException("storage ownership", compiled);
-        return Key(compiled, out _);
+        var key = ServiceQueryIdentity.For(query.Request);
+        if (prepared.IsDefault || !queries.TryGetValue(key, out var owner))
+            throw Failure("services.storage.queryMissing", "Admit the query before describing its read binding.");
+        return prepared[owner].DescribeRead(query);
     }
     /// <inheritdoc />
     public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)
@@ -189,7 +195,7 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
             : throw Failure("services.storage.repositoryMissing", $"No admitted storage supplies observation '{observation}'.");
         public IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(RelationQuery<TInput, TResult> query,
             int maximumRows, long maximumBytes, RelationQueryConsistency consistency) =>
-            owner.queries.TryGetValue(Key(query.CompilationRequest), out var index)
+            owner.queries.TryGetValue(ServiceQueryIdentity.For(query.CompilationRequest), out var index)
                 ? sources[index].Query(query, maximumRows, maximumBytes, consistency)
                 : throw Failure("services.storage.queryMissing", "The query has no admitted storage placement.");
     }

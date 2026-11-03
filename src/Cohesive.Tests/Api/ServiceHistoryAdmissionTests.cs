@@ -9,6 +9,9 @@ public sealed class ServiceHistoryAdmissionTests
     sealed record History(StorageHistoryDeclaration HistoryDeclaration) : IStorageHistoryBinding;
     sealed class Source(EntityStateAuthority authority) : IServiceStorageComposition
     {
+        public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query) =>
+            new("Test", "test-resource", Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
+
         public ImmutableArray<object> Bindings { get; } = [new History(new("orders", authority, EntityReconstitutionMode.FullReplay))];
         public ImmutableArray<ValueContract> Observations => [];
         public ImmutableArray<QualifiedShapeId> Shapes => [];

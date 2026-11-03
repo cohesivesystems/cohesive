@@ -39,6 +39,9 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
         return this;
     }
     /// <inheritdoc />
+    public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query) => new("PostgreSQL", bindings.Database.Value,
+        Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
+    /// <inheritdoc />
     public ImmutableArray<object> Bindings => [bindings];
     /// <inheritdoc />
     public async ValueTask<IServicePersistence> BindAsync(IServiceProvider services, CancellationToken cancellationToken = default)

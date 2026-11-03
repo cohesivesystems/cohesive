@@ -52,3 +52,30 @@ stable search view; point-in-time lifecycle support remains outside the current 
 - [Relations getting started](../../Cohesive.Relations/docs/GETTING_STARTED.md) introduces the semantic query first.
 - [Relations capability reference](../../Cohesive.Relations/docs/CAPABILITIES.md) records the generated profile.
 - [`Cohesive.Storage`](../../Cohesive.Storage/README.md) owns the materialization lifecycle semantics.
+
+## Prepared materialized query reads
+
+`ElasticMaterializationReadSelection.PrepareAsync` admits the exact native rebuild
+plan and rooted keyed-query projection and produces bounded typed readers.
+`ElasticMaterializationReadBinding` exposes that interpretation to declarative
+`SelectMaterializedQuery` composition, which owns comparison-file loading and source/
+target admission ordering. Declare the binding with the existing target ID and a
+native metadata-admission function. It borrows the host's HttpClient keyed by that
+ID and checks the returned target and materialization identities. Client allocation,
+template policy and configuration section names remain application concerns; the
+shared preparation owns evidence validation, decoding and no-fallback semantics.
+
+For direct item access, `PrepareValueReaderAsync` inspects target publication state at
+startup without reconciling or writing it and returns a pinned-generation reader. Each warm read makes exactly three
+transport calls: generation control read, exact ownership-alias inspection, and
+bounded item multi-get. Retention, provisioning, permanent failure, definition and
+ownership checks remain fresh. No target-wide publication reconciliation, index
+creation, refresh or alias promotion runs on this path. Promotion of another
+generation does not affect the pinned reader; loss of its generation or ownership
+fails closed. The existing `ReadValueAsync` remains a standalone admission-plus-read
+convenience operation. Operator promotion APIs retain full target reconciliation.
+
+Tests pin the three-call boundary and reject eligibility/ownership changes after
+preparation. The optimization deliberately keeps native checks rather than caching
+retention or adding a freshness window. It does not promise read-your-writes or
+continuous comparison freshness.

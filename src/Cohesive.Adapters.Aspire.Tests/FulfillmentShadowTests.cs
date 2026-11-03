@@ -1,3 +1,12 @@
+using Cohesive.Adapters.Elastic;
+using Cohesive.Adapters.Marten;
+using Marten;
+using Microsoft.Extensions.Configuration;
+using Microsoft.AspNetCore.Builder;
+using Cohesive.Adapters.AspNet;
+using Cohesive.Adapters.AspNet.Services;
+using Cohesive.Api.Execution.Services;
+using Cohesive.Relations.Execution;
 using System.Text.Json;
 using Cohesive.Application;
 using Microsoft.Extensions.DependencyInjection;
@@ -93,6 +102,17 @@ public sealed class FulfillmentShadowTests
     }
 
     [Fact]
+    public async Task Missing_keyed_replication_factory_fails_before_native_io()
+    {
+        var storage = DeclareStorage(StorageOptions());
+        await using var database = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=orders;Username=test");
+        using var services = new ServiceCollection().AddKeyedSingleton<NpgsqlDataSource>("orders", database).BuildServiceProvider();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => storage.BindAsync(services,
+            UnusedTarget(), new byte[32], "test/v1"));
+        Assert.Contains(nameof(PostgresLogicalReplicationConnectionFactory), error.Message);
+    }
+
+    [Fact]
     public async Task Missing_replication_factory_fails_without_opening_pool()
     {
         var storage = DeclareStorage(StorageOptions());
@@ -146,7 +166,8 @@ public sealed class FulfillmentShadowTests
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var ct = timeout.Token;
-        var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy())
+            .AddSingleton(new RelationQueryReadPolicy { Source = RelationQueryReadSource.Materialized, AcceptEventualConsistency = true }));
         var model = application.Orders;
         var connection = Environment.GetEnvironmentVariable("COHESIVE_SHADOW_POSTGRES")!;
         await using var database = NpgsqlDataSource.Create(connection);
@@ -186,10 +207,36 @@ public sealed class FulfillmentShadowTests
                 (await rebuild.RunShardAsync(context, attempt, Assert.Single(runtime.Compilation.Plan.Shards).Id)).Disposition);
             await CatchUp("baseline");
             await AssertMatchesLive(first, second);
+            var approvedComparison = await Compare();
+            // CLI JSON is the operator artifact consumed by worker admission.
+            approvedComparison = JsonSerializer.Deserialize<MaterializationShadowComparison>(JsonSerializer.Serialize(approvedComparison))!;
+            var native = new ServicePersistenceBuilder().Query(model.Queries.OrderDetails, (_, _) => live).Build();
+            var selected = new ServicePersistenceBuilder(native).Query(model.Queries.OrderDetails,
+                await ElasticMaterializationReadSelection.PrepareAsync(model.Queries.OrderDetails, model.Queries.OrderDetailsRelation, runtime, approvedComparison, ct)).Build();
+            Assert.Throws<ServiceBindingValidationException>(() => selected.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.SingleSnapshot));
+            var otherIncarnation = await application.Storage.OrderDetails.BindAsync(database,
+                () => new LogicalReplicationConnection(connection), target, new byte[32], "different-incarnation", ct);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => ElasticMaterializationReadSelection.PrepareAsync(model.Queries.OrderDetails, model.Queries.OrderDetailsRelation, otherIncarnation, approvedComparison, ct));
+            await Assert.ThrowsAsync<Cohesive.Adapters.Elastic.ElasticMaterializationTransportException>(() => target.ReadValueAsync(context, approvedComparison.Convergence.Generation,
+                definition.OrderDetails.Document.DefinitionFingerprint, MaterializationItemId.FromRootIdentity(first), maximumBytes: 1));
+            var eventual = selected.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.Eventual);
+            var selectedBefore = JsonSerializer.Serialize(await eventual.ReadAsync(first, ct), Json);
+            Assert.Equal(JsonSerializer.Serialize(await live.ReadAsync(first, ct), Json), selectedBefore);
+            Assert.Null(await eventual.ReadAsync("absent-" + id, ct));
+            await AssertHttpRead(approvedComparison, first, await live.ReadAsync(first, ct));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => target.ReadValueAsync(context, new("missing-" + id),
+                definition.OrderDetails.Document.DefinitionFingerprint, MaterializationItemId.FromRootIdentity(first)));
             await Execute("UPDATE cohesive_inventory SET available=8,observation_version=1 WHERE sku=$1", sku);
             var stale = await Compare();
             Assert.False(stale.Matches);
             Assert.Single(stale.Changed);
+            Assert.Equal(selectedBefore, JsonSerializer.Serialize(await eventual.ReadAsync(first, ct), Json));
+            // Rollback resolves the original live reader; it does not query, mutate or delete the generation.
+            var rolledBack = native.Query(model.Queries.OrderDetails, 1000, 1_000_000, RelationQueryConsistency.SingleSnapshot);
+            Assert.Same(live, rolledBack);
+            Assert.NotEqual(selectedBefore, JsonSerializer.Serialize(await rolledBack.ReadAsync(first, ct), Json));
+            await AssertHttpRead(null, first, await rolledBack.ReadAsync(first, ct));
+            Assert.Throws<InvalidOperationException>(() => MaterializationReadSelection.Validate(stale, definition.OrderDetails.Document, DateTimeOffset.UtcNow));
             await Execute("UPDATE cohesive_reservations SET order_id=$1,observation_version=1 WHERE reservation_id=$2", second, reservation);
             await CatchUp("reparent");
             await AssertMatchesLive(first, second);
@@ -252,6 +299,56 @@ public sealed class FulfillmentShadowTests
             refresh.EnsureSuccessStatusCode();
             using var document = JsonDocument.Parse(await http.GetStringAsync("/" + index + "/_search?size=1000&sort=_doc", ct));
             return document.RootElement.GetProperty("hits").GetProperty("hits").Clone();
+        }
+        async Task AssertHttpRead(MaterializationShadowComparison? selection, string order, OrderDetails? expected)
+        {
+            var hostedModel = ModelActivator.Create<FulfillmentApplication>(services => services
+                .AddSingleton(new FulfillmentHistoryPolicy())
+                .AddSingleton(new RelationQueryReadPolicy { Source = selection is null ? RelationQueryReadSource.Live : RelationQueryReadSource.Materialized,
+                    AcceptEventualConsistency = selection is not null }));
+            var builder = WebApplication.CreateBuilder();
+            var artifact = Path.GetTempFileName();
+            await File.WriteAllTextAsync(artifact, JsonSerializer.Serialize(selection), ct);
+            builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["OrderReads:ComparisonFile"] = artifact,
+                ["Shadow:PositionKey"] = Convert.ToBase64String(new byte[32]),
+                ["Shadow:SlotGeneration"] = "test-slots/v1"
+            });
+            var historyPolicy = new FulfillmentHistoryPolicy();
+            builder.Services.AddKeyedSingleton<NpgsqlDataSource>(historyPolicy.DatabaseName, database);
+            builder.Services.AddKeyedSingleton<IDocumentStore>(historyPolicy.DatabaseName, (_, _) => DocumentStore.For(options =>
+            {
+                options.Connection(database);
+                historyPolicy.History.Configure(options);
+            }));
+            if (selection is not null)
+            {
+                builder.Services.AddKeyedSingleton<HttpClient>(ShadowElastic.Resource, http);
+                builder.Services.AddKeyedSingleton<PostgresLogicalReplicationConnectionFactory>(historyPolicy.DatabaseName,
+                    (_, _) => () => new LogicalReplicationConnection(connection));
+            }
+            builder.Services.AddRequestOperationContext();
+            builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
+            builder.Services.AddCohesiveServices(hostedModel);
+            await using var app = builder.Build();
+            app.UseRequestOperationContext();
+            app.UseAuthorization();
+            await app.MapServicesAsync();
+            app.Urls.Add("http://127.0.0.1:0");
+            await app.StartAsync(ct);
+            try
+            {
+                using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
+                using var response = await client.GetAsync("/orders/" + order + "/details", ct);
+                response.EnsureSuccessStatusCode();
+                using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+                // ASP.NET uses camelCase; compare through the same typed output rather than duplicating a DTO.
+                var actual = body.RootElement.Deserialize<OrderDetails>(new JsonSerializerOptions(JsonSerializerDefaults.Web)
+                    { Converters = { new JsonStringEnumConverter() } });
+                Assert.Equal(JsonSerializer.Serialize(expected, Json), JsonSerializer.Serialize(actual, Json));
+            }
+            finally { await app.StopAsync(ct); File.Delete(artifact); }
         }
         Task<MaterializationShadowComparison> Compare() => MaterializationShadowVerification.CompareAsync(runtime, context, convergence!,
             (generation, limit, token) => target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit));

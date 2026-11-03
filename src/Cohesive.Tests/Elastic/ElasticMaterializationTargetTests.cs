@@ -24,6 +24,57 @@ public sealed class ElasticMaterializationTargetTests
     static readonly MaterializationWorkerFence WorkerFence = new("1");
 
     [Fact]
+    public async Task Prepared_item_reads_use_three_native_reads_without_reconciling_target_publication()
+    {
+        var rig = CreateRig();
+        var generation = await PrepareValidatedAsync(rig, "read-cost", Epoch);
+        var admissionStart = rig.Transport.Calls.Length;
+        var reader = await rig.Target.PrepareValueReaderAsync(OperationContext.Create(), generation.GenerationId, DefinitionFingerprint);
+        Assert.All(rig.Transport.Calls.Skip(admissionStart), call =>
+            Assert.Contains(call.Operation, new[] { FakeElasticMaterializationTransport.GetDocumentOperation,
+                FakeElasticMaterializationTransport.InspectAliasesOperation }));
+        var before = rig.Transport.Calls.Length;
+        var value = await reader.ReadAsync(OperationContext.Create(), new("item/read-cost"));
+        Assert.Equal(ObservationValue.FromString("read-cost"), value);
+        Assert.Equal(new[] { FakeElasticMaterializationTransport.GetDocumentOperation,
+            FakeElasticMaterializationTransport.InspectAliasesOperation, FakeElasticMaterializationTransport.MultiGetOperation },
+            rig.Transport.Calls.Skip(before).Select(call => call.Operation));
+        Assert.Null(await reader.ReadAsync(OperationContext.Create(), new("absent")));
+    }
+
+    [Theory]
+    [InlineData("retained", false)]
+    [InlineData("hasPermanentFailures", true)]
+    public async Task Prepared_item_reads_do_not_cache_generation_eligibility(string field, bool value)
+    {
+        var rig = CreateRig();
+        var generation = await PrepareValidatedAsync(rig, "eligibility", Epoch);
+        var reader = await rig.Target.PrepareValueReaderAsync(OperationContext.Create(), generation.GenerationId, DefinitionFingerprint);
+        var control = await FindGenerationControlAsync(rig, generation.GenerationId);
+        var changed = JsonNode.Parse(control.Source)!.AsObject();
+        changed[field] = value;
+        await rig.Transport.ReplaceDocumentAsync(rig.Binding.ControlIndexName, control.Id,
+            JsonObject(JsonSerializer.SerializeToUtf8Bytes(changed)), control.Token, rig.Policy.MaximumDiagnosticBytes, CancellationToken.None);
+        var before = rig.Transport.Calls.Length;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => reader.ReadAsync(OperationContext.Create(), new("item/eligibility")));
+        Assert.DoesNotContain(rig.Transport.Calls.Skip(before), call => call.Operation == FakeElasticMaterializationTransport.MultiGetOperation);
+    }
+
+    [Fact]
+    public async Task Prepared_item_reads_recheck_generation_ownership()
+    {
+        var rig = CreateRig();
+        var generation = await PrepareValidatedAsync(rig, "ownership", Epoch);
+        var reader = await rig.Target.PrepareValueReaderAsync(OperationContext.Create(), generation.GenerationId, DefinitionFingerprint);
+        var control = await FindGenerationControlAsync(rig, generation.GenerationId);
+        var changed = JsonNode.Parse(control.Source)!.AsObject();
+        changed["indexName"] = "unrelated-index";
+        await rig.Transport.ReplaceDocumentAsync(rig.Binding.ControlIndexName, control.Id,
+            JsonObject(JsonSerializer.SerializeToUtf8Bytes(changed)), control.Token, rig.Policy.MaximumDiagnosticBytes, CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => reader.ReadAsync(OperationContext.Create(), new("item/ownership")));
+    }
+
+    [Fact]
     public async Task Bounded_candidate_values_reuse_validated_envelopes_without_promotion()
     {
         var rig = CreateRig();

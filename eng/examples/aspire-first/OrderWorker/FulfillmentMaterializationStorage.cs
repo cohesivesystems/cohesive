@@ -11,7 +11,7 @@ namespace AspireFirst.Materialization;
 public sealed class FulfillmentMaterializationStorage : StorageModel
 {
     /// <summary>Stable checkpoint and native binding authority.</summary>
-    public const string Authority = "aspire-first/order-shadow/v1";
+    public const string Authority = ShadowElastic.Authority;
 
     /// <summary>Declares offline materialization storage using existing entity mappings.</summary>
     /// <param name="storage">Live PostgreSQL mappings reused by the shadow.</param>
