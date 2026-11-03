@@ -1,5 +1,7 @@
 # One fulfillment model, two storage compositions
 
+Start with the [compositional CQRS/ES walkthrough](CQRS-ES.md): durable fulfillment, state/event authority, CDC convergence, eventual reads and live rollback, with one reproducible native proof.
+
 For state-authoritative versus event-authoritative PostgreSQL execution, see [State authority](STATE-AUTHORITY.md).
 
 ## Shared live and materialized read definition

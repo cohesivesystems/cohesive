@@ -98,3 +98,11 @@ Use `WithoutEnvironmentVariables()` on a dedicated AppHost CLI so native configu
 only by the native builder, rather than the CLI's optional environment parameter binding. `report.ToJson()` uses the existing portable document serializers directly; it does not
 serialize and parse embedded documents into mutable JSON trees. The output is an inspection report,
 not a supported application import format or an independent executable system IR.
+
+### Service execution in explanation schema v2
+
+Admitted process bindings retain their original service document and selected operation alongside the process reference.
+`endpoints[].service` exposes that operation's existing lifetime/completion/authorization contract; `services[]` contains
+the distinct original canonical documents. The inspection schema is now `cohesive.application.explanation/2`.
+No lifetime is inferred from HTTP 202, and polling does not imply durable execution. Storage history and selected read
+consistency remain separate sections. These are offline declarations, not provider readiness or current freshness evidence.

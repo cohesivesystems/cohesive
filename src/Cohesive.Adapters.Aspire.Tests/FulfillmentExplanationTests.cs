@@ -9,6 +9,8 @@ using AspireFirst.Orders;
 using AspireFirst.PostgresCosmos;
 using Cohesive.Application;
 using Cohesive.Storage;
+using Cohesive.Execution;
+using Cohesive.Api.Services;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
@@ -19,6 +21,57 @@ public sealed class FulfillmentExplanationTests
         var model = TestModels.Infrastructure(authority);
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
         return model.Explain(model.Configure(builder));
+    }
+
+    [Theory]
+    [InlineData(EntityStateAuthority.State, ProcessExecutionLifetime.Host, false)]
+    [InlineData(EntityStateAuthority.State, ProcessExecutionLifetime.Durable, true)]
+    [InlineData(EntityStateAuthority.Events, ProcessExecutionLifetime.Durable, false)]
+    [InlineData(EntityStateAuthority.Events, ProcessExecutionLifetime.Durable, true)]
+    public void Original_service_policy_is_explained_independently_of_history_and_read_selection(
+        EntityStateAuthority authority, ProcessExecutionLifetime lifetime, bool selected)
+    {
+        var model = ModelActivator.Create<FulfillmentInfrastructure>(services => services
+            .AddSingleton(new FulfillmentHistoryPolicy(authority))
+            .AddSingleton(new FulfillmentExecutionPolicy { Lifetime = lifetime })
+            .AddSingleton(new RelationQueryReadPolicy { Source = selected ? RelationQueryReadSource.Materialized : RelationQueryReadSource.Live,
+                AcceptEventualConsistency = selected }));
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
+        var report = model.Explain(model.Configure(builder));
+        var start = report.Endpoints.Single(endpoint => endpoint.Http?.Route == "/fulfillment");
+        var poll = report.Endpoints.Single(endpoint => endpoint.ResultOf == start.Id);
+        var service = Assert.Single(report.Services);
+        Assert.Equal(service.Reference, start.Service!.Definition);
+        Assert.Equal(service.Reference, poll.Service!.Definition);
+        var operation = Assert.IsType<ServiceProcessOperation>(start.Service.Operation);
+        var original = service.GetDefinition<ServiceDefinition>().Operations.Single(item => item.Id == operation.Id);
+        var options = Cohesive.Model.Serialization.StrictDocumentJson.CreateOptions();
+        Assert.True(JsonNode.DeepEquals(System.Text.Json.JsonSerializer.SerializeToNode(original, options),
+            System.Text.Json.JsonSerializer.SerializeToNode<ServiceOperation>(operation, options)));
+        Assert.Equal(lifetime, operation.Execution!.Lifetime);
+        Assert.Equal(ServiceProcessCompletion.Admission, operation.Execution.Completion);
+        Assert.Equal(operation.Process, start.Execution);
+        Assert.Equal(operation.Process, Assert.IsType<ServiceProcessResultOperation>(poll.Service.Operation).Process);
+        Assert.Equal(authority, Assert.Single(report.History).Authority);
+        var details = report.Storage.Queries.Single(query => query.Query == report.Endpoints.Single(endpoint => endpoint.Http?.Route == "/orders/{id}/details").Execution);
+        Assert.Equal(selected ? RelationQueryConsistency.Eventual : RelationQueryConsistency.SingleSnapshot, details.Read!.Consistency);
+        var json = JsonNode.Parse(report.ToJson())!;
+        Assert.True(JsonNode.DeepEquals(json["services"]![0], JsonNode.Parse(ExecutionDefinitionJsonSerializer.Serialize(service))));
+        Assert.Equal(ApplicationExplanationScope.OfflineAdmission, report.Scope);
+    }
+
+    [Fact]
+    public void Failed_pair_admission_rolls_back_service_links_with_endpoint_coverage()
+    {
+        var pair = TestModels.Fulfillment().Api.Fulfill;
+        var plan = new Cohesive.Api.Execution.Services.ServiceImplementationPlan();
+        plan.Declare(pair.Definition);
+        plan.Implement(pair.Definition, pair.Result, pair.Process.Definition.Reference);
+        Assert.Throws<Cohesive.Api.Execution.Services.ServiceBindingValidationException>(() => plan.ImplementProcess(pair.Definition, pair));
+        // Failure on the second member must not leave the first member or its service evidence behind.
+        plan.Implement(pair.Definition, pair.Start, pair.Process.Definition.Reference);
+        Assert.Equal(2, plan.Implementations.Length);
+        Assert.All(plan.Implementations, link => Assert.Null(link.Service));
     }
 
     [Fact]

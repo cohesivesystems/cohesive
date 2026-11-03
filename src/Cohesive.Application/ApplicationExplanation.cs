@@ -54,6 +54,10 @@ public static class ApplicationExplanation
             executions: [.. application.Composition.Executions.Documents
                 .OrderBy(document => document.Metadata.DefinitionId.Value, StringComparer.Ordinal)],
             infrastructure: infrastructure.Definition,
-            deployment: artifact);
+            deployment: artifact,
+            services: [.. plans.SelectMany(plan => plan.Implementations).Select(link => link.Service?.Declaration)
+                .OfType<Cohesive.Execution.ExecutionDefinitionDocument>().DistinctBy(document => document.Reference)
+                .OrderBy(document => document.Metadata.DefinitionId.Value, StringComparer.Ordinal)
+                .ThenBy(document => document.Reference.RevisionId.Value, StringComparer.Ordinal)]);
     }
 }

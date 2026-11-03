@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Api.Services;
 using Cohesive.Model;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Execution;
@@ -10,7 +11,22 @@ namespace Cohesive.Api.Execution.Services;
 /// <param name="Endpoint">Original API operation, including transport and response semantics.</param>
 /// <param name="Execution">Selected query, process or service reference; null when not supplied by this binding.</param>
 /// <param name="Repository">Entity observation contract; null for non-entity bindings.</param>
-public sealed record ServiceEndpointImplementation(ApiOperation Endpoint, ExecutionDefinitionReference? Execution, ValueContract? Repository);
+public sealed record ServiceEndpointImplementation(ApiOperation Endpoint, ExecutionDefinitionReference? Execution, ValueContract? Repository)
+{
+    /// <summary>Admitted original service operation, when the endpoint runs or polls a process.</summary>
+    public ServiceEndpointOperation? Service { get; internal init; }
+}
+
+/// <summary>Exact service declaration and selected operation admitted together with an endpoint.</summary>
+public sealed class ServiceEndpointOperation
+{
+    internal ServiceEndpointOperation(ExecutionDefinitionDocument declaration, ServiceOperation operation)
+    { Declaration = declaration; Operation = operation; }
+    /// <summary>Original canonical service document; no execution policy is copied or inferred.</summary>
+    public ExecutionDefinitionDocument Declaration { get; }
+    /// <summary>Original selected operation, including its lifetime, completion and authorization requirements.</summary>
+    public ServiceOperation Operation { get; }
+}
 
 /// <summary>Payload-free query ownership and admitted consistency, projected from successful offline preparation.</summary>
 /// <param name="Query">Exact selected query definition.</param>
