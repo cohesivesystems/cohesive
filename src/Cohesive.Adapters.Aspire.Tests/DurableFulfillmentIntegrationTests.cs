@@ -20,6 +20,7 @@ using Npgsql;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
+[Collection("Order PostgreSQL schema")]
 public sealed class DurableFulfillmentIntegrationTests
 {
     const string DatabaseVariable = "COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING";
