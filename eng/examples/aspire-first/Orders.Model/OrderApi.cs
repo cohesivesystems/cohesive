@@ -14,13 +14,14 @@ public sealed class OrderApi : ApiModel
     /// <summary>Declares the public contract using the exact transition reference.</summary>
     /// <param name="process">Execution contract.</param>
     /// <param name="domain">Canonical entities and order behavior, without runtime bindings.</param>
-    public OrderApi(FulfillmentDomain domain, FulfillmentProcess process)
+    /// <param name="execution">Explicit execution lifetime; the mixed-store example retains host execution.</param>
+    public OrderApi(FulfillmentDomain domain, FulfillmentProcess process, FulfillmentExecutionPolicy? execution = null)
     {
         Fulfill = Endpoints.Process(process).Accepted<ServiceProcessCommand<FulfillOrder>>(
-            id: new("fulfillment"), revision: new("3"),
+            id: new("fulfillment"), revision: new("4"),
             configure: service => service
                 .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
-                .ReturnAfterAdmission(ProcessExecutionLifetime.Host)
+                .ReturnAfterAdmission(execution?.Lifetime ?? ProcessExecutionLifetime.Host)
                 .Operation("result").Require(new("fulfillment.read")).ReadResultOf(process.Definition),
             startOperationId: "fulfill", resultOperationId: "result",
             startRoute: "/fulfillment", resultRoute: "/fulfillment/results/{instanceId}");
@@ -61,7 +62,8 @@ public sealed class OrderEndpoints : ApiBindingModel
     /// <param name="api">API contract.</param><param name="domain">Canonical entities.</param>
     /// <param name="queries">Declared queries.</param>
     /// <param name="reads">Explicit read realization; defaults to live.</param>
-    public OrderEndpoints(OrderApi api, FulfillmentDomain domain, FulfillmentQueries queries, RelationQueryReadPolicy? reads = null)
+    /// <param name="execution">Same execution policy used by the API declaration.</param>
+    public OrderEndpoints(OrderApi api, FulfillmentDomain domain, FulfillmentQueries queries, RelationQueryReadPolicy? reads = null, FulfillmentExecutionPolicy? execution = null)
     {
         reads ??= new();
         reads.Validate();
@@ -84,9 +86,12 @@ public sealed class OrderEndpoints : ApiBindingModel
             bindings.Bind(api => api.Availability, queries.ReservationAvailability, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
                 configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound(),
                 consistency: RelationQueryConsistency.IndependentSources);
-            bindings.BindHosted(endpoint => endpoint.Fulfill,
-                authority: "aspire-first", authorization: new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField)),
-                maximumExecutions: 1000, logPrivateFailures: true);
+            var authorization = new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField));
+            if (execution?.Lifetime == ProcessExecutionLifetime.Durable)
+                bindings.BindDurable(endpoint => endpoint.Fulfill, authority: "aspire-first", authorization, logPrivateFailures: true);
+            else
+                bindings.BindHosted(endpoint => endpoint.Fulfill, authority: "aspire-first", authorization,
+                    maximumExecutions: 1000, logPrivateFailures: true);
         });
     }
 }
@@ -99,3 +104,19 @@ public sealed record OrderCreated(string Id);
 /// <param name="Id">Order identity.</param>
 /// <param name="Status">Current lifecycle state.</param>
 public sealed record OrderSummary(string Id, OrderStatus Status);
+
+/// <summary>Explicit example execution selection shared by API declaration and binding.</summary>
+/// <remarks>The PostgreSQL AppHost and worker register Durable. The mixed-store demo retains Host until its own recovery qualification.</remarks>
+public sealed class FulfillmentExecutionPolicy
+{
+    ProcessExecutionLifetime lifetime = ProcessExecutionLifetime.Host;
+    /// <summary>Execution retention guarantee declared by the service; Host or Durable only.</summary>
+    public ProcessExecutionLifetime Lifetime
+    {
+        get => lifetime;
+        init => lifetime = value is ProcessExecutionLifetime.Host or ProcessExecutionLifetime.Durable
+            ? value : throw new ArgumentOutOfRangeException(nameof(value));
+    }
+    /// <summary>Native local scheduler resource identity.</summary>
+    public const string SchedulerResource = "fulfillment-scheduler";
+}

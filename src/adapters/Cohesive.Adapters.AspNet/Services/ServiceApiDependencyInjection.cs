@@ -125,7 +125,7 @@ internal class ServiceApiRuntime(IServiceProvider provider, IReadOnlyList<ApiBin
     Func<IServiceProvider, CancellationToken, ValueTask<IServicePersistence>> prepareStorage, string mappingMethod = "MapServicesAsync") : IHostedService, IAsyncDisposable
 {
     readonly object gate = new();
-    readonly ServiceProcessLifetime lifetime = new(provider.GetRequiredService<ILoggerFactory>());
+    readonly ServiceProcessLifetime lifetime = new(provider.GetRequiredService<ILoggerFactory>(), provider.GetService<IDurableServiceProcessProvider>());
     Task<ServiceApiBindings>? preparation;
     bool disposed;
     bool mapped;
@@ -143,6 +143,8 @@ internal class ServiceApiRuntime(IServiceProvider provider, IReadOnlyList<ApiBin
         try
         {
             token.ThrowIfCancellationRequested();
+            if (bindings.Any(binding => binding.Builder.RequiresDurableProvider) && provider.GetService<IDurableServiceProcessProvider>() is null)
+                throw ServiceImplementationPlan.Error("services.binding.durableProviderMissing", "Register a durable process provider before preparing storage and services.");
             var persistence = await prepareStorage(provider, token).ConfigureAwait(false);
             token.ThrowIfCancellationRequested();
             var preparedBindings = new ServiceApiBindings[bindings.Count];

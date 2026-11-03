@@ -41,7 +41,7 @@ public sealed class CompositionModelTests
     {
         var model = TestModels.Fulfillment();
         var process = model.Process;
-        var separate = Service.Define(new("fulfillment"), new("3"), process.Provenance)
+        var separate = Service.Define(new("fulfillment"), new("4"), process.Provenance)
             .Use(new ServiceDependencies().Process(process))
             .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
             .ReturnAfterAdmission(ProcessExecutionLifetime.Host)

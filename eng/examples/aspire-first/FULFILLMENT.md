@@ -80,31 +80,41 @@ than duplicating physical placement in portable query configuration.
 
 ## Failure and recovery boundary
 
-Execution is host-owned and independent of the HTTP request. Start returns 202 with a native admission receipt;
-the process continues in the generic-host worker. Caller cancellation and bounded response waiting do not
-cancel admitted execution. The same explicit command/idempotency/instance/attempt/input replays admission
-without scheduling another execution. Conflicting intent is rejected.
+The PostgreSQL composition declares `ProcessExecutionLifetime.Durable` in the service document and
+binds the same accepted/poll pair with `BindDurable`. `AddCohesiveDurableTaskServices` connects the prepared
+process to the existing Durable Task interpreter, persistent start dispatcher and result repository.
+Native client and worker configuration stays in `Program.cs`; the AppHost supplies a pinned local scheduler.
+No second process, queue, receipt store or application orchestration recipe is introduced.
 
-There is no crash recovery: in-memory execution receipts, deduplication and results disappear on host exit.
-At most 1,000 instances are retained, including completed ones. Capacity rejects new work without eviction.
-The single worker supports finite process graphs, has no retry/timer/distributed scheduler, and reports missing
-terminal evidence safely if physical execution fails. A physical failure after reservation may leave stock
-reserved; compensation runs only along the graph's explicit domain-rejection branch. Inspect the exact
-PostgreSQL transition receipt before deciding how to recover; do not blindly repeat or compensate.
+Start returns 202 after durable admission. Caller cancellation does not cancel admitted execution.
+Reusing the exact command/idempotency/instance/attempt/input returns the retained admission; changed
+intent is rejected. Result polling is authorized independently. HTTP response policy, process lifetime,
+entity authority and query consistency remain distinct declarations.
 
-Receipts are retained indefinitely in this demo. Schema bootstrap is explicit, caller-owned and idempotent; it
-is not a migration engine. Production must choose schema migration, receipt retention, reconciliation and
-client identity policies before claiming recovery guarantees. No global transaction spans order, inventory and reservation. A failed reservation insert can leave a
-Submitted order with reserved stock but no reservation until the exact occurrence is recovered. A new
-command identity is not a retry. The tests demonstrate receipt-backed replay, not automatic process recovery.
+`DurableFulfillmentIntegrationTests` runs State and Events configurations against real PostgreSQL/Marten
+and a local scheduler. It verifies terminal results across application replacement, then interrupts a worker
+after the inventory transaction commits but before scheduler acknowledgement. The replacement replays the
+receipted occurrence and completes: stock five becomes three, with one reservation of two. These four cases
+run in the `durable-fulfillment` CI workflow rather than silently skipping in the generic suite.
 
-State/event authority and reconstitution are independently selectable through the existing
-[Marten attachment](STATE-AUTHORITY.md). Next composition: durable process recovery and explicit read-projection
-lifecycles. Neither follows merely from storing transition receipts.
+This qualifies application/worker replacement while the scheduler remains available. Removing the disposable
+scheduler container can lose its local history; this is not a production scheduler disaster-recovery claim.
+There is no global transaction across inventory, order and reservation, and no automatic compensation for
+arbitrary permanent infrastructure failures. Domain rejection follows the explicitly declared release branch.
+A failed later transition can leave partially completed business work until exact-instance recovery or an
+operator decision. A new command identity is not a retry.
+
+The separate Postgres+Cosmos composition still selects Host lifetime: its in-memory admission and results
+disappear on host exit, with a maximum of 1,000 retained instances. It has not acquired durable-worker
+qualification from the PostgreSQL tests. Both compositions retain transition receipts indefinitely in the
+demo; production must define retention, migrations, reconciliation and authenticated client policy.
+
+State/event authority and reconstitution remain independently selectable through the
+[Marten attachment](STATE-AUTHORITY.md). Materialized read selection and rollback remain independent of execution.
 
 ### Operator failure details
 
-`BindHosted(..., logPrivateFailures: true)` opts into the existing generic-host scoped transition failure
+`BindDurable(..., logPrivateFailures: true)` (or `BindHosted` for the mixed composition) opts into the existing generic-host scoped transition failure
 logger. It subscribes to the prepared process at startup and releases on stop/disposal. Disabled Debug
 logging does not build diagnostic arguments. The logger is operator-only; native IDs, tokens and provider
 details must remain in protected sinks. Public polling responses contain only the service's safe diagnostics.

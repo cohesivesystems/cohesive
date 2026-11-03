@@ -1,0 +1,43 @@
+name: durable-fulfillment
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'eng/examples/aspire-first/**'
+      - '.github/workflows/durable-fulfillment.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  worker-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Start isolated native dependencies
+        run: |
+          docker run -d --name fulfillment-postgres -p 5432:5432 -e POSTGRES_PASSWORD=fulfillment-ci-only -e POSTGRES_DB=orders postgres:17
+          docker run -d --name fulfillment-scheduler -p 8080:8080 -e ASPNETCORE_URLS=http://+:8080 mcr.microsoft.com/dts/dts-emulator@sha256:1b49dcf1581168f5c620a4f32083e1291a7dddfa60434acb3eacd8b23355936a
+          for attempt in $(seq 1 90); do
+            status="$(curl --silent --output /dev/null --write-out '%{http_code}' http://localhost:8080/ || true)"
+            if docker exec fulfillment-postgres pg_isready -U postgres && [ "$status" != "000" ]; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Prove accepted fulfillment and interrupted commit recovery
+        env:
+          COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=orders;Username=postgres;Password=fulfillment-ci-only
+          DURABLE_TASK_SCHEDULER_CONNECTION_STRING: Endpoint=http://127.0.0.1:8080;TaskHub=default;Authentication=None
+        run: dotnet test src/Cohesive.Adapters.Aspire.Tests -c Release -m:1 --filter FullyQualifiedName~DurableFulfillmentIntegrationTests --logger 'trx;LogFileName=durable-fulfillment.trx'
+      - name: Retain test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: durable-fulfillment-results
+          path: src/Cohesive.Adapters.Aspire.Tests/TestResults/*.trx
+      - name: Clean up native dependencies
+        if: always()
+        run: docker rm -f fulfillment-postgres fulfillment-scheduler

@@ -1,5 +1,6 @@
 using Cohesive.Relations.Execution;
 using Aspire.Hosting;
+using Aspire.Hosting.ApplicationModel;
 using Microsoft.Extensions.Configuration;
 using Cohesive.Adapters.Aspire;
 using Cohesive.Adapters.Aspire.Postgres;
@@ -71,6 +72,13 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             .WithReference(database).WaitFor(database)
             .WithEnvironment("EntityState__Authority", policy.Authority.ToString())
             .WithEnvironment("EntityState__Reconstitution", policy.Reconstitution.ToString());
+        var scheduler = builder.AddContainer(FulfillmentExecutionPolicy.SchedulerResource, "mcr.microsoft.com/dts/dts-emulator")
+            .WithImageSHA256("1b49dcf1581168f5c620a4f32083e1291a7dddfa60434acb3eacd8b23355936a")
+            .WithEnvironment("ASPNETCORE_URLS", "http://+:8080")
+            .WithHttpEndpoint(targetPort: 8080, name: "grpc");
+        worker.WithEnvironment($"ConnectionStrings__{FulfillmentExecutionPolicy.SchedulerResource}",
+            ReferenceExpression.Create($"Endpoint={scheduler.GetEndpoint("grpc")};TaskHub=default;Authentication=None"))
+            .WaitFor(scheduler);
         worker.WithEnvironment("OrderReads__Source", reads.Source.ToString())
             .WithEnvironment("OrderReads__AcceptEventualConsistency", reads.AcceptEventualConsistency.ToString());
         if (reads.Source == RelationQueryReadSource.Materialized)
