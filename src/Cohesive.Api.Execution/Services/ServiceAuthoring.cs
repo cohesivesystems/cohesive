@@ -217,8 +217,17 @@ public sealed class ServiceOperationBuilder
     }
 
     /// <summary>Exposes the retained public output of an exact typed Process with independent authorization.</summary>
+    /// <typeparam name="TInput">Process input projection.</typeparam>
+    /// <typeparam name="TResult">Non-null process output and classifier input projection.</typeparam>
+    /// <param name="definition">Exact typed process whose retained output is exposed.</param>
+    /// <param name="classifier">Optional valid deterministic query over the exact process output contract.</param>
+    /// <returns>The service with this process-result operation added.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="definition"/> is null.</exception>
+    /// <exception cref="InvalidOperationException">This operation already selected process execution.</exception>
+    /// <exception cref="ServiceBindingValidationException">The process definition is invalid.</exception>
+    /// <exception cref="ArgumentException">The classifier is invalid, nondeterministic, or has a different input contract.</exception>
     public ServiceBuilder ReadResultOf<TInput, TResult>(Process<TInput, TResult> definition,
-        HostedQuery<TResult, ServiceResultClassification>? classifier = null)
+        HostedQuery<TResult, ServiceResultClassification>? classifier = null) where TResult : notnull
     {
         ArgumentNullException.ThrowIfNull(definition);
         RequireUnselected();
