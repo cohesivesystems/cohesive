@@ -1,4 +1,12 @@
 using System.Net;
+using System.Text.Json;
+using AspireFirst.Materialization;
+using Cohesive.Adapters.Elastic;
+using Cohesive.Adapters.Postgres;
+using Cohesive.Relations.Execution;
+using Cohesive.Storage.Materialization;
+using Microsoft.Extensions.Configuration;
+using Npgsql.Replication;
 using System.Net.Http.Json;
 using AspireFirst.Orders;
 using Cohesive.Adapters.AspNet;
@@ -42,27 +50,45 @@ public sealed class DurableFulfillmentIntegrationTests
     [SchedulerPostgresTheory]
     [InlineData(EntityStateAuthority.State)]
     [InlineData(EntityStateAuthority.Events)]
-    public Task Accepted_fulfillment_and_receipts_survive_application_replacement(EntityStateAuthority authority) => Run(authority, interruptAfterCommit: false);
+    public Task Accepted_fulfillment_and_receipts_survive_application_replacement(EntityStateAuthority authority) => Run(authority, Scenario.CompletedReplacement);
 
     [SchedulerPostgresTheory]
     [InlineData(EntityStateAuthority.State)]
     [InlineData(EntityStateAuthority.Events)]
-    public Task Interrupted_inventory_commit_recovers_without_reserving_twice(EntityStateAuthority authority) => Run(authority, interruptAfterCommit: true);
+    public Task Interrupted_inventory_commit_recovers_without_reserving_twice(EntityStateAuthority authority) => Run(authority, Scenario.InterruptedCommit);
 
-    static async Task Run(EntityStateAuthority authority, bool interruptAfterCommit)
+    [CqrsTheory]
+    [InlineData(EntityStateAuthority.State)]
+    [InlineData(EntityStateAuthority.Events)]
+    public Task Fulfillment_converges_through_CDC_then_reads_can_select_and_roll_back(EntityStateAuthority authority) =>
+        Run(authority, Scenario.MaterializedReads);
+
+    enum Scenario { CompletedReplacement, InterruptedCommit, MaterializedReads }
+
+    static async Task Run(EntityStateAuthority authority, Scenario scenario)
     {
+        var interruptAfterCommit = scenario == Scenario.InterruptedCommit;
+        var materialize = scenario == Scenario.MaterializedReads;
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(DatabaseVariable)!);
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(120));
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var model = CreateModel();
-        FulfillmentApplication CreateModel() => ModelActivator.Create<FulfillmentApplication>(services => services
+        FulfillmentApplication CreateModel(bool selected = false) => ModelActivator.Create<FulfillmentApplication>(services => services
             .AddSingleton(new FulfillmentHistoryPolicy(authority))
-            .AddSingleton(new FulfillmentExecutionPolicy { Lifetime = ProcessExecutionLifetime.Durable }));
+            .AddSingleton(new FulfillmentExecutionPolicy { Lifetime = ProcessExecutionLifetime.Durable })
+            .AddSingleton(new RelationQueryReadPolicy { Source = selected ? RelationQueryReadSource.Materialized : RelationQueryReadSource.Live,
+                AcceptEventualConsistency = selected }));
         var history = Assert.IsType<MartenEntityHistoryConfiguration>(model.Storage.Bindings.HistoryConfiguration);
         using var store = DocumentStore.For(options => { options.Connection(database); history.Configure(options); });
         var sku = "durable-" + Guid.NewGuid().ToString("N");
         string? orderId = null;
         CommitBarrier? barrier = null;
         var hosts = 0;
+        using var elastic = materialize ? new HttpClient { BaseAddress = new(Environment.GetEnvironmentVariable("COHESIVE_SHADOW_ELASTIC")!) } : null;
+        BoundMaterialization? shadow = null;
+        ElasticMaterializationTarget? target = null;
+        var runId = Guid.NewGuid().ToString("N");
+        var attempt = new MaterializationRebuildAttempt(new(new(runId), new(runId)), DateTimeOffset.UtcNow);
+        var comparisonFile = Path.GetTempFileName();
         try
         {
             ServiceProcessCommand<FulfillOrder> command;
@@ -73,6 +99,16 @@ public sealed class DurableFulfillmentIntegrationTests
                 var prepared = await model.Storage.Bindings.PrepareAsync(first.Services, database, "tests/durable-fulfillment");
                 await prepared.Persistence.Repository(model.Domain.Inventory, transitionReceipts: prepared.Receipts, stateHistory: prepared.History).Upsert(OperationContext.Create(),
                     new InventoryItem(sku, FulfillmentStoragePolicy.LocalPartition, 5));
+                if (materialize)
+                {
+                    var shadowModel = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy(authority)));
+                    await ShadowBootstrap.InitializeAsync(shadowModel, database, elastic!, deadline.Token);
+                    target = await ShadowElastic.BindAsync(elastic!, shadowModel.Materializations.OrderDetails, deadline.Token);
+                    shadow = await shadowModel.Storage.OrderDetails.BindAsync(database,
+                        () => new LogicalReplicationConnection(Environment.GetEnvironmentVariable(DatabaseVariable)!), target,
+                        new byte[32], "test-slots/v1", deadline.Token);
+                    await Synchronize(MaterializationShadowOperation.Rebuild, "baseline");
+                }
                 using var client = new HttpClient { BaseAddress = new(first.Urls.Single()) };
                 var created = await client.PostAsync("/orders", null, deadline.Token);
                 Assert.Equal(HttpStatusCode.Created, created.StatusCode);
@@ -111,9 +147,34 @@ public sealed class DurableFulfillmentIntegrationTests
                 Assert.Equal(3, reservation.AvailableStock);
                 await replacement.StopAsync(deadline.Token);
             }
+            if (materialize)
+            {
+                var caughtUp = await Synchronize(MaterializationShadowOperation.CatchUp, "after-fulfillment");
+                var context = OperationContext.Create(cancellationToken: deadline.Token);
+                var comparison = await MaterializationShadowVerification.CompareAsync(shadow!, context, caughtUp.Receipt!,
+                    (generation, limit, token) => target!.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit));
+                Assert.True(comparison.Matches, JsonSerializer.Serialize(comparison));
+                await File.WriteAllTextAsync(comparisonFile, JsonSerializer.Serialize(comparison), deadline.Token);
+                string? selectedResult = null;
+                foreach (var selected in new[] { true, false })
+                {
+                    await using var reader = await Start(selected);
+                    using var client = new HttpClient { BaseAddress = new(reader.Urls.Single()) };
+                    var response = await client.GetAsync($"/orders/{orderId}/details", deadline.Token);
+                    Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                    var body = await response.Content.ReadAsStringAsync(deadline.Token);
+                    if (selected) selectedResult = body;
+                    else Assert.Equal(selectedResult, body);
+                    var details = await response.Content.ReadFromJsonAsync<OrderDetails>(deadline.Token);
+                    Assert.Equal(OrderStatus.Submitted, details!.Status);
+                    Assert.Equal(3, Assert.Single(details.Reservations).AvailableStock);
+                    await reader.StopAsync(deadline.Token);
+                }
+            }
         }
         finally
         {
+            File.Delete(comparisonFile);
             foreach (var sql in new[] {
                 "DELETE FROM public.cohesive_process_receipts WHERE subject_id=$1 OR subject_id=$2",
                 "DELETE FROM public.cohesive_reservations WHERE order_id=$1 AND $2 IS NOT NULL",
@@ -126,9 +187,17 @@ public sealed class DurableFulfillmentIntegrationTests
             }
         }
 
-        async Task<WebApplication> Start()
+        async Task<MaterializationSynchronizationRunResult> Synchronize(MaterializationShadowOperation operation, string invocation)
         {
-            model = CreateModel();
+            var result = await MaterializationShadowExecution.RunAsync(shadow!, operation,
+                OperationContext.Create(cancellationToken: deadline.Token), attempt, new(runId + "/" + invocation), new("tests/cqrs"));
+            Assert.True(result.Disposition == MaterializationSynchronizationRunDisposition.Converged, JsonSerializer.Serialize(result.Diagnostics));
+            return result;
+        }
+
+        async Task<WebApplication> Start(bool selected = false)
+        {
+            model = CreateModel(selected);
             var builder = WebApplication.CreateBuilder();
             builder.Services.AddRequestOperationContext();
             builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
@@ -140,6 +209,18 @@ public sealed class DurableFulfillmentIntegrationTests
             if (interruptAfterCommit && hosts++ == 0)
                 builder.Services.AddSingleton<IAsyncProcessReferenceHost>(services => barrier = new(
                     services.GetRequiredService<DurableTaskServiceProcessProvider>(), model.Domain.InventoryTransitions.Reserve.Reference));
+            if (selected)
+            {
+                builder.Configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    ["OrderReads:ComparisonFile"] = comparisonFile,
+                    ["Shadow:PositionKey"] = Convert.ToBase64String(new byte[32]),
+                    ["Shadow:SlotGeneration"] = "test-slots/v1"
+                });
+                builder.Services.AddKeyedSingleton<HttpClient>(ShadowElastic.Resource, elastic!);
+                builder.Services.AddKeyedSingleton<PostgresLogicalReplicationConnectionFactory>(model.Storage.Bindings.Database.Value,
+                    (_, _) => () => new LogicalReplicationConnection(Environment.GetEnvironmentVariable(DatabaseVariable)!));
+            }
             builder.Services.AddCohesiveServices(model);
             var app = builder.Build();
             try
@@ -187,7 +268,16 @@ public sealed class DurableFulfillmentIntegrationTests
         public ValueTask<ProcessSignalTargetResult> ResolveSignalTargetAsync(OperationContext context, ProcessSignalTargetResolution resolution) => inner.ResolveSignalTargetAsync(context, resolution);
     }
 
-    sealed class SchedulerPostgresTheoryAttribute : TheoryAttribute
+    sealed class CqrsTheoryAttribute : SchedulerPostgresTheoryAttribute
+    {
+        public CqrsTheoryAttribute()
+        {
+            if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("COHESIVE_SHADOW_ELASTIC")))
+                Skip = "Requires local PostgreSQL, Durable Task and Elasticsearch.";
+        }
+    }
+
+    class SchedulerPostgresTheoryAttribute : TheoryAttribute
     {
         public SchedulerPostgresTheoryAttribute()
         {

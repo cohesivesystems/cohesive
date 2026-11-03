@@ -217,8 +217,7 @@ public sealed class ServiceApiImplementation<TApi>
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "The linked API and runtime require the same exact service.");
         model.Plan.Contribute(definition, () =>
         {
-            model.Plan.Implement(definition, start, pair.Declaration.Reference);
-            model.Plan.Implement(definition, result, pair.Declaration.Reference);
+            model.Plan.ImplementProcess(definition, pair);
             model.Add(_ => new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project), []));
         });
         return this;
@@ -343,8 +342,7 @@ public sealed class ServiceApiImplementation<TApi>
         {
             if (executionLifetime == ProcessExecutionLifetime.Durable) model.RequireDurableProvider();
             model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
-            model.Plan.Implement(definition, start, process.Definition.Reference);
-            model.Plan.Implement(definition, result, process.Definition.Reference);
+            model.Plan.ImplementProcess(definition, pair);
             var policies = authorizationPolicyResolver;
             model.ConfigureServices(services => policies ??= ServiceProcessHttpAuthorization.Register(services, pair, authorization));
             model.Add((lifetime, persistence) =>
@@ -382,7 +380,7 @@ public sealed class ServiceApiImplementation<TApi>
             throw ServiceImplementationPlan.Error("services.api.operationMismatch", "This finite host requires the endpoint's single declared service operation.");
         var http = endpoint.Operation.Http ?? throw ServiceImplementationPlan.Error("services.api.httpMissing", "Process endpoint requires HTTP binding.");
         model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
-        model.Plan.Implement(definition, endpoint, process.Definition.Reference);
+        model.Plan.ImplementProcess(definition, endpoint, declaration);
         model.Add(persistence =>
         {
             var hosted = service.Bind(process.Definition, persistence.Repository).Build(authority, authorization);

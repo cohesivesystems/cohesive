@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Api;
+using Cohesive.Api.Services;
 using Cohesive.Model;
 using Cohesive.Execution;
 using Cohesive.Infra;
@@ -36,14 +37,14 @@ public sealed class ApplicationExplanationDocument
         ImmutableArray<ApplicationEndpointExplanation> endpoints, ServiceStorageExplanation storage,
         ImmutableArray<StorageHistoryDeclaration> history, ImmutableArray<RelationQueryDocument> queries,
         ImmutableArray<ExecutionDefinitionDocument> executions, InfrastructureDefinitionDocument infrastructure,
-        InfrastructureDeploymentArtifact deployment)
+        InfrastructureDeploymentArtifact deployment, ImmutableArray<ExecutionDefinitionDocument> services)
     {
         Entities = entities; Endpoints = endpoints; Storage = storage; History = history;
-        Queries = queries; Executions = executions; Infrastructure = infrastructure; Deployment = deployment;
+        Queries = queries; Executions = executions; Services = services; Infrastructure = infrastructure; Deployment = deployment;
     }
 
     /// <summary>Version of this inspection report's serialized structure, independent of embedded document versions.</summary>
-    public string SchemaVersion => "cohesive.application.explanation/1";
+    public string SchemaVersion => "cohesive.application.explanation/2";
     /// <summary>Explicit evidence boundary; this report contains no live observations.</summary>
     public ApplicationExplanationScope Scope => ApplicationExplanationScope.OfflineAdmission;
     /// <summary>Original canonical entities in ordinal name order.</summary>
@@ -58,6 +59,8 @@ public sealed class ApplicationExplanationDocument
     public ImmutableArray<RelationQueryDocument> Queries { get; }
     /// <summary>Original execution documents; their own fingerprints remain authoritative.</summary>
     public ImmutableArray<ExecutionDefinitionDocument> Executions { get; }
+    /// <summary>Original canonical services supplying admitted endpoint execution and polling policies.</summary>
+    public ImmutableArray<ExecutionDefinitionDocument> Services { get; }
     /// <summary>Original infrastructure declaration.</summary>
     public InfrastructureDefinitionDocument Infrastructure { get; }
     /// <summary>Validated compiled deployment intent, not evidence of a live deployment.</summary>
@@ -82,7 +85,10 @@ public sealed class ApplicationEndpointExplanation
         Execution = implementation.Execution ?? endpoint.TransitionReference;
         Repository = implementation.Repository;
         SemanticReferences = [.. endpoint.SemanticReferences];
+        Service = implementation.Service is { } service ? new(service.Declaration.Reference, service.Operation) : null;
     }
+    /// <summary>Exact service and original operation supplying lifetime/completion semantics; null for entity/query endpoints.</summary>
+    public ApplicationServiceEndpointExplanation? Service { get; }
     /// <summary>Original endpoint identity.</summary>
     public ApiEndpointId Id { get; }
     /// <summary>Declared operation semantics.</summary>
@@ -105,3 +111,7 @@ public sealed class ApplicationEndpointExplanation
 /// <param name="Method">Original HTTP method.</param>
 /// <param name="Route">Original route template.</param>
 public sealed record ApplicationHttpRouteExplanation(string Method, string Route);
+
+/// <summary>Projection of an admitted service operation, independent of its native executor and runtime health.</summary>
+/// <param name="Definition">Exact canonical service authority.</param><param name="Operation">Original selected operation.</param>
+public sealed record ApplicationServiceEndpointExplanation(ExecutionDefinitionReference Definition, ServiceOperation Operation);
