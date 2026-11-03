@@ -16,6 +16,12 @@ jobs:
   build-test-pack:
     runs-on: ubuntu-latest
     services:
+      fulfillment-scheduler:
+        image: mcr.microsoft.com/dts/dts-emulator@sha256:1b49dcf1581168f5c620a4f32083e1291a7dddfa60434acb3eacd8b23355936a
+        env:
+          ASPNETCORE_URLS: http://+:8080
+        ports:
+          - 8080:8080
       postgres:
         image: postgres:17
         env:
@@ -68,6 +74,7 @@ jobs:
         run: dotnet test Cohesive.sln -c Release --no-build
         env:
           COHESIVE_MIMESIS_PYTHON: python
+          COHESIVE_ORDER_EXAMPLE_SCHEDULER_CONNECTION_STRING: Endpoint=http://127.0.0.1:8080;TaskHub=default;Authentication=None
           COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=cohesive-test-only
 
       - name: Test PostgreSQL entity commits and authority
@@ -127,6 +134,7 @@ jobs:
         run: bash ./eng/test-simulation-tool.sh 0.1.0-ci.${{ github.run_number }}
         env:
           COHESIVE_MIMESIS_PYTHON: python
+          COHESIVE_ORDER_EXAMPLE_SCHEDULER_CONNECTION_STRING: Endpoint=http://127.0.0.1:8080;TaskHub=default;Authentication=None
           COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=cohesive-test-only
 
   notify-slack:

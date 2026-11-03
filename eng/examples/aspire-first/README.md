@@ -74,7 +74,7 @@ Aspire resources to choose how the same HTTP API executes.
 | `AppHost` | PostgreSQL | Same PostgreSQL database | One SQL statement |
 | `PostgresCosmosAppHost` | PostgreSQL | Cosmos DB | Bounded composed reads; availability pushes the order/reservation join into SQL |
 
-The first is the default and stays PostgreSQL-only. The second is a separate executable composition,
+The first is the default and keeps entity storage PostgreSQL-only; Durable Task separately owns process execution. The second is a separate executable composition,
 not a placement switch scattered through domain code. The domain, query definitions, transitions,
 process and API are compiled once in `Orders.Model` and referenced by both workers.
 
@@ -104,14 +104,13 @@ The process reads inventory directly:
 var stock = await process.PointRead(domain.Inventory, input.Sku,
     policy: new ProcessReadPolicy(timeout: TimeSpan.FromSeconds(2)));
 if (stock.Entity == null)
-    return new FulfillmentResult("Rejected", "Inventory does not exist.");
+    return new FulfillmentResult(FulfillmentStatus.Rejected, FulfillmentOutcome.InventoryMissing);
 ```
 
 The entity declaration supplies the read contract and generated dependency. The result envelope makes
 absence explicit; subsequent transitions remain responsible for concurrency and stock validation.
 The optional deadline is cooperative and covers the whole read. Classified-failure retries can also
-be selected with `ProcessReadPolicy`; this host-memory example does not enable adapter exception classification or
-durable retry progress. The Durable Task interpreter supports an explicit `ProcessReadProgress.Durable`
+be selected with `ProcessReadPolicy`; the demo does not opt into adapter exception classification or a read retry budget. The Durable Task interpreter supports an explicit `ProcessReadProgress.Durable`
 demand; selecting it with the ephemeral executor fails at setup. See [process policy semantics](../../../src/Cohesive.Processes/README.md).
 
 A `StorageModel` can own multiple providers. `StorageModelBuilder` is available directly; the base
@@ -172,7 +171,7 @@ at setup. Result row and decoded-scalar byte bounds are checked before returning
 The mixed SQL schema retains the reservation-to-order foreign key, but cannot enforce its inventory
 reference in Cosmos. The domain relationship is still canonical. Each entity transition atomically commits
 its own state and operation receipt in its own backend; the process provides sequencing and compensation.
-Host-owned accepted execution remains in-memory, not crash durable. See [process guarantees](FULFILLMENT.md).
+The PostgreSQL AppHost runs accepted fulfillment on a pinned local Durable Task scheduler. Worker replacement preserves admission and results; PostgreSQL transition receipts prevent duplicate stock reservation after interrupted acknowledgement. The Postgres+Cosmos composition still uses bounded host-memory execution. See [process guarantees](FULFILLMENT.md).
 
 The shared endpoint bindings explicitly permit `RelationQueryConsistency.IndependentSources`. This is
 an application consistency choice, not a consequence inferred from placement. The PostgreSQL-only

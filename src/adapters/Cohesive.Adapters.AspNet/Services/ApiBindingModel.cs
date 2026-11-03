@@ -16,6 +16,7 @@ public abstract class ApiBindingModel : IAuthoringModel, IServiceImplementationM
     void IAuthoringModel.Complete() => Bindings.Complete();
     /// <summary>Resolves runtime bindings once for the supplied host and persistence.</summary>
     /// <param name="services">Host services.</param><param name="persistence">Caller-owned native persistence.</param>
+    /// <param name="durableProvider">Optional native provider for durable execution when preparing before host construction.</param>
     /// <returns>Prepared HTTP bindings.</returns>
-    public ServiceApiBindings Build(IServiceCollection services, IServicePersistence persistence) => Bindings.Build(services, persistence);
+    public ServiceApiBindings Build(IServiceCollection services, IServicePersistence persistence, IDurableServiceProcessProvider? durableProvider = null) => Bindings.Build(services, persistence, durableProvider);
 }

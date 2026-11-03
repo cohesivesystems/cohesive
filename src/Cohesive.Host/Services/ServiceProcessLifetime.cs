@@ -1,4 +1,5 @@
 using Cohesive.Api.Execution.Services;
+using Cohesive.Execution;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -9,6 +10,12 @@ namespace Cohesive.Host.Services;
 /// <summary>Lifecycle attachment used when preparing API bindings before or after host construction.</summary>
 public interface IServiceProcessLifetime
 {
+    /// <summary>Admits a process to the host's registered durable execution provider.</summary>
+    /// <param name="process">Prepared process.</param><param name="declaration">Exact service contract.</param>
+    /// <param name="authority">Logical execution authority.</param><param name="authorization">Invocation authorization.</param>
+    /// <returns>Provider-backed service runtime.</returns>
+    ServiceRuntime Durable(PreparedServiceProcess process, ExecutionDefinitionDocument declaration,
+        string authority, IServiceInvocationAuthorization authorization);
     /// <summary>Creates an owned worker; no execution begins during preparation.</summary>
     /// <param name="process">Prepared process.</param><param name="maximumExecutions">Retained execution bound.</param>
     /// <returns>The worker to bind to the service contract.</returns>
@@ -21,8 +28,14 @@ public interface IServiceProcessLifetime
 
 /// <summary>Adapts explicit preparation to normal generic-host registrations.</summary>
 /// <param name="services">The host's service collection, before building its provider.</param>
-public sealed class ServiceCollectionProcessLifetime(IServiceCollection services) : IServiceProcessLifetime
+/// <param name="durableProvider">Optional already constructed durable provider, borrowing native clients.</param>
+public sealed class ServiceCollectionProcessLifetime(IServiceCollection services, IDurableServiceProcessProvider? durableProvider = null) : IServiceProcessLifetime
 {
+    /// <inheritdoc />
+    public ServiceRuntime Durable(PreparedServiceProcess process, ExecutionDefinitionDocument declaration,
+        string authority, IServiceInvocationAuthorization authorization) =>
+        (durableProvider ?? throw new InvalidOperationException("Supply a durable provider when preparing bindings before host construction."))
+            .Bind(process, declaration, authority, authorization);
     readonly IServiceCollection registrations = services ?? throw new ArgumentNullException(nameof(services));
     /// <inheritdoc />
     public HostProcessWorker Worker(PreparedServiceProcess process, int maximumExecutions) => registrations.AddCohesiveHostProcessWorker(process, maximumExecutions);
@@ -38,14 +51,17 @@ public sealed class ServiceCollectionProcessLifetime(IServiceCollection services
 public sealed class ServiceProcessLifetime : IServiceProcessLifetime, IHostedService, IDisposable
 {
     readonly ILoggerFactory loggers;
+    readonly IDurableServiceProcessProvider? durableProvider;
     readonly List<HostProcessWorker> workers = [];
     readonly TransitionFailureLoggingOptions logging = new();
     readonly TransitionFailureLoggingService logger;
     bool started;
     bool disposed;
     /// <summary>Creates an unstarted owner using the host's logger factory.</summary><param name="loggers">Borrowed logger factory.</param>
-    public ServiceProcessLifetime(ILoggerFactory loggers)
+    /// <param name="durableProvider">Optional host-owned durable provider.</param>
+    public ServiceProcessLifetime(ILoggerFactory loggers, IDurableServiceProcessProvider? durableProvider = null)
     {
+        this.durableProvider = durableProvider;
         this.loggers = loggers ?? throw new ArgumentNullException(nameof(loggers));
         logger = new(Options.Create(logging), loggers);
     }
@@ -53,6 +69,14 @@ public sealed class ServiceProcessLifetime : IServiceProcessLifetime, IHostedSer
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         if (started) throw new InvalidOperationException("Process preparation is complete.");
+    }
+    /// <inheritdoc />
+    public ServiceRuntime Durable(PreparedServiceProcess process, ExecutionDefinitionDocument declaration,
+        string authority, IServiceInvocationAuthorization authorization)
+    {
+        RequirePreparation();
+        return (durableProvider ?? throw new InvalidOperationException("Register a durable service process provider before mapping services."))
+            .Bind(process, declaration, authority, authorization);
     }
     /// <inheritdoc />
     public HostProcessWorker Worker(PreparedServiceProcess process, int maximumExecutions)
