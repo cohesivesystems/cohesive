@@ -11,23 +11,6 @@ namespace Cohesive.Adapters.Elastic;
 /// <summary>Prepares typed eventual reads from a compared generation of the same rooted relation as a live query.</summary>
 public static class ElasticMaterializationReadSelection
 {
-    /// <summary>Admits a comparison file before binding native source/target ports, then prepares bounded query readers.</summary>
-    /// <typeparam name="TResult">Rooted result projection.</typeparam>
-    /// <param name="query">Live keyed query whose API contract remains unchanged.</param><param name="relation">Shared rooted relation.</param>
-    /// <param name="definition">Materialization prepared from that relation.</param><param name="comparisonFile">Trusted operator artifact path.</param>
-    /// <param name="bind">Binds host-owned native resources without executing CDC or rebuild.</param><param name="cancellationToken">Startup cancellation.</param>
-    /// <returns>Reader factory sharing one admitted target/generation; failures never fall back.</returns>
-    public static async Task<Func<int, long, IRelationQueryReader<string, TResult?>>> PrepareAsync<TResult>(
-        RelationQuery<string, TResult?> query, RootedRelation<TResult> relation, PreparedMaterialization definition,
-        string comparisonFile, Func<CancellationToken, Task<BoundMaterialization>> bind, CancellationToken cancellationToken = default) where TResult : class
-    {
-        ArgumentNullException.ThrowIfNull(query); ArgumentNullException.ThrowIfNull(relation);
-        ArgumentNullException.ThrowIfNull(definition); ArgumentNullException.ThrowIfNull(bind);
-        var comparison = await MaterializationReadSelection.LoadAsync(comparisonFile, definition, cancellationToken).ConfigureAwait(false);
-        var runtime = await bind(cancellationToken).ConfigureAwait(false);
-        return await PrepareAsync(query, relation, runtime, comparison, cancellationToken).ConfigureAwait(false);
-    }
-
     /// <summary>Admits exact relation/query and native rebuild evidence, then prepares a pinned generation once.</summary>
     /// <typeparam name="TResult">Rooted result projection.</typeparam>
     /// <param name="query">Keyed query derived from the relation.</param><param name="relation">Shared root authority.</param>

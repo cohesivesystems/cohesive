@@ -55,12 +55,15 @@ stable search view; point-in-time lifecycle support remains outside the current 
 
 ## Prepared materialized query reads
 
-`ElasticMaterializationReadSelection.PrepareAsync` loads a trusted local comparison
-through `MaterializationReadSelection`, admits the exact native rebuild plan and
-rooted keyed-query projection, and produces bounded typed readers. Native source
-and target binding is supplied by the host; client allocation and configuration
-names remain application concerns. The shared preparation owns artifact validation,
-generation admission, decoding and no-fallback semantics.
+`ElasticMaterializationReadSelection.PrepareAsync` admits the exact native rebuild
+plan and rooted keyed-query projection and produces bounded typed readers.
+`ElasticMaterializationReadBinding` exposes that interpretation to declarative
+`SelectMaterializedQuery` composition, which owns comparison-file loading and source/
+target admission ordering. Declare the binding with the existing target ID and a
+native metadata-admission function. It borrows the host's HttpClient keyed by that
+ID and checks the returned target and materialization identities. Client allocation,
+template policy and configuration section names remain application concerns; the
+shared preparation owns evidence validation, decoding and no-fallback semantics.
 
 For direct item access, `PrepareValueReaderAsync` inspects target publication state at
 startup without reconciling or writing it and returns a pinned-generation reader. Each warm read makes exactly three

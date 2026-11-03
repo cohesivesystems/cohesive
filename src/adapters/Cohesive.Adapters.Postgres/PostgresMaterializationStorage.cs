@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using System.Collections.Immutable;
 using Cohesive.Execution;
@@ -97,6 +98,31 @@ public sealed class PostgresMaterializationStorage
         await PostgresLogicalReplicationPreparation.InitializeAsync(database, tables, options.Publication,
             slots.Values, state, cancellationToken).ConfigureAwait(false);
         await state.EnsureCreatedAsync(Cohesive.Prelude.OperationContext.Create(cancellationToken: cancellationToken)).ConfigureAwait(false);
+    }
+
+    /// <summary>Declares DI-backed source admission with configuration deferred until selected reads are prepared.</summary>
+    /// <param name="configurationSection">Section containing PositionKey (base64) and SlotGeneration.</param>
+    /// <returns>Offline source binding reusing this declaration and its existing native resource identity.</returns>
+    public IMaterializationReadSourceBinding ForReads(string configurationSection)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(configurationSection);
+        return new ReadSource(this, configurationSection);
+    }
+
+    sealed class ReadSource(PostgresMaterializationStorage owner, string configurationSection) : IMaterializationReadSourceBinding
+    {
+        public PreparedMaterialization Materialization => owner.Materialization;
+        public Func<IMaterializationTarget, CancellationToken, Task<BoundMaterialization>> Prepare(IServiceProvider services)
+        {
+            ArgumentNullException.ThrowIfNull(services);
+            var section = services.GetRequiredService<IConfiguration>().GetSection(configurationSection);
+            var key = Convert.FromBase64String(section["PositionKey"]
+                ?? throw new InvalidOperationException($"{section.Path}:PositionKey is required for read-plan admission."));
+            var incarnation = section["SlotGeneration"]
+                ?? throw new InvalidOperationException($"{section.Path}:SlotGeneration is required for read-plan admission.");
+            ArgumentException.ThrowIfNullOrWhiteSpace(incarnation);
+            return (target, ct) => owner.BindAsync(services, target, key, incarnation, ct);
+        }
     }
 
     /// <summary>Binds the declaration using host-owned clients keyed by its existing database identity.</summary>

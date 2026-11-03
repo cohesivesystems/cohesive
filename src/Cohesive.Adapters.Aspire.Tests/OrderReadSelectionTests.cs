@@ -1,3 +1,6 @@
+using AspireFirst.Materialization;
+using Cohesive.Adapters.Elastic;
+using Microsoft.Extensions.Configuration;
 using AspireFirst.Orders;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Application;
@@ -12,19 +15,28 @@ public sealed class OrderReadSelectionTests
     [Fact]
     public async Task Shared_preparation_rejects_invalid_comparison_before_native_binding()
     {
-        var model = TestModels.Fulfillment();
-        var definition = new AspireFirst.Materialization.FulfillmentMaterializations(model.Queries).OrderDetails;
+        var model = ModelActivator.Create<FulfillmentApplication>(services => services
+            .AddSingleton(new FulfillmentHistoryPolicy())
+            .AddSingleton(new RelationQueryReadPolicy { Source = RelationQueryReadSource.Materialized, AcceptEventualConsistency = true }));
+        var definitions = new FulfillmentMaterializations(model.Queries);
+        var source = new FulfillmentMaterializationStorage(model.Storage, definitions).OrderDetails.ForReads("Shadow");
         var path = Path.GetTempFileName();
         try
         {
             await File.WriteAllTextAsync(path, "null");
             var calls = 0;
-            await Assert.ThrowsAsync<InvalidOperationException>(() => Cohesive.Adapters.Elastic.ElasticMaterializationReadSelection.PrepareAsync(
-                model.Queries.OrderDetails, model.Queries.OrderDetailsRelation, definition, path, _ =>
-                {
-                    calls++;
-                    throw new InvalidOperationException("Native preparation must not run.");
-                }));
+            var target = new ElasticMaterializationReadBinding(new("test-target"), (_, _, _) =>
+            {
+                calls++;
+                throw new InvalidOperationException("Native preparation must not run.");
+            });
+            var composition = model.Storage.Native.SelectMaterializedQuery(model.Queries.OrderDetails, model.Queries.OrderDetailsRelation,
+                source, target, "Reads");
+            var selection = model.Endpoints.Plan.QueryDependencies.Queries.Single(item =>
+                item.Request.DefinitionDocument.DefinitionFingerprint == model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
+            using var services = new ServiceCollection().AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { ["Reads:ComparisonFile"] = path }).Build()).BuildServiceProvider();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => composition.PrepareQueries([selection]).BindAsync(services).AsTask());
             Assert.Equal(0, calls);
         }
         finally { File.Delete(path); }

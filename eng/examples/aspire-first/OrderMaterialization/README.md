@@ -268,15 +268,23 @@ Explanation does not load comparison files or contact either backend: it describ
 selection, not live readiness or a verified generation. Generation admission remains a
 startup check, with no silent fallback.
 
-The example now delegates comparison loading, exact query/rebuild admission and typed
-result reads to `ElasticMaterializationReadSelection`. Its storage binding only selects
-configuration and host-owned native clients. See the [adapter's prepared-read contract](../../../../src/adapters/Cohesive.Adapters.Elastic/README.md#prepared-materialized-query-reads)
-for per-request native checks and the three-call bound.
+The storage selection is declarative:
 
-Live/materialized selection uses the shared `RelationQueryReadPolicy`; there is no
-order-specific policy type. `OrderEndpoints` supplies its live consistency requirement
-explicitly, while materialized selection requires eventual-consistency consent.
-`FulfillmentStorage` calls the shared preparation API directly. The remaining
-`OrderReads`/`Shadow` configuration names and target/client choices are application
-configuration, not another policy or reader implementation. PostgreSQL materialization
-binding resolves its native clients from DI using the database identity it already owns.
+```csharp
+return Native.SelectMaterializedQuery(queries.OrderDetails, queries.OrderDetailsRelation,
+    source: materializationStorage.OrderDetails.ForReads(configurationSection: "Shadow"),
+    target: ShadowElastic.Reads,
+    comparisonSection: "OrderReads");
+```
+
+There is no configuration/file/native-binding callback in `FulfillmentStorage`.
+Shared composition loads comparison evidence, validates source configuration and
+admits the native bindings. `ShadowElastic.Reads` names the existing target and its
+native metadata policy, shared with the operator. PostgreSQL resolves native clients
+under its declared database identity. No extra resource catalog is introduced.
+
+Live/materialized selection uses `RelationQueryReadPolicy`; the endpoint supplies
+its live consistency requirement explicitly. Materialized reads require eventual
+consent. Live rollback does not load either configuration section's materialization
+values or resolve the target. See the [adapter's prepared-read contract](../../../../src/adapters/Cohesive.Adapters.Elastic/README.md#prepared-materialized-query-reads)
+for per-request native checks and the three-call bound.

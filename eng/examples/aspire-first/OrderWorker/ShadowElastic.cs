@@ -12,6 +12,8 @@ public static class ShadowElastic
 {
     /// <summary>Canonical logical target and keyed native-client identity.</summary>
     public const string Resource = "fulfillment/order-details/shadow";
+    /// <summary>Declarative serving binding; native policy remains shared with the operator.</summary>
+    public static ElasticMaterializationReadBinding Reads { get; } = new(new(Resource), BindAsync);
     /// <summary>Shared target authority, independent of the selected HTTP reader.</summary>
     public const string Authority = "aspire-first/order-shadow/v1";
     /// <summary>Native template identity.</summary>

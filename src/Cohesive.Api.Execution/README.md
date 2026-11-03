@@ -469,3 +469,24 @@ rejects a null description. Backend names remain provider display labels, not
 semantic identities; the existing resource identity and consistency carry the
 binding semantics. Composed PostgreSQL/remote reads report `Composed` and
 `IndependentSources`, never a cross-store snapshot.
+
+For materialized reads, prefer the declarative composition:
+
+```csharp
+return native.SelectMaterializedQuery(queries.Details, queries.DetailsRelation,
+    source: materializationStorage.ForReads(configurationSection: "Replication"),
+    target: elasticReads,
+    comparisonSection: "Reads");
+```
+
+`IMaterializationReadSourceBinding` owns the canonical materialization and deferred
+source configuration/native admission. `IMaterializationReadTargetBinding` owns the
+serving identity and provider interpretation. They are independent Storage ports;
+there is no package for every source/target pair. `SelectMaterializedQuery` reuses
+`SelectQuery` for consistency, ownership and bounded-reader preparation. At startup
+it loads `Reads:ComparisonFile`, checks its definition/freshness, validates source
+configuration, admits target and source ports, and prepares the typed reader. All
+of this is skipped for unused selections; offline explanation needs no configuration
+or native resources. The target's admitted identity must match the declared identity.
+The lower-level callback form remains for custom query interpretations, not as a
+second materialization recipe.

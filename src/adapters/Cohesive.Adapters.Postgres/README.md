@@ -456,3 +456,10 @@ under the declaration's existing database identity. It delegates to the same nat
 preflight as direct-client binding; missing keyed resources fail before native IO,
 and client ownership stays with the host. Callers need not repeat the database ID
 or construct another resource catalog.
+
+For declarative materialized query selection, call `ForReads(configurationSection)`
+on that storage declaration. This returns an offline source binding; `Prepare`
+loads the section's base64 `PositionKey` and explicit `SlotGeneration` without
+resolving native clients or doing IO. Native admission later delegates to the same
+DI-backed BindAsync path. Secrets are not retained in offline explanation, and
+configuration is not read until the selection is used by the host.
