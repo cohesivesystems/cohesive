@@ -6,14 +6,20 @@ public enum RelationQueryReadSource
     /// <summary>Evaluate the canonical relation against its declared live sources.</summary>
     Live,
     /// <summary>Read an operator-selected asynchronous generation; read-your-writes is not promised.</summary>
-    Materialized
+    Materialized,
+    /// <summary>Evaluate a live feature flag once per read, choosing between pre-admitted live and materialized readers.</summary>
+    FeatureFlag
 }
 
-/// <summary>Per-query startup selection, shared by offline admission and native binding.</summary>
+/// <summary>Per-query serving policy, shared by offline admission and native binding.</summary>
 public sealed record RelationQueryReadPolicy
 {
-    /// <summary>Defaults to live evaluation; changing selection requires rebinding the host.</summary>
+    /// <summary>Defaults to live evaluation; FeatureFlag admits both backends for invocation-time selection.</summary>
     public RelationQueryReadSource Source { get; init; }
+    /// <summary>Required provider key when Source is FeatureFlag; true selects materialized reads.</summary>
+    public string? FeatureFlag { get; init; }
+    /// <summary>Whether this deployment prepares the materialized backend, independent of the current flag decision.</summary>
+    public bool UsesMaterializedReads => Source != RelationQueryReadSource.Live;
     /// <summary>Explicit consent to asynchronous visibility, required for Materialized.</summary>
     public bool AcceptEventualConsistency { get; init; }
 
@@ -21,7 +27,11 @@ public sealed record RelationQueryReadPolicy
     public void Validate()
     {
         if (!Enum.IsDefined(Source)) throw new ArgumentException("Unknown query read source.");
-        if (Source == RelationQueryReadSource.Materialized && !AcceptEventualConsistency)
+        if (Source == RelationQueryReadSource.FeatureFlag && string.IsNullOrWhiteSpace(FeatureFlag))
+            throw new ArgumentException("Live read selection requires a feature flag key.");
+        if (Source != RelationQueryReadSource.FeatureFlag && FeatureFlag is not null)
+            throw new ArgumentException("A feature flag key requires FeatureFlag read selection.");
+        if (UsesMaterializedReads && !AcceptEventualConsistency)
             throw new ArgumentException("Materialized reads require explicit acceptance of eventual consistency.");
     }
 
@@ -33,6 +43,6 @@ public sealed record RelationQueryReadPolicy
     {
         Validate();
         if (!Enum.IsDefined(liveRequirement)) throw new ArgumentException("Unknown live-read consistency requirement.", nameof(liveRequirement));
-        return Source == RelationQueryReadSource.Materialized ? RelationQueryConsistency.Eventual : liveRequirement;
+        return UsesMaterializedReads ? RelationQueryConsistency.Eventual : liveRequirement;
     }
 }

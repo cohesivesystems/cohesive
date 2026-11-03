@@ -65,10 +65,19 @@ public sealed record ServiceQueryReadBinding
         if (!Enum.IsDefined(consistency)) throw new ArgumentOutOfRangeException(nameof(consistency));
         Backend = backend; Resource = resource; Consistency = consistency;
     }
-    /// <summary>Selected provider label.</summary>
+    /// <summary>Live switching declaration, when present. This describes candidates, not a current flag value.</summary>
+    public ServiceQueryFeatureSelection? FeatureSelection { get; internal init; }
+    /// <summary>Selected provider label, or the enabled candidate when FeatureSelection is present.</summary>
     public string Backend { get; }
-    /// <summary>Existing resource identity used by the serving implementation.</summary>
+    /// <summary>Existing serving resource, or the enabled candidate resource when FeatureSelection is present.</summary>
     public string Resource { get; }
     /// <summary>Declared minimum reader guarantee, checked against endpoint demand and the bound reader.</summary>
     public RelationQueryConsistency Consistency { get; }
 }
+
+/// <summary>Both admitted serving candidates and the flag selecting between them.</summary>
+/// <param name="Flag">Provider flag key; true selects Enabled.</param>
+/// <param name="Disabled">Live source reader used when the flag is false.</param>
+/// <param name="Enabled">Alternate reader used when the flag is true.</param>
+/// <remarks>One decision per invocation. Both candidates are prepared before traffic. Backend errors never cause fallback.</remarks>
+public sealed record ServiceQueryFeatureSelection(string Flag, ServiceQueryReadBinding Disabled, ServiceQueryReadBinding Enabled);

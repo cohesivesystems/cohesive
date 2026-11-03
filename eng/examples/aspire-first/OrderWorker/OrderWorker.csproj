@@ -7,6 +7,7 @@
     <EnableCohesiveGlobalUsings>false</EnableCohesiveGlobalUsings>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.FeatureManagement/Cohesive.Adapters.FeatureManagement.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.DurableTask/Cohesive.Adapters.DurableTask.csproj" />
     <EmbeddedResource Include="../Orders.Model/Storage/schema.sql" LogicalName="Orders.schema.sql" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Elastic/Cohesive.Adapters.Elastic.csproj" />

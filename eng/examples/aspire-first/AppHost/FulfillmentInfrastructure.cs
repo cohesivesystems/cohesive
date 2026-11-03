@@ -81,7 +81,9 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             .WaitFor(scheduler);
         worker.WithEnvironment("OrderReads__Source", reads.Source.ToString())
             .WithEnvironment("OrderReads__AcceptEventualConsistency", reads.AcceptEventualConsistency.ToString());
-        if (reads.Source == RelationQueryReadSource.Materialized)
+        if (reads.Source == RelationQueryReadSource.FeatureFlag)
+            worker.WithEnvironment("OrderReads__FeatureFlag", reads.FeatureFlag);
+        if (reads.UsesMaterializedReads)
         {
             worker.WithEnvironment("OrderReads__ComparisonFile", builder.Configuration["OrderReads:ComparisonFile"])
                 .WithEnvironment("Shadow__Elasticsearch", builder.Configuration["Shadow:Elasticsearch"])
@@ -98,7 +100,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
                 .WithEnvironment("ES_JAVA_OPTS", "-Xms512m -Xmx512m")
                 .WithHttpEndpoint(targetPort: 9200, name: "http")
                 .WithVolume("order-shadow-elastic", "/usr/share/elasticsearch/data");
-            if (reads.Source == RelationQueryReadSource.Materialized)
+            if (reads.UsesMaterializedReads)
                 worker.WithEnvironment("Shadow__Elasticsearch", elastic.GetEndpoint("http")).WaitFor(elastic);
             // A separate operator process owns all materialization writes, regardless of HTTP read selection.
             builder.AddProject<Projects.OrderMaterialization>("order-shadow")

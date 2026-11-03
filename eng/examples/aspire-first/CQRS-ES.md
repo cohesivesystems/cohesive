@@ -84,3 +84,44 @@ Every worker sharing a task hub must bind the same application deployment and st
 The demo qualifies worker replacement while the scheduler is available. Scheduler-container loss, production
 recovery/retention policies, authentication, and automatic compensation for arbitrary infrastructure failures
 remain separate work. Live feature-flag adapters and fleet-wide cutover are also outside this slice.
+
+## Live flag selection after qualification
+
+Once the comparison artifact and native readers are qualified, configure the worker:
+
+```json
+{
+  "OrderReads": {
+    "Source": "FeatureFlag",
+    "FeatureFlag": "orders-materialized",
+    "AcceptEventualConsistency": true,
+    "ComparisonFile": "/absolute/path/to/comparison.json"
+  },
+  "FeatureManagement": { "orders-materialized": false }
+}
+```
+
+Retain the existing `Shadow` target, slot-generation and position-key configuration.
+The storage model prepares both backends before serving traffic. The worker uses
+Microsoft feature management; editing a reload-enabled worker appsettings file from
+false to true selects Elasticsearch on subsequent reads. Set it false to select
+live PostgreSQL without restarting. In-flight reads keep their original backend.
+The comparison/generation is admitted at startup; rotating a generation still
+requires explicit admission/rebinding. This does not turn off CDC or materialization.
+
+With Aspire, `OrderReads` authoring is forwarded to the worker, while live flag values
+must come from the worker's reloadable provider. Environment variables supplied by
+AppHost are startup configuration, not a live flag transport. For production use
+[Azure App Configuration](../../../src/adapters/Cohesive.Adapters.FeatureManagement/README.md)
+or [LaunchDarkly](../../../src/adapters/Cohesive.Adapters.LaunchDarkly/README.md)
+with host-owned clients and refresh. Neither cloud service is required by the local proof.
+
+The explanation includes both candidates and the flag identity. It does not claim a
+current decision or synchronized fleet cutover. Selected-backend errors propagate;
+rollback is an operator flag decision, never a hidden fallback. Feature targeting
+is separate from request authorization, and asynchronous visibility remains explicit.
+
+`bash eng/test-fulfillment-composition.sh` now also flips false → true → false in
+one running HTTP host under both state and event authority. Provider tests exercise
+native configuration refresh and contextual targeting; they do not contact hosted
+Azure or LaunchDarkly accounts.

@@ -1,3 +1,6 @@
+using Cohesive.Configuration;
+using Cohesive.Adapters.FeatureManagement;
+using Microsoft.FeatureManagement;
 using Cohesive.Relations.Execution;
 using Cohesive.Execution;
 using Cohesive.Adapters.Postgres;
@@ -34,7 +37,7 @@ builder.Services.AddKeyedSingleton<IDocumentStore>(policy.DatabaseName, (service
     policy.History.Configure(options);
 }));
 // Native clients remain DI-owned; the storage model owns read admission and selection.
-if (reads.Source == RelationQueryReadSource.Materialized)
+if (reads.UsesMaterializedReads)
 {
     builder.Services.AddKeyedSingleton<PostgresLogicalReplicationConnectionFactory>(policy.DatabaseName,
         (_, _) => () => new LogicalReplicationConnection(connectionString));
@@ -49,10 +52,15 @@ var scheduler = builder.Configuration.GetConnectionString(FulfillmentExecutionPo
 builder.Services.AddCohesiveDurableTaskServices(
     configureClient: client => client.UseDurableTaskScheduler(scheduler),
     configureWorker: worker => worker.UseDurableTaskScheduler(scheduler));
+if (reads.Source == RelationQueryReadSource.FeatureFlag)
+{
+    builder.Services.AddFeatureManagement();
+    builder.Services.AddSingleton<IFeatureFlagEvaluator<string>, FeatureManagementEvaluator<string>>();
+}
 builder.Services.AddCohesiveServices(model);
 
 await using var app = builder.Build();
-app.Logger.LogInformation("OrderDetails read source: {Source}. Selection is fixed for this host lifetime.", reads.Source);
+app.Logger.LogInformation("OrderDetails read source: {Source}. FeatureFlag mode evaluates its decision per read.", reads.Source);
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
 app.UseAuthorization();

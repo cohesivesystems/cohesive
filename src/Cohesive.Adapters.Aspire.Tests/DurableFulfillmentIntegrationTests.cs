@@ -1,3 +1,6 @@
+using Cohesive.Configuration;
+using Cohesive.Adapters.FeatureManagement;
+using Microsoft.FeatureManagement;
 using System.Net;
 using System.Text.Json;
 using AspireFirst.Materialization;
@@ -72,11 +75,11 @@ public sealed class DurableFulfillmentIntegrationTests
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(DatabaseVariable)!);
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var model = CreateModel();
-        FulfillmentApplication CreateModel(bool selected = false) => ModelActivator.Create<FulfillmentApplication>(services => services
+        FulfillmentApplication CreateModel(RelationQueryReadSource source = RelationQueryReadSource.Live) => ModelActivator.Create<FulfillmentApplication>(services => services
             .AddSingleton(new FulfillmentHistoryPolicy(authority))
             .AddSingleton(new FulfillmentExecutionPolicy { Lifetime = ProcessExecutionLifetime.Durable })
-            .AddSingleton(new RelationQueryReadPolicy { Source = selected ? RelationQueryReadSource.Materialized : RelationQueryReadSource.Live,
-                AcceptEventualConsistency = selected }));
+            .AddSingleton(new RelationQueryReadPolicy { Source = source, FeatureFlag = source == RelationQueryReadSource.FeatureFlag ? "materialized" : null,
+                AcceptEventualConsistency = source != RelationQueryReadSource.Live }));
         var history = Assert.IsType<MartenEntityHistoryConfiguration>(model.Storage.Bindings.HistoryConfiguration);
         using var store = DocumentStore.For(options => { options.Connection(database); history.Configure(options); });
         var sku = "durable-" + Guid.NewGuid().ToString("N");
@@ -158,7 +161,7 @@ public sealed class DurableFulfillmentIntegrationTests
                 string? selectedResult = null;
                 foreach (var selected in new[] { true, false })
                 {
-                    await using var reader = await Start(selected);
+                    await using var reader = await Start(selected ? RelationQueryReadSource.Materialized : RelationQueryReadSource.Live);
                     using var client = new HttpClient { BaseAddress = new(reader.Urls.Single()) };
                     var response = await client.GetAsync($"/orders/{orderId}/details", deadline.Token);
                     Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -170,6 +173,18 @@ public sealed class DurableFulfillmentIntegrationTests
                     Assert.Equal(3, Assert.Single(details.Reservations).AvailableStock);
                     await reader.StopAsync(deadline.Token);
                 }
+                // One running host and one prepared reader pair: changes affect the next HTTP invocation.
+                await using var switching = await Start(RelationQueryReadSource.FeatureFlag);
+                using var switchingClient = new HttpClient { BaseAddress = new(switching.Urls.Single()) };
+                foreach (var enabled in new[] { false, true, false })
+                {
+                    switching.Configuration["FeatureManagement:materialized"] = enabled.ToString();
+                    ((IConfigurationRoot)switching.Configuration).Reload();
+                    var response = await switchingClient.GetAsync($"/orders/{orderId}/details", deadline.Token);
+                    Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                    Assert.Equal(selectedResult, await response.Content.ReadAsStringAsync(deadline.Token));
+                }
+                await switching.StopAsync(deadline.Token);
             }
         }
         finally
@@ -195,9 +210,10 @@ public sealed class DurableFulfillmentIntegrationTests
             return result;
         }
 
-        async Task<WebApplication> Start(bool selected = false)
+        async Task<WebApplication> Start(RelationQueryReadSource source = RelationQueryReadSource.Live)
         {
-            model = CreateModel(selected);
+            var selected = source != RelationQueryReadSource.Live;
+            model = CreateModel(source);
             var builder = WebApplication.CreateBuilder();
             builder.Services.AddRequestOperationContext();
             builder.Services.AddFixedRequestIdentity(FulfillmentDemoIdentity.Context);
@@ -220,6 +236,11 @@ public sealed class DurableFulfillmentIntegrationTests
                 builder.Services.AddKeyedSingleton<HttpClient>(ShadowElastic.Resource, elastic!);
                 builder.Services.AddKeyedSingleton<PostgresLogicalReplicationConnectionFactory>(model.Storage.Bindings.Database.Value,
                     (_, _) => () => new LogicalReplicationConnection(Environment.GetEnvironmentVariable(DatabaseVariable)!));
+            }
+            if (source == RelationQueryReadSource.FeatureFlag)
+            {
+                builder.Services.AddFeatureManagement();
+                builder.Services.AddSingleton<IFeatureFlagEvaluator<string>, FeatureManagementEvaluator<string>>();
             }
             builder.Services.AddCohesiveServices(model);
             var app = builder.Build();

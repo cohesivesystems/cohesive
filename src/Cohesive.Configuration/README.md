@@ -32,3 +32,15 @@ var overrides = projection.Build(new TrainCommand(
 - `Cohesive.Cli` for typed command binding that can flow into configuration projection.
 - `Cohesive.Host` for optional generic-host lifecycle and dependency-injection integration.
 - `Cohesive.Adapters.AzureAppConfiguration` for Azure App Configuration integration.
+
+## Live feature decisions
+
+`IFeatureFlagEvaluator<TContext>` is a narrow, invocation-scoped decision contract;
+native clients are concurrent host-lifetime resources. The explicit context travels
+into the provider rather than being inferred by reflection or cached in a singleton.
+Adapters are available in `Cohesive.Adapters.FeatureManagement` (including Azure App
+Configuration) and `Cohesive.Adapters.LaunchDarkly`. The SDK owns refresh and cached
+value policy. Both implement the same cancellation and no-context-retention contract.
+
+This is separate from `DependencySelectionCatalog`: the catalog selects from fixed
+registered rules, while live flags obtain changing decisions from a native provider.

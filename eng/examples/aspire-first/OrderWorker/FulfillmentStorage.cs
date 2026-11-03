@@ -50,8 +50,12 @@ public sealed class FulfillmentStorage : StorageModel
             if (reads.Source == RelationQueryReadSource.Live) return Native;
             var materializations = new FulfillmentMaterializations(queries);
             var materializationStorage = new FulfillmentMaterializationStorage(this, materializations);
+            var source = materializationStorage.OrderDetails.ForReads(configurationSection: "Shadow");
+            if (reads.Source == RelationQueryReadSource.FeatureFlag)
+                return Native.SelectMaterializedQueryByFeatureFlag(queries.OrderDetails, queries.OrderDetailsRelation,
+                    source, ShadowElastic.Reads, comparisonSection: "OrderReads", flag: reads.FeatureFlag!);
             return Native.SelectMaterializedQuery(queries.OrderDetails, queries.OrderDetailsRelation,
-                source: materializationStorage.OrderDetails.ForReads(configurationSection: "Shadow"),
+                source: source,
                 target: ShadowElastic.Reads,
                 comparisonSection: "OrderReads");
         });

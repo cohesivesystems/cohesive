@@ -498,3 +498,34 @@ Source preparation returns the named `PreparedMaterializationReadSource` delegat
 only when invoked. Target adapters validate direct binding callers; composition independently validates target
 identity because custom adapter implementations also cross this boundary. Backend labels are presentation metadata,
 not capability or identity evidence (`ElasticMaterializationReadBinding.BackendName` is the Elasticsearch label).
+
+## Live read selection
+
+`SelectQueryByFeatureFlag` extends `SelectQuery`; `SelectMaterializedQueryByFeatureFlag`
+reuses the same comparison, source and target preparation as fixed materialized reads.
+True selects the alternate, false selects the source's live interpretation. Both are
+prepared before traffic, including when the initial flag is false. A host cannot use
+an unqualified generation by flipping a flag later.
+
+Register a host-owned `IFeatureFlagEvaluator<TInput>`. Each `ReadAsync` captures one
+decision with its invocation input/cancellation, then invokes one already-prepared
+reader. An in-flight read retains its choice. Backend failure is returned to the
+caller, without retrying against the other store. Provider failures propagate too;
+missing-flag/default behavior is explicitly documented by each provider adapter.
+No per-read native client lookup, reflection or query compilation occurs. Cohesive
+does not cache flag decisions, invocation context or results. Immutable plans and
+bounded readers are prepared once.
+
+The endpoint must admit the weakest candidate guarantee. Switching between snapshot
+PostgreSQL and asynchronous Elasticsearch therefore requires explicit `Eventual`
+consistency even while the flag is false. Offline explanation's `featureSelection`
+records the flag plus disabled/enabled backends and original resource identities;
+the enclosing backend/resource describe the alternate candidate, not a current
+runtime decision. This is no freshness, authorization or fleet-wide cutover claim.
+
+A typed reader decorator is used instead of DispatchProxy: the reader boundary has
+one asynchronous invocation and two immutable metadata properties. That avoids
+reflection, boxing and ambiguous handling of Task/ValueTask/property calls. The
+provider seam is reusable independently of this reader. An allocation regression
+covers 1,000 warm synchronous-decision calls against completed readers: zero added
+managed bytes. SDK/network/real-reader cost is outside that measurement.

@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\Cohesive.Configuration\Cohesive.Configuration.csproj" />
     <ProjectReference Include="..\Cohesive.Api\Cohesive.Api.csproj" />
     <ProjectReference Include="..\Cohesive.Identity\Cohesive.Identity.csproj" />
     <ProjectReference Include="..\Cohesive.Processes\Cohesive.Processes.csproj" />

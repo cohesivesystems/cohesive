@@ -61,6 +61,27 @@ public sealed class FulfillmentExplanationTests
     }
 
     [Fact]
+    public void Live_flag_explanation_retains_both_candidates_and_requires_eventual_consent()
+    {
+        var model = ModelActivator.Create<FulfillmentInfrastructure>(services => services
+            .AddSingleton(new FulfillmentHistoryPolicy())
+            .AddSingleton(new RelationQueryReadPolicy { Source = RelationQueryReadSource.FeatureFlag,
+                FeatureFlag = "orders-materialized", AcceptEventualConsistency = true }));
+        var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
+        var report = model.Explain(model.Configure(builder));
+        var selection = Assert.Single(report.Storage.Queries.Where(query => query.Read?.FeatureSelection is not null));
+        Assert.Equal(RelationQueryConsistency.Eventual, selection.Consistency);
+        Assert.Equal("orders-materialized", selection.Read!.FeatureSelection!.Flag);
+        Assert.Equal("PostgreSQL", selection.Read.FeatureSelection.Disabled.Backend);
+        Assert.Equal("Elasticsearch", selection.Read.FeatureSelection.Enabled.Backend);
+        Assert.Contains("orders-materialized", report.ToJson());
+        Assert.Throws<ArgumentException>(() => new RelationQueryReadPolicy { Source = RelationQueryReadSource.FeatureFlag,
+            FeatureFlag = "orders-materialized" }.Validate());
+        Assert.Throws<ArgumentException>(() => new RelationQueryReadPolicy { Source = RelationQueryReadSource.FeatureFlag,
+            AcceptEventualConsistency = true }.Validate());
+    }
+
+    [Fact]
     public void Failed_pair_admission_rolls_back_service_links_with_endpoint_coverage()
     {
         var pair = TestModels.Fulfillment().Api.Fulfill;

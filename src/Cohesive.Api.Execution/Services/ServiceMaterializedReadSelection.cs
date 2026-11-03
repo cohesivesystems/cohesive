@@ -25,26 +25,52 @@ public static class ServiceMaterializedReadSelection
     public static IServiceStorageComposition SelectMaterializedQuery<TResult>(this IServiceStorageComposition storage,
         RelationQuery<string, TResult?> query, RootedRelation<TResult> relation,
         IMaterializationReadSourceBinding source, IMaterializationReadTargetBinding target, string comparisonSection) where TResult : class
+        => Select(storage, query, relation, source, target, comparisonSection, flag: null);
+
+    /// <summary>Prepares live and materialized interpretations, then evaluates a live flag once per read.</summary>
+    /// <typeparam name="TResult">Rooted result projection.</typeparam>
+    /// <param name="storage">Canonical live source.</param><param name="query">Canonical keyed query.</param>
+    /// <param name="relation">Shared rooted relation.</param><param name="source">Materialization source declaration.</param>
+    /// <param name="target">Materialized serving target.</param><param name="comparisonSection">Comparison artifact configuration section.</param>
+    /// <param name="flag">Flag key; true serves materialized reads, false live reads.</param>
+    /// <returns>Composition requiring explicit eventual-consistency admission and both native readers at startup.</returns>
+    /// <exception cref="ArgumentException">The flag or comparison section is empty.</exception>
+    public static IServiceStorageComposition SelectMaterializedQueryByFeatureFlag<TResult>(this IServiceStorageComposition storage,
+        RelationQuery<string, TResult?> query, RootedRelation<TResult> relation,
+        IMaterializationReadSourceBinding source, IMaterializationReadTargetBinding target, string comparisonSection,
+        string flag) where TResult : class
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(flag);
+        return Select(storage, query, relation, source, target, comparisonSection, flag);
+    }
+
+    static IServiceStorageComposition Select<TResult>(IServiceStorageComposition storage,
+        RelationQuery<string, TResult?> query, RootedRelation<TResult> relation,
+        IMaterializationReadSourceBinding source, IMaterializationReadTargetBinding target, string comparisonSection,
+        string? flag) where TResult : class
     {
         ArgumentNullException.ThrowIfNull(storage); ArgumentNullException.ThrowIfNull(query); ArgumentNullException.ThrowIfNull(relation);
         ArgumentNullException.ThrowIfNull(source); ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(comparisonSection);
         var materialization = source.Materialization;
         var targetId = target.Id;
-        return storage.SelectQuery(query, new(target.Backend, targetId.Value, RelationQueryConsistency.Eventual),
-            async (services, ct) =>
-            {
-                ct.ThrowIfCancellationRequested();
-                var section = services.GetRequiredService<IConfiguration>().GetSection(comparisonSection);
-                var path = section[ComparisonFileKey]
-                    ?? throw new InvalidOperationException($"{section.Path}:{ComparisonFileKey} is required for materialized reads.");
-                var comparison = await MaterializationReadSelection.LoadAsync(path, materialization, ct).ConfigureAwait(false);
-                var bindSource = source.Prepare(services);
-                var nativeTarget = await target.BindAsync(services, materialization, ct).ConfigureAwait(false);
-                if (nativeTarget.Descriptor.Id != targetId)
-                    throw new InvalidOperationException("Native target differs from the declared serving resource.");
-                var runtime = await bindSource(nativeTarget, ct).ConfigureAwait(false);
-                return await target.PrepareReadersAsync(query, relation, runtime, comparison, ct).ConfigureAwait(false);
-            });
+        var binding = new ServiceQueryReadBinding(target.Backend, targetId.Value, RelationQueryConsistency.Eventual);
+        return flag is null ? storage.SelectQuery(query, binding, Prepare)
+            : storage.SelectQueryByFeatureFlag(query, flag, binding, Prepare);
+
+        async ValueTask<Func<int, long, IRelationQueryReader<string, TResult?>>> Prepare(IServiceProvider services, CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var section = services.GetRequiredService<IConfiguration>().GetSection(comparisonSection);
+            var path = section[ComparisonFileKey]
+                ?? throw new InvalidOperationException($"{section.Path}:{ComparisonFileKey} is required for materialized reads.");
+            var comparison = await MaterializationReadSelection.LoadAsync(path, materialization, ct).ConfigureAwait(false);
+            var bindSource = source.Prepare(services);
+            var nativeTarget = await target.BindAsync(services, materialization, ct).ConfigureAwait(false);
+            if (nativeTarget.Descriptor.Id != targetId)
+                throw new InvalidOperationException("Native target differs from the declared serving resource.");
+            var runtime = await bindSource(nativeTarget, ct).ConfigureAwait(false);
+            return await target.PrepareReadersAsync(query, relation, runtime, comparison, ct).ConfigureAwait(false);
+        }
     }
 }
