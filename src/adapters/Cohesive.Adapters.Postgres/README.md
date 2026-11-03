@@ -410,7 +410,7 @@ read bindings from an existing rooted relation and persistence mappings.
 `PostgresMaterializationImpactSource` combines preflighted pgoutput delivery with
 the capabilities of actual same-partition readers; optional current-state root
 enrichment is explicit and does not imply snapshot reconstruction. See the
-[Aspire shadow example](../../../eng/examples/aspire-first/OrderShadow/README.md).
+[Aspire shadow example](../../../eng/examples/aspire-first/OrderMaterialization/README.md).
 
 Materialization baseline continuation uses one native `C` text ordering for both
 SQL ordering and exclusive keyset predicates. It does not require or advertise
