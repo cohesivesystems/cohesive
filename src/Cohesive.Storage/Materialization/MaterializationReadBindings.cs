@@ -3,6 +3,13 @@ using Cohesive.Relations.Execution;
 
 namespace Cohesive.Storage.Materialization;
 
+/// <summary>Admits configured native source ports against a borrowed target, without running rebuild or CDC.</summary>
+/// <param name="target">Already admitted, host-owned serving target.</param>
+/// <param name="cancellationToken">Cancels native admission.</param>
+/// <returns>Bound materialization; ownership of native clients remains with the host.</returns>
+public delegate Task<BoundMaterialization> PreparedMaterializationReadSource(
+    IMaterializationTarget target, CancellationToken cancellationToken);
+
 /// <summary>Offline source declaration that can admit native materialization ports for serving reads.</summary>
 public interface IMaterializationReadSourceBinding
 {
@@ -11,7 +18,7 @@ public interface IMaterializationReadSourceBinding
     /// <summary>Validates runtime configuration without native IO and prepares exact source admission against a borrowed target.</summary>
     /// <param name="services">Host-owned native clients and configuration.</param>
     /// <returns>Native admission taking the target and cancellation token; it executes neither rebuild nor CDC.</returns>
-    Func<IMaterializationTarget, CancellationToken, Task<BoundMaterialization>> Prepare(IServiceProvider services);
+    PreparedMaterializationReadSource Prepare(IServiceProvider services);
 }
 
 /// <summary>Provider read interpretation with an explicit target identity and host-owned native admission.</summary>

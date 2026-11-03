@@ -463,3 +463,7 @@ loads the section's base64 `PositionKey` and explicit `SlotGeneration` without
 resolving native clients or doing IO. Native admission later delegates to the same
 DI-backed BindAsync path. Secrets are not retained in offline explanation, and
 configuration is not read until the selection is used by the host.
+
+`ForReads` exposes its configuration keys as `PositionKeyConfigurationKey` (base64 authentication key)
+and `SlotGenerationConfigurationKey` (required nonempty slot incarnation). Both are validated before native
+client resolution; the returned `PreparedMaterializationReadSource` admits the source when invoked.

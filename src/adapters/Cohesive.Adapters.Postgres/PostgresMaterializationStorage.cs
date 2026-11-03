@@ -100,6 +100,11 @@ public sealed class PostgresMaterializationStorage
         await state.EnsureCreatedAsync(Cohesive.Prelude.OperationContext.Create(cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
+    /// <summary>Required key in the ForReads section: base64 CDC position authentication key.</summary>
+    public const string PositionKeyConfigurationKey = "PositionKey";
+    /// <summary>Required key in the ForReads section: nonempty replication-slot incarnation.</summary>
+    public const string SlotGenerationConfigurationKey = "SlotGeneration";
+
     /// <summary>Declares DI-backed source admission with configuration deferred until selected reads are prepared.</summary>
     /// <param name="configurationSection">Section containing PositionKey (base64) and SlotGeneration.</param>
     /// <returns>Offline source binding reusing this declaration and its existing native resource identity.</returns>
@@ -112,14 +117,14 @@ public sealed class PostgresMaterializationStorage
     sealed class ReadSource(PostgresMaterializationStorage owner, string configurationSection) : IMaterializationReadSourceBinding
     {
         public PreparedMaterialization Materialization => owner.Materialization;
-        public Func<IMaterializationTarget, CancellationToken, Task<BoundMaterialization>> Prepare(IServiceProvider services)
+        public PreparedMaterializationReadSource Prepare(IServiceProvider services)
         {
             ArgumentNullException.ThrowIfNull(services);
             var section = services.GetRequiredService<IConfiguration>().GetSection(configurationSection);
-            var key = Convert.FromBase64String(section["PositionKey"]
-                ?? throw new InvalidOperationException($"{section.Path}:PositionKey is required for read-plan admission."));
-            var incarnation = section["SlotGeneration"]
-                ?? throw new InvalidOperationException($"{section.Path}:SlotGeneration is required for read-plan admission.");
+            var key = Convert.FromBase64String(section[PositionKeyConfigurationKey]
+                ?? throw new InvalidOperationException($"{section.Path}:{PositionKeyConfigurationKey} is required for read-plan admission."));
+            var incarnation = section[SlotGenerationConfigurationKey]
+                ?? throw new InvalidOperationException($"{section.Path}:{SlotGenerationConfigurationKey} is required for read-plan admission.");
             ArgumentException.ThrowIfNullOrWhiteSpace(incarnation);
             return (target, ct) => owner.BindAsync(services, target, key, incarnation, ct);
         }

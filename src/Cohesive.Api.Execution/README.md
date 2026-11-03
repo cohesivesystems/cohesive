@@ -490,3 +490,11 @@ of this is skipped for unused selections; offline explanation needs no configura
 or native resources. The target's admitted identity must match the declared identity.
 The lower-level callback form remains for custom query interpretations, not as a
 second materialization recipe.
+
+The comparison section contract is exposed by `ServiceMaterializedReadSelection.ComparisonFileKey`.
+PostgreSQL owns its separate source contract through `PostgresMaterializationStorage.PositionKeyConfigurationKey`
+and `SlotGenerationConfigurationKey`; API execution does not read those provider-specific keys.
+Source preparation returns the named `PreparedMaterializationReadSource` delegate, which performs native admission
+only when invoked. Target adapters validate direct binding callers; composition independently validates target
+identity because custom adapter implementations also cross this boundary. Backend labels are presentation metadata,
+not capability or identity evidence (`ElasticMaterializationReadBinding.BackendName` is the Elasticsearch label).

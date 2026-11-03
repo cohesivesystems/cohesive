@@ -1,6 +1,7 @@
 using System.Net;
 using AspireFirst.Materialization;
 using Cohesive.Adapters.Elastic;
+using Cohesive.Adapters.Postgres;
 using Cohesive.Storage.Materialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +34,20 @@ public sealed class MaterializedReadBindingTests
         using var services = new ServiceCollection().AddSingleton<IConfiguration>(new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["Replication:PositionKey"] = "invalid-base64" }).Build()).BuildServiceProvider();
         Assert.Throws<FormatException>(() => source.Prepare(services));
+    }
+
+    [Fact]
+    public void Missing_slot_generation_fails_before_native_client_resolution()
+    {
+        var model = TestModels.Fulfillment();
+        var source = new FulfillmentMaterializationStorage(model.Storage, new(model.Queries)).OrderDetails.ForReads("Replication");
+        using var services = new ServiceCollection().AddSingleton<IConfiguration>(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                [$"Replication:{PostgresMaterializationStorage.PositionKeyConfigurationKey}"] = Convert.ToBase64String(new byte[32])
+            }).Build()).BuildServiceProvider();
+        var error = Assert.Throws<InvalidOperationException>(() => source.Prepare(services));
+        Assert.Contains($"Replication:{PostgresMaterializationStorage.SlotGenerationConfigurationKey}", error.Message);
     }
 
     [Fact]

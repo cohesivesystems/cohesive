@@ -18,8 +18,10 @@ public sealed class ElasticMaterializationReadBinding : IMaterializationReadTarg
         ArgumentException.ThrowIfNullOrWhiteSpace(id.Value); ArgumentNullException.ThrowIfNull(bind);
         Id = id; this.bind = bind;
     }
+    /// <summary>Display label for Elasticsearch serving; target identity and admitted capabilities carry semantics.</summary>
+    public const string BackendName = "Elasticsearch";
     /// <inheritdoc />
-    public string Backend => "Elasticsearch";
+    public string Backend => BackendName;
     /// <inheritdoc />
     public MaterializationTargetId Id { get; }
     /// <inheritdoc />

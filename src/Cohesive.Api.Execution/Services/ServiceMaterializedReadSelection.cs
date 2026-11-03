@@ -9,6 +9,9 @@ namespace Cohesive.Api.Execution.Services;
 /// <summary>Declarative serving selection composed from independent materialization source and target adapters.</summary>
 public static class ServiceMaterializedReadSelection
 {
+    /// <summary>Required configuration key within the declared comparison section: a trusted local comparison artifact path.</summary>
+    public const string ComparisonFileKey = "ComparisonFile";
+
     /// <summary>Selects an eventual materialized reader; evidence and native admission are deferred until host preparation.</summary>
     /// <typeparam name="TResult">Rooted result projection.</typeparam>
     /// <param name="storage">Canonical repository/source owner and live rollback interpretation.</param>
@@ -33,8 +36,8 @@ public static class ServiceMaterializedReadSelection
             {
                 ct.ThrowIfCancellationRequested();
                 var section = services.GetRequiredService<IConfiguration>().GetSection(comparisonSection);
-                var path = section["ComparisonFile"]
-                    ?? throw new InvalidOperationException($"{section.Path}:ComparisonFile is required for materialized reads.");
+                var path = section[ComparisonFileKey]
+                    ?? throw new InvalidOperationException($"{section.Path}:{ComparisonFileKey} is required for materialized reads.");
                 var comparison = await MaterializationReadSelection.LoadAsync(path, materialization, ct).ConfigureAwait(false);
                 var bindSource = source.Prepare(services);
                 var nativeTarget = await target.BindAsync(services, materialization, ct).ConfigureAwait(false);
