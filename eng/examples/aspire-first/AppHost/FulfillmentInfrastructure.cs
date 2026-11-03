@@ -75,7 +75,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
         var scheduler = builder.AddContainer(FulfillmentExecutionPolicy.SchedulerResource, "mcr.microsoft.com/dts/dts-emulator")
             .WithImageSHA256("1b49dcf1581168f5c620a4f32083e1291a7dddfa60434acb3eacd8b23355936a")
             .WithEnvironment("ASPNETCORE_URLS", "http://+:8080")
-            .WithHttpEndpoint(targetPort: 8080, name: "grpc");
+            .WithHttpEndpoint(targetPort: 8080, name: "grpc", isProxied: false);
         worker.WithEnvironment($"ConnectionStrings__{FulfillmentExecutionPolicy.SchedulerResource}",
             ReferenceExpression.Create($"Endpoint={scheduler.GetEndpoint("grpc")};TaskHub=default;Authentication=None"))
             .WaitFor(scheduler);
