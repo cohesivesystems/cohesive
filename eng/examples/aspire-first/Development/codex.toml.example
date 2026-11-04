@@ -1,0 +1,7 @@
+# Merge this table into your Codex configuration, replacing /absolute/cohesive with this checkout.
+# Build the host first; keep builds and their stdout outside the stdio MCP connection.
+[mcp_servers.cohesive_orders]
+command = "dotnet"
+args = ["/absolute/cohesive/eng/examples/aspire-first/Development/bin/Debug/net10.0/Orders.Development.dll", "serve", "/absolute/cohesive"]
+startup_timeout_sec = 20
+tool_timeout_sec = 120

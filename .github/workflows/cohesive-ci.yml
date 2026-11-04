@@ -77,6 +77,9 @@ jobs:
           COHESIVE_ORDER_EXAMPLE_SCHEDULER_CONNECTION_STRING: Endpoint=http://127.0.0.1:8080;TaskHub=default;Authentication=None
           COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING: Host=127.0.0.1;Port=5432;Database=postgres;Username=postgres;Password=cohesive-test-only
 
+      - name: Exercise Orders semantic development MCP
+        run: dotnet run --project eng/examples/aspire-first/Development -c Release --no-build -- exercise "$GITHUB_WORKSPACE"
+
       - name: Test PostgreSQL entity commits and authority
         run: dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj -c Release --no-build --filter FullyQualifiedName~PostgresRepositoryConformanceTests
         env:

@@ -17,6 +17,9 @@ Elasticsearch shadow generations, durable rebuild and bounded catch-up over thos
 It leaves endpoint reads unchanged and never promotes a search alias. Inventory enrichment
 remains current-state data, not a historical event-stream snapshot.
 
+For an agent-driven transition/process edit loop, see [Orders development MCP onboarding](Development/README.md).
+It exports the same domain source and includes an isolated source-edit/rebuild/compare exercise.
+
 ## Inspect the compiled system without running it
 
 Both AppHosts use `Cohesive.Adapters.Aspire.Application.AspireApplication.RunAsync`, which registers

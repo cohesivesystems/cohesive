@@ -4,6 +4,9 @@ A local stdio MCP server for inspecting and checking Cohesive execution semantic
 authoring source. It uses the official `ModelContextProtocol.Core` SDK (pinned to 1.3.0) and the shared
 [`Cohesive.Semantics`](../../Cohesive.Semantics/README.md) workspace. It adds no runtime application access or source mutation tools.
 
+For a real application workflow with client configuration and an isolated source-change exercise, see
+[Orders development onboarding](../../../eng/examples/aspire-first/Development/README.md).
+
 ## Run the example
 
 From the repository root with .NET 10:
