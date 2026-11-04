@@ -6,6 +6,36 @@ namespace Cohesive.Adapters.SQLite.Tests;
 public sealed class SqliteRelationQueryRowReaderTests
 {
     [Fact]
+    public void OwnedOrdinalIngestionAllocatesLessThanDictionaryAdmission()
+    {
+        using var fixture = new SqliteTypedRowFixture(256);
+        using var command = fixture.CreateCommand();
+        using var reader = command.ExecuteReader();
+        var rows = fixture.Mapping.Bind(reader);
+        Assert.True(reader.Read());
+        Observation Canonical()
+        {
+            var fields = new Dictionary<string, ObservationValue>(rows.Layout.Count, StringComparer.Ordinal);
+            for (var slot = 0; slot < rows.Layout.Count; slot++)
+                if (rows.TryGetField(slot, out var value)) fields.Add(rows.Layout.FieldIdentities[slot], value);
+            return Observation.Create(fixture.Shape, fields);
+        }
+        Observation Ordinal()
+        {
+            Assert.True(rows.TryReadObservation(out var observation));
+            return observation!;
+        }
+        long Allocated(Func<Observation> read)
+        {
+            for (var index = 0; index < 64; index++) GC.KeepAlive(read());
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < 64; index++) GC.KeepAlive(read());
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Assert.True(Allocated(Ordinal) < Allocated(Canonical));
+    }
+
+    [Fact]
     public void OwnedOrdinalObservationPreservesValuesAbsenceAndProviderLifetime()
     {
         using var fixture = new SqliteTypedRowFixture(256);

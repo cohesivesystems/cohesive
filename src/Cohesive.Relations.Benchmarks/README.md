@@ -335,3 +335,21 @@ adapter tests separately cover absent bindings and malformed presence/scalar dat
 contributor identities. The new ordinal method preserves the same validation boundary while transferring
 owned immutable slots directly to the admitted observation. Retained state ingestion is a different workload
 from DTO-only `SqliteTypedRowBenchmarks`; do not compare their timings as equivalent guarantees.
+
+
+[Linux ingestion run 41935696235](https://github.com/cohesivesystems/cohesive/actions/runs/41935696235),
+source `332b15a0`, completed all six cases on AMD EPYC 7763 / .NET 10.0.14. Results include real provider
+execution and the full identity-free admission-to-DTO pipeline described above:
+
+| Rows | Dictionary reference, us | Native ordinal, us | Reference bytes | Ordinal bytes |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 5.983 | 5.681 | 2,384 | 1,928 |
+| 32 | 70.625 | 61.360 | 42,080 | 26,496 |
+| 1,024 | 2,175.550 | 1,848.076 | 1,319,944 | 820,264 |
+
+At 1,024 rows, observed latency is 15% lower and allocation 38% lower. Three counterbalanced local repeats
+also favored ordinal admission (605 vs 683 us, with the same allocation direction). These synthetic local
+SQLite results are not PostgreSQL, network, contributor-provenance or complete-application claims. No existing
+read path is rerouted. Evidence and reproduction details are under
+`docs/performance/evidence/sqlite-ordinal-ingestion`. The SQLite suite passes 235 tests including ownership,
+null/missing/whole-binding absence, malformed presence/scalars and a relative allocation regression guard.
