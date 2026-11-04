@@ -133,22 +133,27 @@ public sealed class GuardedDiscriminatorTests
         {
             [typeof(OrderStatus)] = new EnumTypeRef("custom-order-status", ["Draft", "Submitted"])
         });
+        var author = new EntityTransitionAuthoring<Order, SubmitOrder>(new("order"), mapper);
         var source = Machine.Define("configured", "1");
         var draft = source.State("draft").Initial();
         var done = source.State("done").Final();
         var submit = source.Edge("submit").From(draft).To(done)
-            .When((Order order, SubmitOrder input) => order.ItemCount > 0, typeRefMapper: mapper);
+            .When(author.Guard((order, input) => order.ItemCount > 0));
         var machine = source.Build();
-        var links = new MachineDiscriminatorBinding<Order, OrderStatus>(machine, order => order.Status, typeRefMapper: mapper)
+        var links = author.Discriminator(machine, order => order.Status)
             .Map(draft, OrderStatus.Draft).Map(done, OrderStatus.Submitted).Build();
-        var entity = ObjectEntityDefinition.For<Order>(new("order"), typeRefMapper: mapper);
+        var entity = author.Entity;
         var metadata = new TransitionAuthoringMetadata(new("configured.submit"), new("1"), new("body"),
             new(new(TransitionAuthoring.Producer), new("tests/configured"), DocumentOrigin.User));
-        var transition = TransitionAuthoring.Create<Order, SubmitOrder, string>(entity.Shape, metadata,
+        var transition = author.Create<string>(metadata,
             t => t.Move(submit, rejection: (order, input) => "rejected")
-                .Return(new("result"), TransitionOutcomeDisposition.Applied, "submitted"), typeRefMapper: mapper);
+                .Return(new("result"), TransitionOutcomeDisposition.Applied, "submitted"));
         var compiled = TransitionStaticCompiler.Compile(transition.Document, machineLinks: links);
         Assert.True(compiled.IsSuccessful, string.Join(";", compiled.Validation.Diagnostics.Select(d => d.Message)));
+        var predicateLinks = author.Predicates(machine)
+            .State(draft, order => order.Status == OrderStatus.Draft)
+            .State(done, order => order.Status == OrderStatus.Submitted).Build();
+        Assert.True(TransitionStaticCompiler.Compile(transition.Document, machineLinks: predicateLinks).IsSuccessful);
         Assert.Equal(ValueContract.FromField(entity.Shape.Fields.Single(f => f.Name.Value == "Status")),
             links.Edges[0].Assignments[0].Value.Contract);
         Assert.Equal(TransitionDecisionKind.Applied, TransitionReferenceInterpreter.DecideFullState(compiled.Plan!, new("test"),

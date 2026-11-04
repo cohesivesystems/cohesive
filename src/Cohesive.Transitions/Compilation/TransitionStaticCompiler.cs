@@ -155,7 +155,6 @@ public static class TransitionStaticCompiler
             this.definition = definition;
             this.graph = graph;
             this.machineLinks = machineLinks;
-            diagnostics.AddRange(machineLinks.Diagnostics);
             inputContract = ResolveContract(definition.Input);
             observationContract = ResolveContract(definition.Observation);
             parameters = CreateParameters(inputContract);
@@ -785,6 +784,7 @@ public static class TransitionStaticCompiler
                 return input;
             }
 
+            diagnostics.AddRange(link.Diagnostics);
             usedMachineEdges[new(link.Machine, link.Edge)] = link;
             if (link.CreateAmbiguousConfiguration() is { } ambiguity)
             {

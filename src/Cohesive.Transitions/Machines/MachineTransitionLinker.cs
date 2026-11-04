@@ -40,22 +40,22 @@ public static class MachineTransitionLinker
         Func<string, Expr> configuration,
         Func<MachineEdge, ImmutableArray<TransitionMachineConfigurationAssignment>> assignments)
     {
-        var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>();
         var links = ImmutableArray.CreateBuilder<TransitionMachineEdgeLink>(machine.Edges.Length);
         foreach (var group in machine.Edges.GroupBy(edge => (edge.From, edge.Action)))
         {
             var edges = group.ToArray();
             var guards = edges.Select(edge => edge.Guard is { } guard
                 ? Rebind(guard.Predicate, guard) : Expr.Const(true)).ToImmutableArray();
-            if (edges.Length > 1)
+            ImmutableArray<DocumentValidationDiagnostic> diagnostics = [];
+            if (edges.Length > 1 && !MachineGuardDisjointness.ProvesExclusive(guards))
             {
                 // Structural unguarded overlap is also rejected by MachineBuilder. Keep this
                 // boundary explicit for independently materialized linker inputs.
-                if (edges.Count(edge => edge.Guard is null) > 1)
-                    throw new ArgumentException("Multiple unguarded sibling edges are always ambiguous.", nameof(machine));
-                diagnostics.Add(new("machines.linking.disjointnessUnknown", DiagnosticSeverity.Warning,
+                if (guards.Count(MachineGuardDisjointness.IsTrue) > 1)
+                    throw new ArgumentException("Multiple always-enabled sibling edges are always ambiguous.", nameof(machine));
+                diagnostics = [new("machines.linking.disjointnessUnknown", DiagnosticSeverity.Warning,
                     $"Guard disjointness for '{machine.Id}/{group.Key.From}/{group.Key.Action}' is unproven; runtime checks remain required.",
-                    $"/machines/{Uri.EscapeDataString(machine.Id)}/states/{Uri.EscapeDataString(group.Key.From)}/actions/{Uri.EscapeDataString(group.Key.Action)}"));
+                    $"/machines/{Uri.EscapeDataString(machine.Id)}/states/{Uri.EscapeDataString(group.Key.From)}/actions/{Uri.EscapeDataString(group.Key.Action)}")];
             }
             var sourceState = configuration(group.Key.From);
             for (var index = 0; index < edges.Length; index++)
@@ -63,10 +63,10 @@ public static class MachineTransitionLinker
                 var edge = edges[index];
                 var hasGuards = edges.Length > 1 || edge.Guard is not null;
                 links.Add(new(machine.Document.Reference, new(edge.Id), sourceState,
-                    configuration(edge.To), assignments(edge), hasGuards ? guards : [], hasGuards ? index : -1));
+                    configuration(edge.To), assignments(edge), hasGuards ? guards : [], hasGuards ? index : -1, diagnostics));
             }
         }
-        return new(links.MoveToImmutable(), diagnostics.ToImmutable());
+        return new(links.MoveToImmutable());
     }
 
     internal static Expr Rebind(Expr expression, MachineGuard guard)

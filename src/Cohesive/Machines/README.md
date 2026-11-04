@@ -113,19 +113,36 @@ admission without commit artifacts. There is no duplicate `Requires` for the mac
 manual `Set` for the discriminator. The host commits the resulting decision through its normal boundary.
 The executable example is covered in `Cohesive.Tests/Machines/GuardedDiscriminatorTests.cs`.
 
-Configured applications should pass the same `IClrTypeRefMapper` to entity authoring, typed `When`,
-`MachineDiscriminatorBinding` / `MachinePredicateBinding`, and Transition authoring. The optional
-`typeRefMapper` parameter preserves custom enum/value contracts; no mapper survives into the IR.
-Bindings still validate against the compiled entity observation contract. Custom wire encodings must also
-match the application's normal portable-value serialization.
+Configured applications can use `EntityTransitionAuthoring<TEntity, TInput>` (in
+`Cohesive.Transitions.Authoring`) to supply a mapper once:
+
+```csharp
+var author = new EntityTransitionAuthoring<Order, SubmitOrder>(new("order"), mapper);
+var submit = source.Edge("submit").From(draft).To(submitted)
+    .When(author.Guard((order, command) => order.ItemCount > 0 && command.AcceptTerms));
+var machine = source.Build();
+var links = author.Discriminator(machine, order => order.Status)
+    .Map(draft, OrderStatus.Draft).Map(submitted, OrderStatus.Submitted).Build();
+var entity = author.Entity;
+var transition = author.Create<string>(metadata, t => t
+    .Move(submit, (order, command) => "Cannot submit")
+    .Return(new("result"), TransitionOutcomeDisposition.Applied, "Submitted"));
+```
+
+`author.Predicates(machine)` shares the same configuration for predicate bindings. This scope
+owns source configuration only; no mapper survives into IR. Standalone authoring still accepts
+an explicit mapper for independently owned components. Custom wire encodings must also match
+normal portable-value serialization.
 
 Both discriminator and predicate bindings rebind guard facts to entity observation and guard input to
 the transition command. Admission requires the selected guard. Two or more enabled sibling edges produce `InvalidDefinition`
 with diagnostic `transitions.execution.machine.admissionAmbiguous`, even if the requested edge is disabled.
 An ordinary false guard produces `AdmissionRejected` with the movement's authored rejection outcome.
 Ambiguity produces no patches, emissions or movements. Link catalogs expose a `machines.linking.disjointnessUnknown` warning for sibling guards whose disjointness
-has not been proven; the compiler includes these diagnostics. Multiple unguarded siblings fail machine
-validation outright. The static compiler retains ambiguity dependencies
+has not been proven; compilation includes only diagnostics for referenced edge groups. The linker
+proves distinct scalar equality constraints on the same bound field (including conjunctions and
+reversed equality operands). Disjunctions, ranges and other expressions remain unknown. Multiple
+unguarded siblings fail machine validation; multiple constant-true guards fail linking. The static compiler retains ambiguity dependencies
 and its failure condition separately from ordinary rejection. Guards need not be statically provably disjoint;
 this runtime check detects overlap for the current observation and command.
 Guards constrain the source; final-target checks concern the resulting configuration.

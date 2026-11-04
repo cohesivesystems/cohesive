@@ -84,6 +84,7 @@ public sealed record TransitionMachineEdgeLink
     /// <param name="assignments">Edge-owned assignments; empty for predicate-established configurations.</param>
     /// <param name="admissionGuards">Ordered sibling guards, shared at construction; empty for legacy unguarded links.</param>
     /// <param name="selectedGuardIndex">Index of this edge's guard, or -1 when no guards are supplied.</param>
+    /// <param name="diagnostics">Proof limitations applying to this edge and its siblings.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="machine"/>, <paramref name="sourceConfiguration"/>, or
     /// <paramref name="targetConfiguration"/> is <see langword="null"/>.
@@ -100,7 +101,8 @@ public sealed record TransitionMachineEdgeLink
         Expr targetConfiguration,
         ImmutableArray<TransitionMachineConfigurationAssignment> assignments,
         ImmutableArray<Expr> admissionGuards = default,
-        int selectedGuardIndex = -1)
+        int selectedGuardIndex = -1,
+        ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
     {
         Machine = Guard.RequireNotNull(machine);
         if (string.IsNullOrWhiteSpace(edge.Value))
@@ -140,7 +142,11 @@ public sealed record TransitionMachineEdgeLink
             || (AdmissionGuards.IsEmpty ? selectedGuardIndex != -1 : selectedGuardIndex < 0 || selectedGuardIndex >= AdmissionGuards.Length))
             throw new ArgumentException("Supply non-null guards and a valid selected guard index.", nameof(admissionGuards));
         SelectedGuardIndex = selectedGuardIndex;
+        Diagnostics = diagnostics.IsDefault ? [] : diagnostics;
     }
+
+    /// <summary>Link diagnostics scoped to this edge's selection group.</summary>
+    public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
 
     /// <summary>Exact authoritative Machine definition revision and fingerprint.</summary>
     public ExecutionDefinitionReference Machine { get; }
@@ -192,11 +198,10 @@ public sealed class TransitionMachineLinkCatalog
 
     /// <summary>Creates an exact Machine edge-link catalog.</summary>
     /// <param name="edges">Machine-derived edge slices.</param>
-    /// <param name="diagnostics">Link-time diagnostics; retained for registration and compilation.</param>
     /// <exception cref="ArgumentException">
     /// <paramref name="edges"/> contains null or duplicates an exact Machine and edge identity.
     /// </exception>
-    public TransitionMachineLinkCatalog(ImmutableArray<TransitionMachineEdgeLink> edges, ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
+    public TransitionMachineLinkCatalog(ImmutableArray<TransitionMachineEdgeLink> edges)
     {
         if (edges.IsDefault)
             edges = [];
@@ -219,7 +224,7 @@ public sealed class TransitionMachineLinkCatalog
         }
 
         Edges = normalized;
-        Diagnostics = diagnostics.IsDefault ? [] : diagnostics;
+        Diagnostics = [.. normalized.SelectMany(edge => edge.Diagnostics).Distinct()];
     }
 
     /// <summary>Link-time proof limitations and validation evidence.</summary>
