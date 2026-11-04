@@ -194,19 +194,28 @@ The scalar-reader experiment's matched-process measurements, rejected generic-co
 attribution are retained in `docs/performance/evidence/relation-dto-scalar-readers`.
 
 
-### Compiled collection DTO experiment
+### DTO scalar and collection experiments
 
-`CompiledBatchKernelSimple` and `CompiledBatchKernelJoined` compile a collection loop from the same
-row-construction expression used by the scalar kernel. Both consume the prebuilt canonical row array
-used by AutoMapper; preparation and row acquisition are outside timing. The internal lazy delegate
-returns fresh arrays and DTOs and preserves row order, scalar conversions and the first conversion
-failure. It is a fail-fast projection kernel, not the canonical mapper's admission, cancellation,
-provenance or collect-all row-diagnostics contract. The public mapper retains that contract unchanged.
-The compiled mapper retains its expression for optional batch preparation, adding cold retained metadata.
+The guarded scalar-reader candidate emits exact-kind reads into the constructor expression and
+loads binding metadata only for the original conversion/diagnostic fallback. Missing, null, alternate
+scalar kinds and entity-reference checks retain their original behavior. No public API changes.
 
-On the local ARM64 host, three counterbalanced 1,024-row repeats averaged 20.073 us simple / 77.594 us
-joined versus AutoMapper's 24.328 us / 79.960 us, with identical destination allocations. This does not
-establish Linux parity. The preceding guarded scalar-reader Linux run (41761072832, AMD EPYC 9V45)
-still trailed AutoMapper by 14.6% simple / 10.9% joined. Runner CPUs differ between runs; compare
-within-run ratios, and use stable hardware for attribution. Evidence, environments, raw reports and
-source hashes live under `docs/performance/evidence/relation-dto-scalar-readers/{guarded,batch}`.
+A compiled collection-loop prototype reused the same row expression and prebuilt canonical row arrays
+as AutoMapper. Local ARM64 repeats favored it (20.073 vs 24.328 us simple; 77.594 vs 79.960 us joined,
+1,024 rows). Linux CI did not establish a consistent benefit: on Intel Xeon 6973P-C, batch took
+45.752 vs AutoMapper's 38.901 us simple and 177.710 vs 155.193 us joined. The scalar kernel was
+50.945 / 172.902 us. All paths allocated the same destination bytes (57,368 / 106,520).
+The batch prototype was therefore removed; ordinary mappers do not retain its expression or lazy slot.
+
+All 42 CI cases completed in run 41763124452 at experimental revision d7fb02a4. The experiment,
+including its extra allocation guard, is preserved as a patch against a62aca11 and raw reports under
+`docs/performance/evidence/relation-dto-scalar-readers/batch`. The prototype was a fail-fast projection,
+not a replacement for canonical mapping's admission, provenance, cancellation or collect-all diagnostics.
+The public canonical mapper retains its behavior.
+
+Earlier guarded scalar-reader CI (41761072832, AMD EPYC 9V45) trailed AutoMapper by 14.6% simple /
+10.9% joined; the new Intel run trailed by 31.0% / 11.4%. Hosted hardware varies: these runs do not
+establish a portable simple-case improvement or a causal before/after Linux speedup. Local matched
+control/candidate evidence is retained under `guarded`. Use stable hardware before accepting a release
+performance claim. The next promising experiment is direct ordinal access over validated relation-row
+layouts, accounting separately for admission and output provenance costs.

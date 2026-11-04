@@ -93,45 +93,6 @@ public sealed class RelationDtoMapperTests
         Assert.Equal(Allocated(() => new(expected.Id, expected.Status, expected.Amount)), Allocated(() => kernel(value)));
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(32)]
-    [InlineData(1024)]
-    public void CompiledBatchKernelMatchesRowKernelAndOwnsItsDestinations(int count)
-    {
-        var scenario = RelationDtoBenchmarkFixture.CreateJoinedScenario(count);
-        var mapper = Compile<LoadSearchDto>(scenario.Plan);
-        var rows = scenario.Execution.Relation!.Rows.ToArray();
-        var batch = mapper.BatchMaterializationKernel;
-        Assert.Same(batch, mapper.BatchMaterializationKernel);
-        var expected = rows.Select(row => mapper.MaterializationKernel(row.Value)).ToArray();
-        var actual = batch(rows);
-        Assert.Equal(rows.Select(row => mapper.MaterializationKernel(row.Value)), actual);
-        var second = batch(rows);
-        Assert.NotSame(actual, second);
-        Assert.NotSame(actual[0], second[0]);
-        Array.Clear(rows);
-        Assert.Equal(expected, actual);
-        Assert.Empty(batch([]));
-        Parallel.For(0, 16, _ => Assert.Equal(expected,
-            batch(scenario.Execution.Relation.Rows.ToArray())));
-    }
-
-    [Fact]
-    public void CompiledBatchKernelPreservesFirstConversionFailure()
-    {
-        var scenario = RelationDtoBenchmarkFixture.CreateSimpleScenario(rowCount: 3);
-        var mapper = Compile<LoadSummaryDto>(scenario.Plan);
-        var malformed = RewriteFirstValue(scenario.Execution,
-            value => WithField(value, nameof(LoadSummaryDto.Amount), ObservationValue.FromString("invalid")));
-        var rows = malformed.Relation!.Rows.ToArray();
-        var expected = Assert.Throws<RelationDtoRowMappingException>(() => mapper.MaterializationKernel(rows[0].Value));
-        var actual = Assert.Throws<RelationDtoRowMappingException>(() => mapper.BatchMaterializationKernel(rows));
-        Assert.Same(expected.Binding, actual.Binding);
-        Assert.Equal(expected.DiagnosticMessage, actual.DiagnosticMessage);
-        Assert.Equal(expected.InnerException!.Message, actual.InnerException!.Message);
-    }
-
     [Fact]
     public void SharedSimpleFixture_ProducesOneCompleteCanonicalRelationRow()
     {
