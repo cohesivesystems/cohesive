@@ -11,6 +11,44 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationDtoMapperTests
 {
     [Theory]
+    [InlineData(RelationDtoFixtureVariant.Complete)]
+    [InlineData(RelationDtoFixtureVariant.MissingCustomer)]
+    [InlineData(RelationDtoFixtureVariant.InvalidCustomerName)]
+    public void DirectOrdinalProjectionPreservesExecutionAndAdmitsWithoutRepacking(RelationDtoFixtureVariant variant)
+    {
+        var scenario = RelationDtoBenchmarkFixture.CreateJoinedScenario(32, variant);
+        var interpreter = new RelationQueryInMemoryInterpreter { UseOrdinalProjection = true };
+        var actual = interpreter.Execute(new(scenario.Plan, scenario.Evidence));
+        var repeat = interpreter.Execute(new(scenario.Plan, scenario.Evidence));
+        var expected = scenario.Execution;
+        Assert.Equal(expected.Status, actual.Status);
+        Assert.Equal(expected.Diagnostics.Select(item => item.Code), actual.Diagnostics.Select(item => item.Code));
+        if (expected.Relation is null) { Assert.Null(actual.Relation); return; }
+        Assert.Equal(expected.Relation.Rows.Length, actual.Relation!.Rows.Length);
+        var shape = OrdinalShape(scenario.Plan, actual);
+        for (var index = 0; index < actual.Relation.Rows.Length; index++)
+        {
+            var source = expected.Relation.Rows[index];
+            var row = actual.Relation.Rows[index];
+            Assert.Equal(source.Value, row.Value);
+            Assert.Equal(source.Value.Fields!.Keys, row.Value.Fields!.Keys);
+            Assert.Equal(source.Identity, row.Identity);
+            Assert.Equal(source.Root, row.Root);
+            Assert.Equal(source.InputOccurrences.Select(item => (item.Id, item.Binding, item.Shape, item.ObservationIdentity)),
+                row.InputOccurrences.Select(item => (item.Id, item.Binding, item.Shape, item.ObservationIdentity)));
+            Assert.Equal(source.UnresolvedGaps.Select(item => item.ToString()), row.UnresolvedGaps.Select(item => item.ToString()));
+            var reader = Assert.IsAssignableFrom<IOrdinalObservationFieldReader>(row.Value.Fields);
+            var repeated = Assert.IsAssignableFrom<IOrdinalObservationFieldReader>(repeat.Relation!.Rows[index].Value.Fields);
+            Assert.Same(reader.Layout, repeated.Layout);
+            if (variant != RelationDtoFixtureVariant.Complete) continue;
+            var admitted = Observation.Create(shape, row.Value.Fields!);
+            Assert.Same(row.Value.Fields, admitted.Fields);
+            var mapper = CompileOrdinal<LoadSearchDto>(scenario.Plan, reader.Layout);
+            Assert.Equal(mapper.MaterializationKernel(source.Value), mapper.OrdinalMaterializationKernel!(reader));
+        }
+    }
+
+    [Theory]
     [InlineData(1)]
     [InlineData(32)]
     [InlineData(1024)]

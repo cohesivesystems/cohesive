@@ -205,11 +205,18 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 Engine.NormalizeDiagnostics(analysis.Diagnostics.Concat(unsupportedDiagnostics)));
         }
 
-        return new Engine(request, analysis, cancellationToken).Run();
+        return new Engine(request, analysis, cancellationToken, UseOrdinalProjection).Run();
     }
+
+    static readonly ConditionalWeakTable<CompiledRelationQueryPlan,
+        System.Collections.Concurrent.ConcurrentDictionary<QueryNodeId, (ObservationLayout Layout, int[] Slots)>> projectionLayouts = new();
+
+    // Experimental physical realization. The reference default remains unchanged.
+    internal bool UseOrdinalProjection { get; init; }
 
     sealed class Engine : IRelationQueryExpressionRuntimeAvailability
     {
+        readonly bool useOrdinalProjection;
         readonly RelationQueryExecutionRequest request;
         readonly RelationRequirementGapAnalysisResult gapAnalysis;
         readonly CancellationToken cancellationToken;
@@ -241,8 +248,10 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         public Engine(
             RelationQueryExecutionRequest request,
             RelationRequirementGapAnalysisResult gapAnalysis,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool useOrdinalProjection)
         {
+            this.useOrdinalProjection = useOrdinalProjection;
             this.request = request;
             this.gapAnalysis = gapAnalysis;
             this.cancellationToken = cancellationToken;
@@ -1029,19 +1038,41 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             var projected = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>();
             var topLevelOnly = execution.ProjectionAssignments.All(static assignment =>
                 assignment.Definition.Target.TryGetDirectFieldName(out _));
+            ObservationLayout? layout = null;
+            int[]? assignmentOrdinals = null;
+            if (useOrdinalProjection && topLevelOnly)
+            {
+                var prepared = projectionLayouts.GetValue(request.Plan, static _ => new()).GetOrAdd(node.Id, _ =>
+                {
+                    var graph = request.Plan.Provenance.ShapeDocuments.Single(document => document.Graph.Id == node.ResultShape.GraphId).Graph;
+                    var boundLayout = ObservationLayout.Create(new(graph, node.ResultShape.ShapeId),
+                        execution.ProjectionAssignments.Select(assignment => assignment.Definition.Target.Segments[0].Segment!)
+                            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+                    return (boundLayout, execution.ProjectionAssignments.Select(assignment =>
+                        boundLayout.GetOrdinal(assignment.Definition.Target.Segments[0].Segment!)).ToArray());
+                });
+                layout = prepared.Layout;
+                assignmentOrdinals = prepared.Slots;
+            }
             foreach (var row in InputRows(execution, inputIndex: 0))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var value = RelationQueryObjectValues.Empty;
-                var topLevelFields = topLevelOnly
+                var ordinalValues = layout is null ? null : new ObservationValue[layout.Count];
+                var topLevelFields = topLevelOnly && layout is null
                     ? ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal)
                     : null;
                 List<FieldPath> unavailableFields = [];
+                var assignmentIndex = 0;
                 foreach (var assignment in execution.ProjectionAssignments)
                 {
                     if (TryEvaluate(assignment.ValueSite, row, out var assigned))
                     {
-                        if (topLevelFields is null)
+                        if (ordinalValues is not null)
+                        {
+                            ordinalValues[assignmentOrdinals![assignmentIndex]] = assigned;
+                        }
+                        else if (topLevelFields is null)
                         {
                             value = RelationQueryObjectValues.Set(value, assignment.Definition.Target, assigned);
                         }
@@ -1056,8 +1087,13 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                     }
                     else
                         unavailableFields.Add(assignment.Definition.Target);
+                    assignmentIndex++;
                 }
 
+                if (ordinalValues is not null)
+                    value = ObservationValue.FromOrdinalFields(new(layout!,
+                        System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(ordinalValues),
+                        ordinalValues.Count(field => field.Kind != ObservationValueKind.Undefined)));
                 if (topLevelFields is not null)
                     value = ObservationValue.FromObject(topLevelFields.ToImmutable());
 

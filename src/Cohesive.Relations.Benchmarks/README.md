@@ -275,3 +275,27 @@ remain those of the relation mapper, not the more general core materializer.
 The reproduction commands, source/runtime hashes, matched controls, raw reports, rejected probe, and
 verification record are retained in `docs/performance/evidence/relation-dto-ordinals`. The implementation
 adds no public types or dependencies, and does not retain target expression trees in ordinary mappers.
+
+
+### Native ordinal relation projections
+
+The internal `UseOrdinalProjection` interpreter strategy writes top-level projection assignments directly
+into owned ordinal slots. Per-plan weak caching binds assignment ordinals and stable layouts once.
+Undefined assignments remove a slot; unavailable expressions retain the reference interpreter's gap behavior.
+Nested projections retain the reference path. Terminal field selection preserves ordinal backing, while
+canonical field enumeration and canonical value equality remain unchanged. Projection construction itself
+is not shape admission: partial results and gaps remain representable.
+
+The ordinal DTO kernel now accepts the existing ordinal reader interface, allowing both validated indexed
+occurrences and admitted ordinal-backed observations. This internal interface is trusted: a matching layout
+is not proof of validation. `DirectPipeline*` benchmarks execute the whole query from the same evidence,
+validate every output through `Observation.Create`, then construct DTOs. Tests assert admission retains
+physical storage without repacking, repeated executions share layouts, and missing/invalid evidence retains
+status, values, ordering, gaps and occurrence provenance. The default interpreter strategy is unchanged.
+
+Run `--filter '*DirectPipeline*'` for twelve cases (simple/joined, 1/32/1024 rows, reference/ordinal).
+Compilation caches are warmed in setup. The measured path includes interpreter execution, terminal shaping,
+output validation and DTO construction, excluding external acquisition and serialization. The strategies
+retain execution provenance before the benchmark consumes values; this is not a full public DTO-mapping
+result comparison. Host-dependent local results suggest allocation reduction and modest/noisy latency gains;
+the earlier warm-kernel ratios must not be treated as complete-query speedups.

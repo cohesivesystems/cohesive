@@ -153,8 +153,9 @@ public sealed class CompiledRelationDtoMapper<TOutput>
 
     internal Func<ObservationValue, TOutput> MaterializationKernel => kernel;
 
-    // Experimental strict physical boundary: exact layout identity is checked before target construction.
-    internal Func<IndexedObservationOccurrence, TOutput>? OrdinalMaterializationKernel { get; init; }
+    // Experimental trusted-reader kernel: callers must admit values first. Exact layout identity
+    // is checked before target construction; identity alone does not establish value validity.
+    internal Func<IOrdinalObservationFieldReader, TOutput>? OrdinalMaterializationKernel { get; init; }
 
     /// <summary>Materializes typed rows from an exact canonical relation execution.</summary>
     /// <param name="execution">Canonical execution whose relation terminal will be consumed.</param>

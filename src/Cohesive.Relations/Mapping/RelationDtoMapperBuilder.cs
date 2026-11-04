@@ -350,7 +350,7 @@ static class RelationDtoMapperBuilder
         }
 
         Func<ObservationValue, TOutput> kernel;
-        Func<IndexedObservationOccurrence, TOutput>? ordinalKernel = null;
+        Func<IOrdinalObservationFieldReader, TOutput>? ordinalKernel = null;
         try
         {
             kernel = CompileKernel<ObservationValue, TOutput>(
@@ -363,7 +363,7 @@ static class RelationDtoMapperBuilder
                 );
             if (ordinalLayout is not null)
             {
-                var prepared = CompileKernel<IndexedObservationOccurrence, TOutput>(constructor,
+                var prepared = CompileKernel<IOrdinalObservationFieldReader, TOutput>(constructor,
                     constructorParameters, parameterProperties, preliminary, compiledBindings, ordinalLayout);
                 ordinalKernel = row => ReferenceEquals(row.Layout, ordinalLayout)
                     ? prepared(row)
@@ -488,8 +488,8 @@ static class RelationDtoMapperBuilder
     {
         var ordinal = layout.TryGetOrdinal(binding.OutputField.Path.Segments[0].Segment!, out var found) ? found : -1;
         var value = Expression.Variable(typeof(ObservationValue), "field");
-        var lookup = Expression.Call(row, typeof(IndexedObservationOccurrence).GetMethod(
-            nameof(IndexedObservationOccurrence.TryGetField), [typeof(int), typeof(ObservationValue).MakeByRefType()])!,
+        var lookup = Expression.Call(row, typeof(IOrdinalObservationFieldReader).GetMethod(
+            nameof(IOrdinalObservationFieldReader.TryGetField), [typeof(int), typeof(ObservationValue).MakeByRefType()])!,
             Expression.Constant(ordinal), value);
         var fallback = Expression.Call(Reader(nameof(RelationDtoValueReader.ReadValue))
             .MakeGenericMethod(destinationType, GetConverterType(binding.Conversion, destinationType)),
