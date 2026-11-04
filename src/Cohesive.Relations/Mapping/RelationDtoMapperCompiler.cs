@@ -138,19 +138,29 @@ public sealed class RelationDtoMapperCompiler
 public sealed class CompiledRelationDtoMapper<TOutput>
 {
     readonly Func<ObservationValue, TOutput> kernel;
+    readonly Expression<Func<ObservationValue, TOutput>> kernelExpression;
+    readonly PreparationSlot<Func<RelationQueryOutputRow[], TOutput[]>> batchKernel = new();
 
     internal CompiledRelationDtoMapper(
         RelationDtoMapperDescriptor descriptor,
-        Func<ObservationValue, TOutput> kernel)
+        Func<ObservationValue, TOutput> kernel,
+        Expression<Func<ObservationValue, TOutput>> kernelExpression)
     {
         Descriptor = descriptor;
         this.kernel = kernel;
+        this.kernelExpression = kernelExpression;
     }
 
     /// <summary>Explainable plan, target, profile, options, and resolved member decisions.</summary>
     public RelationDtoMapperDescriptor Descriptor { get; }
 
     internal Func<ObservationValue, TOutput> MaterializationKernel => kernel;
+
+    // Experimental fail-fast value projection over borrowed, prebuilt canonical rows. Fresh destinations;
+    // no plan/shape admission, provenance, cancellation or row-failure policy is claimed by this kernel.
+    // Success-only preparation is shared per immutable mapper; it never retains invocation rows.
+    internal Func<RelationQueryOutputRow[], TOutput[]> BatchMaterializationKernel =>
+        batchKernel.Get(kernelExpression, static expression => RelationDtoMapperBuilder.CompileBatch(expression));
 
     /// <summary>Materializes typed rows from an exact canonical relation execution.</summary>
     /// <param name="execution">Canonical execution whose relation terminal will be consumed.</param>

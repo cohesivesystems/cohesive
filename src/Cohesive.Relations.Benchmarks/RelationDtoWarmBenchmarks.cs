@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Collections.Immutable;
 using AutoMapper;
 using BenchmarkDotNet.Attributes;
@@ -28,6 +29,8 @@ public class RelationDtoWarmBenchmarks
     CompiledRelationDtoMapper<LoadSearchDto> joinedCompiledMapper = null!;
     Func<ObservationValue, LoadSummaryDto> simpleKernel = null!;
     Func<ObservationValue, LoadSearchDto> joinedKernel = null!;
+    Func<RelationQueryOutputRow[], LoadSummaryDto[]>? simpleBatch;
+    Func<RelationQueryOutputRow[], LoadSearchDto[]>? joinedBatch;
     IMapper autoMapper = null!;
     RelationQueryOutputRow[] simpleCanonicalRows = null!;
     RelationQueryOutputRow[] joinedCanonicalRows = null!;
@@ -62,8 +65,18 @@ public class RelationDtoWarmBenchmarks
         joinedCompiledMapper = RelationDtoBenchmarkSupport.CompileMapper<LoadSearchDto>(joined.Plan);
         simpleKernel = simpleCompiledMapper.MaterializationKernel;
         joinedKernel = joinedCompiledMapper.MaterializationKernel;
+        // Setup-only reflection lets this identical harness execute existing cases against the older library.
+        simpleBatch = typeof(CompiledRelationDtoMapper<LoadSummaryDto>).GetProperty("BatchMaterializationKernel",
+            BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(simpleCompiledMapper) as Func<RelationQueryOutputRow[], LoadSummaryDto[]>;
+        joinedBatch = typeof(CompiledRelationDtoMapper<LoadSearchDto>).GetProperty("BatchMaterializationKernel",
+            BindingFlags.Instance | BindingFlags.NonPublic)?.GetValue(joinedCompiledMapper) as Func<RelationQueryOutputRow[], LoadSearchDto[]>;
         simpleCanonicalRows = RelationDtoBenchmarkSupport.ToRelationRows(simple.Execution);
         joinedCanonicalRows = RelationDtoBenchmarkSupport.ToRelationRows(joined.Execution);
+
+        if (simpleBatch is not null) ValidateOutput(simpleBatch(simpleCanonicalRows),
+            RelationDtoBenchmarkSupport.MapSimpleHandwritten(simple.Execution), "simple batch");
+        if (joinedBatch is not null) ValidateOutput(joinedBatch(joinedCanonicalRows),
+            RelationDtoBenchmarkSupport.MapJoinedHandwritten(joined.Execution), "joined batch");
 
         var autoMapperConfiguration = RelationDtoBenchmarkSupport.ConfigureAutoMapper();
         autoMapper = autoMapperConfiguration.CreateMapper();
@@ -164,6 +177,20 @@ public class RelationDtoWarmBenchmarks
     [BenchmarkCategory("Warm", "Joined")]
     public LoadSearchDto[] AutoMapperCanonicalRowsJoined() =>
         autoMapper.Map<LoadSearchDto[]>(joinedCanonicalRows);
+
+    /// <summary>Compiled collection loop over the same prebuilt canonical row array as AutoMapper.</summary>
+    /// <returns>Fresh DTOs without canonical result bookkeeping; preparation is excluded.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Warm", "Simple")]
+    public LoadSummaryDto[] CompiledBatchKernelSimple() =>
+        (simpleBatch ?? throw new NotSupportedException("Batch kernel is unavailable."))(simpleCanonicalRows);
+
+    /// <summary>Compiled joined collection loop over the same prebuilt canonical row array as AutoMapper.</summary>
+    /// <returns>Fresh DTOs without canonical result bookkeeping; preparation is excluded.</returns>
+    [Benchmark]
+    [BenchmarkCategory("Warm", "Joined")]
+    public LoadSearchDto[] CompiledBatchKernelJoined() =>
+        (joinedBatch ?? throw new NotSupportedException("Batch kernel is unavailable."))(joinedCanonicalRows);
 
     static void ValidateOutput<TOutput>(
         IReadOnlyList<TOutput> actual,

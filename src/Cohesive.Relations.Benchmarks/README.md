@@ -192,3 +192,21 @@ Collect with an already-installed `dotnet-trace` and analyze stacks beneath `Rel
 Unfiltered trace summaries also include setup and GC activity. Do not overlap profiling with timed comparisons.
 The scalar-reader experiment's matched-process measurements, rejected generic-converter experiment and CPU/JIT
 attribution are retained in `docs/performance/evidence/relation-dto-scalar-readers`.
+
+
+### Compiled collection DTO experiment
+
+`CompiledBatchKernelSimple` and `CompiledBatchKernelJoined` compile a collection loop from the same
+row-construction expression used by the scalar kernel. Both consume the prebuilt canonical row array
+used by AutoMapper; preparation and row acquisition are outside timing. The internal lazy delegate
+returns fresh arrays and DTOs and preserves row order, scalar conversions and the first conversion
+failure. It is a fail-fast projection kernel, not the canonical mapper's admission, cancellation,
+provenance or collect-all row-diagnostics contract. The public mapper retains that contract unchanged.
+The compiled mapper retains its expression for optional batch preparation, adding cold retained metadata.
+
+On the local ARM64 host, three counterbalanced 1,024-row repeats averaged 20.073 us simple / 77.594 us
+joined versus AutoMapper's 24.328 us / 79.960 us, with identical destination allocations. This does not
+establish Linux parity. The preceding guarded scalar-reader Linux run (41761072832, AMD EPYC 9V45)
+still trailed AutoMapper by 14.6% simple / 10.9% joined. Runner CPUs differ between runs; compare
+within-run ratios, and use stable hardware for attribution. Evidence, environments, raw reports and
+source hashes live under `docs/performance/evidence/relation-dto-scalar-readers/{guarded,batch}`.

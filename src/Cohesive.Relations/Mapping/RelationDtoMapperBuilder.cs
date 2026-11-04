@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 
 namespace Cohesive.Relations.Mapping;
@@ -340,15 +341,17 @@ static class RelationDtoMapperBuilder
             return Failed<TOutput>(compilation, diagnostics);
 
         Func<ObservationValue, TOutput> kernel;
+        Expression<Func<ObservationValue, TOutput>> kernelExpression;
         try
         {
-            kernel = CompileKernel<TOutput>(
+            kernelExpression = BuildKernel<TOutput>(
                 constructor,
                 constructorParameters,
                 parameterProperties,
                 preliminary,
                 compiledBindings
                 );
+            kernel = kernelExpression.Compile();
         }
         catch (Exception exception) when (exception is not OutOfMemoryException
                                           and not StackOverflowException
@@ -380,10 +383,10 @@ static class RelationDtoMapperBuilder
             terminal.Definition.Mode,
             memberDescriptors
             );
-        return new(compilation, new(descriptor, kernel), Sort(diagnostics));
+        return new(compilation, new(descriptor, kernel, kernelExpression), Sort(diagnostics));
     }
 
-    static Func<ObservationValue, TOutput> CompileKernel<TOutput>(
+    static Expression<Func<ObservationValue, TOutput>> BuildKernel<TOutput>(
         ConstructorInfo? constructor,
         IReadOnlyList<ParameterInfo> constructorParameters,
         IReadOnlyDictionary<ParameterInfo, PropertyInfo> parameterProperties,
@@ -433,7 +436,28 @@ static class RelationDtoMapperBuilder
         Expression body = initializers.Length == 0
             ? created
             : Expression.MemberInit(created, initializers);
-        return Expression.Lambda<Func<ObservationValue, TOutput>>(body, value).Compile();
+        return Expression.Lambda<Func<ObservationValue, TOutput>>(body, value);
+    }
+
+    // Compile the complete collection task from the exact same row expression. Invoking a LambdaExpression
+    // node embeds its body in the generated loop; it does not dispatch through the compiled row delegate.
+    internal static Func<RelationQueryOutputRow[], TOutput[]> CompileBatch<TOutput>(
+        Expression<Func<ObservationValue, TOutput>> row)
+    {
+        var rows = Expression.Parameter(typeof(RelationQueryOutputRow[]), "rows");
+        var result = Expression.Variable(typeof(TOutput[]), "result");
+        var index = Expression.Variable(typeof(int), "index");
+        var done = Expression.Label("done");
+        var length = Expression.ArrayLength(rows);
+        var source = Expression.Property(Expression.ArrayIndex(rows, index), nameof(RelationQueryOutputRow.Value));
+        var body = Expression.Block([result, index],
+            Expression.Assign(result, Expression.NewArrayBounds(typeof(TOutput), length)),
+            Expression.Assign(index, Expression.Constant(0)),
+            Expression.Loop(Expression.IfThenElse(Expression.LessThan(index, length),
+                Expression.Block(Expression.Assign(Expression.ArrayAccess(result, index), Expression.Invoke(row, source)),
+                    Expression.PostIncrementAssign(index), Expression.Empty()), Expression.Break(done)), done),
+            result);
+        return Expression.Lambda<Func<RelationQueryOutputRow[], TOutput[]>>(body, rows).Compile();
     }
 
     static Expression Read(

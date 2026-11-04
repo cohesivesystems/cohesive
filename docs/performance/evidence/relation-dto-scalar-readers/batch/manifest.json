@@ -1,0 +1,8 @@
+{
+  "design": "Compile a fail-fast collection loop from the same row expression. Lazy internal prototype; full canonical mapping retains per-row diagnostics, provenance and cancellation.",
+  "measurement": "18 fresh processes, three counterbalanced repeats of batch, scalar and AutoMapper at 1024 rows; four warmups, six 200ms iterations; identical frozen runtime.",
+  "source_hashes": {
+    "src/Cohesive.Relations/Mapping/RelationDtoMapperBuilder.cs": "b28de186d744edb33dc38e8a8740b1defa656d2c5d9399ebb7eba655e1111fd2",
+    "src/Cohesive.Relations/Mapping/RelationDtoMapperCompiler.cs": "57da5a220a2cdb40c01748475eeecf7b4941f1d4c74cedd17a463b3d27282045"
+  }
+}
