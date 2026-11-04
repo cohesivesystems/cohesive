@@ -1,3 +1,4 @@
+using Cohesive.Model.Serialization;
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
@@ -69,9 +70,10 @@ public sealed record TransitionMachineConfigurationAssignment
 /// </summary>
 /// <remarks>
 /// Transition IR persists only the exact Machine and edge references. This linked slice contributes source and
-/// target configuration predicates plus the edge-owned state assignments to static sparse analysis and reference
+/// target configuration predicates, optional ambiguity evidence, and edge-owned state assignments to static sparse analysis and reference
 /// interpretation. It contains no callback, resolver, service handle, or independently authored lifecycle graph.
 /// </remarks>
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record TransitionMachineEdgeLink
 {
     /// <summary>Creates a linked Machine edge slice.</summary>
@@ -79,14 +81,17 @@ public sealed record TransitionMachineEdgeLink
     /// <param name="edge">Stable edge identity within <paramref name="machine"/>.</param>
     /// <param name="sourceConfiguration">Pure predicate recognizing legal source configurations.</param>
     /// <param name="targetConfiguration">Pure predicate recognizing the established target configuration.</param>
-    /// <param name="assignments">Non-empty edge-owned target configuration assignments.</param>
+    /// <param name="assignments">Edge-owned assignments; empty for predicate-established configurations.</param>
+    /// <param name="admissionGuards">Ordered sibling guards, shared at construction; empty for legacy unguarded links.</param>
+    /// <param name="selectedGuardIndex">Index of this edge's guard, or -1 when no guards are supplied.</param>
+    /// <param name="diagnostics">Proof limitations applying to this edge and its siblings.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="machine"/>, <paramref name="sourceConfiguration"/>, or
     /// <paramref name="targetConfiguration"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="edge"/> is default; <paramref name="assignments"/> is empty, contains null, or contains
-    /// overlapping paths.
+    /// <paramref name="edge"/> is default; <paramref name="assignments"/> is default, contains null, or contains
+    /// overlapping paths; or the guard array/index is invalid.
     /// </exception>
     [JsonConstructor]
     public TransitionMachineEdgeLink(
@@ -94,15 +99,18 @@ public sealed record TransitionMachineEdgeLink
         ExecutionNodeId edge,
         Expr sourceConfiguration,
         Expr targetConfiguration,
-        ImmutableArray<TransitionMachineConfigurationAssignment> assignments)
+        ImmutableArray<TransitionMachineConfigurationAssignment> assignments,
+        ImmutableArray<Expr> admissionGuards = default,
+        int selectedGuardIndex = -1,
+        ImmutableArray<DocumentValidationDiagnostic> diagnostics = default)
     {
         Machine = Guard.RequireNotNull(machine);
         if (string.IsNullOrWhiteSpace(edge.Value))
             throw new ArgumentException("A linked Machine edge requires a stable identity.", nameof(edge));
-        if (assignments.IsDefaultOrEmpty || assignments.Any(static assignment => assignment is null))
+        if (assignments.IsDefault || assignments.Any(static assignment => assignment is null))
         {
             throw new ArgumentException(
-                "A linked Machine edge requires at least one non-null configuration assignment.",
+                "A linked Machine edge requires an initialized array of non-null configuration assignments.",
                 nameof(assignments));
         }
 
@@ -129,7 +137,16 @@ public sealed record TransitionMachineEdgeLink
         SourceConfiguration = Guard.RequireNotNull(sourceConfiguration);
         TargetConfiguration = Guard.RequireNotNull(targetConfiguration);
         Assignments = normalized;
+        AdmissionGuards = admissionGuards.IsDefault ? [] : admissionGuards;
+        if (AdmissionGuards.Any(guard => guard is null)
+            || (AdmissionGuards.IsEmpty ? selectedGuardIndex != -1 : selectedGuardIndex < 0 || selectedGuardIndex >= AdmissionGuards.Length))
+            throw new ArgumentException("Supply non-null guards and a valid selected guard index.", nameof(admissionGuards));
+        SelectedGuardIndex = selectedGuardIndex;
+        Diagnostics = diagnostics.IsDefault ? [] : diagnostics;
     }
+
+    /// <summary>Link diagnostics scoped to this edge's selection group.</summary>
+    public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
 
     /// <summary>Exact authoritative Machine definition revision and fingerprint.</summary>
     public ExecutionDefinitionReference Machine { get; }
@@ -139,6 +156,28 @@ public sealed record TransitionMachineEdgeLink
 
     /// <summary>Pure predicate recognizing legal source configurations.</summary>
     public Expr SourceConfiguration { get; }
+
+    /// <summary>Ordered portable sibling guards; every invocation evaluates these at most once.</summary>
+    public ImmutableArray<Expr> AdmissionGuards { get; }
+
+    /// <summary>Index of the requested edge in AdmissionGuards, or -1 for an unguarded link.</summary>
+    public int SelectedGuardIndex { get; }
+
+    /// <summary>Derived compiler expression for the requested edge's source admission.</summary>
+    /// <returns>The derived source-state and selected-guard predicate.</returns>
+    public Expr CreateSourceAdmission() => AdmissionGuards.IsEmpty ? SourceConfiguration
+        : Expr.And(SourceConfiguration, AdmissionGuards[SelectedGuardIndex]);
+
+    /// <summary>Derived compiler-only ambiguity expression; runtime uses the guard array directly.</summary>
+    /// <returns>A derived ambiguity predicate, or null for a singleton group.</returns>
+    public Expr? CreateAmbiguousConfiguration()
+    {
+        if (AdmissionGuards.Length < 2) return null;
+        Expr Count(int start, int length) => length == 1
+            ? Expr.If(AdmissionGuards[start], Expr.Const(1), Expr.Const(0))
+            : Expr.Add(Count(start, length / 2), Count(start + length / 2, length - length / 2));
+        return Expr.And(SourceConfiguration, Expr.Gt(Count(0, AdmissionGuards.Length), Expr.Const(1)));
+    }
 
     /// <summary>Pure predicate recognizing the established target configuration.</summary>
     public Expr TargetConfiguration { get; }
@@ -185,7 +224,11 @@ public sealed class TransitionMachineLinkCatalog
         }
 
         Edges = normalized;
+        Diagnostics = [.. normalized.SelectMany(edge => edge.Diagnostics).Distinct()];
     }
+
+    /// <summary>Link-time proof limitations and validation evidence.</summary>
+    public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
 
     /// <summary>Linked edge slices in deterministic exact-reference and edge order.</summary>
     public ImmutableArray<TransitionMachineEdgeLink> Edges { get; }

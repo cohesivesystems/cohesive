@@ -76,7 +76,10 @@ public enum TransitionExpressionSiteKind
     MachineTargetConfiguration = 12,
 
     /// <summary>A pure input-derived complete observation for an absent subject.</summary>
-    SubjectInitializer = 13
+    SubjectInitializer = 13,
+
+    /// <summary>A linked Machine predicate detecting ambiguous action admission.</summary>
+    MachineAmbiguousConfiguration = 14
 }
 
 /// <summary>Why an aggregate observation can influence Transition semantics.</summary>

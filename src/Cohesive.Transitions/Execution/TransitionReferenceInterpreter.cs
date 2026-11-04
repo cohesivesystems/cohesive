@@ -31,6 +31,9 @@ public static class TransitionExecutionDiagnosticCodes
     /// <summary>An authored NoChange path changed candidate aggregate state.</summary>
     public const string NoChangeModifiedState = "transitions.execution.noChange.modifiedState";
 
+    /// <summary>Multiple sibling edges are enabled for the requested Machine action.</summary>
+    public const string MachineAdmissionAmbiguous = "transitions.execution.machine.admissionAmbiguous";
+
     /// <summary>A linked Machine edge failed to establish its target configuration.</summary>
     public const string MachineTargetViolated = "transitions.execution.machine.targetViolated";
 
@@ -165,6 +168,7 @@ public static class TransitionReferenceInterpreter
         readonly List<TransitionExecutedPatch> executedPatches = [];
         readonly List<TransitionEmissionIntent> emissions = [];
         readonly List<TransitionMachineMovement> movements = [];
+        readonly List<(ExecutionNodeId Node, TransitionMachineEdgeLink Link, Dictionary<ValueBindingId, PortableExpressionValue> Scope)> machineTargets = [];
         readonly Dictionary<FieldPath, ValueContract> observationContracts = [];
         readonly Dictionary<string, ValueContract> inputContracts = new(StringComparer.Ordinal);
         TransitionObservationFrame observation;
@@ -254,6 +258,7 @@ public static class TransitionReferenceInterpreter
 
                 RecomputeAffectedDerivedFields();
                 ValidateInvariants();
+                ValidateMachineTargets();
 
                 var changed = executedPatches.Where(static patch => patch.Changed).ToImmutableArray();
                 var kind = terminal.Kind;
@@ -726,12 +731,26 @@ public static class TransitionReferenceInterpreter
                     $"Compiled Machine edge '{movement.Edge.Value}' is unavailable.",
                     movement.Id);
 
-            if (!EvaluateBoolean(
-                    link.SourceConfiguration,
-                    movement.Id,
-                    candidateState: false,
-                    operation: "Machine source configuration",
-                    scope))
+            var evaluation = CreateEvaluationContext(movement.Id, candidateState: false, scope);
+            var admitted = PortableExpressionReferenceEvaluator.RequireBoolean(
+                evaluator.Evaluate(link.SourceConfiguration, evaluation), "Machine source configuration");
+            if (admitted && !link.AdmissionGuards.IsEmpty)
+            {
+                var enabled = 0;
+                var selected = false;
+                for (var index = 0; index < link.AdmissionGuards.Length; index++)
+                {
+                    if (!PortableExpressionReferenceEvaluator.RequireBoolean(
+                            evaluator.Evaluate(link.AdmissionGuards[index], evaluation), "Machine admission guard")) continue;
+                    if (++enabled > 1)
+                        throw Invalid(TransitionExecutionDiagnosticCodes.MachineAdmissionAmbiguous,
+                            $"Machine '{movement.Machine.DefinitionId.Value}' has multiple enabled edges for the action of '{movement.Edge.Value}'.",
+                            movement.Id);
+                    selected = index == link.SelectedGuardIndex;
+                }
+                admitted = selected;
+            }
+            if (!admitted)
             {
                 var rejection = EvaluateTyped(
                     movement.Rejection,
@@ -764,19 +783,7 @@ public static class TransitionReferenceInterpreter
                 TracePatch(executed, TransitionTraceEventKind.PatchExecuted);
             }
 
-            if (!EvaluateBoolean(
-                    link.TargetConfiguration,
-                    movement.Id,
-                    candidateState: true,
-                    operation: "Machine target configuration",
-                    scope))
-            {
-                throw Invalid(
-                    TransitionExecutionDiagnosticCodes.MachineTargetViolated,
-                    $"Machine edge '{movement.Edge.Value}' did not establish its declared target configuration.",
-                    movement.Id);
-            }
-
+            machineTargets.Add((movement.Id, link, scope));
             movements.Add(new(
                 movement.Id,
                 movement.Machine,
@@ -844,6 +851,19 @@ public static class TransitionReferenceInterpreter
             }
         }
 
+        void ValidateMachineTargets()
+        {
+            foreach (var target in machineTargets)
+            {
+                if (!EvaluateBoolean(target.Link.TargetConfiguration, target.Node, candidateState: true,
+                        operation: "Machine final target", target.Scope))
+                {
+                    throw Invalid(TransitionExecutionDiagnosticCodes.MachineTargetViolated,
+                        $"Machine edge '{target.Link.Edge.Value}' did not establish its target in the final candidate.", target.Node);
+                }
+            }
+        }
+
         void ValidateInvariants()
         {
             foreach (var invariant in plan.Definition.Invariants)
@@ -872,15 +892,19 @@ public static class TransitionReferenceInterpreter
             Expr expression,
             ExecutionNodeId node,
             bool candidateState,
-            Dictionary<ValueBindingId, PortableExpressionValue>? scope = null)
+            Dictionary<ValueBindingId, PortableExpressionValue>? scope = null) =>
+            evaluator.Evaluate(expression, CreateEvaluationContext(node, candidateState, scope));
+
+        PortableExpressionEvaluationContext CreateEvaluationContext(ExecutionNodeId node, bool candidateState,
+            Dictionary<ValueBindingId, PortableExpressionValue>? scope)
         {
             var visible = scope ?? bindings;
-            return evaluator.Evaluate(expression, new()
+            return new()
             {
                 ResolveBinding = binding => ResolveBinding(binding, node, candidateState, visible),
                 ResolveField = (binding, path) => ResolveField(binding, path, node, candidateState, visible),
                 ResolveParameter = parameter => ResolveParameter(parameter)
-            });
+            };
         }
 
         bool EvaluateBoolean(
