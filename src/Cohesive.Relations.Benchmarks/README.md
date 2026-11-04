@@ -299,3 +299,22 @@ output validation and DTO construction, excluding external acquisition and seria
 retain execution provenance before the benchmark consumes values; this is not a full public DTO-mapping
 result comparison. Host-dependent local results suggest allocation reduction and modest/noisy latency gains;
 the earlier warm-kernel ratios must not be treated as complete-query speedups.
+
+
+[Linux direct-pipeline run 41927974838](https://github.com/cohesivesystems/cohesive/actions/runs/41927974838)
+at `fee80586` completed all twelve cases on AMD EPYC 7763 / .NET 10.0.14. At 1,024 rows:
+
+| Complete execution + admission + DTO mapping | Simple | Joined |
+| --- | ---: | ---: |
+| Reference, ms | 7.435 | 25.692 |
+| Direct ordinal projection, ms | 6.673 | 25.085 |
+| Reference allocation, bytes | 4,675,771 | 14,224,850 |
+| Direct ordinal allocation, bytes | 4,249,610 | 13,208,979 |
+
+Observed latency is about 10% / 2% lower and allocation about 9% / 7% lower. The joined timing difference
+is small; Short-job hosted-runner results do not establish a portable latency guarantee. Local repeated
+means showed 3% / 12% lower latency, demonstrating timing variability despite consistent allocation direction.
+Retain opt-in execution until representative application workloads and stable-host measurements support
+adoption. Raw environments, reports, source hashes and three local counterbalanced repeats are preserved
+under `docs/performance/evidence/relation-direct-ordinals`. This completes the relation-projection producer
+experiment; native adapter ingestion and serialization fusion are separate follow-ups.
