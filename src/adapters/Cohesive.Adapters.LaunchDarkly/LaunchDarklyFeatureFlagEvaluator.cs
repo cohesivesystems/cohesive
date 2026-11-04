@@ -21,11 +21,23 @@ public sealed class LaunchDarklyFeatureFlagEvaluator<TContext> : IFeatureFlagEva
         this.targeting = targeting ?? throw new ArgumentNullException(nameof(targeting));
     }
     /// <inheritdoc />
+    public ValueTask RequireFlagAsync(string flag, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(flag); cancellationToken.ThrowIfCancellationRequested();
+        // AllFlagsState does not generate evaluation/exposure events. Admission has no request context.
+        var state = client.AllFlagsState(Context.New("cohesive-flag-admission"));
+        if (!state.Valid) throw new InvalidOperationException("LaunchDarkly flag configuration is not ready for admission.");
+        if (!state.ToValuesJsonMap().ContainsKey(flag)) throw new FeatureFlagNotFoundException(flag);
+        return ValueTask.CompletedTask;
+    }
+    /// <inheritdoc />
     public ValueTask<bool> IsEnabledAsync(string flag, TContext context, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(flag);
         cancellationToken.ThrowIfCancellationRequested();
         var decision = client.BoolVariationDetail(flag, targeting(context), false);
+        if (decision.Reason.Kind == EvaluationReasonKind.Error && decision.Reason.ErrorKind == EvaluationErrorKind.FlagNotFound)
+            throw new FeatureFlagNotFoundException(flag);
         if (decision.Reason.Kind == EvaluationReasonKind.Error)
             throw new InvalidOperationException($"Feature flag '{flag}' evaluation failed: {decision.Reason.ErrorKind}.");
         return ValueTask.FromResult(decision.Value);

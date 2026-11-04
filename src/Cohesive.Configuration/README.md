@@ -38,7 +38,8 @@ var overrides = projection.Build(new TrainCommand(
 `IFeatureFlagEvaluator<TContext>` is a narrow, invocation-scoped decision contract;
 native clients are concurrent host-lifetime resources. The explicit context travels
 into the provider rather than being inferred by reflection or cached in a singleton.
-Adapters are available in `Cohesive.Adapters.FeatureManagement` (including Azure App
+`RequireFlagAsync` admits existence before dependent resource preparation; missing
+flags throw `FeatureFlagNotFoundException` in both adapters. Adapters are available in `Cohesive.Adapters.FeatureManagement` (including Azure App
 Configuration) and `Cohesive.Adapters.LaunchDarkly`. The SDK owns refresh and cached
 value policy. Both implement the same cancellation and no-context-retention contract.
 

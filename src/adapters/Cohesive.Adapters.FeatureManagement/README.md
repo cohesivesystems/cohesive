@@ -1,26 +1,29 @@
 # Microsoft feature management
 
 `FeatureManagementEvaluator<TContext>` adapts a host-owned `IVariantFeatureManager`
-to `IFeatureFlagEvaluator<TContext>`. Use `AddFeatureManagement`, not the snapshot
-manager, for decisions that observe subsequent native configuration refreshes.
+and its `IFeatureDefinitionProvider` to Cohesive. Register them once:
 
 ```csharp
-services.AddFeatureManagement();
-services.AddSingleton<IFeatureFlagEvaluator<string>, FeatureManagementEvaluator<string>>();
+services.AddCohesiveFeatureManagement<TenantContext>();
 ```
 
-The same registration works with reloadable JSON configuration or Azure App
-Configuration's feature-flag provider. The host configures Azure credentials,
-`UseFeatureFlags`, refresh interval and the refresh trigger (middleware or a
-background refresher). Cohesive does not poll Azure per query or own that client.
-An Azure refresh interval is not a fleet-wide cutover or freshness guarantee.
+The helper uses `AddFeatureManagement` (not the snapshot manager), retains existing
+evaluator registrations, and does not allocate native clients itself. Configure
+contextual filters with the normal Microsoft feature-management builder.
 
-The query input is supplied explicitly to contextual filters. For tenant rollout,
-use a host filter that consumes trusted request identity; do not treat a URL key
-as proof of tenant membership. The evaluator does not cache or retain targeting
-context. Missing flags follow Microsoft's disabled behavior. Evaluation errors
-and cancellation propagate; selected-backend errors never cause another read.
+The same registration works with reloadable JSON or Azure App Configuration. The
+host configures credentials, `UseFeatureFlags`, refresh interval and a refresh
+trigger (middleware or background refresher). Cohesive does not poll Azure per query.
+The adapter uses native definition metadata for startup existence admission and
+rechecks it during evaluation. Missing or removed flags throw
+`FeatureFlagNotFoundException`, matching LaunchDarkly; they never mean disabled.
+A declared false flag is valid. Provider errors and cancellation propagate.
 
-Tests exercise configuration reload and concurrent contextual filtering through
-the real manager without an Azure account. Azure transport refresh remains a
-host/provider integration responsibility.
+Targeting comes from the individual selection's typed projection, which can read
+trusted request identity independently of query input. Context is never retained
+by Cohesive. A flag is not authorization. Native refresh is not an atomic snapshot
+across independent evaluations or hosts; configuration changes remain eventually visible.
+
+Tests cover true/false reload, actual flag removal, contextual filtering under
+concurrency, startup rejection and idempotent registration. They use the native
+manager and configuration providers without an Azure account.

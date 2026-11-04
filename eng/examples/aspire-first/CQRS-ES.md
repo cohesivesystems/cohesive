@@ -51,7 +51,7 @@ dotnet run --project eng/examples/aspire-first/AppHost -- explain -- \
   --OrderReads:AcceptEventualConsistency=true > eventual.json
 ```
 
-In report schema `cohesive.application.explanation/2`, follow:
+In report schema `cohesive.application.explanation/3`, follow:
 
 - `endpoints[].service`: exact service reference and original selected operation. The fulfillment operation
   declares `Durable` lifetime and `Admission` completion independently; the result operation has its own authorization.
@@ -92,7 +92,7 @@ Once the comparison artifact and native readers are qualified, configure the wor
 ```json
 {
   "OrderReads": {
-    "Source": "FeatureFlag",
+    "Source": "Materialized",
     "FeatureFlag": "orders-materialized",
     "AcceptEventualConsistency": true,
     "ComparisonFile": "/absolute/path/to/comparison.json"
@@ -102,7 +102,8 @@ Once the comparison artifact and native readers are qualified, configure the wor
 ```
 
 Retain the existing `Shadow` target, slot-generation and position-key configuration.
-The storage model prepares both backends before serving traffic. The worker uses
+The optional `FeatureFlag` makes this a live choice; omitting it fixes reads to the
+materialized source. The storage model prepares both backends before serving traffic. The worker uses
 Microsoft feature management; editing a reload-enabled worker appsettings file from
 false to true selects Elasticsearch on subsequent reads. Set it false to select
 live PostgreSQL without restarting. In-flight reads keep their original backend.
@@ -116,7 +117,11 @@ AppHost are startup configuration, not a live flag transport. For production use
 or [LaunchDarkly](../../../src/adapters/Cohesive.Adapters.LaunchDarkly/README.md)
 with host-owned clients and refresh. Neither cloud service is required by the local proof.
 
-The explanation includes both candidates and the flag identity. It does not claim a
+The storage selection projects the current `IdentityContext` for targeting; the order
+ID is not used as a tenant identity. `AddCohesiveFeatureManagement<IdentityContext>()`
+registers the provider. Both adapters reject missing flags before native preparation.
+
+Explanation v3 uses a distinct flag shape containing both candidates and the flag identity. It does not claim a
 current decision or synchronized fleet cutover. Selected-backend errors propagate;
 rollback is an operator flag decision, never a hidden fallback. Feature targeting
 is separate from request authorization, and asynchronous visibility remains explicit.

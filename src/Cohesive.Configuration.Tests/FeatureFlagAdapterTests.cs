@@ -12,6 +12,41 @@ namespace Cohesive.Configuration.Tests;
 public sealed class FeatureFlagAdapterTests
 {
     [Fact]
+    public async Task Microsoft_missing_and_removed_flags_fail_admission_and_evaluation()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(path, "{\"FeatureManagement\":{\"reads\":false}}");
+            using var config = (ConfigurationRoot)new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddJsonFile(path).Build();
+            var registrations = new ServiceCollection().AddSingleton<IConfiguration>(config);
+            registrations.AddCohesiveFeatureManagement<string>();
+            registrations.AddCohesiveFeatureManagement<string>();
+            using var services = registrations.BuildServiceProvider();
+            var evaluator = Assert.Single(services.GetServices<IFeatureFlagEvaluator<string>>());
+            await evaluator.RequireFlagAsync("reads");
+            Assert.False(await evaluator.IsEnabledAsync("reads", "a"));
+            await Assert.ThrowsAsync<FeatureFlagNotFoundException>(() => evaluator.RequireFlagAsync("typo").AsTask());
+            await Assert.ThrowsAsync<FeatureFlagNotFoundException>(() => evaluator.IsEnabledAsync("typo", "a").AsTask());
+            await File.WriteAllTextAsync(path, "{}");
+            config.Reload();
+            await Assert.ThrowsAsync<FeatureFlagNotFoundException>(() => evaluator.RequireFlagAsync("reads").AsTask());
+            await Assert.ThrowsAsync<FeatureFlagNotFoundException>(() => evaluator.IsEnabledAsync("reads", "a").AsTask());
+        }
+        finally { File.Delete(path); }
+    }
+
+    [Fact]
+    public async Task LaunchDarkly_admission_accepts_disabled_flags_and_rejects_missing_flags_without_targeting()
+    {
+        var data = TestData.DataSource(); data.Update(data.Flag("reads").VariationForAll(false));
+        using var client = new LdClient(LaunchDarkly.Sdk.Server.Configuration.Builder("test-key").DataSource(data).Events(Components.NoEvents).Build());
+        var evaluator = new LaunchDarklyFeatureFlagEvaluator<string>(client, _ => throw new Exception("Admission must not project request context."));
+        await evaluator.RequireFlagAsync("reads");
+        await Assert.ThrowsAsync<FeatureFlagNotFoundException>(() => evaluator.RequireFlagAsync("typo").AsTask());
+    }
+
+    [Fact]
     public async Task Microsoft_manager_observes_reload_without_recreating_evaluator()
     {
         var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -19,7 +54,7 @@ public sealed class FeatureFlagAdapterTests
         var registrations = new ServiceCollection().AddSingleton<IConfiguration>(config);
         registrations.AddFeatureManagement();
         using var services = registrations.BuildServiceProvider();
-        var evaluator = new FeatureManagementEvaluator<string>(services.GetRequiredService<IVariantFeatureManager>());
+        var evaluator = new FeatureManagementEvaluator<string>(services.GetRequiredService<IVariantFeatureManager>(), services.GetRequiredService<IFeatureDefinitionProvider>());
         Assert.False(await evaluator.IsEnabledAsync("reads", "a"));
         config["FeatureManagement:reads"] = "true";
         config.Reload();
@@ -37,7 +72,7 @@ public sealed class FeatureFlagAdapterTests
         var registrations = new ServiceCollection().AddSingleton<IConfiguration>(config);
         registrations.AddFeatureManagement().AddFeatureFilter<TenantFilter>();
         using var services = registrations.BuildServiceProvider();
-        var evaluator = new FeatureManagementEvaluator<string>(services.GetRequiredService<IVariantFeatureManager>());
+        var evaluator = new FeatureManagementEvaluator<string>(services.GetRequiredService<IVariantFeatureManager>(), services.GetRequiredService<IFeatureDefinitionProvider>());
         var results = await Task.WhenAll(Enumerable.Range(0, 100).Select(async i =>
             (await evaluator.IsEnabledAsync("reads", i % 2 == 0 ? "enabled" : "disabled")) == (i % 2 == 0)));
         Assert.All(results, Assert.True);
@@ -70,7 +105,7 @@ public sealed class FeatureFlagAdapterTests
         using var client = new LdClient(LaunchDarkly.Sdk.Server.Configuration.Builder("test-key")
             .DataSource(TestData.DataSource()).Events(Components.NoEvents).Build());
         var evaluator = new LaunchDarklyFeatureFlagEvaluator<string>(client, Context.New);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => evaluator.IsEnabledAsync("missing", "a").AsTask());
+        await Assert.ThrowsAsync<FeatureFlagNotFoundException>(() => evaluator.IsEnabledAsync("missing", "a").AsTask());
     }
 
     [Fact]

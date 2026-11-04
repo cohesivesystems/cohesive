@@ -1,27 +1,27 @@
 # LaunchDarkly live flags
 
-`LaunchDarklyFeatureFlagEvaluator<TContext>` uses one host-owned `ILdClient` and an
-explicit projection into LaunchDarkly's `Context`:
+Register one host-owned `ILdClient`, then map the application's targeting contract
+into LaunchDarkly's native context:
 
 ```csharp
-services.AddSingleton<IFeatureFlagEvaluator<string>>(sp =>
-    new LaunchDarklyFeatureFlagEvaluator<string>(
-        sp.GetRequiredService<ILdClient>(),
-        orderId => Context.New(orderId)));
+services.AddCohesiveLaunchDarkly<TenantContext>(tenant => Context.New(tenant.Id));
 ```
 
-The sample targets an order, not a tenant. For tenant rollout project trusted
-identity through an injected operation-context accessor; do not infer tenant
-identity from an arbitrary string input. Never use flag targeting as authorization.
-The host registers/disposes the native singleton, owns SDK credentials and selects
-streaming, polling and last-known-value behavior. Cohesive neither connects nor
-creates native clients during model declaration.
+The query's selection maps invocation input/request identity into `TenantContext`;
+it is not constrained to the query's input type. The helper retains an existing
+evaluator registration. The host owns native client lifetime, credentials, streaming,
+polling and last-known-value policy. Flag targeting never grants authorization.
 
-The adapter calls `BoolVariationDetail` once per invocation and rejects SDK error
-reasons (including unknown flags and invalid contexts) instead of silently accepting
-the fallback argument. Successful SDK cached decisions retain the native freshness
-policy; they are not guaranteed current across a fleet. No context is cached by
-Cohesive. Cancellation is checked before synchronous native evaluation.
+At startup `RequireFlagAsync` uses the SDK's event-free `AllFlagsState` snapshot with
+a synthetic admission context, then checks the requested key. No request context projection or SDK evaluation events are produced. This catalog snapshot is a startup
+cost per admitted selection, not a per-read scan. Unready SDK state fails admission.
+Missing flags throw the shared `FeatureFlagNotFoundException`, including during
+runtime evaluation. A declared false flag is valid.
 
-Tests use the SDK's TestData source and disabled event transport to prove updates,
-targeting, missing-flag failure and cancellation with no network or credentials.
+Per invocation, `BoolVariationDetail` runs once on the explicitly projected context.
+Error reasons propagate instead of accepting the SDK's fallback argument. Successful
+cached values retain the SDK's freshness policy; they are not guaranteed current
+across a fleet. No targeting context is cached by Cohesive.
+
+Tests use the SDK's TestData source with event transport disabled to prove updates,
+targeting, admission, missing-key errors and cancellation without external accounts.

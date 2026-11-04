@@ -474,7 +474,7 @@ For materialized reads, prefer the declarative composition:
 
 ```csharp
 return native.SelectMaterializedQuery(queries.Details, queries.DetailsRelation,
-    source: materializationStorage.ForReads(configurationSection: "Replication"),
+    source: () => materializationStorage.ForReads(configurationSection: "Replication"),
     target: elasticReads,
     comparisonSection: "Reads");
 ```
@@ -501,31 +501,56 @@ not capability or identity evidence (`ElasticMaterializationReadBinding.BackendN
 
 ## Live read selection
 
-`SelectQueryByFeatureFlag` extends `SelectQuery`; `SelectMaterializedQueryByFeatureFlag`
-reuses the same comparison, source and target preparation as fixed materialized reads.
-True selects the alternate, false selects the source's live interpretation. Both are
-prepared before traffic, including when the initial flag is false. A host cannot use
-an unqualified generation by flipping a flag later.
+`SelectQuery` and `SelectMaterializedQuery` each accept one optional
+`ServiceReadSelection<TInput>`: `Native`, `Alternate` (the default), or
+`ByFeatureFlag<TContext>`. `FromPolicy` lowers a configuration-bound
+`RelationQueryReadPolicy` to the same choice. There are no separate flag methods.
+A fixed native choice skips alternate declaration and native preparation.
 
-Register a host-owned `IFeatureFlagEvaluator<TInput>`. Each `ReadAsync` captures one
-decision with its invocation input/cancellation, then invokes one already-prepared
-reader. An in-flight read retains its choice. Backend failure is returned to the
-caller, without retrying against the other store. Provider failures propagate too;
-missing-flag/default behavior is explicitly documented by each provider adapter.
-No per-read native client lookup, reflection or query compilation occurs. Cohesive
-does not cache flag decisions, invocation context or results. Immutable plans and
-bounded readers are prepared once.
+```csharp
+return native.SelectMaterializedQuery(queries.Details, queries.DetailsRelation,
+    source: () => materializationStorage.ForReads(configurationSection: "Replication"),
+    target: elasticReads,
+    comparisonSection: "Reads",
+    selection: ServiceReadSelection<string>.ByFeatureFlag<TenantContext>(
+        "orders-materialized", services =>
+        {
+            var tenants = services.GetRequiredService<TenantAccessor>();
+            return orderId => tenants.Current; // Independent, trusted targeting contract.
+        }));
+```
 
-The endpoint must admit the weakest candidate guarantee. Switching between snapshot
-PostgreSQL and asynchronous Elasticsearch therefore requires explicit `Eventual`
-consistency even while the flag is false. Offline explanation's `featureSelection`
-records the flag plus disabled/enabled backends and original resource identities;
-the enclosing backend/resource describe the alternate candidate, not a current
-runtime decision. This is no freshness, authorization or fleet-wide cutover claim.
+Register `IFeatureFlagEvaluator<TenantContext>` using the provider's helper. The
+projection factory runs once at binding; its returned function runs per invocation.
+It can combine query input with trusted request identity without making the order ID
+the tenant ID. No invocation context is retained. Providers may be shared concurrently;
+target projections belong to individual selections, not one global query-input rule.
 
-A typed reader decorator is used instead of DispatchProxy: the reader boundary has
-one asynchronous invocation and two immutable metadata properties. That avoids
-reflection, boxing and ambiguous handling of Task/ValueTask/property calls. The
-provider seam is reusable independently of this reader. An allocation regression
-covers 1,000 warm synchronous-decision calls against completed readers: zero added
-managed bytes. SDK/network/real-reader cost is outside that measurement.
+Binding first requires the flag to exist, without constructing a request context or
+opening native readers. Both adapters throw `FeatureFlagNotFoundException` for an
+absent key. Microsoft also checks native definition metadata on evaluation, so a
+removed flag cannot quietly become disabled. Native refresh is not a cross-provider
+or fleet-wide atomic snapshot. Providers retain responsibility for refresh/freshness.
+
+True selects the alternate, false the source's live interpretation. Both readers and
+the comparison artifact are prepared before traffic, even if the flag starts false.
+Each read captures one decision and retains it through completion. Provider errors,
+cancellation and backend errors propagate; there is no implicit retry or fallback.
+Immutable plans/readers are reused; no client lookup, reflection or compilation occurs
+per read. The warm dispatch allocation regression remains zero added managed bytes
+for 1,000 synchronous decisions against completed readers, excluding SDK/backend cost.
+
+The endpoint must admit the weakest candidate guarantee: PostgreSQL/Elasticsearch
+switching requires explicit `Eventual` consent regardless of the current flag value.
+Explanation schema v3 has distinct `kind: fixed` and `kind: featureFlag` shapes.
+Only the fixed shape has `backend`/`resource`. A flag shape contains `flag`, `disabled`
+and `enabled` candidates, plus the minimum guarantee; it makes no claim about the
+current decision. No synthetic backend identity is invented for the switch.
+
+The source enum remains `Live`/`Materialized`. In configuration, `Source: Materialized`
+plus an optional `FeatureFlag` selects that candidate or live reads. Omitting the flag
+makes the choice fixed. A flag on `Source: Live`, a blank key, or missing eventual
+consent fails validation. Previously unreleased `Select*ByFeatureFlag` methods and
+`RelationQueryReadSource.FeatureFlag` are removed. Custom compositions now return the
+`ServiceQueryReadSelection` inspection base; fixed adapters still construct
+`ServiceQueryReadBinding`. Custom evaluators must implement flag admission.

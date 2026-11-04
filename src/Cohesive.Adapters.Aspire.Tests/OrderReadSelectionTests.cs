@@ -13,6 +13,16 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class OrderReadSelectionTests
 {
     [Fact]
+    public void Fixed_live_choice_does_not_construct_materialization_declarations()
+    {
+        var model = TestModels.Fulfillment();
+        var selected = model.Storage.Native.SelectMaterializedQuery(model.Queries.OrderDetails, model.Queries.OrderDetailsRelation,
+            source: () => throw new InvalidOperationException("Unused materialization must stay unprepared."),
+            target: ShadowElastic.Reads, comparisonSection: "Reads", selection: ServiceReadSelection<string>.Native);
+        Assert.Same(model.Storage.Native, selected);
+    }
+
+    [Fact]
     public async Task Shared_preparation_rejects_invalid_comparison_before_native_binding()
     {
         var model = ModelActivator.Create<FulfillmentApplication>(services => services
@@ -31,7 +41,7 @@ public sealed class OrderReadSelectionTests
                 throw new InvalidOperationException("Native preparation must not run.");
             });
             var composition = model.Storage.Native.SelectMaterializedQuery(model.Queries.OrderDetails, model.Queries.OrderDetailsRelation,
-                source, target, "Reads");
+                () => source, target, "Reads");
             var selection = model.Endpoints.Plan.QueryDependencies.Queries.Single(item =>
                 item.Request.DefinitionDocument.DefinitionFingerprint == model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.DefinitionFingerprint);
             using var services = new ServiceCollection().AddSingleton<IConfiguration>(new ConfigurationBuilder()

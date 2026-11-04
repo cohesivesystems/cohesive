@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Relations.Execution;
+using Cohesive.Api.Execution.Services;
 using System.Text.Json.Nodes;
 using Aspire.Hosting;
 using Cohesive.Adapters.Aspire;
@@ -65,19 +66,25 @@ public sealed class FulfillmentExplanationTests
     {
         var model = ModelActivator.Create<FulfillmentInfrastructure>(services => services
             .AddSingleton(new FulfillmentHistoryPolicy())
-            .AddSingleton(new RelationQueryReadPolicy { Source = RelationQueryReadSource.FeatureFlag,
+            .AddSingleton(new RelationQueryReadPolicy { Source = RelationQueryReadSource.Materialized,
                 FeatureFlag = "orders-materialized", AcceptEventualConsistency = true }));
         var builder = DistributedApplication.CreateBuilder(new DistributedApplicationOptions { Args = [], DisableDashboard = true });
         var report = model.Explain(model.Configure(builder));
-        var selection = Assert.Single(report.Storage.Queries.Where(query => query.Read?.FeatureSelection is not null));
+        var selection = Assert.Single(report.Storage.Queries.Where(query => query.Read is ServiceQueryFeatureSelection));
         Assert.Equal(RelationQueryConsistency.Eventual, selection.Consistency);
-        Assert.Equal("orders-materialized", selection.Read!.FeatureSelection!.Flag);
-        Assert.Equal("PostgreSQL", selection.Read.FeatureSelection.Disabled.Backend);
-        Assert.Equal("Elasticsearch", selection.Read.FeatureSelection.Enabled.Backend);
+        var choice = Assert.IsType<ServiceQueryFeatureSelection>(selection.Read);
+        Assert.Equal("orders-materialized", choice.Flag);
+        Assert.Equal("PostgreSQL", choice.Disabled.Backend);
+        Assert.Equal("Elasticsearch", choice.Enabled.Backend);
+        var jsonChoice = JsonNode.Parse(report.ToJson())!["storage"]!["queries"]!.AsArray()
+            .Single(q => q!["read"]!["kind"]!.GetValue<string>() == "featureFlag")!["read"]!;
+        Assert.Null(jsonChoice["backend"]);
+        Assert.Null(jsonChoice["resource"]);
+        Assert.Equal("orders-materialized", jsonChoice["flag"]!.GetValue<string>());
         Assert.Contains("orders-materialized", report.ToJson());
-        Assert.Throws<ArgumentException>(() => new RelationQueryReadPolicy { Source = RelationQueryReadSource.FeatureFlag,
+        Assert.Throws<ArgumentException>(() => new RelationQueryReadPolicy { Source = RelationQueryReadSource.Materialized,
             FeatureFlag = "orders-materialized" }.Validate());
-        Assert.Throws<ArgumentException>(() => new RelationQueryReadPolicy { Source = RelationQueryReadSource.FeatureFlag,
+        Assert.Throws<ArgumentException>(() => new RelationQueryReadPolicy { Source = RelationQueryReadSource.Materialized, FeatureFlag = " ",
             AcceptEventualConsistency = true }.Validate());
     }
 
@@ -106,17 +113,17 @@ public sealed class FulfillmentExplanationTests
         var live = Native(EntityStateAuthority.State);
         var detailId = selected.Endpoints.Single(endpoint => endpoint.Http?.Route == "/orders/{id}/details").Execution;
         var details = selected.Storage.Queries.Single(query => query.Query == detailId);
-        Assert.Equal("Elasticsearch", details.Read!.Backend);
-        Assert.Equal(AspireFirst.Materialization.ShadowElastic.Resource, details.Read.Resource);
+        Assert.Equal("Elasticsearch", Assert.IsType<ServiceQueryReadBinding>(details.Read).Backend);
+        Assert.Equal(AspireFirst.Materialization.ShadowElastic.Resource, Assert.IsType<ServiceQueryReadBinding>(details.Read).Resource);
         Assert.Equal(RelationQueryConsistency.Eventual, details.Read.Consistency);
         Assert.Equal(RelationQueryConsistency.Eventual, details.Consistency);
         Assert.All(live.Storage.Queries, query =>
         {
-            Assert.Equal("PostgreSQL", query.Read!.Backend);
-            Assert.Equal("orders", query.Read.Resource);
+            Assert.Equal("PostgreSQL", Assert.IsType<ServiceQueryReadBinding>(query.Read).Backend);
+            Assert.Equal("orders", Assert.IsType<ServiceQueryReadBinding>(query.Read).Resource);
             Assert.Equal(RelationQueryConsistency.SingleSnapshot, query.Read.Consistency);
         });
-        Assert.Equal("PostgreSQL", selected.Storage.Queries.Single(query => query.Query != detailId).Read!.Backend);
+        Assert.Equal("PostgreSQL", Assert.IsType<ServiceQueryReadBinding>(selected.Storage.Queries.Single(query => query.Query != detailId).Read).Backend);
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse(live.ToJson())!["endpoints"], JsonNode.Parse(selected.ToJson())!["endpoints"]));
         var encoded = JsonNode.Parse(selected.ToJson())!["storage"]!["queries"]!.AsArray();
         Assert.Contains(encoded, entry => entry!["read"]!["backend"]!.GetValue<string>() == "Elasticsearch"
@@ -196,7 +203,7 @@ public sealed class FulfillmentExplanationTests
         Assert.All(report.Storage.Queries, query =>
         {
             Assert.Equal(RelationQueryConsistency.IndependentSources, query.Consistency);
-            Assert.Equal("Composed", query.Read!.Backend);
+            Assert.Equal("Composed", Assert.IsType<ServiceQueryReadBinding>(query.Read).Backend);
             Assert.Equal(RelationQueryConsistency.IndependentSources, query.Read.Consistency);
         });
         Assert.Contains("resources/inventory", report.Deployment.ToJson());

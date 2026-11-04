@@ -131,14 +131,14 @@ public sealed class ServiceReadSelectionTests
         var source = new Source(model) { SelectedReader = live };
         var evaluator = new Flags();
         var preparations = 0;
-        var selected = source.SelectQueryByFeatureFlag(model.Queries.OrderDetails, "details", Elastic, (_, _) =>
+        var selected = source.SelectQuery(model.Queries.OrderDetails, Elastic, (_, _) =>
         {
             preparations++;
             return ValueTask.FromResult<Func<int, long, IRelationQueryReader<string, OrderDetails?>>>((_, _) => alternate);
-        });
+        }, selection: FlagChoice());
         var demand = Details(model);
         var prepared = selected.PrepareQueries([demand]);
-        var explanation = prepared.DescribeRead(demand).FeatureSelection!;
+        var explanation = Assert.IsType<ServiceQueryFeatureSelection>(prepared.DescribeRead(demand));
         Assert.Equal("details", explanation.Flag);
         Assert.Equal("Test", explanation.Disabled.Backend);
         Assert.Equal(Elastic, explanation.Enabled);
@@ -153,6 +153,7 @@ public sealed class ServiceReadSelectionTests
         Assert.Equal(2, live.Calls);
         Assert.Equal(1, alternate.Calls);
         Assert.Equal(3, evaluator.Calls);
+        Assert.Equal(1, evaluator.Admissions);
         Assert.Equal(1, preparations);
         Assert.Equal(1, source.Binds);
         Assert.Equal(1, source.NativeQueries);
@@ -216,7 +217,7 @@ public sealed class ServiceReadSelectionTests
     {
         var model = Model();
         var source = new Source(model);
-        var selected = source.SelectQueryByFeatureFlag(model.Queries.OrderDetails, "details", Elastic, (_, _) => throw new ServingFailure());
+        var selected = source.SelectQuery(model.Queries.OrderDetails, Elastic, (_, _) => throw new ServingFailure(), selection: FlagChoice());
         using var services = new ServiceCollection().BuildServiceProvider();
         await Assert.ThrowsAsync<InvalidOperationException>(() => selected.PrepareQueries([Details(model)]).BindAsync(services).AsTask());
         Assert.Equal(0, source.Binds);
@@ -227,7 +228,7 @@ public sealed class ServiceReadSelectionTests
     {
         var model = TestModels.Fulfillment();
         var source = new Source(model);
-        var selected = source.SelectQueryByFeatureFlag(model.Queries.OrderDetails, "details", Elastic, (_, _) => throw new ServingFailure());
+        var selected = source.SelectQuery(model.Queries.OrderDetails, Elastic, (_, _) => throw new ServingFailure(), selection: FlagChoice());
         Assert.Throws<ServiceBindingValidationException>(() => selected.PrepareQueries([Details(model)]));
         Assert.Equal(0, source.Binds);
     }
@@ -243,21 +244,82 @@ public sealed class ServiceReadSelectionTests
         Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
     }
 
+    [Fact]
+    public async Task Missing_configured_flag_fails_before_targeting_or_either_native_preparation()
+    {
+        var model = Model();
+        var source = new Source(model);
+        var flags = new Flags { Missing = true };
+        var selection = source.SelectQuery(model.Queries.OrderDetails, Elastic, (_, _) => throw new ServingFailure(),
+            selection: ServiceReadSelection<string>.ByFeatureFlag<string>("missing", _ => throw new ServingFailure()));
+        using var services = new ServiceCollection().AddSingleton<IFeatureFlagEvaluator<string>>(flags).BuildServiceProvider();
+        var error = await Assert.ThrowsAsync<FeatureFlagNotFoundException>(() => selection.PrepareQueries([Details(model)]).BindAsync(services).AsTask());
+        Assert.Equal("missing", error.Flag);
+        Assert.Equal(0, source.Binds);
+        Assert.Equal(0, flags.Calls);
+    }
+
+    [Fact]
+    public async Task Targeting_contract_is_independent_of_query_input_and_isolated_between_concurrent_tenants()
+    {
+        var model = Model();
+        var live = new CountingReader(model.Queries.OrderDetails);
+        var alternate = new CountingReader(model.Queries.OrderDetails);
+        var source = new Source(model) { SelectedReader = live };
+        var accessor = new TenantAccessor();
+        var preparations = 0;
+        var selection = source.SelectQuery(model.Queries.OrderDetails, Elastic,
+            (_, _) => ValueTask.FromResult<Func<int, long, IRelationQueryReader<string, OrderDetails?>>>((_, _) => alternate),
+            selection: ServiceReadSelection<string>.ByFeatureFlag<Tenant>("details", services =>
+            {
+                preparations++;
+                var context = services.GetRequiredService<TenantAccessor>();
+                return _ => context.Current.Value ?? throw new InvalidOperationException("No tenant.");
+            }));
+        using var services = new ServiceCollection().AddSingleton(accessor).AddSingleton<IFeatureFlagEvaluator<Tenant>>(new TenantFlags()).BuildServiceProvider();
+        var demand = Details(model);
+        var persistence = await selection.PrepareQueries([demand]).BindAsync(services);
+        var reader = persistence.Query(model.Queries.OrderDetails, demand.MaximumRows, demand.MaximumBytes, demand.Consistency);
+        await Task.WhenAll(Enumerable.Range(0, 100).Select(i => Task.Run(async () =>
+        {
+            accessor.Current.Value = new Tenant(i % 2 == 0);
+            await reader.ReadAsync("identical-order-id");
+        })));
+        Assert.Equal(50, live.Calls);
+        Assert.Equal(50, alternate.Calls);
+        Assert.Equal(1, preparations);
+        Assert.Equal(1, source.Binds);
+    }
+
+    sealed record Tenant(bool Enabled);
+    sealed class TenantAccessor { public AsyncLocal<Tenant?> Current { get; } = new(); }
+    sealed class TenantFlags : IFeatureFlagEvaluator<Tenant>
+    {
+        public ValueTask RequireFlagAsync(string flag, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+        public ValueTask<bool> IsEnabledAsync(string flag, Tenant context, CancellationToken cancellationToken = default) => ValueTask.FromResult(context.Enabled);
+    }
+
     static async Task<IRelationQueryReader<string, OrderDetails?>> BindFlag(FulfillmentApplication model,
         CountingReader live, CountingReader alternate, Flags flags)
     {
         var source = new Source(model) { SelectedReader = live };
-        var selection = source.SelectQueryByFeatureFlag(model.Queries.OrderDetails, "details", Elastic,
-            (_, _) => ValueTask.FromResult<Func<int, long, IRelationQueryReader<string, OrderDetails?>>>((_, _) => alternate));
+        var selection = source.SelectQuery(model.Queries.OrderDetails, Elastic,
+            (_, _) => ValueTask.FromResult<Func<int, long, IRelationQueryReader<string, OrderDetails?>>>((_, _) => alternate), selection: FlagChoice());
         using var services = new ServiceCollection().AddSingleton<IFeatureFlagEvaluator<string>>(flags).BuildServiceProvider();
         var demand = Details(model);
         var persistence = await selection.PrepareQueries([demand]).BindAsync(services);
         return persistence.Query(model.Queries.OrderDetails, demand.MaximumRows, demand.MaximumBytes, demand.Consistency);
     }
 
+    static ServiceReadSelection<string> FlagChoice() => ServiceReadSelection<string>.ByFeatureFlag<string>("details", _ => input => input);
+
     sealed class Flags : IFeatureFlagEvaluator<string>
     {
         public bool Enabled;
+        public int Admissions;
+        public bool Missing;
+        public ValueTask RequireFlagAsync(string flag, CancellationToken cancellationToken = default)
+        { Admissions++; if (Missing) throw new FeatureFlagNotFoundException(flag); return ValueTask.CompletedTask; }
         public int Calls;
         public Exception? Error;
         public Task<bool>? Pending;
@@ -276,7 +338,7 @@ public sealed class ServiceReadSelectionTests
         public int Calls;
         public string? LastInput;
         public Task<OrderDetails?> ReadAsync(string input, CancellationToken cancellationToken = default)
-        { Calls++; LastInput = input; return Result; }
+        { Interlocked.Increment(ref Calls); LastInput = input; return Result; }
     }
 
     sealed class ServingFailure : Exception;
@@ -288,8 +350,8 @@ public sealed class ServiceReadSelectionTests
     }
     sealed class Source(FulfillmentApplication model) : IServiceStorageComposition, IServicePersistence
     {
-        public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query) =>
-            new("Test", "test-resource", Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
+        public ServiceQueryReadSelection DescribeRead(ServiceQuerySelection query) =>
+            new ServiceQueryReadBinding("Test", "test-resource", Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
 
         public object? SelectedReader { get; init; }
         public int Binds { get; private set; }

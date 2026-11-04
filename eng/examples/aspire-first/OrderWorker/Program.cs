@@ -1,6 +1,5 @@
-using Cohesive.Configuration;
+using Cohesive.Identity;
 using Cohesive.Adapters.FeatureManagement;
-using Microsoft.FeatureManagement;
 using Cohesive.Relations.Execution;
 using Cohesive.Execution;
 using Cohesive.Adapters.Postgres;
@@ -52,15 +51,11 @@ var scheduler = builder.Configuration.GetConnectionString(FulfillmentExecutionPo
 builder.Services.AddCohesiveDurableTaskServices(
     configureClient: client => client.UseDurableTaskScheduler(scheduler),
     configureWorker: worker => worker.UseDurableTaskScheduler(scheduler));
-if (reads.Source == RelationQueryReadSource.FeatureFlag)
-{
-    builder.Services.AddFeatureManagement();
-    builder.Services.AddSingleton<IFeatureFlagEvaluator<string>, FeatureManagementEvaluator<string>>();
-}
+builder.Services.AddCohesiveFeatureManagement<IdentityContext>();
 builder.Services.AddCohesiveServices(model);
 
 await using var app = builder.Build();
-app.Logger.LogInformation("OrderDetails read source: {Source}. FeatureFlag mode evaluates its decision per read.", reads.Source);
+app.Logger.LogInformation("OrderDetails read source: {Source}. An optional feature flag is evaluated per read.", reads.Source);
 app.UseExceptionHandler();
 app.UseRequestOperationContext();
 app.UseAuthorization();

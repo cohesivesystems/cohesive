@@ -81,7 +81,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             .WaitFor(scheduler);
         worker.WithEnvironment("OrderReads__Source", reads.Source.ToString())
             .WithEnvironment("OrderReads__AcceptEventualConsistency", reads.AcceptEventualConsistency.ToString());
-        if (reads.Source == RelationQueryReadSource.FeatureFlag)
+        if (reads.FeatureFlag is not null)
             worker.WithEnvironment("OrderReads__FeatureFlag", reads.FeatureFlag);
         if (reads.UsesMaterializedReads)
         {

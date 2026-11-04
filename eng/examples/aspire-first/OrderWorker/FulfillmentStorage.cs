@@ -1,3 +1,6 @@
+using Cohesive.Identity;
+using Cohesive.Prelude;
+using Microsoft.Extensions.DependencyInjection;
 using AspireFirst.Materialization;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Relations.Execution;
@@ -45,20 +48,18 @@ public sealed class FulfillmentStorage : StorageModel
                 storage.Entity(domain.Inventory, mappings.Inventory);
             }));
         Native = new PostgresStorageComposition(Bindings);
-        Storage.Compose(() =>
-        {
-            if (reads.Source == RelationQueryReadSource.Live) return Native;
-            var materializations = new FulfillmentMaterializations(queries);
-            var materializationStorage = new FulfillmentMaterializationStorage(this, materializations);
-            var source = materializationStorage.OrderDetails.ForReads(configurationSection: "Shadow");
-            if (reads.Source == RelationQueryReadSource.FeatureFlag)
-                return Native.SelectMaterializedQueryByFeatureFlag(queries.OrderDetails, queries.OrderDetailsRelation,
-                    source, ShadowElastic.Reads, comparisonSection: "OrderReads", flag: reads.FeatureFlag!);
-            return Native.SelectMaterializedQuery(queries.OrderDetails, queries.OrderDetailsRelation,
-                source: source,
-                target: ShadowElastic.Reads,
-                comparisonSection: "OrderReads");
-        });
+        Storage.Compose(() => Native.SelectMaterializedQuery(queries.OrderDetails, queries.OrderDetailsRelation,
+            source: () => new FulfillmentMaterializationStorage(this, new FulfillmentMaterializations(queries))
+                .OrderDetails.ForReads(configurationSection: "Shadow"),
+            target: ShadowElastic.Reads,
+            comparisonSection: "OrderReads",
+            selection: ServiceReadSelection<string>.FromPolicy<IdentityContext>(reads, services =>
+            {
+                var identity = services.GetRequiredService<IOperationContextAccessor>();
+                return _ => identity.Current?.GetIdentityContextOrDefault()
+                    ?? throw new InvalidOperationException("Read targeting requires the current authorized identity.");
+            })));
+
     }
 
     /// <summary>Canonical source placement and live rollback interpretation, also used for infrastructure evidence.</summary>
