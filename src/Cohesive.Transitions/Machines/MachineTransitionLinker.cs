@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Machines;
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -27,23 +28,39 @@ public static class MachineTransitionLinker
         var mapped = machine.States.Select(s => values[s]).ToArray();
         if (mapped.Select(v => v.Value).Distinct().Count() != mapped.Length)
             throw new ArgumentException("State discriminator values must be distinct.", nameof(values));
-        var reference = machine.Document.Reference;
         var field = Expr.Field(TransitionBindingIds.Observation, path);
-        return new([.. machine.Edges.Select(edge => new TransitionMachineEdgeLink(reference, new(edge.Id),
-            SourceAdmission(machine, edge, Expr.Eq(field, Expr.Const(values[edge.From].Value!.Value))),
-            Expr.Eq(field, Expr.Const(values[edge.To].Value!.Value)),
-            [new(path, values[edge.To])]))]);
+        return Link(machine,
+            state => Expr.Eq(field, Expr.Const(values[state].Value!.Value)),
+            edge => [new(path, values[edge.To])]);
     }
 
-    // Both binding projections preserve the same guard and unique-selection obligations.
-    internal static Expr SourceAdmission(MachineDefinition machine, MachineEdge edge, Expr configuration)
+    // Group and lower guards once. Every linked edge shares its group's ambiguity evidence.
+    internal static TransitionMachineLinkCatalog Link(MachineDefinition machine,
+        Func<string, Expr> configuration,
+        Func<MachineEdge, ImmutableArray<TransitionMachineConfigurationAssignment>> assignments)
     {
-        var source = configuration;
-        if (edge.Guard is { } guard) source = Expr.And(source, Rebind(guard.Predicate, guard));
-        foreach (var other in machine.Edges.Where(candidate => candidate.Id != edge.Id
-                     && candidate.From == edge.From && candidate.Action == edge.Action))
-            source = Expr.And(source, other.Guard is null ? Expr.Const(false) : Expr.Not(Rebind(other.Guard.Predicate, other.Guard)));
-        return source;
+        var links = ImmutableArray.CreateBuilder<TransitionMachineEdgeLink>(machine.Edges.Length);
+        foreach (var group in machine.Edges.GroupBy(edge => (edge.From, edge.Action)))
+        {
+            var edges = group.ToArray();
+            var guards = edges.Select(edge => edge.Guard is { } guard
+                ? Rebind(guard.Predicate, guard) : Expr.Const(true)).ToArray();
+            var sourceState = configuration(group.Key.From);
+            // Balanced counting keeps expression depth logarithmic in the sibling count.
+            Expr Count(int start, int length) => length == 1
+                ? Expr.If(guards[start], Expr.Const(1), Expr.Const(0))
+                : Expr.Add(Count(start, length / 2), Count(start + length / 2, length - length / 2));
+            var ambiguity = edges.Length > 1
+                ? Expr.And(sourceState, Expr.Gt(Count(0, edges.Length), Expr.Const(1))) : null;
+            for (var index = 0; index < edges.Length; index++)
+            {
+                var edge = edges[index];
+                var source = edge.Guard is null ? sourceState : Expr.And(sourceState, guards[index]);
+                links.Add(new(machine.Document.Reference, new(edge.Id), source,
+                    configuration(edge.To), assignments(edge), ambiguity));
+            }
+        }
+        return new(links.MoveToImmutable());
     }
 
     internal static Expr Rebind(Expr expression, MachineGuard guard)

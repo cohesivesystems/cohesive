@@ -24,7 +24,11 @@ public static class MachineGuardCompiler
         var input = author.Source<TInput>("machine/input").Binding;
         var lowerer = new RelationQueryExpressionLowerer(author.Clr.ResolveMemberPath);
         var lowered = lowerer.LowerValue(predicate, [facts, input], "machine/guard").RequireValue();
-        return new(lowered.Value, facts.Id, input.Id, new(author.Clr.GetTypeRef(typeof(TFacts))), new(author.Clr.GetTypeRef(typeof(TInput))));
+        // Guards are standalone portable contracts, so resolve CLR enums and nested values using
+        // the same mapper as Transition authoring rather than retaining graph-local named references.
+        var mapper = new Cohesive.Model.Authoring.DefaultClrTypeRefMapper();
+        return new(lowered.Value, facts.Id, input.Id,
+            new(mapper.Map(typeof(TFacts), nullability: null)), new(mapper.Map(typeof(TInput), nullability: null)));
     }
 
 }

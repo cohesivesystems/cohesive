@@ -785,6 +785,19 @@ public static class TransitionStaticCompiler
             }
 
             usedMachineEdges[new(link.Machine, link.Edge)] = link;
+            if (link.AmbiguousConfiguration is { } ambiguity)
+            {
+                var analysis = AnalyzeSite(movement.Id, TransitionExpressionSiteKind.MachineAmbiguousConfiguration,
+                    ambiguity, scope, ExprExpectation.Boolean, $"{location}/linked/ambiguousConfiguration", input,
+                    TransitionObservationInfluence.Admission | TransitionObservationInfluence.Branch,
+                    conditionAtomScope: $"machine-ambiguous:{movement.Id.Value}");
+                var ambiguous = TryGetBoolean(analysis, ambiguity, out var constant)
+                    ? constant ? conditions.True : conditions.False
+                    : BooleanExpressionCondition(ambiguity, $"machine-ambiguous:{movement.Id.Value}");
+                AddFact(ConditionalFact.Outcome(TransitionDecisionKind.InvalidDefinition, conditions.And(input, ambiguous),
+                    Origin(movement.Id, $"{location}/linked/ambiguousConfiguration", null, TransitionObservationInfluence.Outcome)));
+                input = conditions.And(input, conditions.Not(ambiguous));
+            }
             var source = AnalyzeSite(
                 movement.Id,
                 TransitionExpressionSiteKind.MachineSourceConfiguration,
@@ -2459,6 +2472,7 @@ public static class TransitionStaticCompiler
             TransitionExpressionSiteKind.InvariantPredicate => "invariant",
             TransitionExpressionSiteKind.ComputedField => "computed",
             TransitionExpressionSiteKind.MachineSourceConfiguration => "machineSource",
+            TransitionExpressionSiteKind.MachineAmbiguousConfiguration => "machineAmbiguous",
             TransitionExpressionSiteKind.MachineRejection => "machineRejection",
             TransitionExpressionSiteKind.MachineTargetConfiguration => "machineTarget",
             TransitionExpressionSiteKind.SubjectInitializer => "subjectInitializer",

@@ -31,6 +31,9 @@ public static class TransitionExecutionDiagnosticCodes
     /// <summary>An authored NoChange path changed candidate aggregate state.</summary>
     public const string NoChangeModifiedState = "transitions.execution.noChange.modifiedState";
 
+    /// <summary>Multiple sibling edges are enabled for the requested Machine action.</summary>
+    public const string MachineAdmissionAmbiguous = "transitions.execution.machine.admissionAmbiguous";
+
     /// <summary>A linked Machine edge failed to establish its target configuration.</summary>
     public const string MachineTargetViolated = "transitions.execution.machine.targetViolated";
 
@@ -726,6 +729,12 @@ public static class TransitionReferenceInterpreter
                 ?? throw Invalid(
                     TransitionExecutionDiagnosticCodes.MachineLinkUnavailable,
                     $"Compiled Machine edge '{movement.Edge.Value}' is unavailable.",
+                    movement.Id);
+
+            if (link.AmbiguousConfiguration is { } ambiguity && EvaluateBoolean(
+                    ambiguity, movement.Id, candidateState: false, operation: "Machine admission ambiguity", scope))
+                throw Invalid(TransitionExecutionDiagnosticCodes.MachineAdmissionAmbiguous,
+                    $"Machine '{movement.Machine.DefinitionId.Value}' has multiple enabled edges for the action of '{movement.Edge.Value}'.",
                     movement.Id);
 
             if (!EvaluateBoolean(

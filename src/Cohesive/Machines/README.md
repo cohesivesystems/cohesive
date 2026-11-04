@@ -66,6 +66,7 @@ The machine owns the submission precondition; the entity transition requests the
 records who submitted the order. This complete declaration uses the conventions for transition metadata:
 
 ```csharp
+using System.Text.Json.Serialization;
 using Cohesive.Machines;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.Compilation;
@@ -73,7 +74,9 @@ using Cohesive.Transitions.IR;
 using Cohesive.Transitions.Machines;
 
 // Entity and command types (declared outside the setup method):
-public sealed record Order(string Status, int ItemCount, string SubmittedBy);
+[JsonConverter(typeof(JsonStringEnumConverter<OrderStatus>))]
+public enum OrderStatus { Draft, Submitted }
+public sealed record Order(OrderStatus Status, int ItemCount, string SubmittedBy);
 public sealed record SubmitOrder(string Actor, bool AcceptTerms);
 
 // Inside application setup:
@@ -85,10 +88,10 @@ var submit = source.Edge("submit").From(draft).To(submitted)
         order.ItemCount > 0 && command.AcceptTerms);
 var lifecycle = source.Build();
 
-var links = new MachineDiscriminatorBinding<Order, string>(
+var links = new MachineDiscriminatorBinding<Order, OrderStatus>(
         lifecycle, order => order.Status)
-    .Map(draft, "draft")
-    .Map(submitted, "submitted")
+    .Map(draft, OrderStatus.Draft)
+    .Map(submitted, OrderStatus.Submitted)
     .Build();
 
 var entity = ObjectEntityDefinition.For<Order>(new("order"));
@@ -104,15 +107,19 @@ var compilation = TransitionStaticCompiler.Compile(
     transition.Document, machineLinks: links);
 ```
 
-A draft order with items and accepted terms produces a decision containing the `Status = "submitted"`
+A draft order with items and accepted terms produces a decision containing the `Status = OrderStatus.Submitted`
 assignment and the submitter update. An empty order, declined terms, or an order outside `draft` rejects
 admission without commit artifacts. There is no duplicate `Requires` for the machine guard and no
 manual `Set` for the discriminator. The host commits the resulting decision through its normal boundary.
 The executable example is covered in `Cohesive.Tests/Machines/GuardedDiscriminatorTests.cs`.
 
 Both discriminator and predicate bindings rebind guard facts to entity observation and guard input to
-the transition command. Admission requires the selected guard and rejects any other enabled edge for
-the same source state/action; an explicit movement does not bypass ambiguous machine admission.
+the transition command. Admission requires the selected guard. Two or more enabled sibling edges produce `InvalidDefinition`
+with diagnostic `transitions.execution.machine.admissionAmbiguous`, even if the requested edge is disabled.
+An ordinary false guard produces `AdmissionRejected` with the movement's authored rejection outcome.
+Ambiguity produces no patches, emissions or movements. The static compiler retains ambiguity dependencies
+and its failure condition separately from ordinary rejection. Guards need not be statically provably disjoint;
+this runtime check detects overlap for the current observation and command.
 Guards constrain the source; final-target checks concern the resulting configuration.
 
 Supply `links` to `TransitionStaticCompiler.Compile(..., machineLinks: links)`. The existing
@@ -182,6 +189,8 @@ later extensions from the broader Notion research program, not implemented capab
 Reuse: shared expression lowering/analysis/evaluation, canonical execution documents, source maps,
 Transition compilation, patches, decisions and commit boundaries. Typed guard lowering lives in Relations, which depends on core; core does not depend on Relations.
 No third expression translator was introduced.
+Linking groups edges once by source state/action and shares balanced ambiguity expressions. See the
+[guarded Transition benchmark](../../../docs/performance/machine-admission/guarded-transitions.md) for linking and runtime costs.
 Guard and state-predicate rebinding share a deliberately bounded integration operation rather than a second evaluator.
 
 Verification lives in Cohesive.Tests/Machines and the existing Transition compiler/interpreter

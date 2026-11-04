@@ -32,7 +32,7 @@ public sealed class MachineDiscriminatorBinding<TEntity, TValue> where TEntity :
         var lowered = new RelationQueryExpressionLowerer(author.Clr.ResolveMemberPath)
             .LowerValue(selector, [source], "machine/discriminator").RequireValue().Value;
         path = lowered is FieldExpr field ? field.Path : throw new ArgumentException("Select one entity field.", nameof(selector));
-        contract = new(author.Clr.GetTypeRef(typeof(TValue)));
+        contract = new(new Cohesive.Model.Authoring.DefaultClrTypeRefMapper().Map(typeof(TValue), nullability: null));
     }
     /// <summary>Maps a state to its representation value.</summary>
     /// <param name="state">State identity.</param>

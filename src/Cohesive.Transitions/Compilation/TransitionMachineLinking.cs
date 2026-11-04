@@ -69,7 +69,7 @@ public sealed record TransitionMachineConfigurationAssignment
 /// </summary>
 /// <remarks>
 /// Transition IR persists only the exact Machine and edge references. This linked slice contributes source and
-/// target configuration predicates plus the edge-owned state assignments to static sparse analysis and reference
+/// target configuration predicates, optional ambiguity evidence, and edge-owned state assignments to static sparse analysis and reference
 /// interpretation. It contains no callback, resolver, service handle, or independently authored lifecycle graph.
 /// </remarks>
 public sealed record TransitionMachineEdgeLink
@@ -80,6 +80,7 @@ public sealed record TransitionMachineEdgeLink
     /// <param name="sourceConfiguration">Pure predicate recognizing legal source configurations.</param>
     /// <param name="targetConfiguration">Pure predicate recognizing the established target configuration.</param>
     /// <param name="assignments">Edge-owned assignments; empty for predicate-established configurations.</param>
+    /// <param name="ambiguousConfiguration">Optional predicate detecting multiple enabled edges for the source state/action. True invalidates admission.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="machine"/>, <paramref name="sourceConfiguration"/>, or
     /// <paramref name="targetConfiguration"/> is <see langword="null"/>.
@@ -94,7 +95,8 @@ public sealed record TransitionMachineEdgeLink
         ExecutionNodeId edge,
         Expr sourceConfiguration,
         Expr targetConfiguration,
-        ImmutableArray<TransitionMachineConfigurationAssignment> assignments)
+        ImmutableArray<TransitionMachineConfigurationAssignment> assignments,
+        Expr? ambiguousConfiguration = null)
     {
         Machine = Guard.RequireNotNull(machine);
         if (string.IsNullOrWhiteSpace(edge.Value))
@@ -129,6 +131,7 @@ public sealed record TransitionMachineEdgeLink
         SourceConfiguration = Guard.RequireNotNull(sourceConfiguration);
         TargetConfiguration = Guard.RequireNotNull(targetConfiguration);
         Assignments = normalized;
+        AmbiguousConfiguration = ambiguousConfiguration;
     }
 
     /// <summary>Exact authoritative Machine definition revision and fingerprint.</summary>
@@ -139,6 +142,9 @@ public sealed record TransitionMachineEdgeLink
 
     /// <summary>Pure predicate recognizing legal source configurations.</summary>
     public Expr SourceConfiguration { get; }
+
+    /// <summary>Optional source-state predicate detecting overlapping enabled sibling edges.</summary>
+    public Expr? AmbiguousConfiguration { get; }
 
     /// <summary>Pure predicate recognizing the established target configuration.</summary>
     public Expr TargetConfiguration { get; }

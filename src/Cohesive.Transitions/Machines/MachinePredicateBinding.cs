@@ -53,10 +53,6 @@ public sealed class MachinePredicateBinding<TEntity, TInput> where TEntity : not
             foreach (var other in machine.States.Where(s => s != state)) predicate = Expr.And(predicate, Expr.Not(predicates[other]));
             return predicate;
         }
-        return new([.. machine.Edges.Select(edge =>
-        {
-            var source = MachineTransitionLinker.SourceAdmission(machine, edge, Exclusive(edge.From));
-            return new TransitionMachineEdgeLink(machine.Document.Reference, new(edge.Id), source, Exclusive(edge.To), []);
-        })]);
+        return MachineTransitionLinker.Link(machine, Exclusive, _ => []);
     }
 }
