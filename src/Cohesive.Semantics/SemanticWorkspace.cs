@@ -21,13 +21,14 @@ public sealed class SemanticWorkspace
     readonly string root;
     readonly string bundlePath;
     readonly ImmutableDictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, DocumentValidationResult>> validators;
+    readonly ImmutableDictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>> referenceReaders;
     readonly Dictionary<string, Snapshot> snapshots = new(StringComparer.Ordinal);
     readonly Queue<string> retention = new();
     readonly object gate = new();
     static readonly ImmutableArray<string> Limitations =
     [
         "Only producer-declared inputs and exported execution documents are covered; input completeness is not proven.",
-        "No target realization, cross-document linking, API/client propagation, runtime safety, or invariant proof is claimed.",
+        "No target realization, cross-document type/contract validation, transitive impact, API/client propagation, runtime safety, or invariant proof is claimed.",
         "Comparison reports document fingerprint changes, not compatibility or rename continuity. Edit owning source and re-export."
     ];
 
@@ -35,10 +36,16 @@ public sealed class SemanticWorkspace
     /// <param name="root">Repository root.</param>
     /// <param name="bundlePath">Relative path to a derived workspace bundle.</param>
     /// <param name="validators">Domain-owned validators keyed by their existing canonical kind; these supplement mandatory shared integrity validation.</param>
-    /// <exception cref="ArgumentException">The bundle path escapes the repository, traverses a symbolic link, or a validator has an uninitialized kind or null delegate.</exception>
+    /// <param name="referenceReaders">Domain-owned direct reference projections; absent kinds have explicitly incomplete coverage.</param>
+    /// <exception cref="ArgumentException">The bundle path escapes the repository, traverses a symbolic link, or a validator/reference reader has an uninitialized kind or null delegate.</exception>
     public SemanticWorkspace(string root, string bundlePath,
-        IReadOnlyDictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, DocumentValidationResult>>? validators = null)
+        IReadOnlyDictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, DocumentValidationResult>>? validators = null,
+        IReadOnlyDictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>>? referenceReaders = null)
     {
+        this.referenceReaders = referenceReaders?.ToImmutableDictionary()
+            ?? ImmutableDictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>>.Empty;
+        if (this.referenceReaders.Any(pair => string.IsNullOrWhiteSpace(pair.Key.Value) || pair.Value is null))
+            throw new ArgumentException("Reference readers require initialized kinds and non-null delegates.", nameof(referenceReaders));
         this.root = Path.GetFullPath(root);
         _ = SemanticWorkspaceExport.ResolvePath(this.root, bundlePath);
         this.bundlePath = bundlePath;
@@ -114,11 +121,55 @@ public sealed class SemanticWorkspace
                 JsonValueKind.Array => Enumerable.Range(0, selected.GetArrayLength()).Select(i => pointer + "/" + i),
                 _ => []
             };
+            var references = document.Metadata.SourceMap.ResolveReferences(pointer, document.Metadata.Provenance.Source.Reference);
+            var mappings = pointer is "" or "/definition"
+                ? document.Metadata.SourceMap.Entries.AsEnumerable()
+                : document.Metadata.SourceMap.Entries.Where(entry => references.Contains(entry.Reference));
+            if (document.Metadata.Provenance.Source.Location is not null
+                && (pointer is "" or "/definition" || references.Contains(document.Metadata.Provenance.Source.Reference)))
+                mappings = mappings.Prepend(document.Metadata.Provenance.Source);
             return new WorkspaceInspection(Subject(document), pointer,
                 fits ? selected : null,
                 Page(children, offset, limit),
-                Page(document.Metadata.SourceMap.ResolveReferences(pointer, document.Metadata.Provenance.Source.Reference), sourceOffset, sourceLimit));
+                Page(references, sourceOffset, sourceLimit), Page(mappings, sourceOffset, sourceLimit));
         });
+
+    /// <summary>Finds direct consumers by target identity, preserving exact authored revision evidence.</summary>
+    /// <param name="id">Target identity; it may be absent from this export.</param>
+    /// <param name="expectedSnapshot">Exact snapshot to inspect.</param>
+    /// <param name="offset">Zero-based consumer offset.</param>
+    /// <param name="limit">Page size from 1 through 100.</param>
+    /// <returns>Direct references: null Available means missing; unequal Available means stale. Coverage is explicit.</returns>
+    /// <exception cref="ArgumentException">The identity or snapshot is empty.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Pagination is invalid.</exception>
+    /// <exception cref="InvalidOperationException">The snapshot changed or shared integrity validation failed.</exception>
+    /// <exception cref="IOException">A bundle cannot be read.</exception>
+    /// <exception cref="UnauthorizedAccessException">Bundle access is denied.</exception>
+    /// <exception cref="JsonException">The bundle or a projected domain document is malformed.</exception>
+    /// <remarks>Reader exceptions propagate. Results do not establish transitive impact, type compatibility or runtime safety.</remarks>
+    public WorkspaceResult<WorkspaceReferences> References(string id, string expectedSnapshot, int offset = 0, int limit = 20)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        ValidatePage(offset, limit);
+        return Read(RequireSnapshot(expectedSnapshot), snapshot =>
+        {
+            if (snapshot.Fingerprint is null) throw new InvalidOperationException("Reference inspection requires valid document integrity.");
+            var available = snapshot.Documents.FirstOrDefault(document => document.Metadata.DefinitionId.Value == id)?.Reference;
+            var references = new List<WorkspaceReference>();
+            var incomplete = ImmutableArray.CreateBuilder<string>();
+            foreach (var document in snapshot.Documents)
+            {
+                var hasReader = referenceReaders.TryGetValue(document.Kind, out var read);
+                if (!hasReader || !document.Extensions.IsDefaultOrEmpty) incomplete.Add(document.Metadata.DefinitionId.Value);
+                if (!hasReader) continue;
+                foreach (var target in read!(document).Distinct())
+                    if (target.DefinitionId.Value == id) references.Add(new(document.Reference, target, available));
+            }
+            return new WorkspaceReferences(Page(references.OrderBy(reference => reference.Source.DefinitionId.Value, StringComparer.Ordinal)
+                .ThenBy(reference => reference.Expected.RevisionId.Value, StringComparer.Ordinal)
+                .ThenBy(reference => reference.Expected.Fingerprint.Value, StringComparer.Ordinal), offset, limit), incomplete.ToImmutable());
+        });
+    }
 
     /// <summary>Runs registered domain validators and reports their precise coverage.</summary>
     /// <param name="expectedSnapshot">Expected exported revision.</param>

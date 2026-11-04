@@ -42,6 +42,7 @@ public sealed record ExecutionSourceProvenance
     /// Optional semantic path locating the derived construct in canonical execution IR.
     /// </param>
     /// <param name="description">Optional human-readable source description.</param>
+    /// <param name="location">Optional compiler-supplied portable line span.</param>
     /// <exception cref="ArgumentNullException"><paramref name="reference"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// <paramref name="reference"/> is empty or consists only of white-space characters, or
@@ -51,7 +52,8 @@ public sealed record ExecutionSourceProvenance
     public ExecutionSourceProvenance(
         string reference,
         ExecutionSemanticPath? semanticPath = null,
-        string? description = null)
+        string? description = null,
+        ExecutionSourceLocation? location = null)
     {
         if (semanticPath is { Segments.IsDefaultOrEmpty: true })
         {
@@ -63,6 +65,7 @@ public sealed record ExecutionSourceProvenance
         Reference = Guard.RequireNotNullOrWhiteSpace(reference);
         SemanticPath = semanticPath;
         Description = description.TrimmedEmptyOrWhiteSpaceAs();
+        Location = location;
     }
 
     /// <summary>Producer-defined stable reference to the source document or construct.</summary>
@@ -75,6 +78,10 @@ public sealed record ExecutionSourceProvenance
 
     /// <summary>Optional human-readable source description.</summary>
     public string? Description { get; }
+
+    /// <summary>Portable source line span, or null when the producer cannot supply one.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ExecutionSourceLocation? Location { get; }
 }
 
 /// <summary>

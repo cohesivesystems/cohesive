@@ -39,7 +39,7 @@ internal static class OrdersWorkflow
                 Arguments = [typeof(OrdersWorkspace).Assembly.Location, "serve", scratch]
             }), cancellationToken: token);
             var tools = await client.ListToolsAsync(cancellationToken: token);
-            Require(tools.Select(t => t.Name).Order().SequenceEqual(new[] { "check", "compare", "inspect", "learn", "resolve", "workspace" }), "Tool discovery differed.");
+            Require(tools.Select(t => t.Name).Order().SequenceEqual(new[] { "check", "compare", "inspect", "learn", "references", "resolve", "workspace" }), "Tool discovery differed.");
             var guide = await Call("learn");
             Require(guide.GetProperty("content").GetString()!.Contains(OrdersWorkspace.Project, StringComparison.Ordinal), "Project guidance is missing.");
             var before = await Workspace();
@@ -65,6 +65,19 @@ internal static class OrdersWorkflow
             });
             Require(guard.GetProperty("result").GetProperty("sourceReferences").GetProperty("items")[0].GetString()!
                 .StartsWith("fulfillment/reserve#.ctor:L", StringComparison.Ordinal), "Guard-specific attribution is absent.");
+            var consumers = await Call("references", new() { ["id"] = "fulfillment/reserve", ["expectedSnapshot"] = before.SnapshotId });
+            var consumer = consumers.GetProperty("result").GetProperty("references").GetProperty("items").EnumerateArray().Single();
+            Require(consumer.GetProperty("isExactMatch").GetBoolean(), "Consumer did not capture the current exact transition.");
+            var consumerId = consumer.GetProperty("source").GetProperty("definitionId").GetString()!;
+            Require(consumerId == "fulfillment/submit", "The process consumer was not discovered.");
+            var consumerInspection = await Call("inspect", new() { ["id"] = consumerId, ["expectedSnapshot"] = before.SnapshotId });
+            foreach (var view in new[] { inspection, consumerInspection })
+            {
+                var mappings = view.GetProperty("result").GetProperty("sourceMappings").GetProperty("items");
+                Require(mappings.EnumerateArray().Any(mapping => mapping.TryGetProperty("location", out var location)
+                    && location.GetProperty("path").GetString() == OrdersWorkspace.DomainSource
+                    && location.GetProperty("startLine").GetInt32() > 0), "Owning source could not be located through structured mappings.");
+            }
             await Check(before.SnapshotId);
 
             var path = Path.Combine(scratch, OrdersWorkspace.DomainSource);
@@ -100,7 +113,7 @@ internal static class OrdersWorkflow
             {
                 ToolNames = tools.Select(t => t.Name).Order(), Before = before.SnapshotId, After = after.SnapshotId,
                 ChangedInputsBeforeExport = stale.ChangedInputs, Inspection = inspection, SourceMap = sourceMap, Guard = guard, Checks = checks,
-                Comparison = comparison, CommentOnlyChanges = 0,
+                Comparison = comparison, ConsumersBeforeEdit = consumers, ConsumerInspection = consumerInspection, CommentOnlyChanges = 0,
                 Scope = "Offline source/lowering/MCP exercise; no runtime, storage, API/client or impact-analysis proof. Source-map line numbers describe the isolated copy."
             };
             var report = Path.Combine(root, "tmp", "orders-development-exercise.json");

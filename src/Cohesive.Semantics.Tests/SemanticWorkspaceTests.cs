@@ -21,6 +21,84 @@ public sealed class SemanticWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public void UnmappedCompilerLocationsDoNotAllocatePerConstruct()
+    {
+        _ = ExecutionSourceLocation.FromCompiler("/build/source.cs", 2);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            _ = ExecutionSourceLocation.FromCompiler("/build/source.cs", 2);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public void ReferencesRetainMissingAndStaleTargetsAndExplicitCoverage()
+    {
+        var target = Document("target", "before");
+        var consumer = Document("consumer", "uses-target");
+        var workspace = new SemanticWorkspace(root, Bundle, referenceReaders:
+            new Dictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>>
+            { [consumer.Kind] = document => document.Metadata.DefinitionId == consumer.Metadata.DefinitionId ? [target.Reference] : [] });
+        Export([consumer, target]);
+        var current = workspace.Describe();
+        var exact = workspace.References("target", current.SnapshotId);
+        Assert.True(Assert.Single(exact.Result.References.Items).IsExactMatch);
+        Assert.Empty(exact.Result.IncompleteDefinitions);
+        Export([consumer, ExecutionDefinitionDocument.Create(target.Kind, target.Metadata.DefinitionId, new("new-revision"),
+            new { Value = "before" }, Provenance())]);
+        var stale = Assert.Single(workspace.References("target", workspace.Describe().SnapshotId).Result.References.Items);
+        Assert.False(stale.IsExactMatch);
+        Assert.NotNull(stale.Available);
+        Assert.Equal(target.Reference, stale.Expected);
+        Assert.Equal(target.Reference.Fingerprint, stale.Available!.Fingerprint);
+        Export([consumer, ExecutionDefinitionDocument.Create(target.Kind, target.Metadata.DefinitionId, target.Metadata.RevisionId,
+            new { Value = "after" }, Provenance())]);
+        var changedContent = Assert.Single(workspace.References("target", workspace.Describe().SnapshotId).Result.References.Items);
+        Assert.Equal(target.Reference.RevisionId, changedContent.Available!.RevisionId);
+        Assert.False(changedContent.IsExactMatch);
+        Export([consumer]);
+        var missing = Assert.Single(workspace.References("target", workspace.Describe().SnapshotId).Result.References.Items);
+        Assert.Null(missing.Available);
+        Assert.False(missing.IsExactMatch);
+        var unknown = new SemanticWorkspace(root, Bundle);
+        Assert.Equal("consumer", Assert.Single(unknown.References("target", unknown.Describe().SnapshotId).Result.IncompleteDefinitions));
+        Assert.Throws<InvalidOperationException>(() => workspace.References("target", current.SnapshotId));
+    }
+
+    [Theory]
+    [InlineData("/etc/passwd")]
+    [InlineData("../source.cs")]
+    [InlineData("a/../source.cs")]
+    [InlineData("C:/source.cs")]
+    [InlineData("a//source.cs")]
+    public void SourceLocationsRequirePortableNormalizedPaths(string path) =>
+        Assert.Throws<ArgumentException>(() => new ExecutionSourceLocation(path, 1, 1));
+
+    [Fact]
+    public void StructuredLocationsRoundTripAndDoNotAlterSemanticFingerprints()
+    {
+        Assert.Null(ExecutionSourceLocation.FromCompiler("/private/build/source.cs", 5));
+        var location = ExecutionSourceLocation.FromCompiler("/_/source.cs", 5)!;
+        Assert.Equal("source.cs", location.Path);
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ExecutionSourceLocation("source.cs", 5, 4));
+        var original = Document("mapped", "body");
+        var mapped = ExecutionDefinitionDocument.Create(original.Kind, original.Metadata.DefinitionId, original.Metadata.RevisionId,
+            new { Value = "body" }, Provenance(), sourceMap: new([
+                new("source#body", new(["value"]), location: location),
+                new("source#body", new(["value"]), location: new("source.cs", 2, 3))]));
+        Assert.Equal(original.Metadata.Fingerprint, mapped.Metadata.Fingerprint);
+        var wire = ExecutionDefinitionJsonSerializer.Serialize(mapped);
+        var validation = ExecutionDefinitionJsonSerializer.TryDeserialize(wire, out var restored);
+        Assert.True(validation.IsValid);
+        Assert.Equal(mapped.Metadata.SourceMap, restored!.Metadata.SourceMap);
+        Assert.Equal(2, restored.Metadata.SourceMap.Entries[0].Location!.StartLine);
+        Export([mapped]);
+        var workspace = Open();
+        var view = workspace.Inspect("mapped", workspace.Describe().SnapshotId);
+        Assert.Equal(2, view.Result.SourceMappings.Total);
+        Assert.All(view.Result.SourceMappings.Items, entry => Assert.Equal("source.cs", entry.Location!.Path));
+    }
+
+    [Fact]
     public void ChildAndSourcePagesAreIndependent()
     {
         Export();
@@ -180,6 +258,7 @@ public sealed class SemanticWorkspaceTests : IDisposable
         Assert.Contains(workspace.Check(invalid.SnapshotId).Result.Items[0].Diagnostics.Items,
             d => d.Code == ExecutionDefinitionDiagnosticCodes.FingerprintMismatch);
         Assert.Throws<InvalidOperationException>(() => workspace.Compare(baseline.SnapshotId, invalid.SnapshotId));
+        Assert.Throws<InvalidOperationException>(() => workspace.References("orders/cancel", invalid.SnapshotId));
     }
 
     [Fact]
@@ -392,7 +471,7 @@ public sealed class SemanticWorkspaceTests : IDisposable
         var tools = new DevelopmentTools(workspace, guide);
         // No export exists yet; the static guide is still available.
         Assert.Same(guide, tools.Learn());
-        Assert.Equal(6, DevelopmentMcpServer.CreateOptions(workspace, guide).ToolCollection!.Count);
+        Assert.Equal(7, DevelopmentMcpServer.CreateOptions(workspace, guide).ToolCollection!.Count);
         Export();
         var result = tools.Check(workspace.Describe().SnapshotId).Result.Items[0];
         Assert.False(result.GetProperty("isValid").GetBoolean());
@@ -413,16 +492,16 @@ public sealed class SemanticWorkspaceTests : IDisposable
                 Path.Combine(basePath, "Cohesive.Adapters.Mcp.Development.dll"), root, Bundle]
         }), cancellationToken: timeout.Token);
         var tools = await client.ListToolsAsync(cancellationToken: timeout.Token);
-        Assert.Equal(["check", "compare", "inspect", "learn", "resolve", "workspace"], tools.Select(t => t.Name).Order());
+        Assert.Equal(["check", "compare", "inspect", "learn", "references", "resolve", "workspace"], tools.Select(t => t.Name).Order());
         var discovery = await client.CallToolAsync("workspace", cancellationToken: timeout.Token);
         Assert.False(discovery.IsError ?? false);
         var snapshot = discovery.StructuredContent!.Value.GetProperty("snapshotId").GetString()!;
-        foreach (var tool in new[] { "resolve", "inspect", "check", "learn", "compare" })
+        foreach (var tool in new[] { "resolve", "inspect", "check", "learn", "compare", "references" })
         {
             var arguments = new Dictionary<string, object?>();
             if (tool != "learn") arguments["expectedSnapshot"] = snapshot;
             if (tool == "resolve") arguments["query"] = "cancel";
-            if (tool == "inspect") arguments["id"] = "orders/cancel";
+            if (tool is "inspect" or "references") arguments["id"] = "orders/cancel";
             if (tool == "compare") arguments["baselineSnapshot"] = snapshot;
             var result = await client.CallToolAsync(tool, arguments, cancellationToken: timeout.Token);
             Assert.False(result.IsError ?? false, JsonSerializer.Serialize(result.Content));

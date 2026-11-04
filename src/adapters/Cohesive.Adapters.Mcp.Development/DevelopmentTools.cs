@@ -21,7 +21,7 @@ internal sealed class DevelopmentTools(SemanticWorkspace workspace, DevelopmentG
         => Invoke(() => workspace.Resolve(query, expectedSnapshot, offset, limit));
 
     [McpServerTool(Name = "inspect", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Read canonical execution semantics and source mappings by exact definition identity. pointer is an RFC 6901 path in the complete document; empty selects the root. Large values return child pointers. Child offset/limit and sourceOffset/sourceLimit page independently. Edit owning source, never this derived JSON.")]
+    [Description("Read canonical execution semantics and sourceMappings with optional repository-relative line spans by exact definition identity. pointer is an RFC 6901 path in the complete document; empty selects the root. Large values return child pointers. Child offset/limit and sourceOffset/sourceLimit page independently. Edit owning source, never this derived JSON.")]
     public WorkspaceResult<WorkspaceInspection> Inspect(string id, string expectedSnapshot, string pointer = "", int offset = 0, int limit = 20, int sourceOffset = 0, int sourceLimit = 20)
         => Invoke(() => workspace.Inspect(id, expectedSnapshot, pointer, offset, limit, sourceOffset, sourceLimit));
 
@@ -49,6 +49,11 @@ internal sealed class DevelopmentTools(SemanticWorkspace workspace, DevelopmentG
     [McpServerTool(Name = "learn", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Read versioned authoring and inspection guidance supplied by this host. Static guidance requires no workspace snapshot or exported bundle; it does not claim project-version compatibility.")]
     public DevelopmentGuide Learn() => guide;
+
+    [McpServerTool(Name = "references", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Find direct consumers of a definition identity in the expected snapshot. Expected is the authored exact reference; Available null means missing, and IsExactMatch false with Available present means stale. Review IncompleteDefinitions; this is not transitive impact or compatibility analysis.")]
+    public WorkspaceResult<WorkspaceReferences> References(string id, string expectedSnapshot, int offset = 0, int limit = 20)
+        => Invoke(() => workspace.References(id, expectedSnapshot, offset, limit));
 
     static T Invoke<T>(Func<T> operation)
     {

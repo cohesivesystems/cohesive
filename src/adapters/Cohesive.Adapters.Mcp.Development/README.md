@@ -54,6 +54,11 @@ All tools are read-only and return structured results with output schemas. The a
 transition, process and hosted-query document validators. It does not run builds, deploy, authorize operations,
 or accept application changes. Normal source review remains the acceptance boundary.
 
+`references(id, expectedSnapshot)` projects built-in Process dependencies through the owning domain. It reports
+exact, missing and stale targets and explicit incomplete coverage. Transition documents have no built-in
+execution-definition calls; unknown kinds and extensions are not assumed reference-free. `inspect.sourceMappings`
+exposes optional compiler-owned portable line spans. See the Orders walkthrough for the combined navigation loop.
+
 `learn` returns an adapter-owned guide or the host's supplied `DevelopmentGuide`, without reading the workspace.
 The example remains an executable fixture, rather than a dependency of the server. Package-aware retrieval is future work.
 
@@ -90,5 +95,5 @@ dotnet test src/Cohesive.Semantics.Tests
 
 Tests exercise deterministic export, input freshness, failed refreshes, stale request rejection, ambiguity,
 fingerprint integrity, comparison, bounded retention, path containment, JSON pointers, and an official SDK client
-calling all six tools over a real stdio subprocess. The sample transition is authored through the fluent API,
+calling all seven tools over a real stdio subprocess. The sample transition is authored through the fluent API,
 not hand-constructed IR. This slice does not yet validate the Orders application's full API/client change scenario.

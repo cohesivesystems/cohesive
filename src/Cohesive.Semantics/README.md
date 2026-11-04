@@ -13,7 +13,7 @@ It does not introduce another entity, transition, process, relation, or diagnost
 
 The first export boundary covers execution documents. It does **not** claim to discover every construct in a
 repository. Shape graphs, standalone relations, APIs, generated clients, storage mappings, capability matching,
-cross-document linking, and runtime evidence are not yet indexed. Unknown execution kinds remain inspectable,
+cross-document type validation, and runtime evidence are not yet indexed. Unknown execution kinds remain inspectable,
 but `domainValidationAvailable` is false. A successful integrity check does not establish domain validity.
 Registered validators supplement mandatory shared integrity findings; they cannot suppress them. Identical findings
 are deduplicated and ordered through the existing diagnostic authority; separately attributed evidence is retained.
@@ -100,3 +100,23 @@ compatibility guarantee for any project.
 
 See [request cost measurements](../../docs/performance/development-mcp.md) for the warm-call probe,
 allocation evidence, freshness tradeoff and remaining scaling limits.
+
+## Direct consumers and portable source locations
+
+`References(id, expectedSnapshot)` returns direct consumers projected by registered domain readers. Each row
+retains `Source` and `Expected` exact references plus the exported `Available` candidate: null means missing,
+an unequal candidate means stale revision/fingerprint, and `IsExactMatch` means both match. Looking up an absent
+target is supported. Invalid document integrity prevents graph claims. `IncompleteDefinitions` lists unregistered
+kinds and extension-bearing documents whose references have not been fully indexed. This is neither transitive
+impact discovery nor type-compatibility validation. Custom hosts supply reference readers beside validators;
+the protocol-independent workspace does not scan arbitrary JSON for objects resembling references.
+
+`Inspect` also returns `SourceMappings`, independently paged with `sourceOffset`/`sourceLimit`. Root inspection
+lists all producer mappings; narrower pointers select mapped references. An optional `Location` holds a normalized
+repository-relative path and an inclusive one-based line span. The compiler virtual root `/_/` is explicitly
+mapped by producer projects, never inferred by the workspace. Missing locations remain absent. Current C# builders
+capture declaration lines, not complete expression ranges. Provenance, including locations, is outside semantic
+fingerprints; strict readers predating the optional location field must be upgraded for exports containing it.
+
+[Source-map cost measurements](../../docs/performance/source-locations.md) quantify the optional metadata's
+construction and serialization overhead; the existing full-content freshness policy is unchanged.

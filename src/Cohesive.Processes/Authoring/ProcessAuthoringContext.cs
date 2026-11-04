@@ -6,7 +6,7 @@ using CanonicalProcessDefinition = Cohesive.Processes.IR.ProcessDefinition;
 
 namespace Cohesive.Processes.Authoring;
 
-internal sealed record AuthoredProcessSource(string Reference, string Description);
+internal sealed record AuthoredProcessSource(string Reference, string Description, ExecutionSourceLocation? Location = null);
 
 internal sealed class ProcessAuthoringContext
 {
@@ -120,7 +120,7 @@ internal sealed class ProcessAuthoringContext
         var detail = file is null || sourceLine <= 0
             ? description
             : $"{description} ({file}:{sourceLine})";
-        return new(reference, detail);
+        return new(reference, detail, ExecutionSourceLocation.FromCompiler(sourceFile, sourceLine));
     }
 
     public void Register(object construct, AuthoredProcessSource source)
@@ -485,7 +485,7 @@ internal sealed class ProcessAuthoringContext
         List<ExecutionSourceProvenance> entries,
         AuthoredProcessSource source,
         ImmutableArray<string> path) =>
-        entries.Add(new(source.Reference, new(path), source.Description));
+        entries.Add(new(source.Reference, new(path), source.Description, source.Location));
 
     static string Index(int index) => index.ToString(System.Globalization.CultureInfo.InvariantCulture);
 }

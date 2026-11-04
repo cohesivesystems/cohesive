@@ -32,9 +32,13 @@ public static class DevelopmentMcpServer
             [TransitionDefinitionDocuments.Kind] = TransitionDefinitionDocuments.Validate,
             [ProcessDefinitionDocuments.Kind] = ProcessDefinitionDocuments.Validate,
             [HostedQueryDefinitionDocuments.Kind] = HostedQueryDefinitionDocuments.Validate
+        }, new Dictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>>
+        {
+            [ProcessDefinitionDocuments.Kind] = ReadProcessReferences,
+            [TransitionDefinitionDocuments.Kind] = _ => []
         });
 
-    /// <summary>Runs the same six tools over a caller-configured workspace without loading plug-ins or application assemblies.</summary>
+    /// <summary>Runs the same tools over a caller-configured workspace without loading plug-ins or application assemblies.</summary>
     /// <param name="workspace">Workspace owning validator policy and repository scope.</param>
     /// <param name="guide">Optional host-specific guidance; null uses the adapter's versioned guide.</param>
     /// <param name="cancellationToken">Stops the stdio session.</param>
@@ -60,14 +64,21 @@ public static class DevelopmentMcpServer
         return new()
         {
             ServerInfo = new() { Name = "cohesive-development", Version = Version },
-            ServerInstructions = "Use learn for host guidance without a snapshot. Call workspace for exported semantics and retain snapshotId. Edit owning source and re-export. ChangedInputs means the model is stale. Read limitations; this server never edits IR or executes application code.",
+            ServerInstructions = "Use learn for host guidance without a snapshot. Call workspace for exported semantics and retain snapshotId. Use inspect sourceMappings to locate declarations and references to find direct consumers. Edit owning source and re-export. ChangedInputs means the model is stale. Read limitations; this server never edits IR or executes application code.",
             ToolCollection =
             [
                 McpServerTool.Create(tools.Workspace), McpServerTool.Create(tools.Resolve),
                 McpServerTool.Create(tools.Inspect), McpServerTool.Create(tools.Check),
-                McpServerTool.Create(tools.Compare), McpServerTool.Create(tools.Learn)
+                McpServerTool.Create(tools.Compare), McpServerTool.Create(tools.Learn), McpServerTool.Create(tools.References)
             ]
         };
+    }
+
+    static IReadOnlyList<ExecutionDefinitionReference> ReadProcessReferences(ExecutionDefinitionDocument document)
+    {
+        if (!ProcessDefinitionDocuments.Validate(document).IsValid)
+            throw new InvalidOperationException("Process reference inspection requires valid domain semantics. Use check for diagnostics.");
+        return document.GetDefinition<ProcessDefinition>().GetDefinitionDependencies();
     }
 
     static DevelopmentGuide LoadGuide()

@@ -42,9 +42,10 @@ public sealed record WorkspaceSubject(string Id, string Kind, string? DisplayNam
 /// <param name="Value">Selected JSON, or null when it exceeds the response bound.</param>
 /// <param name="Children">Paged child pointers for progressive retrieval.</param>
 /// <param name="SourceReferences">Paged source references mapped to the selected semantic location.</param>
+/// <param name="SourceMappings">Producer mappings with optional portable locations; root inspection lists all mappings.</param>
 public sealed record WorkspaceInspection(
     WorkspaceSubject Subject, string Pointer, JsonElement? Value,
-    WorkspacePage<string> Children, WorkspacePage<string> SourceReferences);
+    WorkspacePage<string> Children, WorkspacePage<string> SourceReferences, WorkspacePage<ExecutionSourceProvenance> SourceMappings);
 
 /// <summary>Validation evidence for a single exported definition.</summary>
 /// <param name="Id">Stable definition identity.</param>
@@ -63,3 +64,19 @@ public sealed record WorkspaceDifference(string Id, string? Before, string? Afte
 /// <param name="BaselineSnapshotId">Exact retained baseline snapshot.</param>
 /// <param name="Changes">Paged document-level changes.</param>
 public sealed record WorkspaceComparison(string BaselineSnapshotId, WorkspacePage<WorkspaceDifference> Changes);
+
+/// <summary>An exact authored dependency and the currently exported candidate with that identity.</summary>
+/// <param name="Source">Exact consumer document reference.</param>
+/// <param name="Expected">Exact reference authored by that consumer.</param>
+/// <param name="Available">Exported target reference, or null if the target is missing.</param>
+public sealed record WorkspaceReference(ExecutionDefinitionReference Source, ExecutionDefinitionReference Expected,
+    ExecutionDefinitionReference? Available)
+{
+    /// <summary>True only when both revision and fingerprint match the authored target.</summary>
+    public bool IsExactMatch => Expected == Available;
+}
+
+/// <summary>Direct reference evidence and explicit bounds on indexing coverage.</summary>
+/// <param name="References">Paged consumers of the requested identity, including missing or stale targets.</param>
+/// <param name="IncompleteDefinitions">Identities with no registered reader or with uninspected extensions.</param>
+public sealed record WorkspaceReferences(WorkspacePage<WorkspaceReference> References, ImmutableArray<string> IncompleteDefinitions);

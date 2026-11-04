@@ -30,7 +30,7 @@ Codex supports user configuration in `~/.codex/config.toml` and project configur
 for trusted projects. See the [official MCP configuration instructions](https://developers.openai.com/codex/mcp).
 The CLI command registers this checkout's absolute path; point it at the intended worktree, and update it if that
 worktree moves. This repository ships configuration without rewriting anyone's personal client settings.
-Start a new client session after configuration and confirm the six tools appear. Initialization instructions
+Start a new client session after configuration and confirm the seven tools appear. Initialization instructions
 explain the cross-tool workflow; tool descriptions/schemas explain arguments; `learn` supplies this project's
 export command and scope. Clients may prefix tool names with `cohesive_orders`.
 
@@ -52,19 +52,21 @@ application. The repeatable exercise below applies it only in a disposable copy.
 1. Call `learn({})`, then `workspace({})`; save `snapshotId` and check `changedInputs`.
 2. `resolve({"query":"fulfillment/reserve","expectedSnapshot":"<before>"})` identifies the transition.
 3. `inspect({"id":"fulfillment/reserve","expectedSnapshot":"<before>","pointer":"/definition"})`
-   returns the canonical declaration. At this root, source attribution is only the semantic identity.
-   Inspect `/metadata/sourceMap` for `FulfillmentDomain.cs` filename/line descriptions, then inspect
-   `/definition/preconditions/1` for the stock guard's specific source reference. Use source search to locate
-   the file named above; the source map does not yet carry a structured repository-relative path.
-   Follow child pointers if a value is too large.
-4. Edit the owning builder. Bump the transition's explicit revision and the referencing process revision.
-   Review `FulfillmentProcess` in source: the server does not yet provide reverse-reference search.
+   returns the canonical declaration and `sourceMappings` containing structured `location` values:
+   repository-relative `path`, one-based `startLine`, and inclusive `endLine`. Narrow inspection to
+   `/definition/preconditions/1` for the stock guard. The current producers identify declaration lines;
+   they do not claim full expression character spans.
+4. Call `references({"id":"fulfillment/reserve","expectedSnapshot":"<before>"})` to discover
+   `fulfillment/submit` as a direct consumer. Inspect that returned identity to locate its owning declaration.
+   Edit the typed builder and bump the transition and consuming process revisions. Review coverage:
+   `available: null` means a referenced target is missing; `isExactMatch: false` with an available target
+   means stale revision/fingerprint. `incompleteDefinitions` lists unknown or extension-bearing documents.
 5. Before re-export, `workspace` reports the changed source while retaining the old bundle's snapshot.
 6. Rebuild/export with the command above, then call `workspace` for the new snapshot and `check` with it.
    Reusing the old expected snapshot fails explicitly.
 7. `compare({"baselineSnapshot":"<before>","expectedSnapshot":"<after>"})` reports the changed reservation
    transition and the process that captured its exact reference. Compare observes these rebuilt documents;
-   it does not independently discover or prove all impacts.
+   it does not prove transitive impacts, compatibility or runtime behavior.
 
 Review `isValid`, `domainValidationAvailable`, diagnostics, `changedInputs` and scope together. Successful
 validation is evidence about these documents, not proof of the proposed business policy or runtime behavior.
@@ -104,16 +106,20 @@ The existing queries use relation documents rather than the workspace's executio
 API endpoints, entity graphs, generated clients, storage and target realization remain outside this export.
 Use the existing [application explain workflow](../README.md#inspect-the-compiled-system-without-running-it)
 and ordinary source search for them. The integration's next priorities are support for those domain-owned
-artifacts and reverse-reference traversal; adding parallel query or dependency models here would hide the gap.
-The observed source references are semantic identity/member/line strings. Filename/line descriptions live in
-the full source map; this host does not invent missing structured repository paths or portable source spans.
-Improving owner-supplied source locations is a prerequisite for reliable automated source navigation.
+artifacts and transitive impact analysis. Direct references reuse Process-owned dependency projections;
+unknown kinds and extension-bearing definitions are explicitly reported as incomplete.
+
+The Orders project maps its repository root to the compiler virtual path `/_` through `PathMap`. Both typed
+transition authoring and generated process authoring preserve structured line locations. Other producers that
+have no portable mapping continue to return references/descriptions with no location. The workspace never guesses
+from a filename description. These optional metadata fields do not change semantic fingerprints; older strict
+readers need updating before they can read documents containing the new fields.
 
 ## Recorded qualification
 
 On 2026-11-03, the SDK-driven exercise passed locally on .NET 10.0.13:
 
-- All six tools were discovered; the project guide supplied the export workflow.
+- All seven tools were discovered; the project guide supplied the export workflow.
 - All five execution documents passed available domain validation with no diagnostics.
 - Changing the reserve guard from `>=` to `>` and bumping the authored reserve/process revisions yielded
   exactly two semantic differences: `fulfillment/reserve` and `fulfillment/submit`.
@@ -124,3 +130,7 @@ On 2026-11-03, the SDK-driven exercise passed locally on .NET 10.0.13:
 The application policy in the working checkout was not changed. No live infrastructure, API or generated client
 was exercised. CI now runs this same offline exercise; its assertions intentionally fail if the illustrative
 source-edit recipe no longer matches the owning model, so the qualification must evolve with that source.
+
+On 2026-11-04 the exercise was extended to discover the exact process consumer through `references` and locate
+both declarations through structured source mappings before editing. The input scope and runtime exclusions above
+remain unchanged; consumer lookup is bounded to exported documents and declared built-in reference readers.

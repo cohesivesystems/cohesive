@@ -386,12 +386,12 @@ changes elsewhere in the pull request without presenting every affected file as 
 
 When working on the Aspire Orders example's exported transitions or process, use the `cohesive_orders` MCP
 server when configured. Read `learn`, then `workspace`, retain its snapshot, resolve the relevant identity and
-inspect its owning source before editing. Setup and the exact export command are documented in
+inspect its structured source mappings and use `references` to discover direct consumers before editing. Setup and the exact export command are documented in
 [Orders development onboarding](eng/examples/aspire-first/Development/README.md).
 
 After source edits, rebuild and re-export before relying on `check`; review `changedInputs`, domain validation
-coverage and diagnostics. Compare with the retained baseline and review referencing source explicitly: current
-comparison is not dependency or compatibility analysis. Edit typed authoring source, never derived JSON. If the
+coverage and diagnostics. Compare with the retained baseline and review reference coverage and missing/stale targets: direct lookup
+is not transitive impact or compatibility analysis. Edit typed authoring source, never derived JSON. If the
 server is unavailable, use the documented setup or report that semantic tool verification was not performed;
 do not claim tool results from source reading alone. Other repository areas are not automatically in this scope.
 

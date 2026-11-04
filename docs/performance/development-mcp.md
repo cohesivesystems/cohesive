@@ -10,7 +10,7 @@ change-and-revert races or establish an atomic filesystem snapshot.
 Run from the repository root:
 
 ```sh
-dotnet run -c Release --project eng/benchmarks/development-mcp -- --filter '*' --warmupCount 3 --iterationCount 8 --launchCount 1
+dotnet run -c Release --project eng/benchmarks/development-mcp -- --filter '*WorkspaceBenchmarks*' --warmupCount 3 --iterationCount 8 --launchCount 1
 ```
 
 The benchmark project references the approved repository version of BenchmarkDotNet, 0.15.8. Its memory diagnoser

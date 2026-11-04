@@ -1354,7 +1354,7 @@ public sealed class TransitionMatchBuilder<TEntity, TInput, TOutcome, TValue>
     }
 }
 
-internal sealed record AuthoredTransitionSource(string Reference, string Description);
+internal sealed record AuthoredTransitionSource(string Reference, string Description, ExecutionSourceLocation? Location = null);
 
 internal sealed class TransitionAuthoringScope(TransitionAuthoringScope? parent)
 {
@@ -1556,7 +1556,7 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
         var detail = file is null || sourceLine <= 0
             ? description
             : $"{description} ({file}:{sourceLine})";
-        return new(reference, detail);
+        return new(reference, detail, ExecutionSourceLocation.FromCompiler(sourceFile, sourceLine));
     }
 
     public void Register(object construct, AuthoredTransitionSource source)
@@ -1653,7 +1653,7 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
             : new(
                 metadata.Provenance.Source.Reference,
                 "Canonical Transition construct produced by C# authoring");
-        entries.Add(new(source.Reference, new(path), source.Description));
+        entries.Add(new(source.Reference, new(path), source.Description, source.Location));
     }
 
     static string Index(int index) => index.ToString(System.Globalization.CultureInfo.InvariantCulture);

@@ -67,7 +67,12 @@ public sealed record ExecutionSourceMap
             if (comparison != 0)
                 return comparison;
 
-            return StringComparer.Ordinal.Compare(left.Description, right.Description);
+            comparison = StringComparer.Ordinal.Compare(left.Description, right.Description);
+            if (comparison != 0) return comparison;
+            comparison = StringComparer.Ordinal.Compare(left.Location?.Path, right.Location?.Path);
+            if (comparison != 0) return comparison;
+            comparison = Nullable.Compare(left.Location?.StartLine, right.Location?.StartLine);
+            return comparison != 0 ? comparison : Nullable.Compare(left.Location?.EndLine, right.Location?.EndLine);
         });
     }
 
