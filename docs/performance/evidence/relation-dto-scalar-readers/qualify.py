@@ -16,5 +16,5 @@ for repeat in [1,2,3]:
    data=json.loads(next((out/name).glob('results/*full.json')).read_text())['Benchmarks'];assert len(data)==1 and data[0]['Statistics']
    b=data[0];rows.append(dict(repeat=repeat,count=count,side=side,method=method,ns=b['Statistics']['Mean'],bytes=b['Memory']['BytesAllocatedPerOperation']))
    with (root/'qualification.csv').open('w') as stream:
-    writer=csv.DictWriter(stream,fieldnames=rows[0]);writer.writeheader();writer.writerows(rows)
+    writer=csv.DictWriter(stream,fieldnames=rows[0],lineterminator="\n");writer.writeheader();writer.writerows(rows)
    print(len(rows),name,round(rows[-1]['ns']/1000,3),flush=True)
