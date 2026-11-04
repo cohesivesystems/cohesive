@@ -1,0 +1,4 @@
+{
+  "relations": "Passed!  - Failed:     0, Passed:  1190, Skipped:     0, Total:  1190, Duration: 2 s - Cohesive.Relations.Tests.dll (net10.0)",
+  "core": "Passed!  - Failed:     0, Passed:  5306, Skipped:    64, Total:  5370, Duration: 2 m 44 s - Cohesive.Tests.dll (net10.0)"
+}

@@ -10,6 +10,90 @@ namespace Cohesive.Relations.Tests;
 public sealed class RelationDtoMapperTests
 {
     [Fact]
+    public void SpecializedDecimalReaderPreservesConversionsAndFailureEvidence()
+    {
+        var scenario = RelationDtoBenchmarkFixture.CreateSimpleScenario(rowCount: 1);
+        var kernel = Compile<LoadSummaryDto>(scenario.Plan).MaterializationKernel;
+        var root = scenario.Execution.Relation!.Rows[0].Value;
+        ObservationValue[] values = [ObservationValue.FromInt64(long.MaxValue), ObservationValue.FromInt64(long.MinValue),
+            ObservationValue.FromDecimal(decimal.MaxValue), ObservationValue.FromDecimal(decimal.MinValue),
+            ObservationValue.FromDouble(1.25), ObservationValue.FromDouble(double.NaN), ObservationValue.FromDouble(double.PositiveInfinity),
+            ObservationValue.FromString("1.25"), ObservationValue.FromString("invalid"), ObservationValue.FromBool(true)];
+        foreach (var value in values)
+        {
+            decimal expected = default;
+            var failure = Record.Exception(() => expected = value.GetDecimal());
+            var candidate = WithField(root, nameof(LoadSummaryDto.Amount), value);
+            if (failure is null) Assert.Equal(expected, kernel(candidate).Amount);
+            else
+            {
+                var actual = Assert.Throws<RelationDtoRowMappingException>(() => kernel(candidate));
+                Assert.Equal(failure.GetType(), actual.InnerException!.GetType());
+                Assert.Equal(failure.Message, actual.InnerException.Message);
+            }
+        }
+    }
+
+    [Fact]
+    public void SpecializedStringReaderPreservesAlternateKindsAndFailureEvidence()
+    {
+        var scenario = RelationDtoBenchmarkFixture.CreateSimpleScenario(rowCount: 1);
+        var kernel = Compile<LoadSummaryDto>(scenario.Plan).MaterializationKernel;
+        var root = scenario.Execution.Relation!.Rows[0].Value;
+        ObservationValue[] values = [ObservationValue.FromString("normal"), ObservationValue.FromString(""), ObservationValue.FromString(" "),
+            new(ObservationValueKind.String), ObservationValue.FromDateOnly(new(2026, 11, 3)),
+            ObservationValue.FromTimeOnly(new(12, 30)), ObservationValue.FromTimeSpan(TimeSpan.FromHours(1)),
+            ObservationValue.FromDateTimeOffset(DateTimeOffset.UnixEpoch), ObservationValue.FromBool(true), ObservationValue.FromInt64(12)];
+        foreach (var value in values)
+        {
+            string? expected = default;
+            var failure = Record.Exception(() => expected = value.GetRequiredString());
+            var candidate = WithField(root, nameof(LoadSummaryDto.Status), value);
+            if (failure is null) Assert.Equal(expected, kernel(candidate).Status);
+            else
+            {
+                var actual = Assert.Throws<RelationDtoRowMappingException>(() => kernel(candidate));
+                Assert.Equal(failure.GetType(), actual.InnerException!.GetType());
+                Assert.Equal(failure.Message, actual.InnerException.Message);
+            }
+        }
+    }
+
+    [Fact]
+    public void SpecializedReferenceReaderStillRejectsEmptyReferences()
+    {
+        var scenario = RelationDtoBenchmarkFixture.CreateJoinedScenario(rowCount: 1);
+        var kernel = Compile<LoadSearchDto>(scenario.Plan).MaterializationKernel;
+        var root = scenario.Execution.Relation!.Rows[0].Value;
+        string[] references = ["customer/valid", "", " ", "\t\n"];
+        foreach (var text in references)
+        {
+            var value = WithField(root, nameof(LoadSearchDto.CustomerId), ObservationValue.FromString(text));
+            if (string.IsNullOrWhiteSpace(text)) Assert.Throws<RelationDtoRowMappingException>(() => kernel(value));
+            else Assert.Equal(text, kernel(value).CustomerId);
+        }
+        var alternate = ObservationValue.FromDateOnly(new(2026, 11, 3));
+        Assert.Equal(alternate.GetRequiredString(), kernel(WithField(root, nameof(LoadSearchDto.CustomerId), alternate)).CustomerId);
+    }
+
+    [Fact]
+    public void SpecializedKernelAllocatesOnlyItsDestinationRecord()
+    {
+        var scenario = RelationDtoBenchmarkFixture.CreateSimpleScenario(rowCount: 1);
+        var kernel = Compile<LoadSummaryDto>(scenario.Plan).MaterializationKernel;
+        var value = scenario.Execution.Relation!.Rows[0].Value;
+        var expected = kernel(value);
+        long Allocated(Func<LoadSummaryDto> create)
+        {
+            for (var index = 0; index < 64; index++) GC.KeepAlive(create());
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < 256; index++) GC.KeepAlive(create());
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Assert.Equal(Allocated(() => new(expected.Id, expected.Status, expected.Amount)), Allocated(() => kernel(value)));
+    }
+
+    [Fact]
     public void SharedSimpleFixture_ProducesOneCompleteCanonicalRelationRow()
     {
         var scenario = RelationDtoBenchmarkFixture.CreateSimpleScenario(rowCount: 1);

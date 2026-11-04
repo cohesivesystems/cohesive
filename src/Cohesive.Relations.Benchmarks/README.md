@@ -175,3 +175,20 @@ Retain BenchmarkDotNet environment and allocation reports with any reported comp
 
 Realization fingerprint and ordering-key qualification: run filters `*RealizationFingerprintBenchmarks*`
 and `*RealizationSequenceKeyBenchmarks*`. See [workloads, before/after results and boundaries](../../docs/performance/realization-fingerprints.md).
+
+### Warm DTO CPU/JIT attribution
+
+`--relation-dto-profile <route> <seconds>` reuses the exact 1,024-row warm fixture. Routes are
+`kernel-simple`, `kernel-joined`, `auto-simple`, and `auto-joined`; duration is bounded to 1–60 seconds.
+Fixture compilation and correctness checks precede 256 warmups and the explicitly marked `Measure` loop.
+This is a sampling target, not a replacement for BenchmarkDotNet timing or an end-to-end query benchmark.
+
+```sh
+dotnet src/Cohesive.Relations.Benchmarks/bin/Release/net10.0/Cohesive.Relations.Benchmarks.dll \
+  --relation-dto-profile kernel-joined 12
+```
+
+Collect with an already-installed `dotnet-trace` and analyze stacks beneath `RelationDtoWarmProfile.Measure`.
+Unfiltered trace summaries also include setup and GC activity. Do not overlap profiling with timed comparisons.
+The scalar-reader experiment's matched-process measurements, rejected generic-converter experiment and CPU/JIT
+attribution are retained in `docs/performance/evidence/relation-dto-scalar-readers`.
