@@ -207,7 +207,3 @@ Verification lives in Cohesive.Tests/Machines and the existing Transition compil
 conformance suites. Guarded admission indexes candidates by state/action and shares the stateless reference
 evaluator; it still interprets predicates and allocates invocation context and decisions. See the
 [before/after benchmark](../../../docs/performance/machine-admission/README.md) for measured cost and scope.
-
-For actor-specific entity operation discovery, use the service runtime
-[inspection API](../../Cohesive.Api.Execution/Services/TRANSITION_DISCOVERY.md). It applies authorization and
-evaluates the whole Transition, not only the machine guard.
