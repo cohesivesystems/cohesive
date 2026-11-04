@@ -1,4 +1,5 @@
 using Cohesive.Relations.Execution;
+using Cohesive.Relations.Physical;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.TestFixtures;
 using System.Collections.ObjectModel;
@@ -9,6 +10,120 @@ namespace Cohesive.Relations.Tests;
 
 public sealed class RelationDtoMapperTests
 {
+    [Theory]
+    [InlineData(1)]
+    [InlineData(32)]
+    [InlineData(1024)]
+    public void OrdinalKernelMatchesCanonicalWithReorderedLayouts(int count)
+    {
+        var scenario = RelationDtoBenchmarkFixture.CreateJoinedScenario(count);
+        var shape = OrdinalShape(scenario.Plan, scenario.Execution);
+        var layout = ObservationLayout.Create(shape, shape.Graph.GetShape(shape.ShapeId).Fields.Select(field => field.Name.Value).Reverse());
+        var mapper = CompileOrdinal<LoadSearchDto>(scenario.Plan, layout);
+        var canonical = mapper.MaterializationKernel;
+        foreach (var row in scenario.Execution.Relation!.Rows)
+        {
+            var indexed = AdmitOrdinal(shape, layout, row.Value);
+            var actual = mapper.OrdinalMaterializationKernel!(indexed);
+            Assert.Equal(canonical(row.Value), actual);
+            Assert.NotSame(actual, mapper.OrdinalMaterializationKernel(indexed));
+        }
+        var first = scenario.Execution.Relation.Rows[0].Value;
+        var foreign = AdmitOrdinal(shape, ObservationLayout.Create(shape), first);
+        Assert.Throws<InvalidOperationException>(() => mapper.OrdinalMaterializationKernel!(foreign));
+        var shared = AdmitOrdinal(shape, layout, first);
+        Parallel.For(0, 32, _ => Assert.Equal(canonical(first), mapper.OrdinalMaterializationKernel!(shared)));
+    }
+
+    [Fact]
+    public void OrdinalAdmissionRejectsRequiredAbsenceNullAndWrongKinds()
+    {
+        var scenario = RelationDtoBenchmarkFixture.CreateSimpleScenario(rowCount: 1);
+        var shape = OrdinalShape(scenario.Plan, scenario.Execution);
+        var layout = ObservationLayout.Create(shape);
+        var root = scenario.Execution.Relation!.Rows[0].Value;
+        foreach (var value in new[] { ObservationValue.Undefined, ObservationValue.Null, ObservationValue.FromBool(true) })
+            Assert.Throws<InvalidOperationException>(() => AdmitOrdinal(shape, layout,
+                WithField(root, nameof(LoadSummaryDto.Amount), value)));
+        Assert.Throws<InvalidOperationException>(() => AdmitOrdinal(shape, layout,
+            WithoutField(root, nameof(LoadSummaryDto.Amount))));
+    }
+
+    [Fact]
+    public void OrdinalOptionalAbsenceAndWideningMatchCanonicalRules()
+    {
+        var scenario = RelationDtoMapperTestFixture.CreateNumericWideningScenario();
+        var shape = OrdinalShape(scenario.Plan, scenario.Execution);
+        var layout = ObservationLayout.Create(shape);
+        var mapper = CompileOrdinal<NumericWideningDto>(scenario.Plan, layout,
+            new(RelationDtoNumericConversionPolicy.LosslessWidening));
+        var root = scenario.Execution.Relation!.Rows[0].Value;
+        foreach (var value in new[] { root, WithoutField(root, LoadCustomerRelationFixture.AggregateCustomerNameFieldName) })
+            Assert.Equal(mapper.MaterializationKernel(value), mapper.OrdinalMaterializationKernel!(AdmitOrdinal(shape, layout, value)));
+        var absent = WithoutField(root, LoadCustomerRelationFixture.AggregateCustomerNameFieldName);
+        var partial = ObservationLayout.Create(shape, layout.FieldIdentities.Where(
+            field => field != LoadCustomerRelationFixture.AggregateCustomerNameFieldName));
+        var partialMapper = CompileOrdinal<NumericWideningDto>(scenario.Plan, partial,
+            new(RelationDtoNumericConversionPolicy.LosslessWidening));
+        Assert.Equal(mapper.MaterializationKernel(absent),
+            partialMapper.OrdinalMaterializationKernel!(AdmitOrdinal(shape, partial, absent)));
+    }
+
+    [Fact]
+    public void OrdinalCompilationRejectsForeignShapeLayout()
+    {
+        var simple = RelationDtoBenchmarkFixture.CreateSimpleScenario(rowCount: 1);
+        var joined = RelationDtoBenchmarkFixture.CreateJoinedScenario(rowCount: 1);
+        var layout = ObservationLayout.Create(OrdinalShape(joined.Plan, joined.Execution));
+        var result = RelationDtoMapperBuilder.Compile<LoadSummaryDto>(simple.Plan,
+            RelationDtoMapperProfile.Conventional, RelationDtoMapperCompilationOptions.Conventional, layout);
+        Assert.False(result.IsSuccessful);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == RelationDtoMapperDiagnosticCodes.PlanMismatch);
+    }
+
+    [Fact]
+    public void OrdinalKernelAllocatesOnlyItsDestination()
+    {
+        var scenario = RelationDtoBenchmarkFixture.CreateSimpleScenario(rowCount: 1);
+        var shape = OrdinalShape(scenario.Plan, scenario.Execution);
+        var layout = ObservationLayout.Create(shape);
+        var mapper = CompileOrdinal<LoadSummaryDto>(scenario.Plan, layout);
+        var indexed = AdmitOrdinal(shape, layout, scenario.Execution.Relation!.Rows[0].Value);
+        var expected = mapper.OrdinalMaterializationKernel!(indexed);
+        long Allocated(Func<LoadSummaryDto> create)
+        {
+            for (var index = 0; index < 64; index++) GC.KeepAlive(create());
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < 256; index++) GC.KeepAlive(create());
+            return GC.GetAllocatedBytesForCurrentThread() - before;
+        }
+        Assert.Equal(Allocated(() => new(expected.Id, expected.Status, expected.Amount)),
+            Allocated(() => mapper.OrdinalMaterializationKernel!(indexed)));
+    }
+
+    static GraphShapeId OrdinalShape(CompiledRelationQueryPlan plan, RelationQueryExecutionResult execution)
+    {
+        var shape = execution.Relation!.Shape;
+        return new(plan.Provenance.ShapeDocuments.Single(document => document.Graph.Id == shape.GraphId).Graph, shape.ShapeId);
+    }
+
+    static CompiledRelationDtoMapper<T> CompileOrdinal<T>(CompiledRelationQueryPlan plan, ObservationLayout layout,
+        RelationDtoMapperCompilationOptions? options = null)
+    {
+        var result = RelationDtoMapperBuilder.Compile<T>(plan, RelationDtoMapperProfile.Conventional,
+            options ?? RelationDtoMapperCompilationOptions.Conventional, layout);
+        Assert.True(result.IsSuccessful, string.Join("; ", result.Diagnostics.Select(diagnostic => diagnostic.Message)));
+        return result.Mapper!;
+    }
+
+    static IndexedObservationOccurrence AdmitOrdinal(GraphShapeId shape, ObservationLayout layout, ObservationValue value)
+    {
+        var builder = IndexedObservationOccurrence.CreateBuilder(shape,
+            new(new("ordinal-test"), new("ordinal-test"), shape.QualifiedId, "ordinal-test"), layout);
+        foreach (var field in value.Fields!) builder.SetField(field.Key, field.Value);
+        return builder.Build();
+    }
+
     [Fact]
     public void SpecializedDecimalReaderPreservesConversionsAndFailureEvidence()
     {

@@ -219,3 +219,21 @@ establish a portable simple-case improvement or a causal before/after Linux spee
 control/candidate evidence is retained under `guarded`. Use stable hardware before accepting a release
 performance claim. The next promising experiment is direct ordinal access over validated relation-row
 layouts, accounting separately for admission and output provenance costs.
+
+
+### Direct ordinal DTO experiment
+
+`CompiledOrdinalSimple` / `CompiledOrdinalJoined` use the existing validated
+`IndexedObservationOccurrence` representation and exact bound-layout identity checks. Constructor and
+member initialization come from the same DTO binding plan; exact-kind fast conversions and all generic
+fallback conversions share their implementation with canonical mapping. No target expression is retained
+by default mappers, and ordinal compilation is internal and opt-in for this experiment.
+
+`OrdinalAdmissionSimple` / `OrdinalAdmissionJoined` allocate new ordinal storage from already-built
+canonical rows using the existing ownership-transferring builder, including field-name binding and shape
+validation. `OrdinalAdmissionAndMap*` includes that preparation plus DTO mapping. Metadata identities and
+layouts are prepared in setup, as are AutoMapper's input row arrays and plans. Acquisition, query execution,
+and original canonical-row construction are excluded from every path. Warm ordinal versus canonical-input
+AutoMapper compares different physical storage; it is not a one-shot conversion speedup claim. The existing
+`SharedCoreIndexed*` cases provide a same-storage comparator. None of the projection kernels claims the
+public mapper's provenance, cancellation, admission, or collect-all diagnostics contract.

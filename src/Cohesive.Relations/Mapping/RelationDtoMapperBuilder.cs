@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using Cohesive.Model;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Physical;
 
 namespace Cohesive.Relations.Mapping;
 
@@ -26,7 +27,8 @@ static class RelationDtoMapperBuilder
     internal static RelationDtoMapperCompilationResult<TOutput> Compile<TOutput>(
         CompiledRelationQueryPlan plan,
         RelationDtoMapperProfile profile,
-        RelationDtoMapperCompilationOptions options
+        RelationDtoMapperCompilationOptions options,
+        ObservationLayout? ordinalLayout = null
         )
     {
         var diagnostics = ImmutableArray.CreateBuilder<RelationDtoMapperDiagnostic>();
@@ -339,16 +341,34 @@ static class RelationDtoMapperBuilder
         if (HasErrors(diagnostics))
             return Failed<TOutput>(compilation, diagnostics);
 
+        if (ordinalLayout is not null && (ordinalLayout.ShapeId != outputShapeId
+            || !ReferenceEquals(ordinalLayout.Graph, graphDocument!.Graph)))
+        {
+            diagnostics.Add(Diagnostic(RelationDtoMapperDiagnosticCodes.PlanMismatch,
+                "Ordinal layout must belong to the exact terminal shape snapshot.", terminal.Relation, outputShapeId));
+            return Failed<TOutput>(compilation, diagnostics);
+        }
+
         Func<ObservationValue, TOutput> kernel;
+        Func<IndexedObservationOccurrence, TOutput>? ordinalKernel = null;
         try
         {
-            kernel = CompileKernel<TOutput>(
+            kernel = CompileKernel<ObservationValue, TOutput>(
                 constructor,
                 constructorParameters,
                 parameterProperties,
                 preliminary,
-                compiledBindings
+                compiledBindings,
+                ordinalLayout: null
                 );
+            if (ordinalLayout is not null)
+            {
+                var prepared = CompileKernel<IndexedObservationOccurrence, TOutput>(constructor,
+                    constructorParameters, parameterProperties, preliminary, compiledBindings, ordinalLayout);
+                ordinalKernel = row => ReferenceEquals(row.Layout, ordinalLayout)
+                    ? prepared(row)
+                    : throw new InvalidOperationException("Ordinal DTO kernel requires its exact bound layout.");
+            }
         }
         catch (Exception exception) when (exception is not OutOfMemoryException
                                           and not StackOverflowException
@@ -380,18 +400,19 @@ static class RelationDtoMapperBuilder
             terminal.Definition.Mode,
             memberDescriptors
             );
-        return new(compilation, new(descriptor, kernel), Sort(diagnostics));
+        return new(compilation, new(descriptor, kernel) { OrdinalMaterializationKernel = ordinalKernel }, Sort(diagnostics));
     }
 
-    static Func<ObservationValue, TOutput> CompileKernel<TOutput>(
+    static Func<TInput, TOutput> CompileKernel<TInput, TOutput>(
         ConstructorInfo? constructor,
         IReadOnlyList<ParameterInfo> constructorParameters,
         IReadOnlyDictionary<ParameterInfo, PropertyInfo> parameterProperties,
         IReadOnlyList<PreliminaryBinding> preliminary,
-        IReadOnlyList<RelationDtoCompiledBinding> compiledBindings
+        IReadOnlyList<RelationDtoCompiledBinding> compiledBindings,
+        ObservationLayout? ordinalLayout
         )
     {
-        var value = Expression.Parameter(typeof(ObservationValue), "value");
+        var value = Expression.Parameter(typeof(TInput), "value");
         var bindingByProperty = preliminary
             .Zip(compiledBindings, static (source, compiled) => (source.Property, Compiled: compiled))
             .ToDictionary(static pair => pair.Property, static pair => pair.Compiled);
@@ -410,7 +431,7 @@ static class RelationDtoMapperBuilder
                 if (parameterProperties.TryGetValue(parameter, out var property)
                     && bindingByProperty.TryGetValue(property, out var binding))
                 {
-                    arguments[index] = Read(value, binding, parameter.ParameterType);
+                    arguments[index] = Read(value, binding, parameter.ParameterType, ordinalLayout);
                 }
                 else
                 {
@@ -428,19 +449,21 @@ static class RelationDtoMapperBuilder
             .Where(binding => !constructorBoundProperties.Contains(binding.Property))
             .Select(binding => Expression.Bind(
                 binding.Property,
-                Read(value, bindingByProperty[binding.Property], binding.Property.PropertyType)))
+                Read(value, bindingByProperty[binding.Property], binding.Property.PropertyType, ordinalLayout)))
             .ToArray();
         Expression body = initializers.Length == 0
             ? created
             : Expression.MemberInit(created, initializers);
-        return Expression.Lambda<Func<ObservationValue, TOutput>>(body, value).Compile();
+        return Expression.Lambda<Func<TInput, TOutput>>(body, value).Compile();
     }
 
     static Expression Read(
         ParameterExpression value,
         RelationDtoCompiledBinding binding,
-        Type destinationType)
+        Type destinationType,
+        ObservationLayout? ordinalLayout)
     {
+        if (ordinalLayout is not null) return ReadOrdinal(value, binding, destinationType, ordinalLayout);
         var fast = binding.Conversion switch
         {
             RelationDtoValueConversion.String when destinationType == typeof(string) => ReadStringMethod,
@@ -457,6 +480,31 @@ static class RelationDtoMapperBuilder
         return Expression.Block([converted], Expression.Condition(
             Expression.Call(fast, value, Expression.Constant(binding.OutputField.Path.Segments[0].Segment!), converted),
             converted, fallback));
+    }
+
+    // Reuse the constructor/member plan and the complete generic conversion authority. Only lookup changes.
+    static Expression ReadOrdinal(ParameterExpression row, RelationDtoCompiledBinding binding,
+        Type destinationType, ObservationLayout layout)
+    {
+        var ordinal = layout.TryGetOrdinal(binding.OutputField.Path.Segments[0].Segment!, out var found) ? found : -1;
+        var value = Expression.Variable(typeof(ObservationValue), "field");
+        var lookup = Expression.Call(row, typeof(IndexedObservationOccurrence).GetMethod(
+            nameof(IndexedObservationOccurrence.TryGetField), [typeof(int), typeof(ObservationValue).MakeByRefType()])!,
+            Expression.Constant(ordinal), value);
+        var fallback = Expression.Call(Reader(nameof(RelationDtoValueReader.ReadValue))
+            .MakeGenericMethod(destinationType, GetConverterType(binding.Conversion, destinationType)),
+            value, Expression.Constant(binding));
+        var fast = binding.Conversion switch
+        {
+            RelationDtoValueConversion.String when destinationType == typeof(string) => nameof(RelationDtoValueReader.TryConvertString),
+            RelationDtoValueConversion.EntityReferenceString when destinationType == typeof(string) => nameof(RelationDtoValueReader.TryConvertReference),
+            RelationDtoValueConversion.Decimal when destinationType == typeof(decimal) => nameof(RelationDtoValueReader.TryConvertDecimal),
+            _ => null
+        };
+        if (fast is null) return Expression.Block([value], lookup, fallback);
+        var converted = Expression.Variable(destinationType, "converted");
+        return Expression.Block([value, converted], lookup, Expression.Condition(
+            Expression.Call(Reader(fast), value, converted), converted, fallback));
     }
 
     static Type GetConverterType(RelationDtoValueConversion conversion, Type destinationType)
@@ -979,12 +1027,7 @@ static class RelationDtoValueReader
     internal static bool TryReadString(in ObservationValue root, string fieldIdentity, out string converted)
     {
         if (root.Kind == ObservationValueKind.Object && root.Fields is { } fields
-            && fields.TryGetValue(fieldIdentity, out var value)
-            && value.Kind == ObservationValueKind.String && value.String is { } text)
-        {
-            converted = text;
-            return true;
-        }
+            && fields.TryGetValue(fieldIdentity, out var value)) return TryConvertString(in value, out converted);
         converted = default!;
         return false;
     }
@@ -993,12 +1036,7 @@ static class RelationDtoValueReader
     internal static bool TryReadEntityReference(in ObservationValue root, string fieldIdentity, out string converted)
     {
         if (root.Kind == ObservationValueKind.Object && root.Fields is { } fields
-            && fields.TryGetValue(fieldIdentity, out var value)
-            && value.Kind == ObservationValueKind.String && !string.IsNullOrWhiteSpace(value.String))
-        {
-            converted = value.String;
-            return true;
-        }
+            && fields.TryGetValue(fieldIdentity, out var value)) return TryConvertReference(in value, out converted);
         converted = default!;
         return false;
     }
@@ -1007,10 +1045,27 @@ static class RelationDtoValueReader
     internal static bool TryReadDecimal(in ObservationValue root, string fieldIdentity, out decimal converted)
     {
         if (root.Kind == ObservationValueKind.Object && root.Fields is { } fields
-            && fields.TryGetValue(fieldIdentity, out var value)
-            && value.Kind is ObservationValueKind.Decimal or ObservationValueKind.Int64
-            && value.TryGetDecimal(out converted))
-            return true;
+            && fields.TryGetValue(fieldIdentity, out var value)) return TryConvertDecimal(in value, out converted);
+        converted = default;
+        return false;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryConvertString(in ObservationValue value, out string converted)
+    {
+        converted = value.String!;
+        return value.Kind == ObservationValueKind.String && converted is not null;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryConvertReference(in ObservationValue value, out string converted) =>
+        TryConvertString(in value, out converted) && !string.IsNullOrWhiteSpace(converted);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryConvertDecimal(in ObservationValue value, out decimal converted)
+    {
+        if (value.Kind is ObservationValueKind.Decimal or ObservationValueKind.Int64
+            && value.TryGetDecimal(out converted)) return true;
         converted = default;
         return false;
     }
@@ -1019,8 +1074,14 @@ static class RelationDtoValueReader
     internal static T Read<T, TConverter>(in ObservationValue root, RelationDtoCompiledBinding binding)
         where TConverter : struct, IConverter<T>
     {
-        if (!root.TryGetProperty(binding.OutputField.Path.Segments[0].Segment!, out var value)
-            || value.Kind == ObservationValueKind.Undefined)
+        root.TryGetProperty(binding.OutputField.Path.Segments[0].Segment!, out var value);
+        return ReadValue<T, TConverter>(in value, binding);
+    }
+
+    internal static T ReadValue<T, TConverter>(in ObservationValue value, RelationDtoCompiledBinding binding)
+        where TConverter : struct, IConverter<T>
+    {
+        if (value.Kind == ObservationValueKind.Undefined)
         {
             if (binding.AllowsMissing)
                 return Cast<T>(binding.MissingValue);
