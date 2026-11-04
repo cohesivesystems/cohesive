@@ -15,9 +15,9 @@ static class RelationDtoMapperBuilder
         .GetMethod(nameof(RelationDtoValueReader.Read), BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new InvalidOperationException("DTO value reader method is unavailable.");
 
-    static readonly MethodInfo ReadStringMethod = Reader(nameof(RelationDtoValueReader.ReadString));
-    static readonly MethodInfo ReadReferenceMethod = Reader(nameof(RelationDtoValueReader.ReadEntityReference));
-    static readonly MethodInfo ReadDecimalMethod = Reader(nameof(RelationDtoValueReader.ReadDecimal));
+    static readonly MethodInfo ReadStringMethod = Reader(nameof(RelationDtoValueReader.TryReadString));
+    static readonly MethodInfo ReadReferenceMethod = Reader(nameof(RelationDtoValueReader.TryReadEntityReference));
+    static readonly MethodInfo ReadDecimalMethod = Reader(nameof(RelationDtoValueReader.TryReadDecimal));
 
     static MethodInfo Reader(string name) => typeof(RelationDtoValueReader)
         .GetMethod(name, BindingFlags.Static | BindingFlags.NonPublic)
@@ -436,7 +436,7 @@ static class RelationDtoMapperBuilder
         return Expression.Lambda<Func<ObservationValue, TOutput>>(body, value).Compile();
     }
 
-    static MethodCallExpression Read(
+    static Expression Read(
         ParameterExpression value,
         RelationDtoCompiledBinding binding,
         Type destinationType)
@@ -448,10 +448,15 @@ static class RelationDtoMapperBuilder
             RelationDtoValueConversion.Decimal when destinationType == typeof(decimal) => ReadDecimalMethod,
             _ => null
         };
-        return fast is not null
-            ? Expression.Call(fast, value, Expression.Constant(binding.OutputField.Path.Segments[0].Segment!), Expression.Constant(binding))
-            : Expression.Call(ReadMethod.MakeGenericMethod(destinationType, GetConverterType(binding.Conversion, destinationType)),
-                value, Expression.Constant(binding));
+        var fallback = Expression.Call(
+            ReadMethod.MakeGenericMethod(destinationType, GetConverterType(binding.Conversion, destinationType)),
+            value, Expression.Constant(binding));
+        if (fast is null) return fallback;
+        var converted = Expression.Variable(destinationType, "converted");
+        // Keep binding metadata and the generic exception-translating reader entirely in the cold arm.
+        return Expression.Block([converted], Expression.Condition(
+            Expression.Call(fast, value, Expression.Constant(binding.OutputField.Path.Segments[0].Segment!), converted),
+            converted, fallback));
     }
 
     static Type GetConverterType(RelationDtoValueConversion conversion, Type destinationType)
@@ -968,37 +973,46 @@ sealed class RelationDtoCompiledBinding
 
 static class RelationDtoValueReader
 {
-    // These readers are selected only for compiler-proven destination types and direct canonical field names.
-    // They preserve the complete generic reader for null, absence, alternate accepted kinds and diagnostics.
+    // Selected only for compiler-proven destinations/direct field names. Failure leaves the generated
+    // expression to invoke the original reader, preserving null, absence, alternate kinds and diagnostics.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static string ReadString(in ObservationValue root, string fieldIdentity, RelationDtoCompiledBinding binding)
+    internal static bool TryReadString(in ObservationValue root, string fieldIdentity, out string converted)
     {
         if (root.Kind == ObservationValueKind.Object && root.Fields is { } fields
             && fields.TryGetValue(fieldIdentity, out var value)
             && value.Kind == ObservationValueKind.String && value.String is { } text)
-            return text;
-        return Read<string, StringConverter<string>>(in root, binding);
+        {
+            converted = text;
+            return true;
+        }
+        converted = default!;
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static string ReadEntityReference(in ObservationValue root, string fieldIdentity, RelationDtoCompiledBinding binding)
+    internal static bool TryReadEntityReference(in ObservationValue root, string fieldIdentity, out string converted)
     {
         if (root.Kind == ObservationValueKind.Object && root.Fields is { } fields
             && fields.TryGetValue(fieldIdentity, out var value)
             && value.Kind == ObservationValueKind.String && !string.IsNullOrWhiteSpace(value.String))
-            return value.String;
-        return Read<string, EntityReferenceStringConverter<string>>(in root, binding);
+        {
+            converted = value.String;
+            return true;
+        }
+        converted = default!;
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static decimal ReadDecimal(in ObservationValue root, string fieldIdentity, RelationDtoCompiledBinding binding)
+    internal static bool TryReadDecimal(in ObservationValue root, string fieldIdentity, out decimal converted)
     {
         if (root.Kind == ObservationValueKind.Object && root.Fields is { } fields
             && fields.TryGetValue(fieldIdentity, out var value)
             && value.Kind is ObservationValueKind.Decimal or ObservationValueKind.Int64
-            && value.TryGetDecimal(out var number))
-            return number;
-        return Read<decimal, DecimalConverter<decimal>>(in root, binding);
+            && value.TryGetDecimal(out converted))
+            return true;
+        converted = default;
+        return false;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

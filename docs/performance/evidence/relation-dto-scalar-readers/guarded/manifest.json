@@ -1,0 +1,10 @@
+{
+  "design": "Emit conditional scalar reads directly into the constructor expression. Binding metadata is evaluated only in the original generic fallback branch.",
+  "baseline": "601d6a80",
+  "repeats": 3,
+  "measurement": "Matched frozen harness/dependencies, only Relations differs; four warmups and six 200ms iterations, one case per fresh process.",
+  "source_hashes": {
+    "src/Cohesive.Relations/Mapping/RelationDtoMapperBuilder.cs": "dd99b3492b30f8ebcaf589744801a825100c2d4ca734cd13adf8010181588448",
+    "src/Cohesive.Relations.Tests/RelationDtoMapperTests.cs": "148526870665c436d18fac1cefc46f1b3b9c29dcb47b4676c46657131ca7ac19"
+  }
+}

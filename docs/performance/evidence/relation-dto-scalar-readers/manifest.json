@@ -140,5 +140,7 @@
     }
   },
   "design": "Compile exact string, non-nullable decimal and entity-reference string reads to tiny specialized helpers. Generic conversion, null/missing, alternate-kind and diagnostic behavior remains the fallback. No new public API, destination representation or dependency.",
-  "limits": "Same-input kernel comparison isolates DTO construction. Full canonical mapping also includes provenance and result bookkeeping. Local ARM64 parity is not Linux qualification. The three explicit helpers intentionally avoid the generic adapter measured slower in the rejected prototype."
+  "limits": "Same-input kernel comparison isolates DTO construction. Full canonical mapping also includes provenance and result bookkeeping. Local ARM64 parity is not Linux qualification. The three explicit helpers intentionally avoid the generic adapter measured slower in the rejected prototype.",
+  "candidate_source_revision": "a8b6631b",
+  "phase": "Direct specialized helpers; local results did not establish Linux parity."
 }
