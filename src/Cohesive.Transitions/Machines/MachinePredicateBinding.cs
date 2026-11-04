@@ -1,11 +1,8 @@
 using Cohesive.Machines;
 using Cohesive.Relations.Authoring;
-using System.Collections.Immutable;
 using System.Linq.Expressions;
-using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Transitions.Compilation;
-using Cohesive.Transitions.IR;
 
 namespace Cohesive.Transitions.Machines;
 
@@ -30,7 +27,7 @@ public sealed class MachinePredicateBinding<TEntity, TInput> where TEntity : not
         var guard = MachineGuardCompiler.Compile(predicate);
         if (guard.Analyze().Requirements.Bindings.Contains(guard.InputBinding))
             throw new ArgumentException("A state predicate cannot depend on an action payload.", nameof(predicate));
-        predicates.Add(state, Rebind(guard.Predicate, guard)); return this;
+        predicates.Add(state, MachineTransitionLinker.Rebind(guard.Predicate, guard)); return this;
     }
     /// <summary>Recognizes a configuration independently of action payloads.</summary>
     /// <param name="state">Owner-scoped state.</param>
@@ -58,27 +55,8 @@ public sealed class MachinePredicateBinding<TEntity, TInput> where TEntity : not
         }
         return new([.. machine.Edges.Select(edge =>
         {
-            var source = Exclusive(edge.From);
-            if (edge.Guard is { } guard) source = Expr.And(source, Rebind(guard.Predicate, guard));
-            // Refuse ambiguous selection at the entity admission boundary as well.
-            foreach (var other in machine.Edges.Where(e => e.Id != edge.Id && e.From == edge.From && e.Action == edge.Action))
-                source = Expr.And(source, other.Guard is null ? Expr.Const(false) : Expr.Not(Rebind(other.Guard.Predicate, other.Guard)));
+            var source = MachineTransitionLinker.SourceAdmission(machine, edge, Exclusive(edge.From));
             return new TransitionMachineEdgeLink(machine.Document.Reference, new(edge.Id), source, Exclusive(edge.To), []);
         })]);
-    }
-
-    static Expr Rebind(Expr expression, MachineGuard guard)
-    {
-        ValueBindingId Bind(ValueBindingId id) => id == guard.FactsBinding ? TransitionBindingIds.Observation
-            : id == guard.InputBinding ? TransitionBindingIds.Input : throw new ArgumentException("Unbound machine expression.");
-        return expression switch
-        {
-            BindingExpr e => new BindingExpr(Bind(e.Binding)),
-            FieldExpr e => new FieldExpr(e.Path, e.Binding is { } id ? Bind(id) : TransitionBindingIds.Observation),
-            ConstantExpr or LiteralExpr => expression,
-            UnaryExpr e => e with { Operand = Rebind(e.Operand, guard) },
-            BinaryExpr e => e with { Left = Rebind(e.Left, guard), Right = Rebind(e.Right, guard) },
-            _ => throw new NotSupportedException("Predicate bindings currently accept field, literal, unary and binary expressions.")
-        };
     }
 }

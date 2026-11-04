@@ -9,6 +9,8 @@ using Cohesive.Transitions.Compilation;
 namespace Cohesive.Transitions.Machines;
 
 /// <summary>Typed discriminator authoring projected into the existing Transition linker.</summary>
+/// <remarks>Edge guards read entity observation and transition input. The movement assigns the discriminator
+/// only after source configuration, guard and unique-selection obligations succeed.</remarks>
 /// <typeparam name="TEntity">Entity observation type.</typeparam>
 /// <typeparam name="TValue">Discriminator value type.</typeparam>
 public sealed class MachineDiscriminatorBinding<TEntity, TValue> where TEntity : notnull
@@ -53,9 +55,10 @@ public sealed class MachineDiscriminatorBinding<TEntity, TValue> where TEntity :
             throw new ArgumentException("State belongs to another exact machine.", nameof(state));
         return Map(state.Id, value);
     }
-    /// <summary>Derives immutable links; ownership and shape checks remain in Transition compilation.</summary>
+    /// <summary>Derives immutable guarded links; ownership and shape checks remain in Transition compilation.</summary>
     /// <returns>Exact machine edge catalog.</returns>
     /// <exception cref="ArgumentException">Mapping is incomplete or invalid.</exception>
+    /// <exception cref="NotSupportedException">A guard uses an unsupported binding expression.</exception>
     public TransitionMachineLinkCatalog Build() => MachineTransitionLinker.LinkDiscriminator(machine, path, values);
 }
 

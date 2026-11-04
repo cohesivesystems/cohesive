@@ -62,17 +62,58 @@ always rejects overlapping enabled edges. No guard priority is inferred from dec
 
 The `Cohesive.Transitions.Machines` namespace lives in `Cohesive.Transitions/Machines`; core has no dependency on Transitions.
 
+The machine owns the submission precondition; the entity transition requests the movement and
+records who submitted the order. This complete declaration uses the conventions for transition metadata:
+
 ```csharp
-var links = new MachineDiscriminatorBinding<Order, OrderStatus>(
+using Cohesive.Machines;
+using Cohesive.Transitions.Authoring;
+using Cohesive.Transitions.Compilation;
+using Cohesive.Transitions.IR;
+using Cohesive.Transitions.Machines;
+
+// Entity and command types (declared outside the setup method):
+public sealed record Order(string Status, int ItemCount, string SubmittedBy);
+public sealed record SubmitOrder(string Actor, bool AcceptTerms);
+
+// Inside application setup:
+var source = Machine.Define("order.lifecycle", revision: "1");
+var draft = source.State("draft").Initial();
+var submitted = source.State("submitted").Final();
+var submit = source.Edge("submit").From(draft).To(submitted)
+    .When((Order order, SubmitOrder command) =>
+        order.ItemCount > 0 && command.AcceptTerms);
+var lifecycle = source.Build();
+
+var links = new MachineDiscriminatorBinding<Order, string>(
         lifecycle, order => order.Status)
-    .Map(draft, OrderStatus.Draft)
-    .Map(submitted, OrderStatus.Submitted)
-    .Map(completed, OrderStatus.Completed)
+    .Map(draft, "draft")
+    .Map(submitted, "submitted")
     .Build();
 
-// Inside ordinary Transition authoring:
-transition.Move(submit, rejection: (_, _) => SubmitOutcome.InvalidState);
+var entity = ObjectEntityDefinition.For<Order>(new("order"));
+var transition = TransitionAuthoring.Create<Order, SubmitOrder, string>(
+    entity.Shape, new("order.submit"), new("1"),
+    t => t
+        .Move(submit, rejection: (order, command) => "Cannot submit")
+        .Set(new("record-submitter"), order => order.SubmittedBy,
+            (order, command) => command.Actor)
+        .Return(new("result"), TransitionOutcomeDisposition.Applied, "Submitted"));
+
+var compilation = TransitionStaticCompiler.Compile(
+    transition.Document, machineLinks: links);
 ```
+
+A draft order with items and accepted terms produces a decision containing the `Status = "submitted"`
+assignment and the submitter update. An empty order, declined terms, or an order outside `draft` rejects
+admission without commit artifacts. There is no duplicate `Requires` for the machine guard and no
+manual `Set` for the discriminator. The host commits the resulting decision through its normal boundary.
+The executable example is covered in `Cohesive.Tests/Machines/GuardedDiscriminatorTests.cs`.
+
+Both discriminator and predicate bindings rebind guard facts to entity observation and guard input to
+the transition command. Admission requires the selected guard and rejects any other enabled edge for
+the same source state/action; an explicit movement does not bypass ambiguous machine admission.
+Guards constrain the source; final-target checks concern the resulting configuration.
 
 Supply `links` to `TransitionStaticCompiler.Compile(..., machineLinks: links)`. The existing
 MoveMachine node pins the exact machine document and edge. The movement owns the discriminator
@@ -84,7 +125,7 @@ For computed configurations, `MachinePredicateBinding<TEntity,TInput>` maps each
 predicate instead. Typed state-handle overloads accept `Expression<Func<TEntity,bool>>`.
 Transitions establish fields through ordinary patches. Source admission and the **final** candidate
 must recognize exactly one declared state; overlapping states fail closed. Action-payload-dependent
-state definitions are rejected. Edge guards also participate in source admission. Predicate
+state definitions are rejected. Edge guards also participate in source admission. Both kinds of machine
 bindings support fields, constants, literals, unary and binary expressions; unsupported expression
 forms produce an explicit error rather than a callback fallback.
 
@@ -141,7 +182,7 @@ later extensions from the broader Notion research program, not implemented capab
 Reuse: shared expression lowering/analysis/evaluation, canonical execution documents, source maps,
 Transition compilation, patches, decisions and commit boundaries. Typed guard lowering lives in Relations, which depends on core; core does not depend on Relations.
 No third expression translator was introduced.
-Predicate rebinding is a deliberately bounded integration operation rather than a second evaluator.
+Guard and state-predicate rebinding share a deliberately bounded integration operation rather than a second evaluator.
 
 Verification lives in Cohesive.Tests/Machines and the existing Transition compiler/interpreter
 conformance suites. Guarded admission indexes candidates by state/action and shares the stateless reference
