@@ -237,3 +237,41 @@ and original canonical-row construction are excluded from every path. Warm ordin
 AutoMapper compares different physical storage; it is not a one-shot conversion speedup claim. The existing
 `SharedCoreIndexed*` cases provide a same-storage comparator. None of the projection kernels claims the
 public mapper's provenance, cancellation, admission, or collect-all diagnostics contract.
+
+
+The ordinal experiment's Linux Short run [41876590708](https://github.com/cohesivesystems/cohesive/actions/runs/41876590708)
+at revision `343f2e98` completed all 54 cases on AMD EPYC 7763 / .NET 10.0.14. Representative
+1,024-row means (microseconds per complete output array):
+
+| Path | Simple | Joined |
+| --- | ---: | ---: |
+| AutoMapper, canonical row input | 54.996 | 204.096 |
+| Existing canonical scalar kernel | 64.514 | 228.914 |
+| Direct bound ordinal kernel | 31.641 | 65.384 |
+| Existing shared-core indexed materializer | 98.183 | 270.531 |
+| Canonical-to-ordinal admission only | 414.838 | 851.545 |
+| Canonical-to-ordinal admission plus DTOs | 463.945 | 960.897 |
+
+Warm ordinal mapping is about 1.74x / 3.12x faster than AutoMapper on these different storage inputs,
+and 3.10x / 4.14x faster than the existing same-storage indexed materializer. Each warm path allocates
+only 57,368 / 106,520 destination bytes. Ordinal preparation plus mapping allocates 401,488 / 647,248
+bytes. These are Short-job observations on a hosted runner, not stable release budgets. The full suite
+also covers 1 and 32 rows; the ordinal kernel beat AutoMapper at both widths in both fixtures.
+
+Three counterbalanced ARM64 repeats agree on the direction: ordinal 12.372 / 26.576 us versus
+AutoMapper 24.934 / 82.612 us. A matched control check using the old identical harness and changing
+only `Cohesive.Relations.dll` found a 4.3% increase in simple scalar-kernel time, 0.9% joined, and
+0.5% / 1.0% for the full canonical mapper after shared conversion factoring. That small canonical-path
+tradeoff is recorded, not claimed as an improvement. An alternate string-check ordering did not
+resolve it and was reverted; its first repeat overlapped a rebuild and is excluded completely.
+
+Keep direct ordinal use opt-in until an ingestion or relation producer already owns validated ordinal
+storage. Repacking an existing canonical result for one mapping is substantially slower. Native ordinal
+ingestion, validation, and complete application execution still need end-to-end comparison before
+production routing changes. This prototype supports the existing top-level scalar DTO contract; it
+introduces no recursive mapping semantics or public compilation API. The binding and conversion rules
+remain those of the relation mapper, not the more general core materializer.
+
+The reproduction commands, source/runtime hashes, matched controls, raw reports, rejected probe, and
+verification record are retained in `docs/performance/evidence/relation-dto-ordinals`. The implementation
+adds no public types or dependencies, and does not retain target expression trees in ordinary mappers.
