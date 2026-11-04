@@ -170,17 +170,22 @@ public sealed partial class ServiceRuntime
         internal ServiceBinding Binding => Resolution.Value;
     }
     readonly IServiceInvocationAuthorization authorization;
+    readonly IServiceInvocationAuthorization discoveryAuthorization;
     readonly ExecutionDefinitionReference definitionReference;
 
     string ServiceOperationIdentity(string operationId) =>
         ServiceApiProjection.OperationIdentity(definitionReference, operationId);
 
     /// <summary>Admits a canonical declaration and its exact physical bindings without resolving repositories.</summary>
+    /// <param name="service">Canonical service declaration.</param>
+    /// <param name="bindings">Exact operation bindings.</param>
+    /// <param name="authorization">Invocation authorization policy.</param>
+    /// <param name="discoveryAuthorization">Optional host-owned visibility policy; defaults to invocation policy.</param>
     /// <exception cref="ArgumentException">The declaration or binding set is invalid or requires unsupported guarantees.</exception>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     public ServiceRuntime(ExecutionDefinitionDocument service, IEnumerable<ServiceBinding> bindings,
-        IServiceInvocationAuthorization authorization)
-        : this(service, BindingFactories(bindings), authorization, eager: true) { }
+        IServiceInvocationAuthorization authorization, IServiceInvocationAuthorization? discoveryAuthorization = null)
+        : this(service, BindingFactories(bindings), authorization, eager: true, discoveryAuthorization) { }
 
     /// <summary>Admits declaration and complete factory coverage without preparing unused operation bindings.</summary>
     /// <remarks>Each factory is invoked once, thread-safely, when its operation first needs a binding.
@@ -191,12 +196,14 @@ public sealed partial class ServiceRuntime
     /// <param name="service">Canonical service declaration.</param>
     /// <param name="bindings">Exactly one immutable binding factory per declared operation; copied on admission.</param>
     /// <param name="authorization">Invocation-scoped authority policy.</param>
+    /// <param name="discoveryAuthorization">Optional host-owned visibility policy; defaults to invocation policy.</param>
     /// <returns>A runtime with independently deferred exact operation bindings.</returns>
     /// <exception cref="ArgumentException">The declaration or factory coverage is invalid.</exception>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public static ServiceRuntime CreateDeferred(ExecutionDefinitionDocument service,
-        IReadOnlyDictionary<string, Func<ServiceBinding>> bindings, IServiceInvocationAuthorization authorization) =>
-        new(service, bindings, authorization, eager: false);
+        IReadOnlyDictionary<string, Func<ServiceBinding>> bindings, IServiceInvocationAuthorization authorization,
+        IServiceInvocationAuthorization? discoveryAuthorization = null) =>
+        new(service, bindings, authorization, eager: false, discoveryAuthorization);
 
     /// <summary>Prepares and validates every operation binding for explicit host preflight.</summary>
     /// <remarks>Does not authorize a caller or qualify backend availability. Reuses successful preparation;
@@ -218,11 +225,12 @@ public sealed partial class ServiceRuntime
     }
 
     ServiceRuntime(ExecutionDefinitionDocument service, IReadOnlyDictionary<string, Func<ServiceBinding>> bindings,
-        IServiceInvocationAuthorization authorization, bool eager)
+        IServiceInvocationAuthorization authorization, bool eager, IServiceInvocationAuthorization? discoveryAuthorization = null)
     {
         ArgumentNullException.ThrowIfNull(service);
         ArgumentNullException.ThrowIfNull(bindings);
         this.authorization = authorization ?? throw new ArgumentNullException(nameof(authorization));
+        this.discoveryAuthorization = discoveryAuthorization ?? authorization;
         var validation = ServiceDefinitionDocuments.ValidateAndProject(service, out var definition);
         if (!validation.IsValid)
             throw new ServiceBindingValidationException(validation);
@@ -342,10 +350,7 @@ public sealed partial class ServiceRuntime
             if (snapshot is null)
                 return Reject(ApiResultKind.NotFound, "services.subject.missing", "/subject", "The subject was not found in the authorized scope.");
             evidence.Record("subjectLoaded");
-            if (snapshot.Entity.EntityId.Value != subject
-                || (readOptions.PartitionKey is not null && snapshot.PartitionKey != readOptions.PartitionKey)
-                || (snapshot.LoadedFields is not null && repository.EntityDefinition.Shape.Fields.Any(f => !snapshot.LoadedFields.Contains(f.Name.Value))))
-                throw new InvalidOperationException("The repository returned an inexact or partial subject snapshot.");
+            ValidateTransitionSnapshot(repository, snapshot, subject, readOptions.PartitionKey);
             if (!await authorization.AuthorizeResourceAsync(context, linked.Operation, snapshot).ConfigureAwait(false))
                 return Reject(ApiResultKind.Forbidden, "services.authorization.resourceDenied", "/authorization/resource", "The caller is not authorized for this resource.");
             evidence.Record("resourceAuthorized");

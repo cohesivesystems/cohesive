@@ -436,3 +436,10 @@ incomplete or foreign infrastructure compilation before admission. the Applicati
 registers the named offline command and writes a report only when requested; both native Aspire
 examples use this entry point. History metadata derives from the storage-owned declaration;
 a composition without a history attachment does not invent a history selection.
+
+## Entity transition discovery
+
+`ServiceRuntime.InspectTransitionsAsync` exposes actor-specific, snapshot-bound availability of registered
+entity transitions, using the existing authorization policy and canonical Transition interpreter without writes.
+See [transition discovery](Services/TRANSITION_DISCOVERY.md) for capability grants, visibility policy, input
+requirements, result semantics and execution rechecks.
