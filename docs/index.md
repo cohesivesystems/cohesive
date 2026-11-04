@@ -37,6 +37,7 @@ expectations.
 | Which Execution Kernel behavior exists today? | [Execution Kernel compatibility](EXECUTION_KERNEL_COMPATIBILITY.md) | Implementation compatibility inventory |
 | How do I adopt, execute, observe, and migrate to the canonical kernel? | [Execution Kernel adoption guide](EXECUTION_KERNEL_GUIDE.md) | Source-backed implementation guide and executable examples |
 | How do I use deterministic data, seeding, scenarios, and replay as one assurance spine? | [Simulation adoption and agentic assurance](../src/Cohesive.Simulation/docs/adoption-and-assurance.md) | Alpha adoption and evidence guide |
+| How can a coding agent inspect and check exported Cohesive semantics? | [Development MCP](../src/adapters/Cohesive.Adapters.Mcp.Development/README.md) | Initial local stdio server and executable authoring example |
 | How is index synchronization operated? | [Index synchronization runbook](INDEX_SYNC_RUNBOOK.md) | Operational procedure |
 
 ## Sources of authority
