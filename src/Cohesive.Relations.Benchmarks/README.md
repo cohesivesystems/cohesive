@@ -353,3 +353,29 @@ SQLite results are not PostgreSQL, network, contributor-provenance or complete-a
 read path is rerouted. Evidence and reproduction details are under
 `docs/performance/evidence/sqlite-ordinal-ingestion`. The SQLite suite passes 235 tests including ownership,
 null/missing/whole-binding absence, malformed presence/scalars and a relative allocation regression guard.
+
+
+### PostgreSQL entity ingestion with provenance
+
+The PostgreSQL entity repository already decodes native columns directly into a shared ordinal layout.
+`*PostgresOrdinalIngestionBenchmarks*` verifies that existing path against a dictionary storage reference,
+sharing the same scalar decoder, shape/entity validation and snapshot construction. The reference mode is
+internal to tests/benchmarks; production reads continue to select ordinal storage by default.
+
+Both timed paths execute a real PostgreSQL query, advance and decode the provider reader, admit complete
+state, reconstruct entity identity, partition, observation version and `xmin` concurrency token, and retain
+both `EntitySnapshot` and an owned DTO. Rows cover nullable 256-byte payloads. Compilation, table population,
+connection opening and command creation are in setup; query execution, wire transfer, decoding, validation,
+metadata and output construction are timed. Serialization and pool-acquisition costs are excluded.
+
+Supply `COHESIVE_POSTGRES_TEST_CONNECTION_STRING` for a disposable PostgreSQL database. Fixtures create and
+drop uniquely named tables only. The manual workflow supplies an ephemeral PostgreSQL 14 service. Run
+`--filter '*PostgresOrdinalIngestionBenchmarks*'` for six cases across 1/32/1024 rows. Native tests use the same
+fixture and assert real metadata values, null fidelity, selected-field provenance, invalid required values,
+provider lifetime and resistance to mutable DTO payload changes.
+
+This is entity-snapshot provenance, not join-contributor lineage. `PostgresQueryRowsReader` currently lacks
+contributor reconstruction and is not upgraded or advertised as equivalent by this experiment. No redundant
+native ingestion API was introduced; existing entity decoding and validation remain authoritative. Adding the
+PostgreSQL project to the strict benchmark build also required a nullable-flow correction in that query reader,
+using a captured non-null cell rather than indexing twice; decoding behavior is unchanged.

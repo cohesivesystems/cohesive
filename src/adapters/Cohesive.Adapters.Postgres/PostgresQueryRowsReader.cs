@@ -123,8 +123,8 @@ public sealed class PostgresQueryRowsReader : IRelationQueryRowsReader
         {
             var field = artifact.ResultFields[index];
             if (!IsPresent(row, presenceOrdinals[index])) continue;
-            yield return new(field.Field.Path, row[index] is null ? ObservationValue.Null
-                : PostgresRelationQueryScalarCatalog.ToObservationValue(row[index], scalarTypes[index]));
+            yield return new(field.Field.Path, row[index] is { } raw
+                ? PostgresRelationQueryScalarCatalog.ToObservationValue(raw, scalarTypes[index]) : ObservationValue.Null);
         }
     }
 
