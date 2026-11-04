@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.Compilation;
 using Cohesive.Execution;
+using Cohesive.Api.Services;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Prelude;
@@ -110,7 +111,48 @@ public sealed class ServiceImplementationPlan
         ImplementCore(definition, endpoint, endpoint.Operation.TransitionReference, repository);
     }
 
-    void ImplementCore(ApiDefinition definition, ApiEndpoint endpoint, ExecutionDefinitionReference? execution, ValueContract? repository)
+    /// <summary>Admits both operations of a fingerprint-pinned admission/result pair atomically.</summary>
+    /// <typeparam name="TRequest">Command input.</typeparam><typeparam name="TResult">Terminal result.</typeparam>
+    /// <param name="definition">Owning API.</param><param name="pair">Original pair retaining its exact service document.</param>
+    public void ImplementProcess<TRequest, TResult>(ApiDefinition definition, ServiceAcceptedProcessApi<TRequest, TResult> pair) where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(pair);
+        Contribute(definition, () =>
+        {
+            ImplementServiceOperation(definition, pair.Start, pair.Declaration, pair.StartOperationId);
+            ImplementServiceOperation(definition, pair.Result, pair.Declaration, pair.ResultOperationId);
+        });
+    }
+
+    /// <summary>Admits a typed terminal process endpoint against its exact service authority.</summary>
+    /// <typeparam name="TRequest">Command input.</typeparam><typeparam name="TResult">Terminal result.</typeparam>
+    /// <param name="definition">Owning API.</param><param name="endpoint">Original typed process endpoint.</param>
+    /// <param name="service">Exact canonical service document retained by the binding.</param>
+    /// <exception cref="ServiceBindingValidationException">The endpoint belongs to another service revision.</exception>
+    public void ImplementProcess<TRequest, TResult>(ApiDefinition definition, ServiceProcessEndpoint<TRequest, TResult> endpoint, ExecutionDefinitionDocument service)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint); ArgumentNullException.ThrowIfNull(service);
+        if (endpoint.Service != service.Reference)
+            throw Error("services.api.processMismatch", $"Endpoint '{endpoint.Id}' belongs to another service revision.");
+        ImplementServiceOperation(definition, endpoint, service, endpoint.OperationId);
+    }
+
+    void ImplementServiceOperation(ApiDefinition definition, ApiEndpoint endpoint, ExecutionDefinitionDocument service, string operationId)
+    {
+        ArgumentNullException.ThrowIfNull(endpoint); ArgumentNullException.ThrowIfNull(service);
+        var operation = service.GetDefinition<ServiceDefinition>().Operations.SingleOrDefault(item => item.Id == operationId);
+        var execution = operation switch
+        {
+            ServiceProcessOperation start => start.Process,
+            ServiceProcessResultOperation result => result.Process,
+            _ => throw Error("services.api.operationMismatch", $"'{operationId}' is not a process start or result operation.")
+        };
+        if (endpoint.Id.Value != ServiceApiProjection.OperationIdentity(service.Reference, operationId))
+            throw Error("services.api.operationMismatch", $"Endpoint '{endpoint.Id}' does not project service operation '{operationId}'.");
+        ImplementCore(definition, endpoint, execution, null, new(service, operation!));
+    }
+
+    void ImplementCore(ApiDefinition definition, ApiEndpoint endpoint, ExecutionDefinitionReference? execution, ValueContract? repository, ServiceEndpointOperation? service = null)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         state.Edit(() =>
@@ -119,7 +161,7 @@ public sealed class ServiceImplementationPlan
                 throw Error("services.api.foreignEndpoint", $"Endpoint '{endpoint.Id}' is not from the declared API.");
             if (!supplied.Add(endpoint.Id))
                 throw Error("services.api.duplicateImplementation", $"Endpoint '{endpoint.Id}' has competing implementations.");
-            implementations.Add(new(endpoint.Operation, execution, repository));
+            implementations.Add(new(endpoint.Operation, execution, repository) { Service = service });
             return this;
         });
     }

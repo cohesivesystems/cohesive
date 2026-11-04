@@ -1328,7 +1328,7 @@ public sealed class MaterializationRebuildExecutor
                     pageIdentity,
                     shard.Scope.Input,
                     page.Read.Observations,
-                    plan.Materialization.Definition.Relation.Output.Shape,
+                    plan.Materialization.Definition.Relation.ValueShape,
                     hydrated.Rows,
                     out var mutations,
                     out var projectionMessage))

@@ -25,6 +25,8 @@ public sealed class ServiceApiBindingsBuilder
 {
     /// <summary>Portable admission and query evidence; can be inspected without persistence.</summary>
     public ServiceImplementationPlan Plan { get; } = new();
+    internal bool RequiresDurableProvider { get; private set; }
+    internal void RequireDurableProvider() => RequiresDurableProvider = true;
     readonly object buildGate = new();
     ServiceApiBindings? built;
     IServiceCollection? builtServices;
@@ -72,8 +74,9 @@ public sealed class ServiceApiBindingsBuilder
         {
             var count = contributions.Count;
             var registrationCount = registrations.Count;
+            var previousDurableRequirement = RequiresDurableProvider;
             try { Plan.Contribute(definition, () => configure(new(this, api, definition))); }
-            catch { contributions.RemoveRange(count, contributions.Count - count); registrations.RemoveRange(registrationCount, registrations.Count - registrationCount); throw; }
+            catch { RequiresDurableProvider = previousDurableRequirement; contributions.RemoveRange(count, contributions.Count - count); registrations.RemoveRange(registrationCount, registrations.Count - registrationCount); throw; }
             return this;
         });
     }
@@ -92,13 +95,16 @@ public sealed class ServiceApiBindingsBuilder
     /// <summary>Freezes all contributions, resolves storage once and checks complete, unique implementation coverage.</summary>
     /// <param name="services">Host services owning optional logging subscriptions.</param>
     /// <param name="persistence">Native storage resolution; resources remain caller-owned.</param>
+    /// <param name="durableProvider">Optional native durable provider for explicit preparation before host construction.</param>
     /// <returns>A prepared HTTP model. Mapping performs no storage resolution.</returns>
     /// <exception cref="ServiceBindingValidationException">Contract coverage or implementation ownership is invalid.</exception>
-    public ServiceApiBindings Build(IServiceCollection services, IServicePersistence persistence)
+    public ServiceApiBindings Build(IServiceCollection services, IServicePersistence persistence, IDurableServiceProcessProvider? durableProvider = null)
     {
         ArgumentNullException.ThrowIfNull(services);
+        if (RequiresDurableProvider && durableProvider is null)
+            throw ServiceImplementationPlan.Error("services.binding.durableProviderMissing", "Supply a durable process provider before preparing this API.");
         Register(services);
-        return Build(new ServiceCollectionProcessLifetime(services), persistence);
+        return Build(new ServiceCollectionProcessLifetime(services, durableProvider), persistence);
     }
 
     internal ServiceApiBindings Build(IServiceProcessLifetime lifetime, IServicePersistence persistence)
@@ -211,8 +217,7 @@ public sealed class ServiceApiImplementation<TApi>
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "The linked API and runtime require the same exact service.");
         model.Plan.Contribute(definition, () =>
         {
-            model.Plan.Implement(definition, start, pair.Declaration.Reference);
-            model.Plan.Implement(definition, result, pair.Declaration.Reference);
+            model.Plan.ImplementProcess(definition, pair);
             model.Add(_ => new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project), []));
         });
         return this;
@@ -229,12 +234,31 @@ public sealed class ServiceApiImplementation<TApi>
     public ServiceApiImplementation<TApi> BindHosted<TInput, TResult>(
         Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult>> select,
         string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
-        bool logPrivateFailures = false, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : notnull
+        bool logPrivateFailures = false, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : notnull =>
+        BindProcess(select, authority, authorization, maximumExecutions, ProcessExecutionLifetime.Host, logPrivateFailures, authorizationPolicyResolver);
+
+    /// <summary>Binds a standard command envelope to persistent admission and linked protected result polling.</summary>
+    /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process result.</typeparam>
+    /// <param name="select">Colocated start/result pair owned by this API.</param>
+    /// <param name="authority">Logical execution authority.</param><param name="authorization">Per-invocation authorization.</param>
+    /// <param name="logPrivateFailures">Opt in to scoped operator diagnostics.</param>
+    /// <param name="authorizationPolicyResolver">Optional native authorization policy mapping.</param>
+    /// <returns>This contribution; the registered durable provider is admitted during host preparation.</returns>
+    public ServiceApiImplementation<TApi> BindDurable<TInput, TResult>(
+        Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult>> select,
+        string authority, IServiceInvocationAuthorization authorization, bool logPrivateFailures = false,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : notnull =>
+        BindProcess(select, authority, authorization, 0, ProcessExecutionLifetime.Durable, logPrivateFailures, authorizationPolicyResolver);
+
+    ServiceApiImplementation<TApi> BindProcess<TInput, TResult>(
+        Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult>> select,
+        string authority, IServiceInvocationAuthorization authorization, int maximumExecutions, ProcessExecutionLifetime executionLifetime,
+        bool logPrivateFailures, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver) where TResult : notnull
     {
         ArgumentNullException.ThrowIfNull(select);
         var pair = select(api) ?? throw ServiceImplementationPlan.Error("services.api.foreignEndpoint", "Select a linked API contract.");
         var resultContract = pair.Process.Definition.Definition.Result;
-        return BindHosted(_ => pair, authority, authorization, maximumExecutions,
+        return BindProcess(_ => pair, pair.Service, pair.Process, authority, authorization, maximumExecutions, executionLifetime,
             bind: (_, command) =>
             {
                 if (string.IsNullOrWhiteSpace(command.CommandId) || string.IsNullOrWhiteSpace(command.IdempotencyKey)
@@ -286,11 +310,21 @@ public sealed class ServiceApiImplementation<TApi>
         ProcessModel<TInput, TResult> process, string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
         Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
             ProcessContinuationIdentity Continuation, ObservationValue Input)> bind, Func<PortableValue, TResult> project,
-        bool logPrivateFailures = false, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TRequest : class
+        bool logPrivateFailures = false, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TRequest : class =>
+        BindProcess(select, service, process, authority, authorization, maximumExecutions, ProcessExecutionLifetime.Host,
+            bind, project, logPrivateFailures, authorizationPolicyResolver);
+
+    ServiceApiImplementation<TApi> BindProcess<TRequest, TInput, TResult>(
+        Func<TApi, ServiceAcceptedProcessApi<TRequest, TResult>> select, ServiceBuilder service,
+        ProcessModel<TInput, TResult> process, string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
+        ProcessExecutionLifetime executionLifetime,
+        Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
+            ProcessContinuationIdentity Continuation, ObservationValue Input)> bind, Func<PortableValue, TResult> project,
+        bool logPrivateFailures, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver) where TRequest : class
     {
         ArgumentNullException.ThrowIfNull(select); ArgumentNullException.ThrowIfNull(service); ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(authorization); ArgumentNullException.ThrowIfNull(bind); ArgumentNullException.ThrowIfNull(project);
-        if (maximumExecutions <= 0) throw new ArgumentOutOfRangeException(nameof(maximumExecutions));
+        if (executionLifetime == ProcessExecutionLifetime.Host && maximumExecutions <= 0) throw new ArgumentOutOfRangeException(nameof(maximumExecutions));
         var pair = select(api) ?? throw ServiceImplementationPlan.Error("services.api.foreignEndpoint", "Select a linked API contract.");
         var start = Select(_ => pair.Start);
         var result = Select(_ => pair.Result);
@@ -299,24 +333,25 @@ public sealed class ServiceApiImplementation<TApi>
             || declaration.GetDefinition<ServiceDefinition>().Operations.Any(operation => operation switch
             {
                 ServiceProcessOperation entry => entry.Process != process.Definition.Reference
-                    || entry.Execution is not { Lifetime: ProcessExecutionLifetime.Host, Completion: ServiceProcessCompletion.Admission },
+                    || entry.Execution is not { Completion: ServiceProcessCompletion.Admission } || entry.Execution.Lifetime != executionLifetime,
                 ServiceProcessResultOperation read => read.Process != process.Definition.Reference,
                 _ => true
             }))
-            throw ServiceImplementationPlan.Error("services.api.processMismatch", "Host binding requires exact process references and host-owned admission.");
+            throw ServiceImplementationPlan.Error("services.api.processMismatch", "Process binding requires exact references and the declared admission lifetime.");
         model.Plan.Contribute(definition, () =>
         {
+            if (executionLifetime == ProcessExecutionLifetime.Durable) model.RequireDurableProvider();
             model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
-            model.Plan.Implement(definition, start, process.Definition.Reference);
-            model.Plan.Implement(definition, result, process.Definition.Reference);
+            model.Plan.ImplementProcess(definition, pair);
             var policies = authorizationPolicyResolver;
             model.ConfigureServices(services => policies ??= ServiceProcessHttpAuthorization.Register(services, pair, authorization));
             model.Add((lifetime, persistence) =>
             {
                 var prepared = service.PrepareProcess(process.Definition, persistence.Repository);
                 if (logPrivateFailures) lifetime.Log(prepared);
-                var worker = lifetime.Worker(prepared, maximumExecutions);
-                var runtime = worker.Bind(declaration, authority, authorization);
+                var runtime = executionLifetime == ProcessExecutionLifetime.Host
+                    ? lifetime.Worker(prepared, maximumExecutions).Bind(declaration, authority, authorization)
+                    : lifetime.Durable(prepared, declaration, authority, authorization);
                 return new([start, result], routes => routes.MapServiceAcceptedProcess(pair, runtime, bind, project, policies), []);
             });
         });
@@ -345,7 +380,7 @@ public sealed class ServiceApiImplementation<TApi>
             throw ServiceImplementationPlan.Error("services.api.operationMismatch", "This finite host requires the endpoint's single declared service operation.");
         var http = endpoint.Operation.Http ?? throw ServiceImplementationPlan.Error("services.api.httpMissing", "Process endpoint requires HTTP binding.");
         model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
-        model.Plan.Implement(definition, endpoint, process.Definition.Reference);
+        model.Plan.ImplementProcess(definition, endpoint, declaration);
         model.Add(persistence =>
         {
             var hosted = service.Bind(process.Definition, persistence.Repository).Build(authority, authorization);

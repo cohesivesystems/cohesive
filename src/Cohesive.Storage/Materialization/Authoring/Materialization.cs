@@ -3,6 +3,7 @@ using Cohesive.Control;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
 
 namespace Cohesive.Storage.Materialization;
@@ -10,6 +11,24 @@ namespace Cohesive.Storage.Materialization;
 /// <summary>Entry point for deterministic C# authoring of canonical materialization definitions.</summary>
 public static class Materialization
 {
+    /// <summary>Materializes the complete output of an admitted typed rooted relation.</summary>
+    /// <typeparam name="TResult">Nested result observation type.</typeparam>
+    /// <param name="id">Stable materialization identity.</param>
+    /// <param name="relation">Shared relation used by live reads and hydration.</param>
+    /// <returns>A builder retaining that exact relation and its complete output.</returns>
+    /// <exception cref="ArgumentNullException">The relation is null.</exception>
+    /// <exception cref="ArgumentException">Compilation fails.</exception>
+    public static MaterializationDefinitionBuilder Define<TResult>(MaterializationId id, RootedRelation<TResult> relation)
+        where TResult : class
+    {
+        ArgumentNullException.ThrowIfNull(relation);
+        var compiled = RelationQueryStaticCompiler.Compile(relation.Definition);
+        if (!compiled.IsSuccessful)
+            throw new ArgumentException(string.Join("; ", compiled.Diagnostics), nameof(relation));
+        var output = compiled.Plan!.RequirementGraph.Outputs.Single(value => value.Field is null);
+        return new(id, relation.Definition, output.Id);
+    }
+
     /// <summary>Begins authoring one relation-derived materialization definition.</summary>
     /// <param name="id">Stable logical materialization identity.</param>
     /// <param name="relation">Exact Relations compilation request retained by the canonical definition.</param>
@@ -513,6 +532,12 @@ public sealed class MaterializationDefinitionAuthoringResult
         Definition = definition;
         Validation = validation;
     }
+
+    /// <summary>Admits the declaration and prepares its contributor-to-root impact plan.</summary>
+    /// <param name="policy">Explicit impact strategies and bounds.</param>
+    /// <returns>One prepared declaration shared by native binding and target preparation.</returns>
+    /// <exception cref="ArgumentException">The declaration or impact policy cannot be admitted.</exception>
+    public PreparedMaterialization Prepare(MaterializationImpactPlanningPolicy policy) => new(CreateDocument(), policy);
 
     /// <summary>Canonical immutable materialization definition.</summary>
     public MaterializationDefinition Definition { get; }

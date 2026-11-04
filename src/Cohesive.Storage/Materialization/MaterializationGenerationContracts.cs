@@ -77,6 +77,11 @@ public readonly record struct MaterializationItemId
     public MaterializationItemId(string value) =>
         Value = MaterializationContract.RequireUnicodeIdentity(value, nameof(value));
 
+    /// <summary>Derives the canonical item key used by rooted relation hydration.</summary>
+    /// <param name="identity">Canonical string root identity.</param>
+    /// <returns>The same key used by baseline and incremental materialization.</returns>
+    public static MaterializationItemId FromRootIdentity(string identity) => MaterializationItemIdentity.FromRootIdentity(identity);
+
     /// <summary>Gets the stable logical item key.</summary>
     public string Value { get; }
 

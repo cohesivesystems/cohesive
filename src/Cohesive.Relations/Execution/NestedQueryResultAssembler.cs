@@ -45,6 +45,41 @@ public static class NestedQueryResultAssembler
         return parent;
     }
 
+    /// <summary>Assembles complete rooted relation rows independently, preserving input provenance and root identity.</summary>
+    /// <param name="definition">Canonical nested-result mappings on the relation.</param>
+    /// <param name="rows">Complete raw rows with retained root occurrences.</param>
+    /// <param name="cancellationToken">Cancellation between roots and rows.</param>
+    /// <returns>One nested object for each represented root; absent roots produce no object.</returns>
+    /// <exception cref="ArgumentNullException">The assembly is null.</exception>
+    /// <exception cref="ArgumentException">The assembly contract or contributing occurrence identities are inconsistent.</exception>
+    /// <exception cref="InvalidOperationException">Rows are incomplete, unrooted, or contain inconsistent parent/child data.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation was requested.</exception>
+    public static ImmutableArray<RelationQueryOutputRow> AssembleRoots(NestedQueryResultAssembly definition,
+        ImmutableArray<RelationQueryOutputRow> rows, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        definition.Validate();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (rows.IsDefaultOrEmpty) return [];
+        if (rows.Any(row => !row.IsComplete || row.Root?.ObservationIdentity is null))
+            throw new InvalidOperationException("Nested relation assembly requires complete rooted rows.");
+        var result = ImmutableArray.CreateBuilder<RelationQueryOutputRow>();
+        foreach (var group in rows.GroupBy(row => (row.Root!.Binding, row.Root.ObservationIdentity))
+                     .OrderBy(group => group.Key.Binding.Value, StringComparer.Ordinal)
+                     .ThenBy(group => group.Key.ObservationIdentity, StringComparer.Ordinal))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var first = group.First();
+            if (Key(first.Value, definition.Identity, required: true) != group.Key.ObservationIdentity)
+                throw new InvalidOperationException("Nested relation identity must match its root observation identity.");
+            var value = Assemble(definition, [.. group.Select(row => row.Value)], cancellationToken);
+            var occurrences = group.SelectMany(row => row.InputOccurrences).ToImmutableArray();
+            result.Add(new(definition.Shape, value, ObservationValue.FromString(group.Key.ObservationIdentity!),
+                first.Root, occurrences, []));
+        }
+        return result.ToImmutable();
+    }
+
     static string? Key(ObservationValue row, FieldPath path, bool required)
     {
         if (!row.TryGetField(path, out var value) || value.Kind is ObservationValueKind.Null or ObservationValueKind.Undefined)

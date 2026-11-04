@@ -275,3 +275,52 @@ Its `BindAsync` borrows host-registered resources and validates required metadat
 `IServiceStorageComposition` in Api.Execution to return prepared service persistence. The Storage layer does
 not reference API or infrastructure packages. Each provider remains responsible for its native configuration
 and guarantees; composition never upgrades independent sources to a shared snapshot.
+
+### Partitioned materialization composition
+
+`MaterializationPartitionedRebuildCompiler` binds a canonical materialization and
+its impact plan to explicit logical partitions, native source profiles and a
+target descriptor. It reuses the rebuild, synchronization, hydration and durable
+state interpreters. `MaterializationRelationReadPlans` derives separate baseline
+and inverse-impact acquisition plans from the same semantic relation;
+`RelationQueryMaterializationImpactReader` executes those reads through admitted
+Relations source readers. The freight harness and the Aspire OrderShadow example
+share this recipe. Neither the recipe nor current-state enrichment promises a
+cross-source historical snapshot or promotes a generation automatically.
+
+### Materialization model declarations
+
+`MaterializationModel` is optional constructor-authoring syntax over
+`MaterializationModelBuilder`. Include immutable preparations produced by the
+existing `Materialization.Define(...).Build().Prepare(impactPolicy)` path.
+`Definition` freezes ordered membership once; model activation calls the same
+completion boundary. Duplicate semantic IDs fail during registration. Declaration
+and completion perform no native IO; each prepared document remains the semantic
+authority and the catalog adds no alternate format or IDs.
+
+Native preparation returns `BoundMaterialization`, containing the admitted
+partitioned compilation, resolved ports and synchronization work store. It borrows
+all native resources; the host owns their lifetimes. This runtime value is separate
+from model activation and can be created directly without a model subclass.
+
+### Shadow parity evidence
+
+`MaterializationShadowVerification.CompareAsync` reuses an admitted rebuild's root
+read and hydration bindings to compare complete bounded live outputs with a candidate
+reader. It retains the existing convergence receipt and rechecks exact plan affinity,
+feed coverage and freshness; it also captures every source position before and after
+comparison. Missing, extra and changed canonical item IDs are reported deterministically.
+Neither payload values nor a promotion authorization are produced. Failed/incomplete
+reads and exceeded bounds throw, rather than returning a partial passing report.
+
+The candidate reader must honor the requested generation and limit, validate its native
+envelope and prove exhaustion. `ElasticMaterializationTarget.ReadValuesAsync` provides
+that reader by reusing its existing validated seal-content scan. Callers own native
+resources and must exclude competing candidate writers for the whole comparison.
+`Matches` describes observed parity under that boundary, not transactional consistency
+or a guarantee that the generation remains fresh after observation. See the
+[operator example](../../eng/examples/aspire-first/OrderMaterialization/README.md#compare-before-considering-a-read-switch).
+
+Each invocation performs one bounded root/hydration traversal, one candidate scan and
+two position inspections per feed. It performs no comparison polling and no target
+GET per item. Values are retained only for the bounded invocation.

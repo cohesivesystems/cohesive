@@ -1,4 +1,7 @@
+using Cohesive.Relations.Execution;
 using Aspire.Hosting;
+using Aspire.Hosting.ApplicationModel;
+using Microsoft.Extensions.Configuration;
 using Cohesive.Adapters.Aspire;
 using Cohesive.Adapters.Aspire.Postgres;
 using Cohesive.Infra;
@@ -15,6 +18,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
 {
     readonly FulfillmentHistoryPolicy policy;
     readonly FulfillmentApplication application;
+    readonly RelationQueryReadPolicy reads;
     /// <summary>Canonical order storage identity.</summary>
     public static InfrastructureNodeId Store { get; } = new("resources/orders");
     /// <summary>Canonical order application identity.</summary>
@@ -27,9 +31,12 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
     /// <summary>Prepares requirements from the same offline composition as the worker.</summary>
     /// <param name="model">Same activated application graph consumed by the worker.</param>
     /// <param name="policy">Explicit environment selection used to activate that graph.</param>
-    public FulfillmentInfrastructure(FulfillmentApplication model, FulfillmentHistoryPolicy policy)
+    /// <param name="reads">Same explicit reader selection used by the worker model.</param>
+    public FulfillmentInfrastructure(FulfillmentApplication model, FulfillmentHistoryPolicy policy, RelationQueryReadPolicy? reads = null)
     {
         this.policy = policy;
+        this.reads = reads ?? new();
+        this.reads.Validate();
         application = model;
         Define(
             id: new("example/orders"),
@@ -38,7 +45,7 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             infra =>
             {
                 infra.Resource(Store).Persistent()
-                    .Prepared(model.Storage.RequireComposition<PostgresStorageComposition>().PrepareEvidence(model.Endpoints.Plan.QueryDependencies.Queries));
+                    .Prepared(model.Storage.Native.PrepareEvidence(model.Endpoints.Plan.QueryDependencies.Queries));
                 infra.Workload(Worker).Requires(ApplicationExecution).RequiresReady(Store);
             });
     }
@@ -65,7 +72,45 @@ public sealed class FulfillmentInfrastructure : InfrastructureModel
             .WithReference(database).WaitFor(database)
             .WithEnvironment("EntityState__Authority", policy.Authority.ToString())
             .WithEnvironment("EntityState__Reconstitution", policy.Reconstitution.ToString());
+        var scheduler = builder.AddContainer(FulfillmentExecutionPolicy.SchedulerResource, "mcr.microsoft.com/dts/dts-emulator")
+            .WithImageSHA256("1b49dcf1581168f5c620a4f32083e1291a7dddfa60434acb3eacd8b23355936a")
+            .WithEnvironment("ASPNETCORE_URLS", "http://+:8080")
+            .WithHttpEndpoint(targetPort: 8080, name: "grpc", isProxied: false);
+        worker.WithEnvironment($"ConnectionStrings__{FulfillmentExecutionPolicy.SchedulerResource}",
+            ReferenceExpression.Create($"Endpoint={scheduler.GetEndpoint("grpc")};TaskHub=default;Authentication=None"))
+            .WaitFor(scheduler);
+        worker.WithEnvironment("OrderReads__Source", reads.Source.ToString())
+            .WithEnvironment("OrderReads__AcceptEventualConsistency", reads.AcceptEventualConsistency.ToString());
+        if (reads.Source == RelationQueryReadSource.Materialized)
+        {
+            worker.WithEnvironment("OrderReads__ComparisonFile", builder.Configuration["OrderReads:ComparisonFile"])
+                .WithEnvironment("Shadow__Elasticsearch", builder.Configuration["Shadow:Elasticsearch"])
+                .WithEnvironment("Shadow__PositionKey", builder.Configuration["Shadow:PositionKey"])
+                .WithEnvironment("Shadow__SlotGeneration", builder.Configuration["Shadow:SlotGeneration"]);
+        }
         _ = builder.AddContainer("native-only", "redis", "7.4");
+        if (builder.Configuration.GetValue<bool>("Shadow:Enabled"))
+        {
+            postgres.WithArgs("-c", "wal_level=logical", "-c", "max_replication_slots=16");
+            var elastic = builder.AddContainer("order-shadow-elastic", "docker.elastic.co/elasticsearch/elasticsearch", "9.0.3")
+                .WithEnvironment("discovery.type", "single-node")
+                .WithEnvironment("xpack.security.enabled", "false")
+                .WithEnvironment("ES_JAVA_OPTS", "-Xms512m -Xmx512m")
+                .WithHttpEndpoint(targetPort: 9200, name: "http")
+                .WithVolume("order-shadow-elastic", "/usr/share/elasticsearch/data");
+            if (reads.Source == RelationQueryReadSource.Materialized)
+                worker.WithEnvironment("Shadow__Elasticsearch", elastic.GetEndpoint("http")).WaitFor(elastic);
+            // A separate operator process owns all materialization writes, regardless of HTTP read selection.
+            builder.AddProject<Projects.OrderMaterialization>("order-shadow")
+                .WithReference(database).WaitFor(worker).WaitFor(elastic)
+                .WithEnvironment("Shadow__Elasticsearch", elastic.GetEndpoint("http"))
+                .WithEnvironment("Shadow__PositionKey", builder.Configuration["Shadow:PositionKey"])
+                .WithEnvironment("Shadow__SlotGeneration", builder.Configuration["Shadow:SlotGeneration"])
+                .WithEnvironment("EntityState__Authority", policy.Authority.ToString())
+                .WithEnvironment("EntityState__Reconstitution", policy.Reconstitution.ToString())
+                .WithArgs(builder.Configuration.GetSection("Shadow:Arguments").Get<string[]>() ?? ["--help"]);
+        }
+
 
         // Associate existing Aspire resources with the canonical requirements and implementations.
         return builder.AttachCohesive(

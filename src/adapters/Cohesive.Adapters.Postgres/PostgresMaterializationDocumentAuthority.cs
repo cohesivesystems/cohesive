@@ -1,6 +1,8 @@
 using System.Data;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using Cohesive.Model.Serialization;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -24,6 +26,16 @@ internal sealed class PostgresMaterializationDocumentAuthority
     {
         this.dataSource = dataSource ?? throw new ArgumentNullException(nameof(dataSource));
         this.options = options ?? throw new ArgumentNullException(nameof(options));
+    }
+
+    internal async Task<bool> HasStoredStateAsync(CancellationToken cancellationToken)
+    {
+        await using var exists = dataSource.CreateCommand("SELECT to_regclass($1) IS NOT NULL");
+        exists.Parameters.AddWithValue(options.QualifiedTable);
+        if (!(bool)(await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!) return false;
+        await using var progress = dataSource.CreateCommand($"SELECT EXISTS (SELECT 1 FROM {options.QualifiedTable} WHERE starts_with(authority_id, $1))");
+        progress.Parameters.AddWithValue(options.AuthorityId + "/");
+        return (bool)(await progress.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false))!;
     }
 
     internal async Task EnsureCreatedAsync(OperationContext context)
@@ -131,7 +143,8 @@ internal sealed class PostgresMaterializationDocumentAuthority
         var document = deserialize(documentJson);
         var canonicalLoadedJson = serialize(document);
         var canonicalLoadedFingerprint = Fingerprint(canonicalLoadedJson);
-        if (!string.Equals(fingerprint, canonicalLoadedFingerprint, StringComparison.Ordinal))
+        if (!string.Equals(fingerprint, canonicalLoadedFingerprint, StringComparison.Ordinal)
+            && !string.Equals(fingerprint, LegacyFingerprint(canonicalLoadedJson), StringComparison.Ordinal))
         {
             throw new InvalidDataException(
                 "The PostgreSQL materialization-document authority fingerprint does not match its canonical content.");
@@ -173,6 +186,15 @@ internal sealed class PostgresMaterializationDocumentAuthority
         return result;
     }
 
-    static string Fingerprint(string document) =>
+    internal static string Fingerprint(string document)
+    {
+        using var json = JsonDocument.Parse(document);
+        var digest = CanonicalJsonWriter.ComputeCanonicalSequenceSha256(
+            json.RootElement, CanonicalJsonSequenceProfile.ExactDecimalRational, default);
+        return $"sha256-canonical-v2:{Convert.ToHexStringLower(digest)}";
+    }
+
+    // Accept legacy evidence only when its original integrity check succeeds; never repair a mismatch.
+    static string LegacyFingerprint(string document) =>
         $"sha256-v1:{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(document)))}";
 }

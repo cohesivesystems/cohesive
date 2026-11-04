@@ -47,6 +47,9 @@ public sealed class ApplicationServiceCompositionTests
     sealed class StoreB(Composition composition) : Store(composition);
     sealed class Composition(params RelationQueryCompilationRequest[] queries) : IServiceStorageComposition
     {
+        public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query) =>
+            new("Test", "test-resource", Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
+
         public int Calls;
         public Exception? Failure;
         public Task? Wait;

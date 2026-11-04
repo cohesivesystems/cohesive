@@ -437,6 +437,68 @@ registers the named offline command and writes a report only when requested; bot
 examples use this entry point. History metadata derives from the storage-owned declaration;
 a composition without a history attachment does not invent a history selection.
 
+### Storage-owned query read selection
+
+A storage composition can select a serving interpretation with
+`source.SelectQuery(query, new ServiceQueryReadBinding(backend, resource, consistency), prepare)`.
+The source retains repository and entity-placement ownership. Selection uses canonical
+query identity, so separately constructed equivalent query declarations resolve identically.
+Admission checks the endpoint's consistency demand before native preparation; binding
+prepares bounded readers once and checks their canonical identity and promised consistency
+before preparing source persistence. A selected reader failure propagates, never falling
+back to a stronger or fresher backend silently. Unused selections require no native target.
+
+`ServiceStorageExplanation.Queries[].Read` reports the chosen backend, existing logical
+resource identity and declared guarantee. This is offline admission evidence, not runtime
+readiness. `PrepareQueries` must complete before `BindAsync`; host-owned clients remain
+owned by the host. The [fulfillment walkthrough](../../eng/examples/aspire-first/OrderMaterialization/README.md#explicit-http-read-selection-and-rollback)
+shows eventual Elasticsearch serving and explicit rollback to PostgreSQL without changing
+the API contract.
+
+Query lookup retains canonical identities in the shared weak preparation cache, keyed
+by immutable compilation requests. Successful preparation is shared concurrently;
+failed preparation is retryable and keys are not strongly retained. No parameters or
+query results are cached. A warmed 100-lookup OrderDetails fixture on .NET 10/macOS
+allocated 104,048,224 bytes before this cache and zero afterwards, including the
+fallback through storage composition. This is a lookup allocation measurement, not
+an end-to-end latency claim; cold compilation is outside that measured boundary.
+
+`IServiceStorageComposition.DescribeRead` is now required (an unreleased interface
+change). Native and composed implementations must describe their reader; admission
+rejects a null description. Backend names remain provider display labels, not
+semantic identities; the existing resource identity and consistency carry the
+binding semantics. Composed PostgreSQL/remote reads report `Composed` and
+`IndependentSources`, never a cross-store snapshot.
+
+For materialized reads, prefer the declarative composition:
+
+```csharp
+return native.SelectMaterializedQuery(queries.Details, queries.DetailsRelation,
+    source: materializationStorage.ForReads(configurationSection: "Replication"),
+    target: elasticReads,
+    comparisonSection: "Reads");
+```
+
+`IMaterializationReadSourceBinding` owns the canonical materialization and deferred
+source configuration/native admission. `IMaterializationReadTargetBinding` owns the
+serving identity and provider interpretation. They are independent Storage ports;
+there is no package for every source/target pair. `SelectMaterializedQuery` reuses
+`SelectQuery` for consistency, ownership and bounded-reader preparation. At startup
+it loads `Reads:ComparisonFile`, checks its definition/freshness, validates source
+configuration, admits target and source ports, and prepares the typed reader. All
+of this is skipped for unused selections; offline explanation needs no configuration
+or native resources. The target's admitted identity must match the declared identity.
+The lower-level callback form remains for custom query interpretations, not as a
+second materialization recipe.
+
+The comparison section contract is exposed by `ServiceMaterializedReadSelection.ComparisonFileKey`.
+PostgreSQL owns its separate source contract through `PostgresMaterializationStorage.PositionKeyConfigurationKey`
+and `SlotGenerationConfigurationKey`; API execution does not read those provider-specific keys.
+Source preparation returns the named `PreparedMaterializationReadSource` delegate, which performs native admission
+only when invoked. Target adapters validate direct binding callers; composition independently validates target
+identity because custom adapter implementations also cross this boundary. Backend labels are presentation metadata,
+not capability or identity evidence (`ElasticMaterializationReadBinding.BackendName` is the Elasticsearch label).
+
 ## Entity transition discovery
 
 `ServiceRuntime.InspectTransitionsAsync` exposes actor-specific, snapshot-bound availability of registered

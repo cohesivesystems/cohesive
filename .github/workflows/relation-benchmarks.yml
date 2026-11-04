@@ -53,7 +53,8 @@ jobs:
           BENCHMARK_FILTER: ${{ inputs.benchmark_filter }}
           BENCHMARK_JOB: ${{ inputs.benchmark_job }}
         run: |
-          benchmark_args=(--filter "$BENCHMARK_FILTER")
+          # Generated harness builds traverse the project references again on CI runners.
+          benchmark_args=(--filter "$BENCHMARK_FILTER" --buildTimeout 600)
           if [[ "$BENCHMARK_JOB" != "Default" ]]; then
             benchmark_args+=(--job "$BENCHMARK_JOB")
           fi

@@ -1,0 +1,290 @@
+# OrderDetails shadow materialization
+
+The HTTP endpoint defaults to live PostgreSQL reads. This optional command consumes the
+same rooted `OrderDetailsRelation`, hydrates its nested result through
+Cohesive.Relations, and maintains a separate Elasticsearch generation. It never
+promotes an alias or changes endpoint bindings.
+
+## Run locally
+
+Enable `Shadow:Enabled` on the existing AppHost to add Elasticsearch and the
+OrderMaterialization project. The latter defaults to `--help`. PostgreSQL starts with
+logical replication enabled. This is a local development configuration, including
+an Elasticsearch node without authentication; do not expose it publicly.
+
+Alternatively run OrderMaterialization against dedicated local PostgreSQL (logical WAL
+required) and Elasticsearch instances. Configure:
+
+- `ConnectionStrings__orders`: the same native database used by the worker.
+- `Shadow__Elasticsearch`: Elasticsearch HTTP endpoint.
+- `Shadow__PositionKey`: a persistent base64 authentication key of at least 32 bytes.
+- `Shadow__SlotGeneration`: an explicit replication-slot incarnation, retained on restart.
+- `EntityState__Authority` and `EntityState__Reconstitution`: the worker's authority policy.
+
+From the repository root:
+
+```sh
+dotnet run --project eng/examples/aspire-first/OrderMaterialization -- initialize
+dotnet run --project eng/examples/aspire-first/OrderMaterialization -- rebuild \
+  --attempt demo-1 --started 2026-10-26T00:00:00Z --invocation baseline-1
+dotnet run --project eng/examples/aspire-first/OrderMaterialization -- catch-up \
+  --attempt demo-1 --started 2026-10-26T00:00:00Z --invocation changes-1
+```
+
+Initialization is explicit: it prepares product tables, sets FULL replica
+identity, creates an insert/update/delete publication and per-input pgoutput
+slots, and installs the dedicated target template and checkpoint table. It does
+not change existing template declarations. Native preflight validates publication,
+slot, table and replica-identity assumptions before reads begin. Missing slots
+with existing progress require operator recovery, not silent recreation.
+
+`rebuild` captures source positions, enumerates bounded root pages, hydrates each
+root and writes its stable target identity. `catch-up` consumes retained pgoutput
+changes through a captured cut; compiled inverse-impact routes find affected
+orders, including both sides of reservation reparenting. Root deletions create
+tombstones. The same prepared result assembly is used for live and shadow reads.
+
+Retain attempt, start timestamp, key, slot incarnation and invocation ID when
+resuming an interrupted activation. Use a new invocation ID for a new catch-up
+cut. Durable prepared work and checkpoints live in PostgreSQL. Elasticsearch
+version fencing makes replay of an already-written batch safe. Each command takes
+a PostgreSQL session advisory lock, permitting one cooperating shadow writer.
+There is no unattended scheduler or automatic retry loop in this example.
+
+## Guarantees and limits
+
+- This is baseline plus retained-feed catch-up with **current-state enrichment**,
+  not a historical snapshot spanning every read. Convergence is demonstrated at
+  a bounded source cut after writes settle.
+- Query semantics, storage mappings and impact routes are reused, not redeclared
+  as a second search query. Read plans separately authorize baseline enumeration
+  and inverse-impact lookups. Evidence comes from the actual native readers.
+- The target remains shadow-only; `orders-shadow` is never promoted. The live API
+  keeps its existing PostgreSQL consistency and response behavior.
+- WAL retention is operational state. Monitor slot lag and disk use. A lost slot,
+  changed incarnation, incompatible plan or mismatched template is a recovery
+  boundary. Do not delete slots while a candidate depends on them.
+- Disposable tests own their source rows and generations. Cleanup of persistent
+  generations, slots and volumes is an explicit operator action.
+- Native PostgreSQL `C` text ordering is used consistently for opaque baseline
+  continuation keys; it is not advertised as CLR ordinal query ordering.
+
+The native integration test requires dedicated `COHESIVE_SHADOW_POSTGRES` and
+`COHESIVE_SHADOW_ELASTIC` resources. It interrupts after a target write, reconstructs
+the runtime, compares nested output with live reads, then exercises contributor
+updates, reparenting, replay and deletions. It checks that no live alias appears.
+
+The PostgreSQL ledger now uses canonical JSON fingerprints: `jsonb` property
+reordering must not corrupt prepared work. Legacy hashes are accepted only when
+their original check succeeds, then upgraded on a successful write. A legacy
+mismatch remains an integrity error; it is never silently re-signed.
+
+Native construction is owned by `PostgresMaterializationRelation.BindAsync`: the
+example supplies its borrowed pool, attested runtime, bounds and slot factory.
+`PostgresLogicalReplicationPreparation` owns explicit publication/slot setup and
+asks the configured state store about progress. `PostgresSessionLease` owns the
+operator lock lifetime. The shared rebuild compiler accepts caller provenance and
+capacity evidence and uses the declared scheduling limits.
+
+The auxiliary impact plan is a bounded read envelope over declared inputs,
+including optional current-state enrichment, rather than a minimal list of only
+operations taken by one impact route. Every actual read remains constrained by
+semantic-plan affinity, native mapping, partition and configured limits.
+
+The `shadow-materialization` GitHub workflow starts disposable PostgreSQL and
+Elasticsearch instances and runs this recovery test on pull requests, including
+stacked branches. It also verifies native ledger and Unicode keyset contracts.
+
+### Ledger representation cost
+
+A Release/.NET 10 warm allocation check measures 32 iterations of serializing a
+nested JSON ledger and hashing it, excluding database I/O and ledger replay. For
+1 KiB / 64 KiB / 256 KiB payloads on the local macOS test host, legacy hashing
+allocated 3,424 / 196,960 / 786,968 bytes per operation; canonical hashing allocated
+2,912 / 131,936 / 525,166. Approximate timings were 1.4 / 46 / 491 µs legacy versus
+3.2 / 67 / 425 µs canonical. These are diagnostic samples, not throughput claims.
+The canonical path still parses serialized JSON; it avoids the legacy full UTF-8
+hash input allocation by streaming canonical output. The regression bounds
+allocation growth, preserves array order and checks decimal/object equivalence.
+
+### Review compatibility notes
+
+The public partition binding uses `partition`/`Partition` instead of `tenant`/`Tenant`; named arguments and property accesses must be updated. Persisted shard and placement identifiers retain the historical `tenant/` prefix so the terminology cleanup does not rename saved progress.
+
+Baseline root reads now use `PostgresRelationQueryReadPolicy.MaximumRowsPerRead` rather than a hidden limit of 1000. Configure that policy explicitly to retain the previous bound. CDC source binding performs scoped deployment inspection and retains no open connection; stream enumeration owns and disposes its native connection. Existing publications must cover every declared input table; initialization rejects missing coverage instead of silently omitting changes.
+
+## Declaration, preparation and command ownership
+
+`FulfillmentMaterializations : MaterializationModel` owns the example's materialization policies and calls
+`Build().Prepare(impactPolicy)`. `PreparedMaterialization` retains the admitted
+declaration and impact plan; PostgreSQL preparation consumes that same object.
+The target and runtime share one declaration instance per activation.
+
+`Cohesive.Application.Cli.AddMaterializationShadowCommands` owns initialize/rebuild/catch-up
+command parsing, stable retry inputs, cancellation and convergence exit status. Help
+does not initialize models or resources. `MaterializationShadowExecution` invokes
+the existing rebuild and synchronization interpreters; it has no promotion step.
+The example owns native client lifetimes, the PostgreSQL writer lease, resource
+names, and explicit provider policy. These commands are bounded activations, not
+a continuously running service. The namespace and project are now
+`AspireFirst.Materialization` / `OrderMaterialization`; durable identities,
+`Shadow:*` configuration, and live PostgreSQL endpoint bindings are unchanged.
+
+### Model activation and runtime binding
+
+`OrderMaterializationApplication` activates the live `FulfillmentApplication` and
+`FulfillmentMaterializations` in one graph. Constructor dependencies resolve the
+same `FulfillmentQueries` instance. `IAuthoringModel.Complete` freezes the ordered
+materialization catalog before activation returns, without opening native clients.
+
+The base class is optional. Direct consumers can call
+`new MaterializationModelBuilder().Include(builder.Build().Prepare(impactPolicy))`
+and `Build()` to freeze the catalog, or keep using an individual prepared declaration.
+Duplicate semantic IDs are rejected; frozen catalogs cannot be mutated.
+
+`FulfillmentMaterializationStorage : StorageModel` declares `OrderDetails` through
+`Storage.Define` using `PostgresMaterializationStorage`. Its named options own
+partition/read/rebuild policies, publication, stable slot naming, checkpoint
+schema/authority, capacity evidence and provenance. The adapter derives source
+tables, reader sets and rebuild composition. `FulfillmentMaterializations.OrderDetails`
+is the prepared declaration; there are no model-wide Document/Impact forwarding properties.
+The native binding returns Cohesive's `BoundMaterialization`, which borrows the
+source/target/progress/work ports and owns no connections. The command host owns
+disposal. `MaterializationShadowExecution.RunAsync` consumes this shared binding;
+there is no application-specific runtime wrapper. Durable resource identities,
+shadow-only execution, and live PostgreSQL reads are unchanged.
+
+Source initialization is explicit through `model.Storage.OrderDetails.InitializeSourcesAsync`;
+it derives publication tables from the prepared source mappings, rather than a
+hand-maintained entity list. Binding derives database identity and authority from the declaration before native
+source admission and performs no DDL. Elasticsearch template policy stays
+native and the host supplies an admitted target; the PostgreSQL adapter does not
+acquire an Elasticsearch dependency. Slot recipes are evaluated once at declaration,
+and invalid or duplicate native names fail before IO. Existing publication, slot,
+authority and durable progress identities are retained.
+
+See the PostgreSQL adapter's [storage-owned materialization contract](../../../../src/adapters/Cohesive.Adapters.Postgres/README.md#storage-owned-materialization)
+for partition derivation, native binding and connection-affinity guarantees.
+
+## Compare before considering a read switch
+
+After rebuild, run a new bounded catch-up and full-scope comparison:
+
+```sh
+dotnet run --project eng/examples/aspire-first/OrderMaterialization -- compare \
+  --attempt demo-1 --started 2026-10-26T00:00:00Z --invocation comparison-1
+```
+
+The command holds the same cooperating-writer lease through catch-up and comparison.
+It enumerates and hydrates the canonical rooted relation again, using its existing
+source mappings and nested-result assembly, and reads the exact candidate generation
+through the Elasticsearch adapter's validated envelope. It does not read a live alias.
+
+The JSON report retains the existing convergence receipt (definition/plan/generation,
+per-feed cuts, committed checkpoints and freshness demand), counts, observation time,
+and sorted missing/extra/changed **materialization item IDs**, without document values.
+Exit 0 means `Matches`: complete bounded values agree, the convergence receipt remains
+fresh, and source positions did not move during comparison. Exit 2 means observed
+non-parity or inconclusive freshness/stability. IO, cancellation and bound failures
+fail the command without emitting a success report.
+
+This first command bounds the entire comparison to 1,000 scanned roots/candidate items
+(including candidate tombstones) and 100 root pages. Native source and target page-byte
+limits still apply. It retains bounded values for comparison; it is not a streaming
+large-dataset verifier. Exceeding a bound requires an explicit larger invocation policy
+through the library API, not sampling or silently accepting a partial result.
+
+A match is evidence at observation time, **not permission to promote**, future freshness,
+or a cross-store transaction. Keep sources quiescent for an interpretable comparison.
+PostgreSQL's database-wide WAL position can move for unrelated writes, causing a safe
+inconclusive result. The source check cannot exclude non-cooperating target writers;
+the caller must preserve the candidate-writer exclusion used by this command. All live
+HTTP reads still use PostgreSQL. Read selection, cutover and rollback remain separate work.
+
+## Explicit HTTP read selection and rollback
+
+`OrderApi` and `/orders/{id}/details` keep the same request, result and 404 contract.
+Only this query can opt into the asynchronous Elasticsearch generation. Entity reads,
+availability, transitions and processes continue to use PostgreSQL. The mixed
+Postgres+Cosmos example is unchanged.
+
+After rebuilding and catching up, save a successful comparison for the same attempt:
+
+```sh
+dotnet run --no-build --project eng/examples/aspire-first/OrderMaterialization -- compare \
+  --attempt demo-1 --started 2026-10-26T00:00:00Z --invocation compare-1 > order-read-comparison.json
+```
+
+Check the command's exit code before selecting the file. Set the worker (or AppHost)
+configuration and restart the worker:
+
+```text
+OrderReads__Source=Materialized
+OrderReads__AcceptEventualConsistency=true
+OrderReads__ComparisonFile=/absolute/path/order-read-comparison.json
+```
+
+The worker also needs the operator's `Shadow__Elasticsearch`, `Shadow__PositionKey`,
+`Shadow__SlotGeneration`, database and entity-authority configuration. These are
+used for read-only native admission; the worker does not run CDC, create slots,
+rebuild, refresh the index or promote an alias. A fresh successful report must match
+the exact materialization and native rebuild plan, including source placement.
+Reports are trusted local operator artifacts, not signed attestations. The existing
+five-minute freshness policy applies at admission; obtain a new comparison before
+restarting a selected host after it expires.
+
+Reads pin the report's generation for the lifetime of that worker. Each read is a
+bounded item lookup and checks retained generation/definition/native ownership.
+Missing items and tombstones yield 404. Provider errors, wrong generations and
+oversized responses fail; they do **not** silently switch to PostgreSQL. There is
+no read-your-writes or ongoing maximum-lag promise. Continue catch-up for the selected
+attempt. A successful comparison proves parity at that cut, not future freshness.
+
+Rollback is explicit:
+
+```text
+OrderReads__Source=Live
+```
+
+Restart the worker. Live mode does not read the comparison file, require shadow
+configuration or contact Elasticsearch. It immediately evaluates the same canonical
+relation against PostgreSQL. No generation is deleted, no CDC progress is reset and
+no API client change is required. This is per-host configuration selection, not an
+atomic fleet-wide rollout or target alias promotion. Keep the pinned generation
+retained until every host using it has switched back.
+
+`FulfillmentStorage` declares the selection through `SelectQuery`, alongside its
+native PostgreSQL composition. `Program.cs` only registers native clients and calls
+`AddCohesiveServices(model)` / `MapServicesAsync()`; storage preparation admits the
+comparison and pinned generation before preparing the source store.
+
+The offline application explanation now records the selected backend, logical serving
+resource and declared consistency in `storage.queries[].read`, alongside the endpoint's
+required consistency and canonical source placement. Live reads report PostgreSQL with
+`SingleSnapshot`; selected materialized details report Elasticsearch with `Eventual`.
+Availability still reads PostgreSQL. The same declaration drives runtime binding, which
+checks the concrete reader's query identity and consistency before source preparation.
+Explanation does not load comparison files or contact either backend: it describes the
+selection, not live readiness or a verified generation. Generation admission remains a
+startup check, with no silent fallback.
+
+The storage selection is declarative:
+
+```csharp
+return Native.SelectMaterializedQuery(queries.OrderDetails, queries.OrderDetailsRelation,
+    source: materializationStorage.OrderDetails.ForReads(configurationSection: "Shadow"),
+    target: ShadowElastic.Reads,
+    comparisonSection: "OrderReads");
+```
+
+There is no configuration/file/native-binding callback in `FulfillmentStorage`.
+Shared composition loads comparison evidence, validates source configuration and
+admits the native bindings. `ShadowElastic.Reads` names the existing target and its
+native metadata policy, shared with the operator. PostgreSQL resolves native clients
+under its declared database identity. No extra resource catalog is introduced.
+
+Live/materialized selection uses `RelationQueryReadPolicy`; the endpoint supplies
+its live consistency requirement explicitly. Materialized reads require eventual
+consent. Live rollback does not load either configuration section's materialization
+values or resolve the target. See the [adapter's prepared-read contract](../../../../src/adapters/Cohesive.Adapters.Elastic/README.md#prepared-materialized-query-reads)
+for per-request native checks and the three-call bound.

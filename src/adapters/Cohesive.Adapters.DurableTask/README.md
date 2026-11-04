@@ -47,6 +47,21 @@ The adapter also provides:
 - A migration-only reader for hubs created by the retired Core adapter.
 - Differential and Scheduler-emulator conformance coverage.
 
+## Prepared service processes
+
+`AddCohesiveDurableTaskServices(configureClient, configureWorker)` registers DI-owned native clients and
+workers. Map the API with `BindDurable` and call `MapServicesAsync` before starting the host. Preparation
+compiles and admits the exact process without starting execution; worker activation freezes the catalog.
+The same provider supplies persistent start admission and independently authorized result polling through
+`DurableTaskProcessExecutionRepository`. HTTP response behavior remains declared on the API pair.
+
+This convenience profile supports repository transitions and queries in finite process graphs. Request,
+child-process, event-publication and signal binding closures that require additional deployment evidence use
+the standalone catalog APIs. Conflicting process revisions and competing query-host authorities fail at
+preparation rather than selecting a host by registration order. Native resources are borrowed and remain
+owned by the generic host. The local [fulfillment example](../../../eng/examples/aspire-first/FULFILLMENT.md)
+qualifies worker replacement under State and Events authority, including lost acknowledgement after a stock commit.
+
 ## Important boundaries
 
 The executable profile is narrower than the planning profile. Reply emission nodes, non-Process Signal targets,

@@ -1,0 +1,28 @@
+name: durable-fulfillment
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'eng/examples/aspire-first/**'
+      - 'eng/test-fulfillment-composition.sh'
+      - '.github/workflows/durable-fulfillment.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  worker-recovery:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Prove fulfillment recovery, CDC convergence and read rollback
+        run: bash eng/test-fulfillment-composition.sh -m:1 --logger 'trx;LogFileName=durable-fulfillment.trx'
+      - name: Retain test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: durable-fulfillment-results
+          path: src/Cohesive.Adapters.Aspire.Tests/TestResults/*.trx
