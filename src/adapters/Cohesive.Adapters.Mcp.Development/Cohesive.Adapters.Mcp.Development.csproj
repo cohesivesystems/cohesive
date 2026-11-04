@@ -11,6 +11,6 @@
     <PackageReference Include="ModelContextProtocol.Core" Version="1.3.0" />
     <ProjectReference Include="../../Cohesive.Semantics/Cohesive.Semantics.csproj" />
     <ProjectReference Include="../../Cohesive.Processes/Cohesive.Processes.csproj" />
-    <EmbeddedResource Include="../../../eng/examples/development-mcp/OrderModel.cs" LogicalName="OrderModel.cs" />
+    <EmbeddedResource Include="AuthoringGuide.md" LogicalName="AuthoringGuide.md" />
   </ItemGroup>
 </Project>

@@ -7,24 +7,10 @@ if (args.Length != 2)
     return 2;
 }
 var root = Path.GetFullPath(args[0]);
-// This source-build example includes framework sources and build inputs so framework changes invalidate it too.
-var projects = new[] { "Cohesive", "Cohesive.Analyzers", "Cohesive.Transitions", "Cohesive.Semantics" };
-var inputs = projects.SelectMany(project => Directory.EnumerateFiles(Path.Combine(root, "src", project), "*", SearchOption.AllDirectories))
-    .Concat(Directory.EnumerateFiles(Path.Combine(root, "eng/examples/development-mcp")))
-    .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(segment => segment is "bin" or "obj"))
-    .Where(path => Path.GetExtension(path) is ".cs" or ".csproj" or ".props" or ".targets")
-    .Select(path => Path.GetRelativePath(root, path))
-    .Append("Directory.Build.props").Append("nuget.config");
-var json = SemanticWorkspaceExport.Create(root, inputs,
-    typeof(OrderModel).Assembly.GetName().Version!.ToString(), revision => [OrderModel.Create(revision)]);
-var output = Path.GetFullPath(args[1]);
-Directory.CreateDirectory(Path.GetDirectoryName(output)!);
-var temporary = output + "." + Guid.NewGuid().ToString("N") + ".tmp";
-try
-{
-    File.WriteAllText(temporary, json);
-    File.Move(temporary, output, overwrite: true);
-}
-finally { if (File.Exists(temporary)) File.Delete(temporary); }
-Console.WriteLine(output);
+// Select the source scope; the library owns discovery conventions and atomic publication.
+var inputs = SemanticWorkspaceExport.DiscoverInputs(root,
+    ["src/Cohesive", "src/Cohesive.Analyzers", "src/Cohesive.Transitions", "src/Cohesive.Semantics", "eng/examples/development-mcp"],
+    ["Directory.Build.props", "nuget.config"]);
+Console.WriteLine(SemanticWorkspaceExport.Write(root, Path.GetRelativePath(root, Path.GetFullPath(args[1])), inputs,
+    typeof(OrderModel).Assembly.GetName().Version!.ToString(), revision => [OrderModel.Create(revision)]));
 return 0;

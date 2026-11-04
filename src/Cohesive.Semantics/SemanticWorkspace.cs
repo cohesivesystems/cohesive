@@ -10,7 +10,7 @@ namespace Cohesive.Semantics;
 /// <remarks>
 /// The session retains four immutable snapshots. Every request rereads the bounded bundle and checks declared
 /// input hashes. It never runs application code, edits source, or treats a failed refresh as a successful one.
-/// Concurrent operations are serialized; this is development tooling, not a runtime hot path.
+/// Concurrent operations are serialized. Freshness checks read all declared bytes twice per request.
 /// </remarks>
 public sealed class SemanticWorkspace
 {
@@ -85,8 +85,10 @@ public sealed class SemanticWorkspace
     /// <param name="id">Exact definition identity.</param>
     /// <param name="expectedSnapshot">Expected exported revision.</param>
     /// <param name="pointer">RFC 6901 pointer; empty selects the complete document.</param>
-    /// <param name="offset">Offset used for child and source-reference pages.</param>
+    /// <param name="offset">Zero-based child-pointer offset.</param>
     /// <param name="limit">Page size from 1 through 100.</param>
+    /// <param name="sourceOffset">Independent zero-based source-reference offset.</param>
+    /// <param name="sourceLimit">Source-reference page size from 1 through 100.</param>
     /// <returns>At most 16 KiB of selected JSON, otherwise child pointers for further retrieval.</returns>
     /// <exception cref="KeyNotFoundException">The definition or pointer is absent.</exception>
     /// <exception cref="ArgumentException">The pointer is malformed or the expected snapshot is empty.</exception>
@@ -96,12 +98,12 @@ public sealed class SemanticWorkspace
     /// <exception cref="IOException">The bundle cannot be read.</exception>
     /// <exception cref="JsonException">The bundle is invalid.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Pagination is invalid.</exception>
-    public WorkspaceResult<WorkspaceInspection> Inspect(string id, string expectedSnapshot, string pointer = "", int offset = 0, int limit = 20)
+    public WorkspaceResult<WorkspaceInspection> Inspect(string id, string expectedSnapshot, string pointer = "", int offset = 0, int limit = 20, int sourceOffset = 0, int sourceLimit = 20)
         => Read(RequireSnapshot(expectedSnapshot), snapshot =>
         {
             var document = snapshot.Documents.FirstOrDefault(d => d.Metadata.DefinitionId.Value == id)
                 ?? throw new KeyNotFoundException($"Unknown definition '{id}'. Use resolve first.");
-            var json = JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(document));
+            var json = snapshot.Json[document.Metadata.DefinitionId];
             var selected = Select(json, pointer);
             var fits = Encoding.UTF8.GetByteCount(selected.GetRawText()) <= MaximumInspectionBytes;
             if (!fits && selected.ValueKind is not (JsonValueKind.Object or JsonValueKind.Array))
@@ -115,7 +117,7 @@ public sealed class SemanticWorkspace
             return new WorkspaceInspection(Subject(document), pointer,
                 fits ? selected : null,
                 Page(children, offset, limit),
-                Page(document.Metadata.SourceMap.ResolveReferences(pointer, document.Metadata.Provenance.Source.Reference), offset, limit));
+                Page(document.Metadata.SourceMap.ResolveReferences(pointer, document.Metadata.Provenance.Source.Reference), sourceOffset, sourceLimit));
         });
 
     /// <summary>Runs registered domain validators and reports their precise coverage.</summary>
@@ -200,8 +202,7 @@ public sealed class SemanticWorkspace
             var result = operation(snapshot);
             // Report changes observed on either side of a potentially expensive domain validator.
             var changed = changedBefore.Union(ChangedInputs(snapshot), StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray();
-            var currentBytes = SemanticWorkspaceExport.ReadBounded(SemanticWorkspaceExport.ResolvePath(root, bundlePath));
-            if (SemanticWorkspaceExport.Digest(currentBytes) != id)
+            if (SemanticWorkspaceExport.DigestFile(SemanticWorkspaceExport.ResolvePath(root, bundlePath)) != id)
                 throw new InvalidOperationException("Workspace snapshot changed during inspection. Call workspace and retry.");
             return new(id, snapshot.InputRevision, snapshot.Fingerprint, changed, Limitations, result);
         }
@@ -212,7 +213,7 @@ public sealed class SemanticWorkspace
 
     bool Changed(string path, string expected)
     {
-        try { return SemanticWorkspaceExport.Digest(SemanticWorkspaceExport.ReadBounded(SemanticWorkspaceExport.ResolvePath(root, path))) != expected; }
+        try { return SemanticWorkspaceExport.DigestFile(SemanticWorkspaceExport.ResolvePath(root, path)) != expected; }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException) { return true; }
     }
 
@@ -238,6 +239,7 @@ public sealed class SemanticWorkspace
         }
         var documents = ImmutableArray.CreateBuilder<ExecutionDefinitionDocument>(bundle.Documents.Length);
         var integrity = ImmutableDictionary.CreateBuilder<ExecutionDefinitionId, DocumentValidationResult>();
+        var inspectionJson = ImmutableDictionary.CreateBuilder<ExecutionDefinitionId, JsonElement>();
         var valid = true;
         foreach (var json in bundle.Documents)
         {
@@ -248,13 +250,16 @@ public sealed class SemanticWorkspace
             if (!integrity.TryAdd(document.Metadata.DefinitionId, validation))
                 throw new JsonException("A workspace export must contain one revision per definition identity.");
             documents.Add(document);
+            // Normalize once per immutable snapshot, preserving the serializer's canonical inspection view.
+            inspectionJson.Add(document.Metadata.DefinitionId,
+                JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(document)));
         }
         var ordered = documents.OrderBy(d => d.Metadata.DefinitionId.Value, StringComparer.Ordinal).ToImmutableArray();
         var inputRevision = SemanticWorkspaceExport.InputRevision(bundle.ProducerVersion, bundle.Inputs);
-        var fingerprint = valid ? SemanticWorkspaceExport.Digest(StrictDocumentJson.GetCanonicalBytes(
+        var fingerprint = valid ? Convert.ToHexStringLower(StrictDocumentJson.ComputeCanonicalSha256(
             new { Schema = SemanticWorkspaceExport.Schema, Definitions = ordered.Select(d => new { Id = d.Metadata.DefinitionId.Value, d.Metadata.Fingerprint }) },
             SemanticWorkspaceExport.JsonOptions)) : null;
-        return new(bundle, ordered, integrity.ToImmutable(), inputRevision, fingerprint);
+        return new(bundle with { Documents = [] }, ordered, inspectionJson.ToImmutable(), integrity.ToImmutable(), inputRevision, fingerprint);
     }
 
     static WorkspaceSubject Subject(ExecutionDefinitionDocument d) => new(d.Metadata.DefinitionId.Value, d.Kind.Value,
@@ -306,5 +311,6 @@ public sealed class SemanticWorkspace
     }
 
     sealed record Snapshot(WorkspaceBundle Bundle, ImmutableArray<ExecutionDefinitionDocument> Documents,
+        ImmutableDictionary<ExecutionDefinitionId, JsonElement> Json,
         ImmutableDictionary<ExecutionDefinitionId, DocumentValidationResult> Integrity, string InputRevision, string? Fingerprint);
 }

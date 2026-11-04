@@ -37,7 +37,7 @@ The repository root and export location are selected by the launching host, not 
 ## Agent loop
 
 1. Call `workspace` and retain `snapshotId`. Check `changedInputs` and `limitations`.
-2. Call `learn(expectedSnapshot)` for the compiled cancellation example and its framework build identity.
+2. Call `learn()` for versioned authoring guidance. It also works before an export exists.
 3. Call `resolve(query: "cancel", expectedSnapshot)` to find the owning definition.
 4. Call `inspect(id: "orders/cancel", expectedSnapshot, pointer: "/definition")` to read its contract and body.
    Inspect `/metadata` for producer attribution; source-map references accompany inspection results.
@@ -51,8 +51,25 @@ All tools are read-only and return structured results with output schemas. The a
 transition, process and hosted-query document validators. It does not run builds, deploy, authorize operations,
 or accept application changes. Normal source review remains the acceptance boundary.
 
-`learn` embeds the exact `OrderModel.cs` file compiled by the example and tests. It covers typed transition
-authoring only. Package-aware retrieval of concepts and examples is future work.
+`learn` returns an adapter-owned guide or the host's supplied `DevelopmentGuide`, without reading the workspace.
+The example remains an executable fixture, rather than a dependency of the server. Package-aware retrieval is future work.
+
+## Custom hosts
+
+The standalone executable supplies conventional transition, process and hosted-query validators. To support
+another document kind, compose the same server in a host project referencing this adapter:
+
+```csharp
+var workspace = new SemanticWorkspace(root, bundlePath, domainValidators);
+await DevelopmentMcpServer.RunAsync(workspace,
+    guide: new DevelopmentGuide("my-guide/v1", authoringGuidance),
+    cancellationToken: cancellationToken);
+```
+
+`domainValidators` uses the workspace's existing dictionary of canonical kinds and domain-owned validation
+functions. Shared integrity checks always run. This composition needs no server fork or runtime plug-in loader;
+the workspace and validator policy remain protocol-independent. `CreateDefaultWorkspace` supplies the standalone
+configuration when no customization is needed. The host owns any extra validator dependencies.
 
 ## Diagnostic transport caveat
 

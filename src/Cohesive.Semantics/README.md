@@ -23,9 +23,12 @@ external shape or contract context; missing context remains diagnostic.
 ## Export in the authoring process
 
 ```csharp
-var json = SemanticWorkspaceExport.Create(
+var inputs = SemanticWorkspaceExport.DiscoverInputs(repositoryRoot,
+    sourceDirectories: ["src/MyApplication"], additionalFiles: ["Directory.Build.props"]);
+var path = SemanticWorkspaceExport.Write(
     root: repositoryRoot,
-    inputPaths: declaredInputs,
+    outputPath: "tmp/workspace.json",
+    inputPaths: inputs,
     producerVersion: exactCompilerVersion,
     lower: inputRevision => [BuildApplicationDefinition(inputRevision)]);
 ```
@@ -34,7 +37,10 @@ var json = SemanticWorkspaceExport.Create(
 an `ExecutionDefinitionDocument`; it is not a framework method. Use the supplied input revision when the
 application needs a deterministic execution revision identity. Declare all source, contract, configuration,
 convention, dependency lock, and build inputs that affect lowering. The exporter hashes declared files before
-and after invoking lowering and rejects observable input changes. The caller writes the returned JSON atomically.
+and after invoking lowering and rejects observable input changes. `Write` publishes through an adjacent temporary file and atomic replacement. `Create` remains available
+for callers that own publication. `DiscoverInputs` scans explicitly selected directories for C#, project, props,
+targets and JSON files, skipping `bin`, `obj` and `.git`; add other inputs explicitly. This is a convention,
+not dependency-graph inference.
 
 The exporter cannot establish that the declaration includes every dependency, detect a newly added undeclared
 file, or prove that an already-loaded application binary matches the working tree. Build and export from an
@@ -72,7 +78,7 @@ Relative file paths cannot escape the selected root or traverse symbolic links. 
 JSON properties, unsupported bundle versions and malformed input fingerprints are rejected.
 
 List operations page 1–100 entries. `inspect` returns at most 16 KiB of selected JSON plus paged child pointers
-and source references. A larger object/array must be read through its children; an oversized scalar requires
+and source references, independently paged with `offset`/`limit` and `sourceOffset`/`sourceLimit`. A larger object/array must be read through its children; an oversized scalar requires
 local artifact inspection and returns an actionable error. Source references are producer-defined attribution, not automatically trusted file
 paths. `check` pages definitions and supplies at most 20 diagnostics per definition; use `diagnosticOffset` to
 retrieve later diagnostics. Only the selected page invokes domain validators; shared document integrity is checked
@@ -89,5 +95,8 @@ asynchronous cancellation of in-progress inspection are intentionally deferred. 
 
 Add domain-specific indexing and authored source locations only where the owning domain can provide reliable
 evidence. Priorities are relation/shape export, cross-layer reference edges, a CLI over the same API, version-matched
-knowledge retrieval, and then narrowly scoped source-edit recipes. The current `learn` example is a compiled
-fixture for the adapter's framework build, not a general knowledge graph or a compatibility guarantee for any project.
+knowledge retrieval, and then narrowly scoped source-edit recipes. The current `learn` guide is host-owned, versioned static guidance, not a general knowledge graph or a
+compatibility guarantee for any project.
+
+See [request cost measurements](../../docs/performance/development-mcp.md) for the warm-call probe,
+allocation evidence, freshness tradeoff and remaining scaling limits.

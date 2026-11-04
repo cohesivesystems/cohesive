@@ -1,28 +1,15 @@
 using System.ComponentModel;
-using System.Reflection;
 using System.Text.Json;
-using Cohesive.Execution;
 using Cohesive.Model.Serialization;
-using Cohesive.Processes.IR;
-using Cohesive.Relations.Serialization;
 using Cohesive.Semantics;
-using Cohesive.Transitions.IR;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 
 namespace Cohesive.Adapters.Mcp.Development;
 
 // Transport projection only. Domain validators and canonical documents retain semantic authority.
-internal sealed class DevelopmentTools(string root, string bundlePath)
+internal sealed class DevelopmentTools(SemanticWorkspace workspace, DevelopmentGuide guide)
 {
-    readonly SemanticWorkspace workspace = new(root, bundlePath,
-        new Dictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, DocumentValidationResult>>
-        {
-            [TransitionDefinitionDocuments.Kind] = TransitionDefinitionDocuments.Validate,
-            [ProcessDefinitionDocuments.Kind] = ProcessDefinitionDocuments.Validate,
-            [HostedQueryDefinitionDocuments.Kind] = HostedQueryDefinitionDocuments.Validate
-        });
-
     [McpServerTool(Name = "workspace", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
     [Description("Discover the exported semantic scope, exact snapshot, declared-source freshness, and definition identities. Start here; page with nextOffset.")]
     public WorkspaceResult<WorkspacePage<WorkspaceSubject>> Workspace(int offset = 0, int limit = 20)
@@ -34,12 +21,12 @@ internal sealed class DevelopmentTools(string root, string bundlePath)
         => Invoke(() => workspace.Resolve(query, expectedSnapshot, offset, limit));
 
     [McpServerTool(Name = "inspect", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Read canonical execution semantics and source mappings by exact definition identity. pointer is an RFC 6901 path in the complete document; empty selects the root. Large values return child pointers. Edit owning source, never this derived JSON.")]
-    public WorkspaceResult<WorkspaceInspection> Inspect(string id, string expectedSnapshot, string pointer = "", int offset = 0, int limit = 20)
-        => Invoke(() => workspace.Inspect(id, expectedSnapshot, pointer, offset, limit));
+    [Description("Read canonical execution semantics and source mappings by exact definition identity. pointer is an RFC 6901 path in the complete document; empty selects the root. Large values return child pointers. Child offset/limit and sourceOffset/sourceLimit page independently. Edit owning source, never this derived JSON.")]
+    public WorkspaceResult<WorkspaceInspection> Inspect(string id, string expectedSnapshot, string pointer = "", int offset = 0, int limit = 20, int sourceOffset = 0, int sourceLimit = 20)
+        => Invoke(() => workspace.Inspect(id, expectedSnapshot, pointer, offset, limit, sourceOffset, sourceLimit));
 
     [McpServerTool(Name = "check", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Validate exported documents with existing transition, process and hosted-query validators. Does not build source, prove runtime invariants, link external contracts, or validate target realization. Check changedInputs and domainValidationAvailable.")]
+    [Description("Validate exported documents with host-registered domain validators. Does not build source, prove runtime invariants, link external contracts, or validate target realization. Check changedInputs and domainValidationAvailable.")]
     public WorkspaceResult<WorkspacePage<JsonElement>> Check(string expectedSnapshot, int offset = 0, int limit = 20, int diagnosticOffset = 0)
     {
         var checkedWorkspace = Invoke(() => workspace.Check(expectedSnapshot, offset, limit, diagnosticOffset));
@@ -60,19 +47,8 @@ internal sealed class DevelopmentTools(string root, string bundlePath)
         => Invoke(() => workspace.Compare(baselineSnapshot, expectedSnapshot, offset, limit));
 
     [McpServerTool(Name = "learn", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Read the compiled order-transition authoring example and the source/export/check workflow for this server build. This initial primer covers transitions only; it is not natural-language search or a project-version compatibility guarantee.")]
-    public WorkspaceResult<AuthoringPrimer> Learn(string expectedSnapshot)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(expectedSnapshot);
-        var current = Invoke(() => workspace.Describe(limit: 1, expectedSnapshot: expectedSnapshot));
-        using var reader = new StreamReader(typeof(DevelopmentTools).Assembly.GetManifestResourceStream("OrderModel.cs")!);
-        var primer = new AuthoringPrimer(
-            typeof(TransitionDefinitionDocuments).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion ?? "unknown",
-            "Edit typed authoring source. Lower through the existing authoring API and export in a separate process. Call workspace again, then check and compare. A successful document check is not a runtime safety proof.",
-            reader.ReadToEnd());
-        return new(current.SnapshotId, current.InputRevision, current.SemanticFingerprint,
-            current.ChangedInputs, current.Limitations, primer);
-    }
+    [Description("Read versioned authoring and inspection guidance supplied by this host. Static guidance requires no workspace snapshot or exported bundle; it does not claim project-version compatibility.")]
+    public DevelopmentGuide Learn() => guide;
 
     static T Invoke<T>(Func<T> operation)
     {
@@ -85,5 +61,3 @@ internal sealed class DevelopmentTools(string root, string bundlePath)
         }
     }
 }
-
-internal sealed record AuthoringPrimer(string FrameworkBuild, string Workflow, string CompiledExample);

@@ -5,6 +5,7 @@ using Cohesive.Model.Serialization;
 using Cohesive.Transitions.IR;
 using DevelopmentMcp.Example;
 using ModelContextProtocol.Client;
+using Cohesive.Adapters.Mcp.Development;
 
 namespace Cohesive.Semantics.Tests;
 
@@ -17,6 +18,66 @@ public sealed class SemanticWorkspaceTests : IDisposable
     {
         Directory.CreateDirectory(root);
         File.WriteAllText(Path.Combine(root, "source.cs"), "authoring input");
+    }
+
+    [Fact]
+    public void ChildAndSourcePagesAreIndependent()
+    {
+        Export();
+        var workspace = Open();
+        var snapshot = workspace.Describe().SnapshotId;
+        var page = workspace.Inspect("orders/cancel", snapshot, "/definition", offset: 1, limit: 1);
+        Assert.Single(page.Result.Children.Items);
+        Assert.NotEmpty(page.Result.SourceReferences.Items);
+        var sourcePage = workspace.Inspect("orders/cancel", snapshot, "/definition", sourceOffset: 100);
+        Assert.Empty(sourcePage.Result.SourceReferences.Items);
+        Assert.NotEmpty(sourcePage.Result.Children.Items);
+        Assert.Throws<ArgumentOutOfRangeException>(() => workspace.Inspect("orders/cancel", snapshot, sourceOffset: -1));
+    }
+
+    [Fact]
+    public void SameSizeEditWithRestoredTimestampStillInvalidatesInputs()
+    {
+        Export();
+        var workspace = Open();
+        workspace.Describe();
+        var path = Path.Combine(root, "source.cs");
+        var timestamp = File.GetLastWriteTimeUtc(path);
+        File.WriteAllText(path, new string('x', File.ReadAllText(path).Length));
+        File.SetLastWriteTimeUtc(path, timestamp);
+        Assert.Equal("source.cs", Assert.Single(workspace.Describe().ChangedInputs));
+    }
+
+    [Fact]
+    public void InputHashAllocationDoesNotScaleWithFileLength()
+    {
+        File.WriteAllText(Path.Combine(root, "source.cs"), new string('x', 8 * 1024 * 1024));
+        Export();
+        var workspace = Open();
+        workspace.Describe();
+        workspace.Describe();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = workspace.Describe();
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Empty(result.ChangedInputs);
+        // Two freshness passes must not allocate a buffer proportional to the 8 MiB source file.
+        Assert.True(allocated < 256 * 1024, $"Allocated {allocated} bytes.");
+    }
+
+    [Fact]
+    public void InputRevisionRetainsExistingCanonicalDigestContract()
+    {
+        Export();
+        var inputs = new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["source.cs"] = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(Path.Combine(root, "source.cs"))))
+        };
+        var canonical = StrictDocumentJson.GetCanonicalBytes(new
+        {
+            Schema = "cohesive-workspace/v1", ProducerVersion = "tests/v1", Inputs = inputs
+        }, StrictDocumentJson.CreateOptions());
+        var expected = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(canonical));
+        Assert.Equal(expected, Open().Describe().InputRevision);
     }
 
     [Fact]
@@ -289,6 +350,56 @@ public sealed class SemanticWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public void EquivalentSeparatelyAllocatedDiagnosticEvidenceIsDeduplicated()
+    {
+        Export();
+        DocumentValidationDiagnostic Diagnostic() => new("test.evidence", Cohesive.Model.DiagnosticSeverity.Error, "same finding",
+            Evidence: new(sourceReferences: ["source.cs"], relatedLocations: ["/definition"], resolutionOptions: ["edit source"]));
+        var first = Diagnostic();
+        var second = Diagnostic();
+        Assert.NotSame(first.Evidence, second.Evidence);
+        var workspace = WithValidator(_ => DocumentValidationResult.FromDiagnostics([first, second]));
+        Assert.Single(workspace.Check(workspace.Describe().SnapshotId).Result.Items[0].Diagnostics.Items);
+    }
+
+    [Fact]
+    public void ExportDiscoveryAndAtomicPublicationOwnTheCommonFileWorkflow()
+    {
+        Directory.CreateDirectory(Path.Combine(root, "model", "bin"));
+        Directory.CreateDirectory(Path.Combine(root, "model", "obj"));
+        File.WriteAllText(Path.Combine(root, "model", "Model.cs"), "source");
+        File.WriteAllText(Path.Combine(root, "model", "bin", "Generated.cs"), "ignored");
+        File.WriteAllText(Path.Combine(root, "model", "obj", "assets.json"), "ignored");
+        File.WriteAllText(Path.Combine(root, "model", "README.md"), "ignored");
+        var inputs = SemanticWorkspaceExport.DiscoverInputs(root, ["model"], ["source.cs"]);
+        Assert.Equal(new[] { "model/Model.cs", "source.cs" }, inputs.ToArray());
+        SemanticWorkspaceExport.Write(root, Bundle, inputs, "test", revision => [OrderModel.Create(revision)]);
+        var previous = File.ReadAllText(Path.Combine(root, Bundle));
+        Assert.Throws<InvalidOperationException>(() => SemanticWorkspaceExport.Write(root, Bundle, inputs, "test", _ => throw new InvalidOperationException("failed lowering")));
+        Assert.Equal(previous, File.ReadAllText(Path.Combine(root, Bundle)));
+        Assert.Empty(Directory.GetFiles(root, "*.tmp"));
+        Assert.Throws<ArgumentException>(() => SemanticWorkspaceExport.Write(root, "source.cs", inputs, "test", _ => []));
+        Assert.Equal("source", File.ReadAllText(Path.Combine(root, "model", "Model.cs")));
+        Assert.Empty(Open().Describe().ChangedInputs);
+    }
+
+    [Fact]
+    public void HostCanSupplyCustomValidatorsAndSnapshotIndependentGuidance()
+    {
+        var guide = new DevelopmentGuide("custom/v1", "Custom authoring guidance");
+        var workspace = WithValidator(_ => DocumentValidationResult.FromDiagnostics(
+            [new("custom.failure", Cohesive.Model.DiagnosticSeverity.Error, "Custom semantics")]));
+        var tools = new DevelopmentTools(workspace, guide);
+        // No export exists yet; the static guide is still available.
+        Assert.Same(guide, tools.Learn());
+        Assert.Equal(6, DevelopmentMcpServer.CreateOptions(workspace, guide).ToolCollection!.Count);
+        Export();
+        var result = tools.Check(workspace.Describe().SnapshotId).Result.Items[0];
+        Assert.False(result.GetProperty("isValid").GetBoolean());
+        Assert.Contains("custom.failure", result.GetRawText());
+    }
+
+    [Fact]
     public async Task OfficialSdkClientCanDiscoverInspectCheckAndLearnOverStdio()
     {
         Export();
@@ -308,7 +419,8 @@ public sealed class SemanticWorkspaceTests : IDisposable
         var snapshot = discovery.StructuredContent!.Value.GetProperty("snapshotId").GetString()!;
         foreach (var tool in new[] { "resolve", "inspect", "check", "learn", "compare" })
         {
-            var arguments = new Dictionary<string, object?> { ["expectedSnapshot"] = snapshot };
+            var arguments = new Dictionary<string, object?>();
+            if (tool != "learn") arguments["expectedSnapshot"] = snapshot;
             if (tool == "resolve") arguments["query"] = "cancel";
             if (tool == "inspect") arguments["id"] = "orders/cancel";
             if (tool == "compare") arguments["baselineSnapshot"] = snapshot;
