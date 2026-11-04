@@ -27,3 +27,12 @@ across independent evaluations or hosts; configuration changes remain eventually
 Tests cover true/false reload, actual flag removal, contextual filtering under
 concurrency, startup rejection and idempotent registration. They use the native
 manager and configuration providers without an Azure account.
+
+Flag deletion intentionally fails affected reads; it is not a rollback operation. Set an
+existing flag to false to select live reads. The per-evaluation definition lookup retains
+that distinction after configuration reload. With the real in-memory configuration provider
+and native manager, warmed evaluation measured 144 bytes/read enabled and 72 bytes/read
+disabled, both directly and through the adapter (1,000 reads, Release net10.0); the adapter
+added zero bytes. The
+regression checks enabled and disabled decisions. This does not establish latency or
+allocation bounds for custom definition providers, contextual filters, or refresh work.

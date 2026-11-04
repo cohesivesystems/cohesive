@@ -21,6 +21,18 @@ public sealed class ServiceReadSelectionTests
     static readonly ServiceQueryReadBinding Elastic = new("Elasticsearch", "orders-materialized", RelationQueryConsistency.Eventual);
 
     [Fact]
+    public void Flag_over_nonfixed_native_selection_has_structured_admission_error()
+    {
+        var model = Model();
+        var source = new Source(model) { ReadSelection = new ServiceQueryFeatureSelection("other", Elastic, Elastic) };
+        var selected = source.SelectQuery(model.Queries.OrderDetails, Elastic,
+            (_, _) => throw new ServingFailure(), ServiceReadSelection<string>.ByFeatureFlag<string>("reads", _ => value => value));
+        var error = Assert.Throws<ServiceBindingValidationException>(() => selected.PrepareQueries([Details(model)]));
+        Assert.Contains(error.Validation.Diagnostics, item => item.Code == ServiceBindingDiagnosticCodes.QueryPlacementUnsupported);
+        Assert.Equal(0, source.Binds);
+    }
+
+    [Fact]
     public async Task Warm_fallback_through_storage_composition_reuses_the_same_canonical_identity()
     {
         var model = Model();
@@ -119,7 +131,7 @@ public sealed class ServiceReadSelectionTests
     {
         var model = Model();
         var selected = new Source(model).SelectQuery(model.Queries.OrderDetails, Elastic, (_, _) => throw new ServingFailure());
-        Assert.Throws<ArgumentException>(() => selected.SelectQuery(Model().Queries.OrderDetails, Elastic, (_, _) => throw new ServingFailure()));
+        Assert.Throws<ServiceBindingValidationException>(() => selected.SelectQuery(Model().Queries.OrderDetails, Elastic, (_, _) => throw new ServingFailure()));
     }
 
     [Fact]
@@ -350,8 +362,9 @@ public sealed class ServiceReadSelectionTests
     }
     sealed class Source(FulfillmentApplication model) : IServiceStorageComposition, IServicePersistence
     {
+        public ServiceQueryReadSelection? ReadSelection { get; init; }
         public ServiceQueryReadSelection DescribeRead(ServiceQuerySelection query) =>
-            new ServiceQueryReadBinding("Test", "test-resource", Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
+            ReadSelection ?? new ServiceQueryReadBinding("Test", "test-resource", Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
 
         public object? SelectedReader { get; init; }
         public int Binds { get; private set; }

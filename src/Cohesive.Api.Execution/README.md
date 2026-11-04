@@ -554,3 +554,9 @@ consent fails validation. Previously unreleased `Select*ByFeatureFlag` methods a
 `RelationQueryReadSource.FeatureFlag` are removed. Custom compositions now return the
 `ServiceQueryReadSelection` inspection base; fixed adapters still construct
 `ServiceQueryReadBinding`. Custom evaluators must implement flag admission.
+
+ASP.NET hosts can pass `RequestIdentityTargeting.For<TInput>` to `FromPolicy` or
+`ByFeatureFlag<IdentityContext>`. It validates fixed/resolved identity registration
+and operation-context access during preparation. Future requests still need the operation
+middleware and a resolved identity: absence returns a 401 failure before flag evaluation,
+not an anonymous targeting default. Startup cannot prove future request identity.

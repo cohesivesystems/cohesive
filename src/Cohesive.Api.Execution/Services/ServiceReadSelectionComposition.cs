@@ -16,7 +16,7 @@ public static class ServiceReadSelectionComposition
     /// <param name="prepare">Admits the alternate once, before source preparation; never called for Native selection.</param>
     /// <param name="selection">Fixed native/alternate or flag choice. Defaults to fixed alternate.</param>
     /// <returns>An immutable composition requiring offline query admission before binding.</returns>
-    /// <exception cref="ArgumentException">The query already has an explicit serving selection.</exception>
+    /// <exception cref="ServiceBindingValidationException">The query already has an explicit serving selection.</exception>
     public static IServiceStorageComposition SelectQuery<TInput, TResult>(this IServiceStorageComposition source,
         RelationQuery<TInput, TResult> query, ServiceQueryReadBinding binding,
         Func<IServiceProvider, CancellationToken, ValueTask<Func<int, long, IRelationQueryReader<TInput, TResult>>>> prepare,
@@ -27,7 +27,8 @@ public static class ServiceReadSelectionComposition
         selection ??= ServiceReadSelection<TInput>.Alternate;
         var key = ServiceQueryIdentity.For(query.CompilationRequest);
         if (source is ISelection previous && previous.Contains(key))
-            throw new ArgumentException("The canonical query already has a serving selection.", nameof(query));
+            throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryPlacementUnsupported,
+                "The canonical query already has a serving selection.", "/bindings/queries/selection");
         if (selection.IsNative) return source;
         return new Selection<TInput, TResult>(source, query, binding, prepare, key, selection);
     }
@@ -53,7 +54,8 @@ public static class ServiceReadSelectionComposition
 
         ServiceQueryReadBinding NativeBinding(ServiceQuerySelection selection) =>
             source.DescribeRead(selection) as ServiceQueryReadBinding
-                ?? throw new InvalidOperationException("A flag choice requires a fixed native reader.");
+                ?? throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryPlacementUnsupported,
+                    "A flag choice requires a fixed native reader.", "/bindings/queries/selection");
 
         public IServiceStorageComposition PrepareQueries(ImmutableArray<ServiceQuerySelection> selections)
         {

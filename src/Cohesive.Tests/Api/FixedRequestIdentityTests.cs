@@ -8,6 +8,26 @@ namespace Cohesive.Tests.Api;
 
 public sealed class FixedRequestIdentityTests
 {
+    [Fact]
+    public void Targeting_rejects_missing_identity_registration_at_setup()
+    {
+        using var services = new ServiceCollection().AddRequestOperationContext().BuildServiceProvider();
+        Assert.Throws<InvalidOperationException>(() => RequestIdentityTargeting.For<string>(services));
+    }
+
+    [Fact]
+    public void Targeting_requires_identity_per_invocation_and_restores_scope()
+    {
+        var identity = new IdentityContext(new PrincipalRef("local", PrincipalKind.User));
+        using var services = new ServiceCollection().AddRequestOperationContext()
+            .AddFixedRequestIdentity(identity).BuildServiceProvider();
+        var project = RequestIdentityTargeting.For<string>(services);
+        Assert.Equal(StatusCodes.Status401Unauthorized, Assert.Throws<BadHttpRequestException>(() => project("order")).StatusCode);
+        using (services.GetRequiredService<IOperationContextScopeFactory>().Push(OperationContext.Create().WithIdentityContext(identity)))
+            Assert.Same(identity, project("order"));
+        Assert.Equal(StatusCodes.Status401Unauthorized, Assert.Throws<BadHttpRequestException>(() => project("order")).StatusCode);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

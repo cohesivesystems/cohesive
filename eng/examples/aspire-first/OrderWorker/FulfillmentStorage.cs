@@ -1,6 +1,5 @@
 using Cohesive.Identity;
-using Cohesive.Prelude;
-using Microsoft.Extensions.DependencyInjection;
+using Cohesive.Adapters.AspNet.Identity;
 using AspireFirst.Materialization;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Relations.Execution;
@@ -53,12 +52,7 @@ public sealed class FulfillmentStorage : StorageModel
                 .OrderDetails.ForReads(configurationSection: "Shadow"),
             target: ShadowElastic.Reads,
             comparisonSection: "OrderReads",
-            selection: ServiceReadSelection<string>.FromPolicy<IdentityContext>(reads, services =>
-            {
-                var identity = services.GetRequiredService<IOperationContextAccessor>();
-                return _ => identity.Current?.GetIdentityContextOrDefault()
-                    ?? throw new InvalidOperationException("Read targeting requires the current authorized identity.");
-            })));
+            selection: ServiceReadSelection<string>.FromPolicy<IdentityContext>(reads, RequestIdentityTargeting.For<string>)));
 
     }
 

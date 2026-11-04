@@ -9,8 +9,30 @@ using Microsoft.FeatureManagement;
 
 namespace Cohesive.Configuration.Tests;
 
-public sealed class FeatureFlagAdapterTests
+public sealed class FeatureFlagAdapterTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Microsoft_warm_adapter_adds_no_allocation_over_native_manager(bool enabled)
+    {
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["FeatureManagement:reads"] = enabled.ToString() }).Build();
+        using var services = new ServiceCollection().AddSingleton<IConfiguration>(config)
+            .AddCohesiveFeatureManagement<string>().BuildServiceProvider();
+        var evaluator = services.GetRequiredService<IFeatureFlagEvaluator<string>>();
+        var manager = services.GetRequiredService<IVariantFeatureManager>();
+        for (var i = 0; i < 1000; i++) await evaluator.IsEnabledAsync("reads", "tenant");
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++) if (manager.IsEnabledAsync("reads", "tenant", default).GetAwaiter().GetResult() != enabled) throw new InvalidOperationException();
+        var native = GC.GetAllocatedBytesForCurrentThread() - start;
+        start = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++) if (evaluator.IsEnabledAsync("reads", "tenant").GetAwaiter().GetResult() != enabled) throw new InvalidOperationException();
+        var adapted = GC.GetAllocatedBytesForCurrentThread() - start;
+        output.WriteLine($"Native={native}, adapter={adapted} bytes/1000 reads");
+        Assert.True(adapted <= native, $"Native={native}, adapter={adapted} bytes/1000 reads");
+    }
+
     [Fact]
     public async Task Microsoft_missing_and_removed_flags_fail_admission_and_evaluation()
     {
