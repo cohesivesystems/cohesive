@@ -6,6 +6,38 @@ namespace Cohesive.Adapters.SQLite.Tests;
 public sealed class SqliteRelationQueryRowReaderTests
 {
     [Fact]
+    public void OwnedOrdinalObservationPreservesValuesAbsenceAndProviderLifetime()
+    {
+        using var fixture = new SqliteTypedRowFixture(256);
+        Observation first;
+        using (var command = fixture.CreateCommand())
+        using (var reader = command.ExecuteReader())
+        {
+            var rows = fixture.Mapping.Bind(reader);
+            Assert.True(reader.Read());
+            Assert.True(rows.TryReadObservation(out var admitted));
+            first = admitted!;
+            var ordinal = Assert.IsAssignableFrom<IOrdinalObservationFieldReader>(first.Fields);
+            Assert.Same(fixture.Mapping.Layout, ordinal.Layout);
+            var expected = rows.ReadCurrent();
+            var actual = fixture.Mapping.Materializer.Materialize(first);
+            Assert.Equal(expected.Id, actual.Id);
+            Assert.Equal(expected.Label, actual.Label);
+            Assert.Equal(expected.Payload, actual.Payload);
+            actual.Payload![0] = 42;
+            Assert.Equal(0, fixture.Mapping.Materializer.Materialize(first).Payload![0]);
+            Assert.True(reader.Read());
+            Assert.True(rows.TryReadObservation(out var nullRow));
+            Assert.True(nullRow!.Fields.TryGetValue(nameof(SqliteTypedRowFixture.Row.Payload), out var value));
+            Assert.Equal(ObservationValueKind.Null, value.Kind);
+            Assert.True(reader.Read());
+            Assert.True(rows.TryReadObservation(out var missingRow));
+            Assert.False(missingRow!.Fields.ContainsKey(nameof(SqliteTypedRowFixture.Row.Payload)));
+        }
+        Assert.Equal(256, fixture.Mapping.Materializer.Materialize(first).Payload!.Length);
+    }
+
+    [Fact]
     public void TypedRowsMatchCanonicalValuesAndRetainOwnedBytesAcrossReaderLifetimes()
     {
         using var fixture = new SqliteTypedRowFixture();
@@ -175,16 +207,20 @@ public sealed class SqliteRelationQueryRowReaderTests
         Assert.True(reader.Read());
         if (absent)
         {
+            Assert.False(rows.TryReadObservation(out var observation));
+            Assert.Null(observation);
             Assert.False(rows.TryReadCurrent(out var value));
             Assert.Null(value);
             Assert.Throws<InvalidOperationException>(() => rows.ReadCurrent());
         }
         else if (target == "payload")
         {
+            Assert.Throws<ArgumentException>(() => rows.TryReadObservation(out _));
             Assert.Throws<ArgumentException>(() => rows.ReadCurrent());
         }
         else
         {
+            Assert.Throws<InvalidOperationException>(() => rows.TryReadObservation(out _));
             Assert.Throws<InvalidOperationException>(() => rows.ReadCurrent());
         }
     }

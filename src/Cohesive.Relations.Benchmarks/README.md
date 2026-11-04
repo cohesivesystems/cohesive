@@ -318,3 +318,20 @@ Retain opt-in execution until representative application workloads and stable-ho
 adoption. Raw environments, reports, source hashes and three local counterbalanced repeats are preserved
 under `docs/performance/evidence/relation-direct-ordinals`. This completes the relation-projection producer
 experiment; native adapter ingestion and serialization fusion are separate follow-ups.
+
+
+### Native SQLite ordinal ingestion
+
+`*SqliteOrdinalIngestionBenchmarks*` compares actual SQLite command execution, reader binding and advancement,
+all-field scalar decoding, complete shape validation, retained observation storage, DTO construction and reader
+disposal. Cases cover 1/32/1024 rows with 256-byte payloads and present/null/missing optional bytes. Artifact,
+layout and materializer compilation, database population and command creation are in setup; execution uses
+an existing connection and command. External network and serialization are excluded.
+
+The canonical reference uses the same adapter's `TryGetField` decoder to populate a dictionary, then
+`Observation.Create` and the same core DTO materializer. It is a benchmark reference for identity-free
+admission, not the provenance-bearing `ReadCurrentRow` API. Both benchmark inputs have present bindings;
+adapter tests separately cover absent bindings and malformed presence/scalar data. Neither path decodes
+contributor identities. The new ordinal method preserves the same validation boundary while transferring
+owned immutable slots directly to the admitted observation. Retained state ingestion is a different workload
+from DTO-only `SqliteTypedRowBenchmarks`; do not compare their timings as equivalent guarantees.

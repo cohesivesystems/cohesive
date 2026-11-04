@@ -236,3 +236,19 @@ size remains fixed; wrappers increase the serialized SQL/artifact size and the b
 The shared canonical analyzer now accepts proven guards; this does not change evaluation or authorize unguarded
 nullish comparisons. Generic conformance fixtures cover composite/string keys, key-preserving and multiplying joins,
 missing/null winners, guarded eligibility, final partition ordering, evidence round trips and unsupported domains.
+
+
+### Owned ordinal ingestion
+
+After preparing `artifact.CreateRowMapping<T>(shape)` and binding its operation-owned `SqliteDataReader`,
+`TryReadObservation(out observation)` decodes every compiled result field directly into an immutable ordinal
+vector and admits it with the exact shape and shared layout. No field dictionary or CLR DTO is constructed
+on this path. A false return means whole-binding absence; optional missing fields remain absent and null
+remains present. Native presence and refined scalar contracts are checked before complete shape validation.
+No partially admitted observation escapes on failure.
+
+The returned observation and byte values survive reader advancement/disposal. This method does not advance
+or dispose the borrowed reader. Shape admission is independent of configured CLR member conversions; apply
+`mapping.Materializer.Materialize(observation)` when a DTO is needed. Contributor identities are not read;
+retain the artifact's canonical row API for provenance-bearing outputs. Existing `ReadCurrent` remains the
+lower-allocation choice when only a DTO is needed and no retained generic state is required.
