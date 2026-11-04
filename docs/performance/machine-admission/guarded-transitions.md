@@ -48,6 +48,30 @@ increase. A single sibling retains its old execution cost. Unrelated edges affec
 works with the compiled movement's sibling evidence. The shared interpreter still dominates execution and
 allocates; these results are not the standalone admission numbers or a zero-allocation claim.
 
+## Single-pass follow-up
+
+The follow-up stores ordered guard expressions once per linked edge slice and evaluates each at most once,
+using a single evaluation context per movement. Runtime stops at the second enabled guard. The selected
+edge result is retained from that pass; no numeric counting expression runs in the interpreter. The compiler
+still derives balanced expressions for static analysis, exposed as compiler methods so they are not serialized. Older expression-count link evidence is rejected
+by strict JSON member validation and must be regenerated from source.
+
+| Siblings | Unrelated | Link mean (µs) | Link allocation (KB) | Admit mean (µs) | Admit allocation (KB) |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1 | 0 | 8.861 | 25.40 | 1.451 | 7.03 |
+| 1 | 128 | 43.488 | 132.68 | 1.478 | 7.03 |
+| 8 | 0 | 9.203 | 30.81 | 3.031 | 10.03 |
+| 8 | 128 | 45.610 | 138.72 | 3.007 | 10.03 |
+| 32 | 0 | 18.744 | 46.69 | 8.240 | 20.58 |
+| 32 | 128 | 74.192 | 153.75 | 8.327 | 20.58 |
+
+At 32 siblings without unrelated edges, admission improves from the previous 12.463 µs / 25.49 KB to
+8.240 µs / 20.58 KB. Link-time diagnostics and grouping still allocate, notably for singleton-heavy catalogs.
+Some linking timing error bars remain wide: the tables are evidence, not a promise of a uniform speedup.
+The shared guard array is reused in memory, but independent edge serialization still repeats sibling guards.
+A catalog-level reference table would change the persisted evidence format and is intentionally deferred;
+the redundant derived count and selected-guard expression are no longer serialized.
+
 ## Interpretation and bounds
 
 Before is commit `06990ccae27f3e7d8ff6c653e6e0d1d54af7a113`. After is the production source committed
@@ -55,8 +79,8 @@ with this report. These ShortRun results are indicative measurements on one host
 The fixture covers successful selection of one sibling; false guards, wrong source states, ambiguous
 selection and predicate-backed configurations are correctness tests rather than benchmark workloads.
 
-Linking now groups edges once by source state/action, lowers each guard once, and shares a balanced
-ambiguity-count expression per group. It no longer scans the entire edge catalog for each linked edge.
+Linking now groups edges once by source state/action, lowers each guard once, and shares an ordered
+guard array per group. It no longer scans the entire edge catalog for each linked edge.
 Catalog normalization still sorts the final edge list. Shared immutable expression references reduce
 construction work; serializing every link independently may still repeat the group's evidence.
 
@@ -66,8 +90,7 @@ requested edge itself is disabled. A false guard remains an ordinary AdmissionRe
 compilation analyzes the ambiguity predicate separately so its input dependencies and failure condition
 remain visible to sparse analysis. Neither failure produces commit artifacts.
 
-The ambiguity check evaluates all sibling guards to count enabled edges; the selected guard is then checked
-for ordinary admission. This remains O(sibling count × guard cost), plus the normal Transition interpreter
-work. Grouping at link time does not prove guard disjointness or eliminate runtime sibling evaluation.
+The runtime evaluates guards once and retains whether the selected edge is enabled, stopping at the second
+enabled sibling. This remains O(sibling count × guard cost) for unique admission, plus normal interpreter work. Grouping at link time does not prove guard disjointness or eliminate runtime sibling evaluation.
 A single-edge group has no ambiguity expression. Guard contracts, outcome precision and absence of side
 effects take priority over suppressing the cost of this diagnostic check.

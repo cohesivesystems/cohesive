@@ -1,3 +1,4 @@
+using Cohesive.Model.Authoring;
 using System.Linq.Expressions;
 using Cohesive.Relations.Authoring;
 
@@ -13,15 +14,16 @@ public static class MachineGuardAuthoring
     /// <typeparam name="TInput">Action payload type.</typeparam>
     /// <param name="movement">Owning movement declaration.</param>
     /// <param name="predicate">Pure admission predicate.</param>
+    /// <param name="typeRefMapper">Configured CLR contracts shared with entity and Transition authoring; defaults to the framework mapper.</param>
     /// <returns>The same movement with its lowered guard.</returns>
     /// <exception cref="ArgumentNullException">The movement or predicate is null.</exception>
     /// <exception cref="InvalidOperationException">Machine source is frozen.</exception>
     /// <exception cref="RelationQueryExpressionAuthoringException">The expression is unsupported.</exception>
     public static MachineMovement When<TFacts, TInput>(this MachineMovement movement,
-        Expression<Func<TFacts, TInput, bool>> predicate)
+        Expression<Func<TFacts, TInput, bool>> predicate, IClrTypeRefMapper? typeRefMapper = null)
         where TFacts : notnull where TInput : notnull
     {
         ArgumentNullException.ThrowIfNull(movement);
-        return movement.When(MachineGuardCompiler.Compile(predicate));
+        return movement.When(MachineGuardCompiler.Compile(predicate, typeRefMapper));
     }
 }

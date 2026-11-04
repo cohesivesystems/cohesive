@@ -1,3 +1,4 @@
+using Cohesive.Model.Authoring;
 using Cohesive.Machines;
 using Cohesive.Relations.Authoring;
 using System.Linq.Expressions;
@@ -12,10 +13,13 @@ namespace Cohesive.Transitions.Machines;
 public sealed class MachinePredicateBinding<TEntity, TInput> where TEntity : notnull where TInput : notnull
 {
     readonly MachineDefinition machine;
+    readonly IClrTypeRefMapper? typeRefMapper;
     readonly Dictionary<string, Expr> predicates = new(StringComparer.Ordinal);
     /// <summary>Creates a binding for an exact machine revision.</summary>
     /// <param name="machine">Canonical lifecycle authority.</param>
-    public MachinePredicateBinding(MachineDefinition machine) { ArgumentNullException.ThrowIfNull(machine); this.machine = machine; }
+    /// <param name="typeRefMapper">Configured CLR contracts shared with entity and Transition authoring.</param>
+    public MachinePredicateBinding(MachineDefinition machine, IClrTypeRefMapper? typeRefMapper = null)
+    { ArgumentNullException.ThrowIfNull(machine); this.machine = machine; this.typeRefMapper = typeRefMapper; }
     /// <summary>Recognizes a state using pure entity facts.</summary>
     /// <param name="state">Declared state identity.</param>
     /// <param name="predicate">Entity configuration predicate.</param>
@@ -24,7 +28,7 @@ public sealed class MachinePredicateBinding<TEntity, TInput> where TEntity : not
     public MachinePredicateBinding<TEntity, TInput> State(string state, Expression<Func<TEntity, TInput, bool>> predicate)
     {
         if (!machine.States.Contains(state)) throw new ArgumentException("Unknown machine state.", nameof(state));
-        var guard = MachineGuardCompiler.Compile(predicate);
+        var guard = MachineGuardCompiler.Compile(predicate, typeRefMapper);
         if (guard.Analyze().Requirements.Bindings.Contains(guard.InputBinding))
             throw new ArgumentException("A state predicate cannot depend on an action payload.", nameof(predicate));
         predicates.Add(state, MachineTransitionLinker.Rebind(guard.Predicate, guard)); return this;

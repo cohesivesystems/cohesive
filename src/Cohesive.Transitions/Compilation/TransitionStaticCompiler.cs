@@ -155,6 +155,7 @@ public static class TransitionStaticCompiler
             this.definition = definition;
             this.graph = graph;
             this.machineLinks = machineLinks;
+            diagnostics.AddRange(machineLinks.Diagnostics);
             inputContract = ResolveContract(definition.Input);
             observationContract = ResolveContract(definition.Observation);
             parameters = CreateParameters(inputContract);
@@ -785,7 +786,7 @@ public static class TransitionStaticCompiler
             }
 
             usedMachineEdges[new(link.Machine, link.Edge)] = link;
-            if (link.AmbiguousConfiguration is { } ambiguity)
+            if (link.CreateAmbiguousConfiguration() is { } ambiguity)
             {
                 var analysis = AnalyzeSite(movement.Id, TransitionExpressionSiteKind.MachineAmbiguousConfiguration,
                     ambiguity, scope, ExprExpectation.Boolean, $"{location}/linked/ambiguousConfiguration", input,
@@ -798,20 +799,21 @@ public static class TransitionStaticCompiler
                     Origin(movement.Id, $"{location}/linked/ambiguousConfiguration", null, TransitionObservationInfluence.Outcome)));
                 input = conditions.And(input, conditions.Not(ambiguous));
             }
+            var sourceAdmission = link.CreateSourceAdmission();
             var source = AnalyzeSite(
                 movement.Id,
                 TransitionExpressionSiteKind.MachineSourceConfiguration,
-                link.SourceConfiguration,
+                sourceAdmission,
                 scope,
                 ExprExpectation.Boolean,
                 $"{location}/linked/sourceConfiguration",
                 input,
                 TransitionObservationInfluence.Admission | TransitionObservationInfluence.Branch,
                 conditionAtomScope: $"machine-source:{movement.Id.Value}");
-            var sourceTest = TryGetBoolean(source, link.SourceConfiguration, out var sourceConstant)
+            var sourceTest = TryGetBoolean(source, sourceAdmission, out var sourceConstant)
                 ? sourceConstant ? conditions.True : conditions.False
                 : BooleanExpressionCondition(
-                    link.SourceConfiguration,
+                    sourceAdmission,
                     $"machine-source:{movement.Id.Value}");
             var rejected = conditions.And(input, conditions.Not(sourceTest));
             _ = AnalyzeSite(

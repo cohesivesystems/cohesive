@@ -1,3 +1,5 @@
+using Cohesive.Model.Serialization;
+using Cohesive.Model.Authoring;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Machines;
@@ -38,6 +40,7 @@ public sealed class GuardedDiscriminatorTests
         var lifecycle = source.Build();
         var links = new MachineDiscriminatorBinding<Order, OrderStatus>(lifecycle, order => order.Status)
             .Map(draft, OrderStatus.Draft).Map(submitted, OrderStatus.Submitted).Build();
+        Assert.Equal(competingEdge, links.Diagnostics.Any(d => d.Code == "machines.linking.disjointnessUnknown"));
         var entity = ObjectEntityDefinition.For<Order>(new("order"));
         var transition = TransitionAuthoring.Create<Order, SubmitOrder, string>(
             entity.Shape, new("order.submit"), new("1"),
@@ -102,7 +105,11 @@ public sealed class GuardedDiscriminatorTests
         // Persisted linker evidence retains the explicit ambiguity obligation.
         var restored = System.Text.Json.JsonSerializer.Deserialize<TransitionMachineEdgeLink>(
             System.Text.Json.JsonSerializer.Serialize(links.Edges[0]))!;
-        Assert.Equal(links.Edges[0].AmbiguousConfiguration, restored.AmbiguousConfiguration);
+        Assert.Equal(links.Edges[0].CreateAmbiguousConfiguration(), restored.CreateAmbiguousConfiguration());
+        var legacy = System.Text.Json.Nodes.JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(links.Edges[0]))!.AsObject();
+        legacy.Remove("AdmissionGuards");
+        legacy["AmbiguousConfiguration"] = true;
+        Assert.Throws<System.Text.Json.JsonException>(() => System.Text.Json.JsonSerializer.Deserialize<TransitionMachineEdgeLink>(legacy.ToJsonString()));
         var entity = ObjectEntityDefinition.For<Order>(new("order"));
         var transition = TransitionAuthoring.Create<Order, SubmitOrder, string>(entity.Shape,
             new("disabled-request"), new("1"), t => t
@@ -117,5 +124,35 @@ public sealed class GuardedDiscriminatorTests
         Assert.Contains(decision.Diagnostics, d => d.Code == TransitionExecutionDiagnosticCodes.MachineAdmissionAmbiguous);
         Assert.Empty(decision.Patch);
         Assert.Empty(decision.MachineMovements);
+    }
+
+    [Fact]
+    public void ConfiguredContractsAreSharedWithEntityAndTransitionAuthoring()
+    {
+        var mapper = new DefaultClrTypeRefMapper(new Dictionary<Type, TypeRef>
+        {
+            [typeof(OrderStatus)] = new EnumTypeRef("custom-order-status", ["Draft", "Submitted"])
+        });
+        var source = Machine.Define("configured", "1");
+        var draft = source.State("draft").Initial();
+        var done = source.State("done").Final();
+        var submit = source.Edge("submit").From(draft).To(done)
+            .When((Order order, SubmitOrder input) => order.ItemCount > 0, typeRefMapper: mapper);
+        var machine = source.Build();
+        var links = new MachineDiscriminatorBinding<Order, OrderStatus>(machine, order => order.Status, typeRefMapper: mapper)
+            .Map(draft, OrderStatus.Draft).Map(done, OrderStatus.Submitted).Build();
+        var entity = ObjectEntityDefinition.For<Order>(new("order"), typeRefMapper: mapper);
+        var metadata = new TransitionAuthoringMetadata(new("configured.submit"), new("1"), new("body"),
+            new(new(TransitionAuthoring.Producer), new("tests/configured"), DocumentOrigin.User));
+        var transition = TransitionAuthoring.Create<Order, SubmitOrder, string>(entity.Shape, metadata,
+            t => t.Move(submit, rejection: (order, input) => "rejected")
+                .Return(new("result"), TransitionOutcomeDisposition.Applied, "submitted"), typeRefMapper: mapper);
+        var compiled = TransitionStaticCompiler.Compile(transition.Document, machineLinks: links);
+        Assert.True(compiled.IsSuccessful, string.Join(";", compiled.Validation.Diagnostics.Select(d => d.Message)));
+        Assert.Equal(ValueContract.FromField(entity.Shape.Fields.Single(f => f.Name.Value == "Status")),
+            links.Edges[0].Assignments[0].Value.Contract);
+        Assert.Equal(TransitionDecisionKind.Applied, TransitionReferenceInterpreter.DecideFullState(compiled.Plan!, new("test"),
+            PortableValue.Concrete(transition.Definition.Input, ObservationValue.FromObject(new SubmitOrder("alice", true))),
+            PortableValue.Concrete(transition.Definition.Observation, ObservationValue.FromObject(new Order(OrderStatus.Draft, 1, "")))).Kind);
     }
 }

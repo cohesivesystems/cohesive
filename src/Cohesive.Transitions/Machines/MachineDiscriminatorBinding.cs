@@ -1,3 +1,4 @@
+using Cohesive.Model.Authoring;
 using Cohesive.Machines;
 using System.Linq.Expressions;
 using Cohesive.Execution;
@@ -22,8 +23,9 @@ public sealed class MachineDiscriminatorBinding<TEntity, TValue> where TEntity :
     /// <summary>Binds a lifecycle to a direct or nested entity field.</summary>
     /// <param name="machine">Canonical lifecycle.</param>
     /// <param name="selector">Typed discriminator selector.</param>
+    /// <param name="typeRefMapper">Configured CLR contracts shared with entity and Transition authoring; defaults to the framework mapper.</param>
     /// <exception cref="ArgumentException">Selector does not lower to a field.</exception>
-    public MachineDiscriminatorBinding(MachineDefinition machine, Expression<Func<TEntity, TValue>> selector)
+    public MachineDiscriminatorBinding(MachineDefinition machine, Expression<Func<TEntity, TValue>> selector, IClrTypeRefMapper? typeRefMapper = null)
     {
         ArgumentNullException.ThrowIfNull(machine);
         this.machine = machine;
@@ -32,7 +34,7 @@ public sealed class MachineDiscriminatorBinding<TEntity, TValue> where TEntity :
         var lowered = new RelationQueryExpressionLowerer(author.Clr.ResolveMemberPath)
             .LowerValue(selector, [source], "machine/discriminator").RequireValue().Value;
         path = lowered is FieldExpr field ? field.Path : throw new ArgumentException("Select one entity field.", nameof(selector));
-        contract = new(new Cohesive.Model.Authoring.DefaultClrTypeRefMapper().Map(typeof(TValue), nullability: null));
+        contract = new((typeRefMapper ?? new DefaultClrTypeRefMapper()).Map(typeof(TValue), nullability: null));
     }
     /// <summary>Maps a state to its representation value.</summary>
     /// <param name="state">State identity.</param>

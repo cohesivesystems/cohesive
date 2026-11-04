@@ -113,11 +113,19 @@ admission without commit artifacts. There is no duplicate `Requires` for the mac
 manual `Set` for the discriminator. The host commits the resulting decision through its normal boundary.
 The executable example is covered in `Cohesive.Tests/Machines/GuardedDiscriminatorTests.cs`.
 
+Configured applications should pass the same `IClrTypeRefMapper` to entity authoring, typed `When`,
+`MachineDiscriminatorBinding` / `MachinePredicateBinding`, and Transition authoring. The optional
+`typeRefMapper` parameter preserves custom enum/value contracts; no mapper survives into the IR.
+Bindings still validate against the compiled entity observation contract. Custom wire encodings must also
+match the application's normal portable-value serialization.
+
 Both discriminator and predicate bindings rebind guard facts to entity observation and guard input to
 the transition command. Admission requires the selected guard. Two or more enabled sibling edges produce `InvalidDefinition`
 with diagnostic `transitions.execution.machine.admissionAmbiguous`, even if the requested edge is disabled.
 An ordinary false guard produces `AdmissionRejected` with the movement's authored rejection outcome.
-Ambiguity produces no patches, emissions or movements. The static compiler retains ambiguity dependencies
+Ambiguity produces no patches, emissions or movements. Link catalogs expose a `machines.linking.disjointnessUnknown` warning for sibling guards whose disjointness
+has not been proven; the compiler includes these diagnostics. Multiple unguarded siblings fail machine
+validation outright. The static compiler retains ambiguity dependencies
 and its failure condition separately from ordinary rejection. Guards need not be statically provably disjoint;
 this runtime check detects overlap for the current observation and command.
 Guards constrain the source; final-target checks concern the resulting configuration.
@@ -189,7 +197,9 @@ later extensions from the broader Notion research program, not implemented capab
 Reuse: shared expression lowering/analysis/evaluation, canonical execution documents, source maps,
 Transition compilation, patches, decisions and commit boundaries. Typed guard lowering lives in Relations, which depends on core; core does not depend on Relations.
 No third expression translator was introduced.
-Linking groups edges once by source state/action and shares balanced ambiguity expressions. See the
+Linking groups edges once by source state/action and shares ordered guard arrays. Runtime evaluates each
+guard at most once, reuses one evaluation context, and stops at the second enabled guard. Balanced ambiguity
+expressions are derived only for compiler analysis and omitted from serialized link evidence. See the
 [guarded Transition benchmark](../../../docs/performance/machine-admission/guarded-transitions.md) for linking and runtime costs.
 Guard and state-predicate rebinding share a deliberately bounded integration operation rather than a second evaluator.
 

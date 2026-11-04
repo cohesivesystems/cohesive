@@ -731,18 +731,26 @@ public static class TransitionReferenceInterpreter
                     $"Compiled Machine edge '{movement.Edge.Value}' is unavailable.",
                     movement.Id);
 
-            if (link.AmbiguousConfiguration is { } ambiguity && EvaluateBoolean(
-                    ambiguity, movement.Id, candidateState: false, operation: "Machine admission ambiguity", scope))
-                throw Invalid(TransitionExecutionDiagnosticCodes.MachineAdmissionAmbiguous,
-                    $"Machine '{movement.Machine.DefinitionId.Value}' has multiple enabled edges for the action of '{movement.Edge.Value}'.",
-                    movement.Id);
-
-            if (!EvaluateBoolean(
-                    link.SourceConfiguration,
-                    movement.Id,
-                    candidateState: false,
-                    operation: "Machine source configuration",
-                    scope))
+            var evaluation = CreateEvaluationContext(movement.Id, candidateState: false, scope);
+            var admitted = PortableExpressionReferenceEvaluator.RequireBoolean(
+                evaluator.Evaluate(link.SourceConfiguration, evaluation), "Machine source configuration");
+            if (admitted && !link.AdmissionGuards.IsEmpty)
+            {
+                var enabled = 0;
+                var selected = false;
+                for (var index = 0; index < link.AdmissionGuards.Length; index++)
+                {
+                    if (!PortableExpressionReferenceEvaluator.RequireBoolean(
+                            evaluator.Evaluate(link.AdmissionGuards[index], evaluation), "Machine admission guard")) continue;
+                    if (++enabled > 1)
+                        throw Invalid(TransitionExecutionDiagnosticCodes.MachineAdmissionAmbiguous,
+                            $"Machine '{movement.Machine.DefinitionId.Value}' has multiple enabled edges for the action of '{movement.Edge.Value}'.",
+                            movement.Id);
+                    selected = index == link.SelectedGuardIndex;
+                }
+                admitted = selected;
+            }
+            if (!admitted)
             {
                 var rejection = EvaluateTyped(
                     movement.Rejection,
@@ -884,15 +892,19 @@ public static class TransitionReferenceInterpreter
             Expr expression,
             ExecutionNodeId node,
             bool candidateState,
-            Dictionary<ValueBindingId, PortableExpressionValue>? scope = null)
+            Dictionary<ValueBindingId, PortableExpressionValue>? scope = null) =>
+            evaluator.Evaluate(expression, CreateEvaluationContext(node, candidateState, scope));
+
+        PortableExpressionEvaluationContext CreateEvaluationContext(ExecutionNodeId node, bool candidateState,
+            Dictionary<ValueBindingId, PortableExpressionValue>? scope)
         {
             var visible = scope ?? bindings;
-            return evaluator.Evaluate(expression, new()
+            return new()
             {
                 ResolveBinding = binding => ResolveBinding(binding, node, candidateState, visible),
                 ResolveField = (binding, path) => ResolveField(binding, path, node, candidateState, visible),
                 ResolveParameter = parameter => ResolveParameter(parameter)
-            });
+            };
         }
 
         bool EvaluateBoolean(
