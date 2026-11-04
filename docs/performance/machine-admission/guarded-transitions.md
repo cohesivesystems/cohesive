@@ -91,6 +91,22 @@ compilation analyzes the ambiguity predicate separately so its input dependencie
 remain visible to sparse analysis. Neither failure produces commit artifacts.
 
 The runtime evaluates guards once and retains whether the selected edge is enabled, stopping at the second
-enabled sibling. This remains O(sibling count × guard cost) for unique admission, plus normal interpreter work. Grouping at link time does not prove guard disjointness or eliminate runtime sibling evaluation.
+enabled sibling. This remains O(sibling count × guard cost) for unique admission, plus normal interpreter work. Link-time equality proofs suppress warnings but do not eliminate runtime sibling evaluation.
 A single-edge group has no ambiguity expression. Guard contracts, outcome precision and absence of side
 effects take priority over suppressing the cost of this diagnostic check.
+
+## Scoped diagnostics and equality proof
+
+The review follow-up adds a conservative pairwise equality proof at registration. Its cost is
+quadratic in siblings (not the whole catalog), with constraints collected once per guard.
+Runtime evaluation and its guarantees are unchanged. The fixture has distinct `Choice == i`
+constraints, so these groups now produce no disjointness warnings.
+
+Compared with the previously recorded single-pass baseline (32 siblings, no unrelated edges),
+linking is 21.40 µs / 54.40 KB versus 18.74 µs / 46.69 KB. For one sibling it is
+8.84 µs / 25.56 KB versus 8.86 µs / 25.40 KB. Registration does more analysis; this is not a
+runtime speedup claim. Short-run error bars remain wide. A trial using nested capturing LINQ
+allocated 144.64 KB at 32 siblings; direct pairwise loops avoid that temporary work.
+
+Raw final output: [equality-proof-results.md](equality-proof-results.md). Reproduce with
+`dotnet run -c Release --project src/Cohesive.Relations.Benchmarks -- --filter '*GuardedMachineTransitionBenchmarks.Link*'`.

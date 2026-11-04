@@ -20,11 +20,18 @@ internal static class MachineGuardDisjointness
         var constraints = guards.Select(Constraints).ToArray();
         for (var i = 0; i < constraints.Length; i++)
             for (var j = i + 1; j < constraints.Length; j++)
-                if (!constraints[i].Any(left => constraints[j].Any(right =>
-                    left.Field == right.Field && left.Value.Kind == right.Value.Kind
-                    && !ObservationValueSemantics.Equals(left.Value, right.Value))))
-                    return false;
+                if (!Contradicts(constraints[i], constraints[j])) return false;
         return true;
+    }
+
+    static bool Contradicts(List<(FieldExpr Field, ObservationValue Value)> left,
+        List<(FieldExpr Field, ObservationValue Value)> right)
+    {
+        foreach (var l in left)
+            foreach (var r in right)
+                if (l.Field == r.Field && l.Value.Kind == r.Value.Kind
+                    && !ObservationValueSemantics.Equals(l.Value, r.Value)) return true;
+        return false;
     }
 
     static List<(FieldExpr Field, ObservationValue Value)> Constraints(Expr expression)
