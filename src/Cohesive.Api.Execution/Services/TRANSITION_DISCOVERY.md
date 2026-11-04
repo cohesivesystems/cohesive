@@ -68,7 +68,12 @@ and conditionally commits. Permission revocation and concurrent entity changes c
 Permitted result. Inspection performs no writes, emits no events, and dispatches no Process work.
 
 Each entry carries its own authoritative snapshot token. Inspection may read multiple repository bindings and
-is not an atomic catalog snapshot. No command or grant evidence is cached across calls. Repository/authorization
+is not an atomic catalog snapshot. Within one call, operations with the same repository instance and
+structurally equal authorized scope share one validated full snapshot and observation projection.
+Different repository instances or scopes do not share a read, even when their entity IDs match.
+Scope admission and resource authorization still run independently for every operation. When discovery
+and invocation use the same policy instance, successful checks are reused only for that operation;
+separate policies each run once. No command, snapshot or grant evidence is cached across calls. Repository/authorization
 infrastructure errors propagate to the host. This initial API covers declared direct Transition operations;
 Process and query availability are not inferred, and no transport endpoint is exposed automatically.
 
@@ -76,3 +81,8 @@ Tests in `LogisticsTransitionDiscoveryTests` exercise release/cancel capability 
 Tests in `ServiceRuntimeTests` cover no-write evaluation, required input, visibility versus invocation,
 resource denial, explicit capability grants, expiration, permission revocation, stale tokens and additional
 Transition preconditions.
+
+A runnable [load-actions consumer](../../../../eng/examples/load-actions/README.md) demonstrates
+role-filtered release/cancel choices, command refinement and conditional execution. Discovery benchmarks
+cover 1/8/32 operations both with and without complete commands; see
+[performance evidence](../../../../docs/performance/transition-discovery/README.md).

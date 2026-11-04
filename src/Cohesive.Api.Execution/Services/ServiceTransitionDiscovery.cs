@@ -46,7 +46,7 @@ public sealed partial class ServiceRuntime
     /// <param name="entity">Exact entity authority to inspect.</param>
     /// <param name="subject">Repository entity identity; caller-provided snapshots are not accepted.</param>
     /// <param name="inputs">Optional complete portable commands keyed by operation identity. Missing commands yield RequiresInput.</param>
-    /// <returns>Discoverable operations in ordinal identity order, each carrying its own freshly loaded snapshot token.</returns>
+    /// <returns>Discoverable operations in ordinal identity order, each carrying the token of its authorized snapshot.</returns>
     /// <exception cref="ArgumentNullException">Context is null.</exception>
     /// <exception cref="ArgumentException">Subject identity is empty.</exception>
     /// <exception cref="InvalidOperationException">A repository supplies an inexact snapshot or entity authority.</exception>
@@ -54,7 +54,8 @@ public sealed partial class ServiceRuntime
     /// <remarks>Visibility uses the host's discovery policy, defaulting to invocation authorization. Hidden, inaccessible
     /// and absent resources produce no entries. A separate visibility policy may expose Forbidden operations. Availability
     /// is advisory: InvokeAsync always reauthorizes and enforces the supplied concurrency token. Entries may come from
-    /// different snapshot versions and do not imply an atomic catalog read. Omitted nonempty commands are conservatively
+    /// different snapshot versions and do not imply an atomic catalog read. Within one call, the same repository
+    /// instance and equal authorized scope share a snapshot; policies still run for every operation. Omitted nonempty commands are conservatively
     /// RequiresInput; this API does not invent values or claim partial-input symbolic evaluation. It evaluates the entire
     /// canonical Transition with supplied input, including machine admission, Requires and final invariants.</remarks>
     public async Task<ImmutableArray<ServiceTransitionAvailability>> InspectTransitionsAsync(OperationContext context,
@@ -63,6 +64,8 @@ public sealed partial class ServiceRuntime
         ArgumentNullException.ThrowIfNull(context);
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
         var results = ImmutableArray.CreateBuilder<ServiceTransitionAvailability>();
+        var snapshots = new Dictionary<IEntityRepository, Dictionary<ScopeRef, (EntitySnapshot? Snapshot, ObservationValue? Observation)>>(ReferenceEqualityComparer.Instance);
+        var sharedPolicy = ReferenceEquals(discoveryAuthorization, authorization);
         foreach (var linked in operations.Values.OrderBy(item => item.Operation.Id, StringComparer.Ordinal))
         {
             context.ThrowIfCancellationRequested();
@@ -74,18 +77,32 @@ public sealed partial class ServiceRuntime
             if (repository.EntityDefinition.StateShape.QualifiedId != entity)
                 throw new InvalidOperationException("The repository does not realize the declared entity authority.");
             var options = EntityReadOptions.Full.WithPartitionKey(visibleScope.ResolvePartitionKey());
-            var snapshot = await repository.TryGet(context, subject, options).ConfigureAwait(false);
+            if (!snapshots.TryGetValue(repository, out var scopedSnapshots))
+                snapshots.Add(repository, scopedSnapshots = []);
+            if (!scopedSnapshots.TryGetValue(visibleScope, out var cached))
+            {
+                var loaded = await repository.TryGet(context, subject, options).ConfigureAwait(false);
+                if (loaded is not null) ValidateTransitionSnapshot(repository, loaded, subject, options.PartitionKey);
+                cached = (loaded, null);
+                scopedSnapshots.Add(visibleScope, cached);
+            }
+            var snapshot = cached.Snapshot;
             if (snapshot is null) continue;
-            ValidateTransitionSnapshot(repository, snapshot, subject, options.PartitionKey);
             if (!await discoveryAuthorization.AuthorizeResourceAsync(context, operation, snapshot).ConfigureAwait(false)) continue;
-            var state = repository.EntityDefinition.CreateState(snapshot.Entity);
+
+            if (cached.Observation is null)
+            {
+                var state = repository.EntityDefinition.CreateState(snapshot.Entity);
+                cached.Observation = ObservationValue.FromObject(state.Fields);
+                scopedSnapshots[visibleScope] = cached;
+            }
             var kind = ServiceTransitionAvailabilityKind.RequiresInput;
             TransitionDecisionKind? decisionKind = null;
             ImmutableArray<DocumentValidationDiagnostic> diagnostics = [];
-            var invokeScope = await authorization.AdmitAsync(context, operation).ConfigureAwait(false);
+            var invokeScope = sharedPolicy ? visibleScope : await authorization.AdmitAsync(context, operation).ConfigureAwait(false);
             if (invokeScope is null || invokeScope.Kind != visibleScope.Kind || invokeScope.Id != visibleScope.Id
                 || invokeScope.ResolvePartitionKey() != visibleScope.ResolvePartitionKey()
-                || !await authorization.AuthorizeResourceAsync(context, operation, snapshot).ConfigureAwait(false))
+                || (!sharedPolicy && !await authorization.AuthorizeResourceAsync(context, operation, snapshot).ConfigureAwait(false)))
                 kind = ServiceTransitionAvailabilityKind.Forbidden;
             else
             {
@@ -97,7 +114,7 @@ public sealed partial class ServiceRuntime
                 {
                     context.ThrowIfCancellationRequested();
                     var decision = TransitionReferenceInterpreter.DecideFullState(binding.Plan, new("services.inspect/" + operation.Id),
-                        input, PortableValue.Concrete(binding.Plan.Definition.Observation, ObservationValue.FromObject(state.Fields)));
+                        input, PortableValue.Concrete(binding.Plan.Definition.Observation, cached.Observation.Value));
                     decisionKind = decision.Kind;
                     kind = decision.Kind switch
                     {

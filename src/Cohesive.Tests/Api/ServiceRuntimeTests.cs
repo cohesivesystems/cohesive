@@ -536,6 +536,60 @@ public sealed class ServiceRuntimeTests
         Assert.Equal(0, fixture.Repository.Writes);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task InspectionReusesSnapshotsButAuthorizesEachOperation(bool distinctRepositories, bool distinctScopes)
+    {
+        var fixture = await Fixture.Create();
+        var second = distinctRepositories ? new RecordingRepository(fixture.Repository.Inner) : fixture.Repository;
+        if (distinctScopes) fixture.Authority.ScopeFor = operation =>
+            new ScopeRef(operation.Id, "tenant", PartitionKey: "tenant-a");
+        var entity = fixture.Repository.EntityDefinition;
+        var document = ServiceDefinitionDocuments.Create(new("two-operations"), new("1"), new ServiceDefinition([
+            new ServiceTransitionOperation("first", entity.StateShape.QualifiedId, fixture.Plan.DefinitionReference, [new("notes.revise")]),
+            new ServiceTransitionOperation("second", entity.StateShape.QualifiedId, fixture.Plan.DefinitionReference, [new("notes.revise")])]),
+            new(new("tests"), new("discovery/reuse"), DocumentOrigin.User));
+        var runtime = new ServiceRuntime(document, [
+            new ServiceTransitionBinding("first", fixture.Plan, entity, _ => fixture.Repository),
+            new ServiceTransitionBinding("second", fixture.Plan, entity, _ => second)], fixture.Authority);
+        var inputs = new Dictionary<string, PortableValue> { ["first"] = fixture.Input, ["second"] = fixture.Input };
+        var result = await runtime.InspectTransitionsAsync(OperationContext.Create(), entity.StateShape.QualifiedId, "note-1", inputs);
+        Assert.Equal(2, result.Length);
+        Assert.All(result, entry => Assert.Equal(ServiceTransitionAvailabilityKind.Permitted, entry.Kind));
+        Assert.Equal(distinctScopes ? 2 : 1, fixture.Repository.Reads);
+        if (distinctRepositories) Assert.Equal(1, second.Reads);
+        Assert.Equal(2, fixture.Authority.AdmissionChecks);
+        Assert.Equal(2, fixture.Authority.ResourceChecks);
+        Assert.Equal(0, fixture.Repository.Writes);
+        // Cache lifetime is one inspection, never a reusable permission or stale entity snapshot.
+        await runtime.InspectTransitionsAsync(OperationContext.Create(), entity.StateShape.QualifiedId, "note-1", inputs);
+        Assert.Equal(distinctScopes ? 4 : 2, fixture.Repository.Reads);
+        Assert.Equal(4, fixture.Authority.AdmissionChecks);
+        Assert.Equal(4, fixture.Authority.ResourceChecks);
+        fixture.Authority.DeniedOperation = "second";
+        var filtered = await runtime.InspectTransitionsAsync(OperationContext.Create(), entity.StateShape.QualifiedId, "note-1", inputs);
+        Assert.Equal("first", Assert.Single(filtered).OperationId);
+        Assert.Equal(6, fixture.Authority.ResourceChecks);
+    }
+
+    [Fact]
+    public async Task SeparateDiscoveryAndInvocationPoliciesEachAuthorizeOnce()
+    {
+        var fixture = await Fixture.Create();
+        var visibility = new Authority();
+        var entity = fixture.Repository.EntityDefinition;
+        var runtime = new ServiceRuntime(fixture.Document,
+            [new ServiceTransitionBinding("revise", fixture.Plan, entity, _ => fixture.Repository)],
+            fixture.Authority, visibility);
+        await runtime.InspectTransitionsAsync(OperationContext.Create(), entity.StateShape.QualifiedId, "note-1");
+        Assert.Equal(1, visibility.AdmissionChecks);
+        Assert.Equal(1, visibility.ResourceChecks);
+        Assert.Equal(1, fixture.Authority.AdmissionChecks);
+        Assert.Equal(1, fixture.Authority.ResourceChecks);
+    }
+
     sealed class Fixture
     {
         public required CompiledTransitionPlan Plan { get; init; }
@@ -583,15 +637,19 @@ public sealed class ServiceRuntimeTests
         public bool AllowAdmission { get; set; } = true;
         public bool AllowResource { get; set; } = true;
         public int ResourceChecks { get; private set; }
+        public int AdmissionChecks { get; private set; }
+        public Func<ServiceOperation, ScopeRef>? ScopeFor { get; set; }
+        public string? DeniedOperation { get; set; }
         public ValueTask<ScopeRef?> AdmitAsync(OperationContext context, ServiceOperation operation)
         {
+            AdmissionChecks++;
             Assert.Equal("notes.revise", Assert.Single(operation.AuthorizationRequirements).Id);
-            return ValueTask.FromResult<ScopeRef?>(AllowAdmission ? new("tenant-a", "tenant") : null);
+            return ValueTask.FromResult<ScopeRef?>(AllowAdmission ? ScopeFor?.Invoke(operation) ?? new("tenant-a", "tenant") : null);
         }
         public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceOperation operation, EntitySnapshot snapshot)
         {
             ResourceChecks++;
-            return ValueTask.FromResult(AllowResource && snapshot.Entity.Observation.GetField("Tenant").GetString() == "tenant-a");
+            return ValueTask.FromResult(AllowResource && operation.Id != DeniedOperation && snapshot.Entity.Observation.GetField("Tenant").GetString() == "tenant-a");
         }
     }
 
