@@ -1,6 +1,6 @@
 # Cohesive development MCP
 
-A local stdio MCP server for inspecting and checking Cohesive execution semantics while agents edit ordinary
+A local stdio MCP server for inspecting and checking Cohesive domain semantics while agents edit ordinary
 authoring source. It uses the official `ModelContextProtocol.Core` SDK (pinned to 1.3.0) and the shared
 [`Cohesive.Semantics`](../../Cohesive.Semantics/README.md) workspace. It adds no runtime application access or source mutation tools.
 
@@ -51,11 +51,11 @@ The repository root and export location are selected by the launching host, not 
    comment-only changes produce a new input revision with no changed semantic fingerprint.
 
 All tools are read-only and return structured results with output schemas. The adapter registers existing
-transition, process and hosted-query document validators. It does not run builds, deploy, authorize operations,
+transition, process, service, hosted-query and native relation document validators. Endpoint inspection artifacts have integrity validation only. It does not run builds, deploy, authorize operations,
 or accept application changes. Normal source review remains the acceptance boundary.
 
-`references(id, expectedSnapshot)` projects built-in Process dependencies through the owning domain. It reports
-exact, missing and stale targets and explicit incomplete coverage. Transition documents have no built-in
+`references(id, expectedSnapshot)` projects Process, Service and hosted-query dependencies through their owning domains. Native query and endpoint readers are explicitly partial. It reports
+exact, content-only, identity-only, missing and stale evidence and explicit incomplete coverage. Transition documents have no built-in
 execution-definition calls; unknown kinds and extensions are not assumed reference-free. `inspect.sourceMappings`
 exposes optional compiler-owned portable line spans. See the Orders walkthrough for the combined navigation loop.
 
@@ -64,7 +64,7 @@ The example remains an executable fixture, rather than a dependency of the serve
 
 ## Custom hosts
 
-The standalone executable supplies conventional transition, process and hosted-query validators. To support
+The standalone executable supplies conventional domain validators and schema readers. To support
 another document kind, compose the same server in a host project referencing this adapter:
 
 ```csharp
@@ -95,5 +95,13 @@ dotnet test src/Cohesive.Semantics.Tests
 
 Tests exercise deterministic export, input freshness, failed refreshes, stale request rejection, ambiguity,
 fingerprint integrity, comparison, bounded retention, path containment, JSON pointers, and an official SDK client
-calling all seven tools over a real stdio subprocess. The sample transition is authored through the fluent API,
-not hand-constructed IR. This slice does not yet validate the Orders application's full API/client change scenario.
+calling all eight tools over a real stdio subprocess. The sample transition is authored through the fluent API,
+not hand-constructed IR. The Orders exercise additionally verifies native query-to-endpoint changes; full API/client compatibility remains outside coverage.
+
+## Bounded impact
+
+`impact(id, expectedSnapshot, maxDepth: 4, limit: 20)` returns potential transitive consumers with shortest evidence
+paths. Inspect each edge and `incompleteDefinitions`; `depthLimitReached` and `resultLimitReached` report omitted
+scope. Cycles are suppressed. Bounds are depth 1–16, 1–100 results, 256 exported documents and 4096 indexed edges.
+The default adapter references Cohesive.Application to reuse its endpoint projection; no API model is duplicated
+inside MCP. The endpoint artifact fingerprint covers route/binding inspection, not a full API semantic contract.

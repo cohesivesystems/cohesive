@@ -39,11 +39,11 @@ internal static class OrdersWorkflow
                 Arguments = [typeof(OrdersWorkspace).Assembly.Location, "serve", scratch]
             }), cancellationToken: token);
             var tools = await client.ListToolsAsync(cancellationToken: token);
-            Require(tools.Select(t => t.Name).Order().SequenceEqual(new[] { "check", "compare", "inspect", "learn", "references", "resolve", "workspace" }), "Tool discovery differed.");
+            Require(tools.Select(t => t.Name).Order().SequenceEqual(new[] { "check", "compare", "impact", "inspect", "learn", "references", "resolve", "workspace" }), "Tool discovery differed.");
             var guide = await Call("learn");
             Require(guide.GetProperty("content").GetString()!.Contains(OrdersWorkspace.Project, StringComparison.Ordinal), "Project guidance is missing.");
             var before = await Workspace();
-            Require(before.ChangedInputs.IsEmpty && before.Result.Total == 5, "Expected five fresh domain-owned execution documents.");
+            Require(before.ChangedInputs.IsEmpty && before.Result.Total > 5, "Expected fresh execution, relation and endpoint documents.");
             var resolved = await Call("resolve", new() { ["query"] = "fulfillment/reserve", ["expectedSnapshot"] = before.SnapshotId });
             Require(resolved.GetProperty("result").GetProperty("total").GetInt32() == 1, "Reservation identity is ambiguous.");
             var inspection = await Call("inspect", new()
@@ -79,6 +79,12 @@ internal static class OrdersWorkflow
                     && location.GetProperty("startLine").GetInt32() > 0), "Owning source could not be located through structured mappings.");
             }
             await Check(before.SnapshotId);
+            var transitionImpact = await Call("impact", new() { ["id"] = "fulfillment/reserve", ["expectedSnapshot"] = before.SnapshotId });
+            var potential = transitionImpact.GetProperty("result").GetProperty("items").EnumerateArray().ToArray();
+            Require(potential.Any(item => item.GetProperty("consumer").GetProperty("definitionId").GetString() == "fulfillment")
+                && potential.Any(item => item.GetProperty("consumer").GetProperty("definitionId").GetString()!.StartsWith("api:", StringComparison.Ordinal)
+                    && item.GetProperty("path").GetArrayLength() == 2),
+                "Expected service and API consumers through the process; direct process bindings yield the shortest endpoint paths.");
 
             var path = Path.Combine(scratch, OrdersWorkspace.DomainSource);
             var source = await File.ReadAllTextAsync(path, token);
@@ -98,28 +104,56 @@ internal static class OrdersWorkflow
             var comparison = await Call("compare", new() { ["baselineSnapshot"] = before.SnapshotId, ["expectedSnapshot"] = after.SnapshotId });
             var changedIds = comparison.GetProperty("result").GetProperty("changes").GetProperty("items")
                 .EnumerateArray().Select(item => item.GetProperty("id").GetString()!).Order().ToArray();
-            Require(changedIds.SequenceEqual(new[] { "fulfillment/reserve", "fulfillment/submit" }),
-                "Expected the edited transition and its referencing process to change: " + string.Join(", ", changedIds));
+            var predicted = transitionImpact.GetProperty("result").GetProperty("items").EnumerateArray()
+                .Select(item => item.GetProperty("consumer").GetProperty("definitionId").GetString()!).Append("fulfillment/reserve").Order().ToArray();
+            Require(changedIds.SequenceEqual(predicted), "Actual transition propagation differed from reference evidence: " + string.Join(", ", changedIds));
+
+            const string queryId = "fulfillment/order-details";
+            var queryBefore = await Call("inspect", new() { ["id"] = queryId, ["expectedSnapshot"] = after.SnapshotId, ["pointer"] = "/definition" });
+            var queryConsumers = await Call("references", new() { ["id"] = queryId, ["expectedSnapshot"] = after.SnapshotId });
+            var queryConsumer = queryConsumers.GetProperty("result").GetProperty("references").GetProperty("items").EnumerateArray().Single();
+            Require(queryConsumer.GetProperty("isContentMatch").GetBoolean() && !queryConsumer.GetProperty("isExactMatch").GetBoolean(),
+                "Native query content evidence or unknown revision was misrepresented.");
+            var endpointId = queryConsumer.GetProperty("source").GetProperty("definitionId").GetString()!;
+            var endpointBefore = await Call("inspect", new() { ["id"] = endpointId, ["expectedSnapshot"] = after.SnapshotId });
+            const string querySource = "eng/examples/aspire-first/Orders.Model/FulfillmentQueries.cs";
+            var queryPath = Path.Combine(scratch, querySource);
+            var queryText = await File.ReadAllTextAsync(queryPath, token);
+            await File.WriteAllTextAsync(queryPath, ReplaceOnce(queryText,
+                "Where(order => order.Partition == FulfillmentStoragePolicy.LocalPartition)",
+                "Where(order => order.Partition == FulfillmentStoragePolicy.LocalPartition && order.Status == OrderStatus.Submitted)"), token);
+            var queryStale = await Workspace();
+            Require(queryStale.ChangedInputs.Contains(querySource), "Query source edit was not reported.");
+            await Export();
+            var queryAfter = await Workspace();
+            await Check(queryAfter.SnapshotId);
+            var queryComparison = await Call("compare", new() { ["baselineSnapshot"] = after.SnapshotId, ["expectedSnapshot"] = queryAfter.SnapshotId });
+            var queryChanges = queryComparison.GetProperty("result").GetProperty("changes").GetProperty("items").EnumerateArray()
+                .Select(item => item.GetProperty("id").GetString()!).Order().ToArray();
+            Require(queryChanges.SequenceEqual(new[] { endpointId, queryId }.Order()), "Expected only the native query and bound API projection to change.");
+            var queryImpact = await Call("impact", new() { ["id"] = queryId, ["expectedSnapshot"] = queryAfter.SnapshotId });
+            Require(queryImpact.GetProperty("result").GetProperty("items").GetArrayLength() == 1, "Expected the actual query endpoint consumer.");
 
             // Rebuild a comment-only source edit to verify metadata/input changes do not invent semantic changes.
             await File.AppendAllTextAsync(path, "\n// Agent exercise: source-only review note.\n", token);
             await Export();
             var comment = await Workspace();
-            var commentComparison = await Call("compare", new() { ["baselineSnapshot"] = after.SnapshotId, ["expectedSnapshot"] = comment.SnapshotId });
-            Require(comment.ChangedInputs.IsEmpty && comment.InputRevision != after.InputRevision && comment.SemanticFingerprint == after.SemanticFingerprint,
+            var commentComparison = await Call("compare", new() { ["baselineSnapshot"] = queryAfter.SnapshotId, ["expectedSnapshot"] = comment.SnapshotId });
+            Require(comment.ChangedInputs.IsEmpty && comment.InputRevision != queryAfter.InputRevision && comment.SemanticFingerprint == queryAfter.SemanticFingerprint,
                 "Comment-only edit changed semantics or failed to update source identity.");
             Require(commentComparison.GetProperty("result").GetProperty("changes").GetProperty("total").GetInt32() == 0, "Comment-only comparison reported semantic changes.");
             var evidence = new
             {
                 ToolNames = tools.Select(t => t.Name).Order(), Before = before.SnapshotId, After = after.SnapshotId,
                 ChangedInputsBeforeExport = stale.ChangedInputs, Inspection = inspection, SourceMap = sourceMap, Guard = guard, Checks = checks,
+                QueryInspection = queryBefore, EndpointInspection = endpointBefore, QueryComparison = queryComparison, QueryImpact = queryImpact, TransitionImpact = transitionImpact,
                 Comparison = comparison, ConsumersBeforeEdit = consumers, ConsumerInspection = consumerInspection, CommentOnlyChanges = 0,
-                Scope = "Offline source/lowering/MCP exercise; no runtime, storage, API/client or impact-analysis proof. Source-map line numbers describe the isolated copy."
+                Scope = "Offline source/lowering/MCP exercise; bounded dependency reachability and endpoint binding evidence only; no runtime, storage or API compatibility proof. Source-map line numbers describe the isolated copy."
             };
             var report = Path.Combine(root, "tmp", "orders-development-exercise.json");
             Directory.CreateDirectory(Path.GetDirectoryName(report)!);
             await File.WriteAllTextAsync(report, JsonSerializer.Serialize(evidence, new JsonSerializerOptions { WriteIndented = true }), token);
-            Console.WriteLine($"PASS: five definitions; stale source and snapshot rejection; transition/process change; comment-only equivalence. Evidence: {report}");
+            Console.WriteLine($"PASS: mixed domain documents; stale source and snapshot rejection; transition/service/API propagation; query/API change; bounded impact; comment-only equivalence. Evidence: {report}");
 
             async Task Export()
             {
@@ -139,7 +173,8 @@ internal static class OrdersWorkflow
             {
                 var result = await Call("check", new() { ["expectedSnapshot"] = snapshot });
                 foreach (var check in result.GetProperty("result").GetProperty("items").EnumerateArray())
-                    Require(check.GetProperty("domainValidationAvailable").GetBoolean() && check.GetProperty("isValid").GetBoolean(), check.GetRawText());
+                    Require(check.GetProperty("isValid").GetBoolean() && (check.GetProperty("domainValidationAvailable").GetBoolean()
+                        || check.GetProperty("id").GetString()!.StartsWith("api:", StringComparison.Ordinal)), check.GetRawText());
                 return result;
             }
         }

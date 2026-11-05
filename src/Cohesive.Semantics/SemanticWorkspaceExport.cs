@@ -72,12 +72,29 @@ public static class SemanticWorkspaceExport
     public static string Write(string root, string outputPath, IEnumerable<string> inputPaths, string producerVersion,
         Func<string, IReadOnlyList<ExecutionDefinitionDocument>> lower)
     {
+        ArgumentNullException.ThrowIfNull(lower);
+        return WriteDocuments(root, outputPath, inputPaths, producerVersion, revision => Serialize(lower(revision)));
+    }
+
+    /// <summary>Atomically publishes original domain JSON documents with declared-input freshness checks.</summary>
+    /// <param name="root">Repository root.</param><param name="outputPath">Relative output, distinct from inputs.</param>
+    /// <param name="inputPaths">Declared inputs.</param><param name="producerVersion">Exact producer version.</param>
+    /// <param name="lower">Produces original domain JSON; corresponding schema readers must be registered.</param>
+    /// <returns>Absolute published path.</returns>
+    /// <exception cref="ArgumentException">Paths or inputs are invalid.</exception>
+    /// <exception cref="ArgumentNullException">Inputs or lowering callback are null.</exception>
+    /// <exception cref="UnauthorizedAccessException">Input or output access is denied.</exception>
+    /// <exception cref="IOException">Capture or publication fails.</exception>
+    /// <exception cref="InvalidOperationException">The document or byte bound is exceeded.</exception>
+    public static string WriteDocuments(string root, string outputPath, IEnumerable<string> inputPaths, string producerVersion,
+        Func<string, IReadOnlyList<JsonElement>> lower)
+    {
         ArgumentNullException.ThrowIfNull(inputPaths);
         var output = ResolvePath(root, outputPath);
         var inputs = inputPaths.ToImmutableArray();
         if (inputs.Any(input => string.Equals(ResolvePath(root, input), output, StringComparison.OrdinalIgnoreCase)))
             throw new ArgumentException("An exported bundle cannot replace an authoring input.", nameof(outputPath));
-        var json = Create(root, inputs, producerVersion, lower);
+        var json = CreateDocuments(root, inputs, producerVersion, lower);
         Directory.CreateDirectory(Path.GetDirectoryName(output)!);
         var temporary = output + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
@@ -109,6 +126,32 @@ public static class SemanticWorkspaceExport
         string producerVersion,
         Func<string, IReadOnlyList<ExecutionDefinitionDocument>> lower)
     {
+        ArgumentNullException.ThrowIfNull(lower);
+        return CreateDocuments(root, inputPaths, producerVersion, revision => Serialize(lower(revision)));
+    }
+
+    static IReadOnlyList<JsonElement> Serialize(IReadOnlyList<ExecutionDefinitionDocument> documents)
+    {
+        if (documents is null) throw new InvalidOperationException("Lowering must return a document collection.");
+        if (documents.Count > MaximumDefinitions) throw new InvalidOperationException($"A bundle supports at most {MaximumDefinitions} documents.");
+        if (documents.Any(d => d is null) || documents.Select(d => d.Metadata.DefinitionId).Distinct().Count() != documents.Count)
+            throw new InvalidOperationException("A bundle must contain unique, non-null definitions.");
+        return [.. documents.OrderBy(d => d.Metadata.DefinitionId.Value, StringComparer.Ordinal)
+            .Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d)))];
+    }
+
+    /// <summary>Captures inputs around lowering original domain documents, without replacing their wire contracts.</summary>
+    /// <param name="root">Repository root.</param><param name="inputPaths">Declared relative input paths.</param>
+    /// <param name="producerVersion">Exact producer revision.</param><param name="lower">Original domain JSON producer.</param>
+    /// <returns>Portable inspection bundle; readers validate domain identity and integrity when loaded.</returns>
+    /// <exception cref="ArgumentException">Inputs or producer version are invalid.</exception>
+    /// <exception cref="ArgumentNullException">Inputs or lowering callback are null.</exception>
+    /// <exception cref="UnauthorizedAccessException">An input cannot be accessed.</exception>
+    /// <exception cref="IOException">Inputs cannot be read or change during lowering.</exception>
+    /// <exception cref="InvalidOperationException">The document or byte bound is exceeded.</exception>
+    public static string CreateDocuments(string root, IEnumerable<string> inputPaths, string producerVersion,
+        Func<string, IReadOnlyList<JsonElement>> lower)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(producerVersion);
         ArgumentNullException.ThrowIfNull(lower);
         var before = Capture(root, inputPaths);
@@ -116,16 +159,15 @@ public static class SemanticWorkspaceExport
             throw new ArgumentException("Declare at least one authoring input.", nameof(inputPaths));
         var lowered = lower(InputRevision(producerVersion, before))
             ?? throw new InvalidOperationException("Lowering must return a document collection.");
-        if (lowered.Count > MaximumDefinitions || lowered.Any(d => d is null))
-            throw new InvalidOperationException($"A bundle supports at most {MaximumDefinitions} non-null documents.");
-        var documents = lowered.OrderBy(d => d.Metadata.DefinitionId.Value, StringComparer.Ordinal).ToArray();
-        if (documents.Select(d => d.Metadata.DefinitionId).Distinct().Count() != documents.Length)
-            throw new InvalidOperationException("A bundle must contain unique definition identities.");
+        if (lowered.Count > MaximumDefinitions || lowered.Any(d => d.ValueKind != JsonValueKind.Object))
+            throw new InvalidOperationException($"A bundle supports at most {MaximumDefinitions} document objects.");
+        // Byte ordering is only export determinism, not a parallel semantic identity authority.
+        var documents = lowered.OrderBy(d => d.GetRawText(), StringComparer.Ordinal).ToImmutableArray();
         var after = Capture(root, before.Keys);
         if (!before.SequenceEqual(after))
             throw new IOException("Declared inputs changed during lowering. Rebuild before exporting.");
         var bundle = new WorkspaceBundle(Schema, producerVersion, before,
-            [.. documents.Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d)))]);
+            documents);
         var json = JsonSerializer.Serialize(bundle, JsonOptions);
         if (Encoding.UTF8.GetByteCount(json) > MaximumFileBytes)
             throw new InvalidOperationException("Workspace bundle exceeds 16 MiB; split the export scope.");

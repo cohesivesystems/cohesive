@@ -48,7 +48,7 @@ public sealed class SemanticWorkspaceTests : IDisposable
         var stale = Assert.Single(workspace.References("target", workspace.Describe().SnapshotId).Result.References.Items);
         Assert.False(stale.IsExactMatch);
         Assert.NotNull(stale.Available);
-        Assert.Equal(target.Reference, stale.Expected);
+        Assert.Equal(WorkspaceDocumentReference.FromExecution(target.Reference), stale.Expected);
         Assert.Equal(target.Reference.Fingerprint, stale.Available!.Fingerprint);
         Export([consumer, ExecutionDefinitionDocument.Create(target.Kind, target.Metadata.DefinitionId, target.Metadata.RevisionId,
             new { Value = "after" }, Provenance())]);
@@ -471,7 +471,7 @@ public sealed class SemanticWorkspaceTests : IDisposable
         var tools = new DevelopmentTools(workspace, guide);
         // No export exists yet; the static guide is still available.
         Assert.Same(guide, tools.Learn());
-        Assert.Equal(7, DevelopmentMcpServer.CreateOptions(workspace, guide).ToolCollection!.Count);
+        Assert.Equal(8, DevelopmentMcpServer.CreateOptions(workspace, guide).ToolCollection!.Count);
         Export();
         var result = tools.Check(workspace.Describe().SnapshotId).Result.Items[0];
         Assert.False(result.GetProperty("isValid").GetBoolean());
@@ -492,16 +492,16 @@ public sealed class SemanticWorkspaceTests : IDisposable
                 Path.Combine(basePath, "Cohesive.Adapters.Mcp.Development.dll"), root, Bundle]
         }), cancellationToken: timeout.Token);
         var tools = await client.ListToolsAsync(cancellationToken: timeout.Token);
-        Assert.Equal(["check", "compare", "inspect", "learn", "references", "resolve", "workspace"], tools.Select(t => t.Name).Order());
+        Assert.Equal(["check", "compare", "impact", "inspect", "learn", "references", "resolve", "workspace"], tools.Select(t => t.Name).Order());
         var discovery = await client.CallToolAsync("workspace", cancellationToken: timeout.Token);
         Assert.False(discovery.IsError ?? false);
         var snapshot = discovery.StructuredContent!.Value.GetProperty("snapshotId").GetString()!;
-        foreach (var tool in new[] { "resolve", "inspect", "check", "learn", "compare", "references" })
+        foreach (var tool in new[] { "resolve", "inspect", "check", "learn", "compare", "references", "impact" })
         {
             var arguments = new Dictionary<string, object?>();
             if (tool != "learn") arguments["expectedSnapshot"] = snapshot;
             if (tool == "resolve") arguments["query"] = "cancel";
-            if (tool is "inspect" or "references") arguments["id"] = "orders/cancel";
+            if (tool is "inspect" or "references" or "impact") arguments["id"] = "orders/cancel";
             if (tool == "compare") arguments["baselineSnapshot"] = snapshot;
             var result = await client.CallToolAsync(tool, arguments, cancellationToken: timeout.Token);
             Assert.False(result.IsError ?? false, JsonSerializer.Serialize(result.Content));
@@ -522,6 +522,111 @@ public sealed class SemanticWorkspaceTests : IDisposable
         }, cancellationToken: timeout.Token);
         Assert.False(comparison.IsError ?? false);
         Assert.Equal(2, comparison.StructuredContent!.Value.GetProperty("result").GetProperty("changes").GetProperty("total").GetInt32());
+    }
+
+    [Fact]
+    public void ImpactIsCycleSafeDeterministicAndBoundedAcrossDiamonds()
+    {
+        var docs = new[] { "a", "b", "c", "d", "e" }.Select(id => Document(id, "1")).ToDictionary(d => d.Metadata.DefinitionId.Value);
+        var dependencies = new Dictionary<string, string[]> { ["a"] = ["d"], ["b"] = ["a"], ["c"] = ["a"], ["d"] = ["b", "c"], ["e"] = ["d"] };
+        Export(docs.Values.Reverse().ToArray());
+        var workspace = new SemanticWorkspace(root, Bundle, referenceReaders:
+            new Dictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>>
+            { [new("test")] = d => dependencies[d.Metadata.DefinitionId.Value].Select(id => docs[id].Reference).ToArray() });
+        var snapshot = workspace.Describe().SnapshotId;
+        var all = workspace.Impact("a", snapshot, maxDepth: 16).Result;
+        Assert.Equal(["b", "c", "d", "e"], all.Items.Select(i => i.Consumer.DefinitionId.Value));
+        Assert.Equal(["b", "d"], all.Items[2].Path.Select(e => e.Source.DefinitionId.Value));
+        Assert.All(all.Items.SelectMany(i => i.Path), edge => Assert.True(edge.IsExactMatch));
+        Assert.False(all.DepthLimitReached);
+        Assert.False(all.ResultLimitReached);
+        Assert.True(workspace.Impact("a", snapshot, maxDepth: 1).Result.DepthLimitReached);
+        Assert.False(workspace.Impact("a", snapshot, maxDepth: 3).Result.DepthLimitReached);
+        var limited = workspace.Impact("a", snapshot, limit: 2).Result;
+        Assert.Equal(2, limited.Items.Length);
+        Assert.True(limited.ResultLimitReached);
+        Assert.False(limited.DepthLimitReached);
+        Assert.Equal(JsonSerializer.Serialize(all), JsonSerializer.Serialize(workspace.Impact("a", snapshot, maxDepth: 16).Result));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workspace.Impact("a", snapshot, maxDepth: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workspace.Impact("a", snapshot, maxDepth: 17));
+        Assert.Throws<ArgumentOutOfRangeException>(() => workspace.Impact("a", snapshot, limit: 101));
+        Export([docs["a"]]);
+        Assert.Throws<InvalidOperationException>(() => workspace.Impact("a", snapshot));
+    }
+
+    [Fact]
+    public void ImpactRetainsMissingEvidenceAndUnknownCoverage()
+    {
+        var missing = Document("missing", "1");
+        var consumer = Document("consumer", "1");
+        var unknown = ExecutionDefinitionDocument.Create(new("unknown"), new("unknown"), new("1"), new { }, Provenance());
+        Export([consumer, unknown]);
+        var workspace = new SemanticWorkspace(root, Bundle, referenceReaders:
+            new Dictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>>
+            { [consumer.Kind] = _ => [missing.Reference] });
+        var result = workspace.Impact("missing", workspace.Describe().SnapshotId).Result;
+        Assert.Null(Assert.Single(Assert.Single(result.Items).Path).Available);
+        Assert.Equal("unknown", Assert.Single(result.IncompleteDefinitions));
+        Assert.False(result.DepthLimitReached);
+    }
+
+    [Fact]
+    public void NativeRelationAndEndpointRoundTripPreserveContentWithoutInventingRevision()
+    {
+        var query = Cohesive.Relations.Serialization.RelationQueryDocument.FromDefinition(new Cohesive.Relations.IR.QueryDefinition(
+            new("query"), new("Query"), new([new Cohesive.Relations.IR.SourceQueryNode(new("source"), new("row"), new(new("graph"), new("shape")))]),
+            [new Cohesive.Relations.IR.RowsQueryResultDefinition(new("rows"), new("source"))]));
+        var fingerprint = query.DefinitionFingerprint;
+        var reference = new ExecutionDefinitionReference(new("query"), new("authored-1"), new(fingerprint.Algorithm, fingerprint.Canonicalization, fingerprint.Value));
+        var endpoint = Cohesive.Application.ApplicationEndpointDocument.Create(new(new("query-endpoint"), Cohesive.Api.ApiOperationKind.Query,
+            new("GET", "/query"), null, Cohesive.Api.ApiResultKind.Success, reference, null, [], null));
+        var queryJson = JsonSerializer.Deserialize<JsonElement>(Cohesive.Relations.Serialization.RelationQueryJsonSerializer.Serialize(query));
+        File.WriteAllText(Path.Combine(root, Bundle), SemanticWorkspaceExport.CreateDocuments(root, ["source.cs"], "tests/v1", _ => [queryJson, endpoint.ToJson()]));
+        var workspace = DevelopmentMcpServer.CreateDefaultWorkspace(root, Bundle);
+        var snapshot = workspace.Describe();
+        Assert.Equal(2, snapshot.Result.Total);
+        var edge = Assert.Single(workspace.References("query", snapshot.SnapshotId).Result.References.Items);
+        Assert.True(edge.IsContentMatch);
+        Assert.False(edge.IsExactMatch);
+        Assert.Null(edge.Available!.RevisionId);
+        Assert.Equal("api:query-endpoint", Assert.Single(workspace.Impact("query", snapshot.SnapshotId).Result.Items).Consumer.DefinitionId.Value);
+        var checks = workspace.Check(snapshot.SnapshotId).Result.Items;
+        Assert.All(checks, check => Assert.True(check.IsValid));
+        Assert.False(checks.Single(c => c.Id == "api:query-endpoint").DomainValidationAvailable);
+        var tampered = JsonNode.Parse(endpoint.ToJson().GetRawText())!;
+        tampered["endpoint"]!["http"]!["route"] = "/changed";
+        Assert.Throws<JsonException>(() => Cohesive.Application.ApplicationEndpointDocument.Read(JsonSerializer.SerializeToElement(tampered)));
+        var corruptQuery = JsonNode.Parse(queryJson.GetRawText())!;
+        corruptQuery["definitionFingerprint"]!["value"] = new string('0', 64);
+        File.WriteAllText(Path.Combine(root, Bundle), SemanticWorkspaceExport.CreateDocuments(root, ["source.cs"], "tests/v1", _ => [JsonSerializer.SerializeToElement(corruptQuery)]));
+        var corrupt = workspace.Describe();
+        Assert.Null(corrupt.SemanticFingerprint);
+        Assert.False(Assert.Single(workspace.Check(corrupt.SnapshotId).Result.Items).IsValid);
+        Assert.Throws<InvalidOperationException>(() => workspace.Impact("query", corrupt.SnapshotId));
+    }
+
+    [Fact]
+    public void ReferenceGraphRejectsAnOversizedReaderAndUnregisteredSchemas()
+    {
+        var target = Document("target", "1");
+        Export([target]);
+        var workspace = new SemanticWorkspace(root, Bundle, referenceReaders:
+            new Dictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>>
+            { [target.Kind] = _ => Enumerable.Repeat(target.Reference, 4097).ToArray() });
+        var snapshot = workspace.Describe().SnapshotId;
+        Assert.Throws<InvalidOperationException>(() => workspace.Impact("target", snapshot));
+        File.WriteAllText(Path.Combine(root, Bundle), SemanticWorkspaceExport.CreateDocuments(root, ["source.cs"], "tests/v1",
+            _ => [JsonSerializer.SerializeToElement(new { schemaVersion = "unknown/v1" })]));
+        Assert.Throws<JsonException>(() => workspace.Describe());
+    }
+
+    [Fact]
+    public void IdentityOnlyReferencesNeverClaimContentEquality()
+    {
+        var identity = new WorkspaceDocumentReference(new("api:result"), null, null);
+        var edge = new WorkspaceReference(identity, identity, identity);
+        Assert.False(edge.IsContentMatch);
+        Assert.False(edge.IsExactMatch);
     }
 
     string Export(IReadOnlyList<ExecutionDefinitionDocument>? documents = null)

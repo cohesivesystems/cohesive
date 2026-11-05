@@ -1,6 +1,6 @@
 # Orders authoring and inspection
 
-This host exports the actual Aspire fulfillment model's four transitions and its process. It does not start
+This host exports the actual Aspire fulfillment model's transitions, process, service, native query documents and API endpoint inspection projections. It does not start
 Aspire, databases, workers or containers. Call workspace and retain snapshotId; resolve identities before
 inspection. Static learn guidance works before the first export.
 
@@ -22,8 +22,8 @@ matching source references. Source locations remain attribution, not access auth
 For a behavior change, edit the typed transition or generated-process source and update its authored revision.
 Call references with the transition identity and expectedSnapshot to discover direct consumers; a process captures exact transition references, so re-export and compare
 all definitions, not just the edited transition. A null Available target means missing, and IsExactMatch false
-with Available present means stale revision/fingerprint. Review IncompleteDefinitions; extension-owned and
-unregistered references are not proven absent. Reference lookup is direct, not transitive impact analysis. No callback or hand-edited IR becomes authoritative.
+requires review: compare IsContentMatch and the optional revision evidence. Native query documents have no authored revision. Review IncompleteDefinitions; extension-owned and
+unregistered references are not proven absent. Use impact for bounded reverse reachability and shortest evidence paths; review depthLimitReached and resultLimitReached. No callback or hand-edited IR becomes authoritative.
 
 Workflow: learn -> workspace -> resolve -> inspect -> ordinary source edit -> export -> workspace -> check ->
 compare against the original snapshot. Supply expectedSnapshot for inspection, resolution, validation and
@@ -35,7 +35,13 @@ plus Directory.Build.props, nuget.config and this guide. This can invalidate the
 It does not attest the loaded binary, installed SDK, package cache, undeclared environment or external inputs.
 Discovery does not detect new files until re-export. Export from a fixed source tree for reproducibility.
 
-The query declarations are relation documents, outside this execution-document export. API routes, generated
-clients, entity graphs, target capabilities and storage mappings are not indexed here.
-Use the existing application explain command and source search for those concerns. The next integration step
-is linking these owning-domain documents; inventing parallel models in this host would hide the gap.
+Query source is eng/examples/aspire-first/Orders.Model/FulfillmentQueries.cs; bindings and routes are in OrderApi.cs.
+Inspect fulfillment/order-details, then references and impact to discover its actual api:-prefixed endpoint.
+The exercise changes the Orders query filter to select Submitted orders, rebuilds, and checks that the query
+and endpoint binding projection change. Query source locations are not supplied by this producer; use these owning files.
+
+Native relation/query JSON and validators remain authoritative. Endpoint artifacts reuse ApplicationEndpointExplanation;
+their fingerprints cover only that route/binding inspection projection. They do not constitute a complete API IR.
+CLR request/response shapes, callbacks, generated clients, entity/shape graphs and target realization remain outside coverage.
+Relation and API readers explicitly report incomplete dependencies. An endpoint check verifies integrity but reports
+DomainValidationAvailable=false. Missing references and unknown revisions are never treated as proof of compatibility.

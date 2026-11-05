@@ -21,7 +21,7 @@ internal sealed class DevelopmentTools(SemanticWorkspace workspace, DevelopmentG
         => Invoke(() => workspace.Resolve(query, expectedSnapshot, offset, limit));
 
     [McpServerTool(Name = "inspect", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Read canonical execution semantics and sourceMappings with optional repository-relative line spans by exact definition identity. pointer is an RFC 6901 path in the complete document; empty selects the root. Large values return child pointers. Child offset/limit and sourceOffset/sourceLimit page independently. Edit owning source, never this derived JSON.")]
+    [Description("Read original domain semantics or explicitly scoped inspection projections and sourceMappings with optional repository-relative line spans by exact definition identity. pointer is an RFC 6901 path in the complete document; empty selects the root. Large values return child pointers. Child offset/limit and sourceOffset/sourceLimit page independently. Edit owning source, never this derived JSON.")]
     public WorkspaceResult<WorkspaceInspection> Inspect(string id, string expectedSnapshot, string pointer = "", int offset = 0, int limit = 20, int sourceOffset = 0, int sourceLimit = 20)
         => Invoke(() => workspace.Inspect(id, expectedSnapshot, pointer, offset, limit, sourceOffset, sourceLimit));
 
@@ -51,9 +51,14 @@ internal sealed class DevelopmentTools(SemanticWorkspace workspace, DevelopmentG
     public DevelopmentGuide Learn() => guide;
 
     [McpServerTool(Name = "references", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
-    [Description("Find direct consumers of a definition identity in the expected snapshot. Expected is the authored exact reference; Available null means missing, and IsExactMatch false with Available present means stale. Review IncompleteDefinitions; this is not transitive impact or compatibility analysis.")]
+    [Description("Find direct consumers of a definition identity in the expected snapshot. Expected is the authored exact reference; Available null means missing, and IsContentMatch verifies content; IsExactMatch also requires revision equality. Missing revisions are unknown, not stale. Review IncompleteDefinitions; this is not transitive impact or compatibility analysis.")]
     public WorkspaceResult<WorkspaceReferences> References(string id, string expectedSnapshot, int offset = 0, int limit = 20)
         => Invoke(() => workspace.References(id, expectedSnapshot, offset, limit));
+
+    [McpServerTool(Name = "impact", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Find potential transitive consumers with shortest evidence paths. maxDepth is 1–16; limit is 1–100. Cycles are suppressed. Inspect depthLimitReached, resultLimitReached, incompleteDefinitions and each edge's content/revision evidence. This is bounded reachability, not compatibility or runtime impact proof.")]
+    public WorkspaceResult<WorkspaceImpact> Impact(string id, string expectedSnapshot, int maxDepth = 4, int limit = 20)
+        => Invoke(() => workspace.Impact(id, expectedSnapshot, maxDepth, limit));
 
     static T Invoke<T>(Func<T> operation)
     {

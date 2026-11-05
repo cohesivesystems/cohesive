@@ -1,3 +1,4 @@
+using Cohesive.Api.Services;
 using System.Reflection;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
@@ -23,20 +24,23 @@ public static class DevelopmentMcpServer
     /// <summary>Creates the standalone server's conventional validator configuration.</summary>
     /// <param name="root">Repository root.</param>
     /// <param name="bundlePath">Repository-relative export path.</param>
-    /// <returns>A workspace with existing transition, process and hosted-query validators.</returns>
+    /// <returns>A workspace with domain-owned execution/relation validators and endpoint inspection readers.</returns>
     /// <exception cref="ArgumentException">The workspace paths are invalid.</exception>
     /// <remarks>Custom hosts may construct SemanticWorkspace directly with their own domain-owned validators.</remarks>
     public static SemanticWorkspace CreateDefaultWorkspace(string root, string bundlePath) => new(root, bundlePath,
         new Dictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, DocumentValidationResult>>
         {
+            [ServiceDefinitionDocuments.Kind] = document => ServiceDefinitionDocuments.ValidateAndProject(document, out _),
             [TransitionDefinitionDocuments.Kind] = TransitionDefinitionDocuments.Validate,
             [ProcessDefinitionDocuments.Kind] = ProcessDefinitionDocuments.Validate,
             [HostedQueryDefinitionDocuments.Kind] = HostedQueryDefinitionDocuments.Validate
         }, new Dictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>>
         {
+            [ServiceDefinitionDocuments.Kind] = document => document.GetDefinition<ServiceDefinition>().GetDefinitionDependencies(),
             [ProcessDefinitionDocuments.Kind] = ReadProcessReferences,
+            [HostedQueryDefinitionDocuments.Kind] = document => document.GetDefinition<Cohesive.Relations.IR.HostedQueryDefinition>().Dependencies.Select(d => d.Definition).ToArray(),
             [TransitionDefinitionDocuments.Kind] = _ => []
-        });
+        }, DomainDocumentReaders.Readers);
 
     /// <summary>Runs the same tools over a caller-configured workspace without loading plug-ins or application assemblies.</summary>
     /// <param name="workspace">Workspace owning validator policy and repository scope.</param>
@@ -64,12 +68,12 @@ public static class DevelopmentMcpServer
         return new()
         {
             ServerInfo = new() { Name = "cohesive-development", Version = Version },
-            ServerInstructions = "Use learn for host guidance without a snapshot. Call workspace for exported semantics and retain snapshotId. Use inspect sourceMappings to locate declarations and references to find direct consumers. Edit owning source and re-export. ChangedInputs means the model is stale. Read limitations; this server never edits IR or executes application code.",
+            ServerInstructions = "Use learn for host guidance without a snapshot. Call workspace for exported semantics and retain snapshotId. Use inspect sourceMappings to locate declarations and references to find direct consumers and impact for bounded transitive evidence paths. Edit owning source and re-export. ChangedInputs means the model is stale. Read limitations; this server never edits IR or executes application code.",
             ToolCollection =
             [
                 McpServerTool.Create(tools.Workspace), McpServerTool.Create(tools.Resolve),
                 McpServerTool.Create(tools.Inspect), McpServerTool.Create(tools.Check),
-                McpServerTool.Create(tools.Compare), McpServerTool.Create(tools.Learn), McpServerTool.Create(tools.References)
+                McpServerTool.Create(tools.Compare), McpServerTool.Create(tools.Learn), McpServerTool.Create(tools.References), McpServerTool.Create(tools.Impact)
             ]
         };
     }

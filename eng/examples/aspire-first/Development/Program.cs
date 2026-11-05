@@ -1,3 +1,7 @@
+using System.Text.Json;
+using Cohesive.Application;
+using Cohesive.Execution;
+using Cohesive.Relations.Serialization;
 using System.Reflection;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Mcp.Development;
@@ -42,13 +46,20 @@ internal static class OrdersWorkspace
         var inputs = SemanticWorkspaceExport.DiscoverInputs(root,
             [.. sourceDirectories, "eng/examples/aspire-first/Orders.Model", Project],
             ["Directory.Build.props", "nuget.config", Project + "/Guide.md"]);
-        return SemanticWorkspaceExport.Write(root, Bundle, inputs, ProducerVersion, _ =>
+        return SemanticWorkspaceExport.WriteDocuments(root, Bundle, inputs, ProducerVersion, _ =>
         {
             var domain = new FulfillmentDomain();
-            // Preserve the domain's identities, authored revisions and compiler-produced source maps.
-            return [domain.OrderTransitions.Submit.Document, domain.InventoryTransitions.Reserve.Document,
-                domain.InventoryTransitions.Release.Document, domain.ReservationTransitions.Create.Document,
-                new FulfillmentProcess(domain).Definition.Document];
+            var process = new FulfillmentProcess(domain);
+            var queries = new FulfillmentQueries(domain);
+            var endpoints = new OrderEndpoints(new OrderApi(domain, process), domain, queries).Plan;
+            var executions = new[] { domain.OrderTransitions.Submit.Document, domain.InventoryTransitions.Reserve.Document,
+                domain.InventoryTransitions.Release.Document, domain.ReservationTransitions.Create.Document, process.Definition.Document }
+                .Concat(endpoints.Implementations.Where(e => e.Service is not null).Select(e => e.Service!.Declaration))
+                .DistinctBy(d => d.Reference);
+            return [.. executions.Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d))),
+                .. endpoints.QueryDependencies.Queries.Select(q => q.Request.DefinitionDocument)
+                    .Select(d => JsonSerializer.Deserialize<JsonElement>(RelationQueryJsonSerializer.Serialize(d))),
+                .. endpoints.Implementations.Select(e => ApplicationEndpointDocument.Create(new(e)).ToJson())];
         });
     }
 }

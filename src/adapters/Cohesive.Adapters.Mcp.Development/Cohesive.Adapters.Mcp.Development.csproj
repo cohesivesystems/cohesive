@@ -9,6 +9,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="ModelContextProtocol.Core" Version="1.3.0" />
+    <ProjectReference Include="../../Cohesive.Application/Cohesive.Application.csproj" />
     <ProjectReference Include="../../Cohesive.Semantics/Cohesive.Semantics.csproj" />
     <ProjectReference Include="../../Cohesive.Processes/Cohesive.Processes.csproj" />
     <EmbeddedResource Include="AuthoringGuide.md" LogicalName="AuthoringGuide.md" />

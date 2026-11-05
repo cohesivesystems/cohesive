@@ -76,7 +76,9 @@ public sealed class ApplicationExplanationDocument
 /// <summary>Derived endpoint inspection link, excluding CLR callbacks and transport binding types.</summary>
 public sealed class ApplicationEndpointExplanation
 {
-    internal ApplicationEndpointExplanation(ServiceEndpointImplementation implementation)
+    /// <summary>Projects an authored endpoint implementation without executing it or admitting infrastructure.</summary>
+    /// <param name="implementation">Original API operation and binding evidence.</param>
+    public ApplicationEndpointExplanation(ServiceEndpointImplementation implementation)
     {
         var endpoint = implementation.Endpoint;
         Id = endpoint.Id; Kind = endpoint.Kind; ResultOf = endpoint.ResultOf;
@@ -86,6 +88,20 @@ public sealed class ApplicationEndpointExplanation
         Repository = implementation.Repository;
         SemanticReferences = [.. endpoint.SemanticReferences];
         Service = implementation.Service is { } service ? new(service.Declaration.Reference, service.Operation) : null;
+    }
+    /// <summary>Restores a derived inspection projection; this is not executable API source.</summary>
+    /// <param name="id">Endpoint identity.</param><param name="kind">Operation kind.</param>
+    /// <param name="http">Route projection.</param><param name="resultOf">Optional originating endpoint.</param>
+    /// <param name="response">Primary response behavior.</param><param name="execution">Bound execution.</param>
+    /// <param name="repository">Observed entity contract.</param><param name="semanticReferences">Attributed semantic references.</param>
+    /// <param name="service">Bound service operation.</param>
+    [System.Text.Json.Serialization.JsonConstructor]
+    public ApplicationEndpointExplanation(ApiEndpointId id, ApiOperationKind kind, ApplicationHttpRouteExplanation? http,
+        ApiEndpointId? resultOf, ApiResultKind response, ExecutionDefinitionReference? execution, ValueContract? repository,
+        ImmutableArray<ApiSemanticReference> semanticReferences, ApplicationServiceEndpointExplanation? service)
+    {
+        Id = id; Kind = kind; Http = http; ResultOf = resultOf; Response = response; Execution = execution;
+        Repository = repository; SemanticReferences = semanticReferences; Service = service;
     }
     /// <summary>Exact service and original operation supplying lifetime/completion semantics; null for entity/query endpoints.</summary>
     public ApplicationServiceEndpointExplanation? Service { get; }

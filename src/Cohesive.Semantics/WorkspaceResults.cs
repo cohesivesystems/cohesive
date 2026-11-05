@@ -56,27 +56,42 @@ public sealed record WorkspaceCheck(string Id, bool DomainValidationAvailable, b
 
 /// <summary>Document-level semantic comparison; does not infer compatibility or identity continuity.</summary>
 /// <param name="Id">Stable definition identity.</param>
-/// <param name="Before">Verified prior fingerprint, or null for an addition.</param>
-/// <param name="After">Verified current fingerprint, or null for a removal.</param>
-public sealed record WorkspaceDifference(string Id, string? Before, string? After);
+/// <param name="Before">Verified prior fingerprint descriptor, or null for an addition.</param>
+/// <param name="After">Verified current fingerprint descriptor, or null for a removal.</param>
+public sealed record WorkspaceDifference(string Id, ExecutionDefinitionFingerprint? Before, ExecutionDefinitionFingerprint? After);
 
 /// <summary>Comparison evidence tied to both exact snapshots.</summary>
 /// <param name="BaselineSnapshotId">Exact retained baseline snapshot.</param>
 /// <param name="Changes">Paged document-level changes.</param>
 public sealed record WorkspaceComparison(string BaselineSnapshotId, WorkspacePage<WorkspaceDifference> Changes);
 
-/// <summary>An exact authored dependency and the currently exported candidate with that identity.</summary>
-/// <param name="Source">Exact consumer document reference.</param>
-/// <param name="Expected">Exact reference authored by that consumer.</param>
+/// <summary>An attributed dependency and the currently exported candidate with that identity.</summary>
+/// <param name="Source">Consumer identity and available revision/content evidence.</param>
+/// <param name="Expected">Reference evidence retained by that consumer.</param>
 /// <param name="Available">Exported target reference, or null if the target is missing.</param>
-public sealed record WorkspaceReference(ExecutionDefinitionReference Source, ExecutionDefinitionReference Expected,
-    ExecutionDefinitionReference? Available)
+public sealed record WorkspaceReference(WorkspaceDocumentReference Source, WorkspaceDocumentReference Expected,
+    WorkspaceDocumentReference? Available)
 {
-    /// <summary>True only when both revision and fingerprint match the authored target.</summary>
-    public bool IsExactMatch => Expected == Available;
+    /// <summary>True only when the full fingerprint descriptor matches; absent revision evidence remains unknown.</summary>
+    public bool IsContentMatch => Expected.Fingerprint is not null && Expected.Fingerprint == Available?.Fingerprint;
+
+    /// <summary>True only when all supplied revision evidence and content evidence agree.</summary>
+    public bool IsExactMatch => Expected.Fingerprint is not null && Expected == Available;
 }
 
 /// <summary>Direct reference evidence and explicit bounds on indexing coverage.</summary>
 /// <param name="References">Paged consumers of the requested identity, including missing or stale targets.</param>
-/// <param name="IncompleteDefinitions">Identities with no registered reader or with uninspected extensions.</param>
+/// <param name="IncompleteDefinitions">Identities with no registered reader, partial domain coverage or uninspected extensions.</param>
 public sealed record WorkspaceReferences(WorkspacePage<WorkspaceReference> References, ImmutableArray<string> IncompleteDefinitions);
+
+/// <summary>A potential affected consumer with one deterministic shortest dependency path from the requested target.</summary>
+/// <param name="Consumer">Reached consumer.</param><param name="Path">Edges ordered from the requested target outward.</param>
+public sealed record WorkspaceImpactItem(WorkspaceDocumentReference Consumer, ImmutableArray<WorkspaceReference> Path);
+
+/// <summary>Bounded reverse reachability, not behavioral change or compatibility proof.</summary>
+/// <param name="Items">Consumers in deterministic breadth-first discovery order; excludes the starting target.</param>
+/// <param name="DepthLimitReached">True when undiscovered consumers exist beyond the selected depth.</param>
+/// <param name="ResultLimitReached">True when reachable consumers were omitted from the result.</param>
+/// <param name="IncompleteDefinitions">Definitions whose dependency coverage is partial or unknown.</param>
+public sealed record WorkspaceImpact(ImmutableArray<WorkspaceImpactItem> Items, bool DepthLimitReached,
+    bool ResultLimitReached, ImmutableArray<string> IncompleteDefinitions);

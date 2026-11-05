@@ -1,8 +1,8 @@
 # Cohesive.Semantics
 
-An initial, protocol-independent development workspace over derived `ExecutionDefinitionDocument` exports.
+An initial, protocol-independent development workspace over original domain documents, including `ExecutionDefinitionDocument` exports.
 It supports discovery, identity resolution, source attribution, bounded JSON inspection, domain validation,
-and comparison of semantic document fingerprints. The [MCP adapter](../adapters/Cohesive.Adapters.Mcp.Development/README.md)
+comparison of document fingerprints, direct references, and bounded transitive dependency paths. The [MCP adapter](../adapters/Cohesive.Adapters.Mcp.Development/README.md)
 projects these operations without reinterpreting their semantics.
 
 ## Authority and scope
@@ -11,10 +11,12 @@ Authoring source remains the editable authority. Existing lowering pipelines pro
 the workspace reads their existing identity, provenance, source maps, serialization, fingerprints and validators.
 It does not introduce another entity, transition, process, relation, or diagnostic model.
 
-The first export boundary covers execution documents. It does **not** claim to discover every construct in a
-repository. Shape graphs, standalone relations, APIs, generated clients, storage mappings, capability matching,
-cross-document type validation, and runtime evidence are not yet indexed. Unknown execution kinds remain inspectable,
-but `domainValidationAvailable` is false. A successful integrity check does not establish domain validity.
+Execution documents use the existing shared reader. Additional schema-keyed readers project original domain JSON
+into a transient `WorkspaceDocument`; this is an inspection view, not another IR. The default MCP host also reads
+native relation/query documents and Application endpoint inspection projections. Core Semantics depends only on
+Cohesive, not those domains or MCP. Shape graphs, generated clients, target realization, cross-document type
+validation and runtime evidence remain outside coverage. Unknown execution kinds remain inspectable with
+`domainValidationAvailable=false`.
 Registered validators supplement mandatory shared integrity findings; they cannot suppress them. Identical findings
 are deduplicated and ordered through the existing diagnostic authority; separately attributed evidence is retained.
 Registered validators may themselves require
@@ -69,7 +71,8 @@ Re-export after edits before treating validation as evidence about the current s
 
 The session retains four snapshots for comparison. Evicted baselines fail explicitly. Comparison reports added,
 removed and content-changed definitions by stable identity; it does not infer renames, migration safety, semantic
-equivalence of different implementations, or compatibility. Read the before/after definitions to review content.
+equivalence of different implementations, or compatibility. Before/after values include the complete fingerprint descriptor
+(algorithm, canonicalization profile and value), so profile changes cannot masquerade as equality. Read the before/after definitions to review content.
 
 ## Bounds and failure behavior
 
@@ -81,7 +84,7 @@ List operations page 1–100 entries. `inspect` returns at most 16 KiB of select
 and source references, independently paged with `offset`/`limit` and `sourceOffset`/`sourceLimit`. A larger object/array must be read through its children; an oversized scalar requires
 local artifact inspection and returns an actionable error. Source references are producer-defined attribution, not automatically trusted file
 paths. `check` pages definitions and supplies at most 20 diagnostics per definition; use `diagnosticOffset` to
-retrieve later diagnostics. Only the selected page invokes domain validators; shared document integrity is checked
+retrieve later diagnostics. Only the selected page invokes registered execution validators; additional schema readers may validate their domain during loading. Document integrity is checked
 when loading a snapshot and retained with that immutable snapshot. Counts describe the complete matching scope,
 not just the current page. Individual
 diagnostic strings retain their original content, so response byte size is not globally capped.
@@ -94,7 +97,7 @@ asynchronous cancellation of in-progress inspection are intentionally deferred. 
 ## Next extensions
 
 Add domain-specific indexing and authored source locations only where the owning domain can provide reliable
-evidence. Priorities are relation/shape export, cross-layer reference edges, a CLI over the same API, version-matched
+evidence. Priorities are entity/shape and full API contract coverage, a CLI over the same API, version-matched
 knowledge retrieval, and then narrowly scoped source-edit recipes. The current `learn` guide is host-owned, versioned static guidance, not a general knowledge graph or a
 compatibility guarantee for any project.
 
@@ -103,13 +106,26 @@ allocation evidence, freshness tradeoff and remaining scaling limits.
 
 ## Direct consumers and portable source locations
 
-`References(id, expectedSnapshot)` returns direct consumers projected by registered domain readers. Each row
-retains `Source` and `Expected` exact references plus the exported `Available` candidate: null means missing,
-an unequal candidate means stale revision/fingerprint, and `IsExactMatch` means both match. Looking up an absent
-target is supported. Invalid document integrity prevents graph claims. `IncompleteDefinitions` lists unregistered
-kinds and extension-bearing documents whose references have not been fully indexed. This is neither transitive
-impact discovery nor type-compatibility validation. Custom hosts supply reference readers beside validators;
-the protocol-independent workspace does not scan arbitrary JSON for objects resembling references.
+`References(id, expectedSnapshot)` returns direct consumers through domain readers, never arbitrary JSON scanning.
+`WorkspaceDocumentReference` preserves optional revision and fingerprint evidence: execution references have both,
+native relations have content fingerprints but no revisions, and identity-only links have neither. `IsContentMatch`
+compares complete fingerprint descriptors; `IsExactMatch` additionally requires equal revision evidence. Null
+`Available` means missing. An unknown revision is not a stale revision. `IncompleteDefinitions` includes unregistered,
+extension-bearing and explicitly partial readers. Invalid integrity prevents graph claims.
+
+`Impact(id, expectedSnapshot, maxDepth: 4, limit: 20)` traverses the same reverse graph, with one deterministic shortest
+path per consumer, excluding the starting target. Cycles and diamonds cannot multiply results. Depth is 1–16,
+result count 1–100, and graph construction rejects more than 4096 edges across at most 256 documents. Traversal
+visits each reachable document once and scans its incoming edges; stored paths are bounded by depth. Results are
+potential consumers even when a path has stale, missing or identity-only evidence. `DepthLimitReached` means an
+undiscovered consumer exists beyond the selected depth; `ResultLimitReached` means reachable consumers were omitted.
+Coverage gaps are separate from truncation. No claim of behavioral effects or API compatibility follows from reachability.
+
+Use `CreateDocuments`/`WriteDocuments` for mixed original JSON documents. Register readers by original `schemaVersion`
+when constructing a workspace. Readers own deserialization, integrity validation, identity projection and dependency
+coverage; custom readers are trusted host code and must return independently owned immutable JSON. Duplicate workspace
+identities are rejected, including cross-domain collisions; native query IDs retain their binding identity and endpoint
+inspection IDs use `api:`. Bundle v1's array of domain JSON remains unchanged; older servers reject unsupported documents.
 
 `Inspect` also returns `SourceMappings`, independently paged with `sourceOffset`/`sourceLimit`. Root inspection
 lists all producer mappings; narrower pointers select mapped references. An optional `Location` holds a normalized
