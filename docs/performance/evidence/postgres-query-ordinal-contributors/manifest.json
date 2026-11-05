@@ -1,0 +1,17 @@
+{
+  "revision": "de5fe8999686c855e9ed5ba1ec6cb9d64816f15a",
+  "measurement": "Three alternating repeats, fresh process per 1024-left-source-row case; four warmups, six 200ms iterations. No concurrent local builds/tests/profiling. BenchmarkDotNet in-process toolchain.",
+  "database": "Disposable Docker PostgreSQL 14.23 (Debian 14.23-1.pgdg13+1); loopback TCP from local host to Docker VM. Container removed after live tests and timing.",
+  "boundary": "Pool checkout, SQL execution and wire transfer, bounded provider reads, scalar and complete-shape validation, contributor reconstruction, retained RelationQueryOutputRow and DTO arrays; excludes compilation, fixture setup/population and serialization.",
+  "authority": "Dictionary and ordinal realizations share metadata-first projection, provider execution, scalar catalog, core shape admission, contributor row semantics and DTO materializer. Dictionary mode is internal reference only.",
+  "limitations": "Unpaged non-temporal direct scalar output, every required field demanded; row-preserving query-row topology. Aggregation and DISTINCT exact contributors explicitly rejected. No whole absent terminal binding. Physical nonnull unique identity evidence required.",
+  "source_hashes": {
+    "src/adapters/Cohesive.Adapters.Postgres/PostgresQueryRowsReader.cs": "26f2aabe465591e91f23682bb36b2db19a94173d83ae05cd91dd26d24c1d1203",
+    "src/adapters/Cohesive.Adapters.Postgres/PostgresNpgsqlExecution.cs": "312e61c3cbf52cc0f92ad77902d86670d5857e113fc85065434d91cd14cc2c93",
+    "src/adapters/Cohesive.Adapters.Postgres/PostgresRelationQueryCompiler.cs": "8ab79c5ac8e4493f355f6163c54cfe35cf2e6ac5d82498f9442a0bc43ee5f74f",
+    "src/adapters/Cohesive.Adapters.Postgres/PostgresRelationQueryCompilationContracts.cs": "281bd85b9a9d25dd506b8c826b6d82d521675f153cbfa8e5e1bef7f2312dfc73",
+    "src/adapters/Cohesive.Adapters.Postgres/PostgresRelationQueryTargetProfile.cs": "27341fe30e648c3c76d897e395f68aeec6bea49671317cd029cf1fdef724e0c8",
+    "src/Cohesive.Relations.Benchmarks/PostgresContributingRowsBenchmarks.cs": "d2335baa03d09bf8deb91b6def3386e95cdbb4179f41a3d41045556f2faefb0b",
+    "src/Cohesive.Tests/Postgres/PostgresContributingRowsFixture.cs": "67a74722d9c4ef03778f144aaac566bf2a83969f848e720d12130669b6687a48"
+  }
+}

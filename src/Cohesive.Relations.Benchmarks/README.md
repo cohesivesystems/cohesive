@@ -374,8 +374,7 @@ drop uniquely named tables only. The manual workflow supplies an ephemeral Postg
 fixture and assert real metadata values, null fidelity, selected-field provenance, invalid required values,
 provider lifetime and resistance to mutable DTO payload changes.
 
-This is entity-snapshot provenance, not join-contributor lineage. `PostgresQueryRowsReader` currently lacks
-contributor reconstruction and is not upgraded or advertised as equivalent by this experiment. No redundant
+This entity experiment measures snapshot provenance, separately from the query-row contributor experiment below. No redundant
 native ingestion API was introduced; existing entity decoding and validation remain authoritative. Adding the
 PostgreSQL project to the strict benchmark build also required a nullable-flow correction in that query reader,
 using a captured non-null cell rather than indexing twice; decoding behavior is unchanged.
@@ -400,5 +399,45 @@ The local container was removed after validation; CI automatically removes its s
 
 These measurements verify a pre-existing native ordinal implementation; they are not a newly introduced
 production speedup over the prior repository. The only alternate realization is an internal dictionary reference
-for differential conformance and benchmarking. Additional PostgreSQL query-row contributor support remains
-unimplemented and must be modeled before that API can claim equivalent provenance.
+for differential conformance and benchmarking. Query-row contributor support is measured separately below.
+
+
+### PostgreSQL query-row ingestion with join contributors
+
+`*PostgresContributingRowsBenchmarks*` compares direct dictionary and ordinal admission for actual inner
+and left joins at 1/32/1024 left-source rows (12 cases). Right-side fan-out can increase output cardinality;
+unmatched right bindings, explicit nulls and extra matches are included. Setup compares native values and
+contributor sets against the reference interpreter before timing.
+
+The measured operation includes pool checkout, one real parameterized SQL statement, provider reads,
+scalar byte/row bounds, strict complete-shape admission, exact contributor reconstruction and retained
+`RelationQueryOutputRow` plus DTO arrays. Both variants use the same metadata-first wire projection,
+scalar catalog, shared command executor, shape and DTO materializer; only field storage differs. There is
+no whole-result raw object-row buffer. Compilation, fixture creation/population and serialization are
+excluded. This is a complete ingestion-to-DTO pipeline, not an end-to-end application benchmark.
+
+Supply `COHESIVE_POSTGRES_TEST_CONNECTION_STRING` pointing to disposable PostgreSQL; fixtures create/drop
+unique schemas. The existing manual workflow provides PostgreSQL 14:
+
+```sh
+dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- \
+  --filter '*PostgresContributingRowsBenchmarks*' --job Short --buildTimeout 600
+```
+
+Exact contributor admission is bound to the artifact's exact semantic plan revision. Hidden source identity
+and presence columns count toward the provider byte budget. The current public path is unpaged,
+non-temporal and restricted to direct scalar output fields with full required-field admission. Collapsing
+operators need contributor-set merging and fail explicitly. See the PostgreSQL adapter README for the
+full boundary. Evidence is under `docs/performance/evidence/postgres-query-ordinal-contributors`.
+
+At 1024 input rows, three alternating local repeats on PostgreSQL 14.23 measured 13.683 vs 13.463 ms
+(inner) and 13.785 vs 13.987 ms (left), dictionary versus ordinal. Managed allocation fell 13.6% and
+14.6% respectively. The small mixed timing differences do not establish a general latency gain. Exact
+source and raw reports are retained in the evidence directory.
+
+[Linux query-row run 41947214718](https://github.com/cohesivesystems/cohesive/actions/runs/41947214718)
+completed all 12 Short cases on source `de5fe899`, PostgreSQL 14 / AMD EPYC 7763 / .NET 10.0.14.
+At 1024 input rows, dictionary versus ordinal takes 39.272 vs 35.766 ms (inner) and 37.176 vs 36.777 ms
+(left). Allocation falls from 3,139,274 to 2,715,219 bytes and 4,133,739 to 3,530,571 bytes respectively.
+The consistent result across local and Linux runs is lower allocation; latency varies by workload and host.
+See the evidence directory for all small-input cases and raw reports.

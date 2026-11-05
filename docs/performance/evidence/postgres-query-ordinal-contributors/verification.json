@@ -1,0 +1,27 @@
+{
+  "live_targeted": {
+    "passed": 75,
+    "failed": 0,
+    "skipped": 0
+  },
+  "core_suite": {
+    "passed": 5306,
+    "failed": 1,
+    "skipped": 68,
+    "failure": "PostgresRelationQuerySourceReaderTests.LogicalReplication_RejectsTamperingAndConfirmedAheadBeforeStreaming: expected ArgumentException not thrown. Reproduces in isolation; logical-replication path/test unchanged by this change."
+  },
+  "strict_benchmark_build": "Passed with zero warnings/errors",
+  "final_benchmark_smoke": "12 of 12 cases passed",
+  "generated_artifacts": "Canonical capability reference and relations TypeScript contract regenerated; both currentness tests pass in full suite.",
+  "relations_suite": {
+    "passed": 1200,
+    "failed": 0,
+    "skipped": 0
+  },
+  "linux_ci": {
+    "cases": 12,
+    "conclusion": "success",
+    "revision": "de5fe8999686c855e9ed5ba1ec6cb9d64816f15a",
+    "url": "https://github.com/cohesivesystems/cohesive/actions/runs/41947214718"
+  }
+}
