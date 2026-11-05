@@ -7,7 +7,8 @@ namespace Cohesive.Storage.Materialization;
 /// </summary>
 /// <remarks>
 /// The codec frames bytes as canonical unpadded base64url plus an HMAC-SHA-256 tag. Callers own payload
-/// serialization, schema validation, and canonical re-encoding. Format prefixes and authentication domains must be
+/// serialization, schema validation, and canonical payload re-encoding. The codec rejects noncanonical base64url
+/// spellings of both payload and tag, including nonzero unused padding bits. Format prefixes and authentication domains must be
 /// versioned whenever their wire semantics change. The codec copies the authentication key and domain.
 /// </remarks>
 public sealed class MaterializationAuthenticatedValueCodec
@@ -89,7 +90,7 @@ public sealed class MaterializationAuthenticatedValueCodec
     /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// The value is oversized, has the wrong versioned prefix, is malformed, or fails authentication; or a textual
+    /// The value is oversized, has the wrong versioned prefix, is malformed or noncanonical, or fails authentication; or a textual
     /// parameter is empty or white space.
     /// </exception>
     public byte[] Decode(string value, string parameterName, string valueKind)
@@ -111,8 +112,8 @@ public sealed class MaterializationAuthenticatedValueCodec
                 throw new FormatException("Invalid authenticated value framing.");
             }
 
-            var payload = Convert.FromBase64String(FromBase64Url(framed[..separator]));
-            var suppliedTag = Convert.FromBase64String(FromBase64Url(framed[(separator + 1)..]));
+            var payload = DecodeCanonicalBase64Url(framed[..separator]);
+            var suppliedTag = DecodeCanonicalBase64Url(framed[(separator + 1)..]);
             if (suppliedTag.Length != AuthenticationTagBytes
                 || !CryptographicOperations.FixedTimeEquals(suppliedTag, Authenticate(payload)))
             {
@@ -142,6 +143,16 @@ public sealed class MaterializationAuthenticatedValueCodec
         .TrimEnd('=')
         .Replace('+', '-')
         .Replace('/', '_');
+
+    static byte[] DecodeCanonicalBase64Url(ReadOnlySpan<char> value)
+    {
+        var bytes = Convert.FromBase64String(FromBase64Url(value));
+        // The platform decoder accepts whitespace, standard alphabet and nonzero unused bits.
+        // Require the encoder's one spelling so textual token mutations cannot alias valid bytes.
+        if (!value.SequenceEqual(ToBase64Url(Convert.ToBase64String(bytes))))
+            throw new FormatException("Noncanonical base64url encoding.");
+        return bytes;
+    }
 
     static string FromBase64Url(ReadOnlySpan<char> value)
     {

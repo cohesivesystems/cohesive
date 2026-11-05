@@ -35,10 +35,10 @@ match the reference interpreter. Aggregation and DISTINCT exact-contributor comp
 All 1200 relations tests pass. All 12 final benchmark Dry smoke cases pass. The strict Release benchmark
 build has zero warnings/errors. Generated capability and frontend contract currentness checks pass.
 
-The complete core suite has 5306 passes, 68 environment-dependent skips and one failure:
+The initial complete core suite had 5306 passes, 68 environment-dependent skips and one failure:
 `LogicalReplication_RejectsTamperingAndConfirmedAheadBeforeStreaming` expects an `ArgumentException`
 which is not thrown. It also fails in isolation. Its replication test/path is unchanged by this work;
-this suite is not reported as green. Logs are archived in `verification-logs.tar.gz`.
+that initial suite was not green. Logs are archived in `verification-logs.tar.gz`. The follow-up below resolves it.
 
 The disposable local database was removed after validation.
 
@@ -63,3 +63,25 @@ lower allocation with equivalent state and contributors. These are synthetic joi
 and provenance costs; prior entity/SQLite results have different boundaries and are not interchangeable.
 Raw JSON/CSV, environment and logs are in `ci/raw-artifacts.tar.gz`; normalized CSV and summaries are also
 checked in. The workflow completed successfully and removed its service.
+
+## Replication tamper follow-up
+
+The original failure exposed noncanonical Base64url acceptance in the shared
+`MaterializationAuthenticatedValueCodec`. Mutating a tag's final `w` to `x` changes only unused padding
+bits, so the platform decoder returned identical authenticated bytes. Both payload and tag now must match
+the shared encoder's canonical spelling. Valid issued tokens keep their format; payload schema validation
+and HMAC authentication retain their existing authorities. This also protects other users of the shared
+codec, including Cosmos, without adapter-specific copies.
+
+Nine regression cases cover both payload padding lengths, every unused-bit tag alias, standard alphabet,
+explicit padding, whitespace, valid roundtrips and actual authenticated-byte changes. Before the fix,
+six cases failed; afterward all nine and the original replication test pass. The full core suite now has
+5316 passes, zero failures and 68 environment-dependent skips. The changed storage project builds with
+zero warnings/errors under warnings-as-errors. The initial strict full-test invocation ran all tests
+successfully but exited on three existing nullable warnings in unrelated test files; the normal full-suite
+invocation succeeds. Follow-up logs are in `tamper-fix-logs.tar.gz`.
+
+The codec deliberately adds bounded re-encoding work per opaque token decode to enforce its existing
+canonical wire contract. Query-row ingestion benchmarks above do not decode these tokens, so their timed
+source and boundary are unchanged. `tamper-fix-verification.json` records the superseding test results;
+the initial failure logs remain attributable historical evidence.
