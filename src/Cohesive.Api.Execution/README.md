@@ -474,7 +474,7 @@ For materialized reads, prefer the declarative composition:
 
 ```csharp
 return native.SelectMaterializedQuery(queries.Details, queries.DetailsRelation,
-    source: materializationStorage.ForReads(configurationSection: "Replication"),
+    source: () => materializationStorage.ForReads(configurationSection: "Replication"),
     target: elasticReads,
     comparisonSection: "Reads");
 ```
@@ -498,3 +498,65 @@ Source preparation returns the named `PreparedMaterializationReadSource` delegat
 only when invoked. Target adapters validate direct binding callers; composition independently validates target
 identity because custom adapter implementations also cross this boundary. Backend labels are presentation metadata,
 not capability or identity evidence (`ElasticMaterializationReadBinding.BackendName` is the Elasticsearch label).
+
+## Live read selection
+
+`SelectQuery` and `SelectMaterializedQuery` each accept one optional
+`ServiceReadSelection<TInput>`: `Native`, `Alternate` (the default), or
+`ByFeatureFlag<TContext>`. `FromPolicy` lowers a configuration-bound
+`RelationQueryReadPolicy` to the same choice. There are no separate flag methods.
+A fixed native choice skips alternate declaration and native preparation.
+
+```csharp
+return native.SelectMaterializedQuery(queries.Details, queries.DetailsRelation,
+    source: () => materializationStorage.ForReads(configurationSection: "Replication"),
+    target: elasticReads,
+    comparisonSection: "Reads",
+    selection: ServiceReadSelection<string>.ByFeatureFlag<TenantContext>(
+        "orders-materialized", services =>
+        {
+            var tenants = services.GetRequiredService<TenantAccessor>();
+            return orderId => tenants.Current; // Independent, trusted targeting contract.
+        }));
+```
+
+Register `IFeatureFlagEvaluator<TenantContext>` using the provider's helper. The
+projection factory runs once at binding; its returned function runs per invocation.
+It can combine query input with trusted request identity without making the order ID
+the tenant ID. No invocation context is retained. Providers may be shared concurrently;
+target projections belong to individual selections, not one global query-input rule.
+
+Binding first requires the flag to exist, without constructing a request context or
+opening native readers. Both adapters throw `FeatureFlagNotFoundException` for an
+absent key. Microsoft also checks native definition metadata on evaluation, so a
+removed flag cannot quietly become disabled. Native refresh is not a cross-provider
+or fleet-wide atomic snapshot. Providers retain responsibility for refresh/freshness.
+
+True selects the alternate, false the source's live interpretation. Both readers and
+the comparison artifact are prepared before traffic, even if the flag starts false.
+Each read captures one decision and retains it through completion. Provider errors,
+cancellation and backend errors propagate; there is no implicit retry or fallback.
+Immutable plans/readers are reused; no client lookup, reflection or compilation occurs
+per read. The warm dispatch allocation regression remains zero added managed bytes
+for 1,000 synchronous decisions against completed readers, excluding SDK/backend cost.
+
+The endpoint must admit the weakest candidate guarantee: PostgreSQL/Elasticsearch
+switching requires explicit `Eventual` consent regardless of the current flag value.
+Explanation schema v3 has distinct `kind: fixed` and `kind: featureFlag` shapes.
+Only the fixed shape has `backend`/`resource`. A flag shape contains `flag`, `disabled`
+and `enabled` candidates, plus the minimum guarantee; it makes no claim about the
+current decision. No synthetic backend identity is invented for the switch.
+
+The source enum remains `Live`/`Materialized`. In configuration, `Source: Materialized`
+plus an optional `FeatureFlag` selects that candidate or live reads. Omitting the flag
+makes the choice fixed. A flag on `Source: Live`, a blank key, or missing eventual
+consent fails validation. Previously unreleased `Select*ByFeatureFlag` methods and
+`RelationQueryReadSource.FeatureFlag` are removed. Custom compositions now return the
+`ServiceQueryReadSelection` inspection base; fixed adapters still construct
+`ServiceQueryReadBinding`. Custom evaluators must implement flag admission.
+
+ASP.NET hosts can pass `RequestIdentityTargeting.For<TInput>` to `FromPolicy` or
+`ByFeatureFlag<IdentityContext>`. It validates fixed/resolved identity registration
+and operation-context access during preparation. Future requests still need the operation
+middleware and a resolved identity: absence returns a 401 failure before flag evaluation,
+not an anonymous targeting default. Startup cannot prove future request identity.

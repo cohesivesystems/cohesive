@@ -39,7 +39,7 @@ public sealed class PostgresStorageComposition : IServiceStorageComposition
         return this;
     }
     /// <inheritdoc />
-    public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query) => new("PostgreSQL", bindings.Database.Value,
+    public ServiceQueryReadSelection DescribeRead(ServiceQuerySelection query) => new ServiceQueryReadBinding("PostgreSQL", bindings.Database.Value,
         Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
     /// <inheritdoc />
     public ImmutableArray<object> Bindings => [bindings];

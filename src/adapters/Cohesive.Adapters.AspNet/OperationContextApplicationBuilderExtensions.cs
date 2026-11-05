@@ -45,6 +45,9 @@ public static class OperationContextApplicationBuilderExtensions
             throw new InvalidOperationException("A fixed request identity is already registered.");
     }
 
+    internal static bool SuppliesIdentity(IHttpOperationContextEnricher enricher) =>
+        enricher is FixedIdentityEnricher or Identity.RequestIdentityContextEnricher;
+
     sealed class FixedIdentityEnricher(Cohesive.Identity.IdentityContext identity) : IHttpOperationContextEnricher
     {
         public ValueTask<OperationContext> EnrichAsync(HttpContext httpContext, OperationContext context) =>

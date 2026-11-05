@@ -1,3 +1,5 @@
+using Cohesive.Identity;
+using Cohesive.Adapters.AspNet.Identity;
 using AspireFirst.Materialization;
 using Cohesive.Api.Execution.Services;
 using Cohesive.Relations.Execution;
@@ -45,16 +47,13 @@ public sealed class FulfillmentStorage : StorageModel
                 storage.Entity(domain.Inventory, mappings.Inventory);
             }));
         Native = new PostgresStorageComposition(Bindings);
-        Storage.Compose(() =>
-        {
-            if (reads.Source == RelationQueryReadSource.Live) return Native;
-            var materializations = new FulfillmentMaterializations(queries);
-            var materializationStorage = new FulfillmentMaterializationStorage(this, materializations);
-            return Native.SelectMaterializedQuery(queries.OrderDetails, queries.OrderDetailsRelation,
-                source: materializationStorage.OrderDetails.ForReads(configurationSection: "Shadow"),
-                target: ShadowElastic.Reads,
-                comparisonSection: "OrderReads");
-        });
+        Storage.Compose(() => Native.SelectMaterializedQuery(queries.OrderDetails, queries.OrderDetailsRelation,
+            source: () => new FulfillmentMaterializationStorage(this, new FulfillmentMaterializations(queries))
+                .OrderDetails.ForReads(configurationSection: "Shadow"),
+            target: ShadowElastic.Reads,
+            comparisonSection: "OrderReads",
+            selection: ServiceReadSelection<string>.FromPolicy<IdentityContext>(reads, RequestIdentityTargeting.For<string>)));
+
     }
 
     /// <summary>Canonical source placement and live rollback interpretation, also used for infrastructure evidence.</summary>

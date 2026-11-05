@@ -44,7 +44,7 @@ public sealed class ApplicationExplanationDocument
     }
 
     /// <summary>Version of this inspection report's serialized structure, independent of embedded document versions.</summary>
-    public string SchemaVersion => "cohesive.application.explanation/2";
+    public string SchemaVersion => "cohesive.application.explanation/3";
     /// <summary>Explicit evidence boundary; this report contains no live observations.</summary>
     public ApplicationExplanationScope Scope => ApplicationExplanationScope.OfflineAdmission;
     /// <summary>Original canonical entities in ordinal name order.</summary>

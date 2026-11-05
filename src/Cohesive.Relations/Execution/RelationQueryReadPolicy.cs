@@ -9,11 +9,15 @@ public enum RelationQueryReadSource
     Materialized
 }
 
-/// <summary>Per-query startup selection, shared by offline admission and native binding.</summary>
+/// <summary>Per-query serving policy, shared by offline admission and native binding.</summary>
 public sealed record RelationQueryReadPolicy
 {
-    /// <summary>Defaults to live evaluation; changing selection requires rebinding the host.</summary>
+    /// <summary>Defaults to live evaluation; an optional flag selects this source or live evaluation.</summary>
     public RelationQueryReadSource Source { get; init; }
+    /// <summary>Optional flag selecting Materialized when true and Live when false. Null means a fixed source.</summary>
+    public string? FeatureFlag { get; init; }
+    /// <summary>Whether this deployment prepares the materialized backend, independent of the current flag decision.</summary>
+    public bool UsesMaterializedReads => Source != RelationQueryReadSource.Live;
     /// <summary>Explicit consent to asynchronous visibility, required for Materialized.</summary>
     public bool AcceptEventualConsistency { get; init; }
 
@@ -21,7 +25,13 @@ public sealed record RelationQueryReadPolicy
     public void Validate()
     {
         if (!Enum.IsDefined(Source)) throw new ArgumentException("Unknown query read source.");
-        if (Source == RelationQueryReadSource.Materialized && !AcceptEventualConsistency)
+        if (FeatureFlag is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(FeatureFlag);
+            if (Source != RelationQueryReadSource.Materialized)
+                throw new ArgumentException("A feature flag requires a materialized candidate.");
+        }
+        if (UsesMaterializedReads && !AcceptEventualConsistency)
             throw new ArgumentException("Materialized reads require explicit acceptance of eventual consistency.");
     }
 
@@ -33,6 +43,6 @@ public sealed record RelationQueryReadPolicy
     {
         Validate();
         if (!Enum.IsDefined(liveRequirement)) throw new ArgumentException("Unknown live-read consistency requirement.", nameof(liveRequirement));
-        return Source == RelationQueryReadSource.Materialized ? RelationQueryConsistency.Eventual : liveRequirement;
+        return UsesMaterializedReads ? RelationQueryConsistency.Eventual : liveRequirement;
     }
 }

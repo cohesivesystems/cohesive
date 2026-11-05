@@ -169,7 +169,7 @@ public sealed class ServiceStorageComposition : IServiceStorageComposition
         explanation = completedExplanation;
     }
     /// <inheritdoc />
-    public ServiceQueryReadBinding DescribeRead(ServiceQuerySelection query)
+    public ServiceQueryReadSelection DescribeRead(ServiceQuerySelection query)
     {
         var key = ServiceQueryIdentity.For(query.Request);
         if (prepared.IsDefault || !queries.TryGetValue(key, out var owner))

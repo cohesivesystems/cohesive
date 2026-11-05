@@ -103,6 +103,11 @@ not a supported application import format or an independent executable system IR
 
 Admitted process bindings retain their original service document and selected operation alongside the process reference.
 `endpoints[].service` exposes that operation's existing lifetime/completion/authorization contract; `services[]` contains
-the distinct original canonical documents. The inspection schema is now `cohesive.application.explanation/2`.
+the distinct original canonical documents. The inspection schema is now `cohesive.application.explanation/3`.
 No lifetime is inferred from HTTP 202, and polling does not imply durable execution. Storage history and selected read
 consistency remain separate sections. These are offline declarations, not provider readiness or current freshness evidence.
+
+Schema v3 changes storage read inspection to a discriminated selection. A `fixed` read
+has backend/resource/consistency. A `featureFlag` read has flag/disabled/enabled and the
+minimum guarantee, without misleading top-level backend/resource fields. This changes
+the v2 report contract; consumers must inspect the kind before selecting provider fields.
