@@ -4,6 +4,50 @@ This guide starts with one CLR object and adds relational capabilities only when
 expression surface is the normal application API. Every operation immediately lowers to the same canonical
 relation/query IR used by persistence, compilers, inference tools, and other host languages.
 
+## Common local DTO projection
+
+For a reusable single-source scalar DTO mapping, the facade prepares the existing canonical pipeline:
+
+```csharp
+using Cohesive.Relations.Mapping;
+
+var mapping = RelationDtoMapping.Create(
+    (Load load) => new LoadSummaryDto(load.Id, load.Status, load.Amount));
+
+var dto = await mapping.MapAsync(new Load("load-42", "Ready", 125m, "Internal only"));
+Console.WriteLine(dto);
+// LoadSummaryDto { Id = load-42, Status = Ready, Amount = 125 }
+
+public record Load(string Id, string Status, decimal Amount, string InternalNotes);
+public record LoadSummaryDto(string Id, string Status, decimal Amount);
+```
+
+Prepare once and reuse the mapping. `MapManyAsync(values)` enumerates a batch once and returns DTOs in input
+order, including repeated values; an empty batch returns an empty array. DTOs need no `Id` member. Each input
+occurrence receives an invocation-local ordinal identity, not an inferred entity identity. The complete batch
+is bounded by `maximumRows` (default `RelationQueryEvaluator.DefaultMaximumRootRows`, currently 10,000),
+checked during enumeration; input validation, failure and cancellation never publish a partial batch.
+
+This facade lowers the projection through the same expression authoring and retains one immutable compilation
+request, shared static plan and compiled DTO mapper. `CompilationRequest`, `Compilation`, `AuthoringProvenance`
+and `Mapper.Descriptor` expose the canonical definition, lowering attribution, diagnostics and mapping decisions. For retained phase evidence and source
+provenance, call `EvaluateAsync(values, new("request/42"))`, inspect its outcome, then use
+`mapping.Mapper.Map(outcome.PhysicalExecution!)`. Value-only methods use a fixed operation-local evaluation
+identity; explicitly identified evaluation is the attribution path for callers that retain results.
+
+No database, direct CLR callback interpreter or global source/destination-type registry is introduced. The
+projection is inspected, not compiled as executable CLR behavior; captures and unsupported constructs retain
+existing authoring diagnostics. Every call still performs the full canonical supplied-only pipeline and input
+admission. This convenience API does not imply AutoMapper-like direct-conversion cost or a new performance
+optimization. Concurrent calls are supported; callers own their input and must keep it stable during admission.
+
+The current DTO mapper supports its existing scalar conversions. Nested source fields can project to scalar
+members, but nested/collection-valued output DTOs fail preparation with structured `REL3308` diagnostics in
+`RelationQueryPreparationException.DtoDiagnostics`. Richer relations, external sources, filters, joins, invariants,
+explicit domain identities and alternate targets use the expanded authoring/evaluation API below. The compact
+source is not a second semantic authority; its request can be inspected, serialized or realized elsewhere through
+the existing compiler APIs.
+
 ## 1. Map one object shape to a DTO shape
 
 Start with ordinary CLR types:
