@@ -85,3 +85,12 @@ The codec deliberately adds bounded re-encoding work per opaque token decode to 
 canonical wire contract. Query-row ingestion benchmarks above do not decode these tokens, so their timed
 source and boundary are unchanged. `tamper-fix-verification.json` records the superseding test results;
 the initial failure logs remain attributable historical evidence.
+
+## Nullable warning follow-up
+
+The three test-source nullable warnings are now fixed with `Expr.Null()` and explicit nonnull-string
+assertions for diagnostic locations and entity-type annotations. Production behavior and benchmark code
+are unchanged. The full core command with `-warnaserror` exits 0: 5316 passed, zero failed, 68
+integration/environment-dependent skips, with no warnings or errors. Exact invocation and source hashes
+are in `nullable-fix-verification.json`; the complete log is in `nullable-fix-log.tar.gz`. This supersedes
+the earlier strict-build warning limitation while retaining its historical logs.
