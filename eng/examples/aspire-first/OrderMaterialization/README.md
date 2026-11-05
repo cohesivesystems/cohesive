@@ -288,3 +288,25 @@ its live consistency requirement explicitly. Materialized reads require eventual
 consent. Live rollback does not load either configuration section's materialization
 values or resolve the target. See the [adapter's prepared-read contract](../../../../src/adapters/Cohesive.Adapters.Elastic/README.md#prepared-materialized-query-reads)
 for per-request native checks and the three-call bound.
+
+## Reservation events
+
+[ReservationEventFeed](ReservationEventFeed.cs) shows how to replace the reservation input's
+table feed with a retained Marten stream while orders and inventory continue through logical
+replication. The binding selects the input by the domain entity's shape and projects the
+event onto the fields in its admitted placement. PostgreSQL still hydrates the same
+`OrderDetailsRelation` used for live reads. This is an opt-in producer contract: enable it
+only where reservation writers append the event in the same transaction as the row change.
+
+The native [recovery test](../../../../src/Cohesive.Adapters.Aspire.Tests/FulfillmentShadowTests.Events.cs)
+seeds a reservation on A, rebuilds the Elasticsearch generation, then moves the reservation
+to B and appends its before and after state in one PostgreSQL transaction. It interrupts
+synchronization after the target batch succeeds. At that point A has zero reservations,
+B has one, the source checkpoint is unchanged and pending work is durable. A new bound
+runtime resumes the same attempt, advances the checkpoint and compares both documents
+with live relational reads. To run just this case against the disposable dependencies
+described above:
+
+```sh
+dotnet test src/Cohesive.Adapters.Aspire.Tests -c Release --filter FullyQualifiedName~Reservation_move_replays
+```
