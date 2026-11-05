@@ -23,6 +23,72 @@ namespace Cohesive.Tests.Api;
 [Collection(Cohesive.Tests.Observability.OperationTelemetryEmitterTestCollection.Name)]
 public sealed class ServiceRuntimeTests
 {
+    [Theory]
+    [InlineData(long.MaxValue - 1, ServiceTransitionAvailabilityKind.Permitted)]
+    [InlineData(long.MaxValue, ServiceTransitionAvailabilityKind.Indeterminate)]
+    public async Task Inspection_prepares_candidate_without_writing_and_matches_invocation(
+        long version, ServiceTransitionAvailabilityKind expected)
+    {
+        var fixture = await Fixture.Create(version);
+        var inspected = Assert.Single(await fixture.Runtime.InspectTransitionsAsync(OperationContext.Create(),
+            fixture.Repository.EntityDefinition.StateShape.QualifiedId, "note-1",
+            new Dictionary<string, PortableValue> { ["revise"] = fixture.Input }));
+        Assert.Equal(expected, inspected.Kind);
+        Assert.Equal(TransitionDecisionKind.Applied, inspected.Decision);
+        Assert.Equal(fixture.Initial.ConcurrencyToken, inspected.ConcurrencyToken);
+        Assert.Equal(0, fixture.Repository.Writes);
+        var retained = await fixture.Repository.Inner.TryGet(OperationContext.Create(), "note-1",
+            EntityReadOptions.Full.WithPartitionKey("tenant-a"));
+        Assert.Equal(version, retained!.Entity.Version);
+        Assert.Equal(fixture.Initial.ConcurrencyToken, retained.ConcurrencyToken);
+        Assert.Equal("before", retained.Entity.Observation.GetField("Text").GetString());
+
+        var invoked = await fixture.Invoke();
+        if (expected == ServiceTransitionAvailabilityKind.Permitted)
+        {
+            Assert.Equal(ApiResultKind.Success, invoked.Kind);
+            Assert.Empty(inspected.Diagnostics);
+        }
+        else
+        {
+            Assert.Equal(ApiResultKind.InfrastructureError, invoked.Kind);
+            var diagnostic = Assert.Single(inspected.Diagnostics);
+            Assert.Equal("transition.state.versionOverflow", diagnostic.Code);
+            Assert.Equal("/current/version", diagnostic.Location);
+            Assert.Equal(Assert.Single(invoked.Diagnostics), diagnostic);
+            Assert.Equal(0, fixture.Repository.Writes);
+        }
+    }
+
+    [Fact]
+    public async Task Inspection_allows_no_commit_decisions_at_version_limit()
+    {
+        var fixture = await Fixture.Create(version: long.MaxValue);
+        var entity = fixture.Repository.EntityDefinition;
+        var transition = TransitionAuthoring.Create<Note, Note.ReviseInput, bool>(entity.Shape,
+            new("inspection.no-change"), new("1"), t => t
+                .Return(new("result"), TransitionOutcomeDisposition.NoChange, true));
+        var compiled = transition.Compile();
+        Assert.True(compiled.IsSuccessful);
+        var service = ServiceDefinitionDocuments.Create(new("inspection"), new("1"),
+            new ServiceDefinition([new ServiceTransitionOperation("revise", entity.StateShape.QualifiedId,
+                compiled.Plan!.DefinitionReference, [new("notes.revise")])]),
+            new(new("tests"), new("tests/inspection"), DocumentOrigin.User));
+        var runtime = new ServiceRuntime(service,
+            [new ServiceTransitionBinding("revise", compiled.Plan, entity, _ => fixture.Repository)], fixture.Authority);
+        var input = PortableValue.Concrete(transition.Definition.Input, ObservationValue.FromObject(new Note.ReviseInput("after")));
+        var inspected = Assert.Single(await runtime.InspectTransitionsAsync(OperationContext.Create(),
+            entity.StateShape.QualifiedId, "note-1", new Dictionary<string, PortableValue> { ["revise"] = input }));
+        Assert.Equal(ServiceTransitionAvailabilityKind.Permitted, inspected.Kind);
+        Assert.Equal(TransitionDecisionKind.NoChange, inspected.Decision);
+        Assert.Empty(inspected.Diagnostics);
+        var invoked = await runtime.InvokeAsync(OperationContext.Create(), "revise", "note-1",
+            inspected.ConcurrencyToken, new("tests/inspection/no-change"), input);
+        Assert.Equal(ApiResultKind.Success, invoked.Kind);
+        Assert.Equal(inspected.ConcurrencyToken, invoked.ConcurrencyToken);
+        Assert.Equal(0, fixture.Repository.Writes);
+    }
+
     [Fact]
     public async Task Candidate_preparation_failure_returns_structured_service_error_without_write()
     {

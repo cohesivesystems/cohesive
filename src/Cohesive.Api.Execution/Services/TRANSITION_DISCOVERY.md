@@ -22,7 +22,10 @@ Missing nonempty commands conservatively produce `RequiresInput`. The API does n
 or claim symbolic partial-input evaluation. Empty object commands can be evaluated automatically. With
 input supplied, the full canonical Transition runs without committing: machine admission, transition
 Requires, patches in an isolated candidate, and final invariants all participate. Candidate state,
-patches, command values and authored outcome payloads are not returned.
+patches, command values and authored outcome payloads are not returned. Accepted decisions that require
+a commit also pass through the same noncommitting entity preparation as invocation. Preparation failures
+(such as version overflow) report `Indeterminate` with the shared sanitized diagnostic; `Decision` still
+records the native interpreter result. Decisions requiring no commit skip preparation, matching invocation.
 
 Each result contains the operation identity, exact Transition reference, input contract, snapshot concurrency
 token, availability kind, native decision classification and payload-free structured diagnostics. Operations

@@ -13,7 +13,7 @@ namespace Cohesive.Api.Execution.Services;
 /// <summary>Actor-specific availability of a discoverable entity operation.</summary>
 public enum ServiceTransitionAvailabilityKind
 {
-    /// <summary>The supplied command is authorized and accepted against the reported snapshot.</summary>
+    /// <summary>The supplied command is authorized and accepted against the reported snapshot, including required entity preparation.</summary>
     Permitted,
     /// <summary>A complete command is needed to evaluate eligibility.</summary>
     RequiresInput,
@@ -23,7 +23,7 @@ public enum ServiceTransitionAvailabilityKind
     Forbidden,
     /// <summary>Evaluation reported invalid input, definition, ambiguity or invariant failure.</summary>
     Invalid,
-    /// <summary>Evaluation could not establish availability.</summary>
+    /// <summary>Evaluation or required entity preparation could not establish availability.</summary>
     Indeterminate
 }
 
@@ -125,6 +125,20 @@ public sealed partial class ServiceRuntime
                     };
                     diagnostics = [.. decision.Diagnostics.Select(d => new DocumentValidationDiagnostic(d.Code, d.Severity,
                         "Transition inspection could not establish permission to apply this command.", d.Location))];
+                    if (kind == ServiceTransitionAvailabilityKind.Permitted && decision.GuaranteeDemands.CommitRequired)
+                    {
+                        try
+                        {
+                            // Match invocation's preparation boundary without retaining or committing the candidate.
+                            _ = TransitionStateProjector.ApplyToEntity(repository.EntityDefinition, subject, decision, snapshot.Entity);
+                        }
+                        catch (TransitionStatePreparationException exception)
+                        {
+                            kind = ServiceTransitionAvailabilityKind.Indeterminate;
+                            diagnostics = diagnostics.Add(new(exception.Code, DiagnosticSeverity.Error,
+                                TransitionStatePreparationException.SafeMessage, exception.Location));
+                        }
+                    }
                 }
             }
             context.ThrowIfCancellationRequested();
