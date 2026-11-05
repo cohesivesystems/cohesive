@@ -95,7 +95,7 @@ public sealed class FulfillmentExplanationTests
             Assert.Equal("orders", query.Read.Resource);
             Assert.Equal(RelationQueryConsistency.SingleSnapshot, query.Read.Consistency);
         });
-        Assert.Equal("PostgreSQL", selected.Storage.Queries.Single(query => query.Query != detailId).Read!.Backend);
+        Assert.All(selected.Storage.Queries.Where(query => query.Query != detailId), query => Assert.Equal("PostgreSQL", query.Read!.Backend));
         Assert.True(JsonNode.DeepEquals(JsonNode.Parse(live.ToJson())!["endpoints"], JsonNode.Parse(selected.ToJson())!["endpoints"]));
         var encoded = JsonNode.Parse(selected.ToJson())!["storage"]!["queries"]!.AsArray();
         Assert.Contains(encoded, entry => entry!["read"]!["backend"]!.GetValue<string>() == "Elasticsearch"
@@ -156,7 +156,7 @@ public sealed class FulfillmentExplanationTests
         var report = Native(EntityStateAuthority.State);
         Assert.Equal(report.ToJson(), Native(EntityStateAuthority.State).ToJson());
         var queries = report.Storage.Queries;
-        Assert.Equal(2, queries.Length);
+        Assert.Equal(3, queries.Length);
         foreach (var query in queries)
         {
             Assert.Contains(report.Endpoints, endpoint => endpoint.Execution == query.Query);

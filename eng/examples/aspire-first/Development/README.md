@@ -93,9 +93,19 @@ It removes the temporary copy and writes detailed evidence to `tmp/orders-develo
 line numbers in that report describe the isolated copy. The ten-minute bound includes restore/build; package restore
 may require network access. Failures produce a nonzero exit and do not publish success evidence.
 
+## Replay the authoring exercise
+
+From a checkout containing the pre-feature commit and the authored source, run:
+
+```sh
+dotnet run --project eng/examples/aspire-first/Development -- exercise "$PWD" 89bec9bb
+```
+
+The optional final argument identifies a commit whose Orders query and API source predate the SKU endpoint. In the disposable copy, the exercise builds those two source files with the current host, calls `learn`, captures the baseline, then restores the authored files and rebuilds. It verifies that `compare` reports the query and endpoint as additions, that `references` links the endpoint to the query fingerprint, and that `compatibility` reports Compatible for an existing client and Breaking for a proposed client calling the old server. The JSON report retains both verdicts. The default exercise still checks the new binding with a shallow checkout.
+
 ## Coverage and next gaps
 
-The export includes four transitions, one generated process, its service, two native queries, entity/shape and relationship documents, and portable API contracts. Their domain-owned IDs, explicit revisions,
+The export includes four transitions, one generated process, its service, three native queries, entity/shape and relationship documents, and portable API contracts. Their domain-owned IDs, explicit revisions,
 fingerprints and compiler source maps remain intact; the export's input revision does not overwrite them.
 
 Input discovery conservatively covers C# build files under `src/Cohesive*`, `src/adapters`, `Orders.Model`, and this host plus root props,

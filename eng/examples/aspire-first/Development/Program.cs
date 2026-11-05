@@ -10,9 +10,9 @@ using AspireFirst.Orders;
 using Cohesive.Adapters.Mcp.Development;
 using Cohesive.Semantics;
 
-if (args.Length != 2 || args[0] is not ("export" or "serve" or "exercise" or "wire-sample"))
+if (args.Length is < 2 or > 3 || args[0] is not ("export" or "serve" or "exercise" or "wire-sample") || (args.Length == 3 && args[0] != "exercise"))
 {
-    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise|wire-sample> <repository-root>");
+    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise|wire-sample> <repository-root> [authoring-base-commit for exercise]");
     return 2;
 }
 var root = Path.GetFullPath(args[1]);
@@ -31,7 +31,7 @@ switch (args[0])
                 new DevelopmentGuide(OrdersWorkspace.ProducerVersion, reader.ReadToEnd()));
         break;
     case "exercise":
-        await OrdersWorkflow.RunAsync(root);
+        await OrdersWorkflow.RunAsync(root, args.Length == 3 ? args[2] : null);
         break;
 }
 return 0;

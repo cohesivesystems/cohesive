@@ -39,6 +39,8 @@ public sealed class OrderApi : ApiModel
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<OrderDetails>();
         Availability = orders.Query("availability").Route("GET", "/orders/{id}/availability")
             .RouteParameter<string>("id").Result(ApiResultKind.NotFound).Build<ReservationAvailability[]>();
+        ReservationsBySku = orders.Query("ReservationsBySku").Route("GET", "/orders/reservations/by-sku/{sku}")
+            .RouteParameter<string>("sku").Build<ReservationBySku[]>();
     }
 
     /// <summary>Acknowledges fulfillment and exposes its independently authorized result.</summary>
@@ -53,6 +55,8 @@ public sealed class OrderApi : ApiModel
     public ApiEndpoint<OrderDetails> Details { get; }
     /// <summary>Current joined reservation demand and inventory observations.</summary>
     public ApiEndpoint<ReservationAvailability[]> Availability { get; }
+    /// <summary>Reads all matching reservations, including an empty result for an unknown SKU.</summary>
+    public ApiEndpoint<ReservationBySku[]> ReservationsBySku { get; }
 }
 
 /// <summary>HTTP declarations bind to the shared load, decide and concurrency-guarded commit implementation.</summary>
@@ -85,6 +89,9 @@ public sealed class OrderEndpoints : ApiBindingModel
                 consistency: reads.ConsistencyFor(RelationQueryConsistency.IndependentSources));
             bindings.Bind(api => api.Availability, queries.ReservationAvailability, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
                 configure: query => query.FromRoute<string>("id", id => id).OkOrNotFound(),
+                consistency: RelationQueryConsistency.IndependentSources);
+            bindings.Bind(api => api.ReservationsBySku, queries.ReservationsBySku, new("1"), maximumRows: 1000, maximumBytes: 1_000_000,
+                configure: query => query.FromRoute<string>("sku", sku => sku).Ok(),
                 consistency: RelationQueryConsistency.IndependentSources);
             var authorization = new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField));
             if (execution?.Lifetime == ProcessExecutionLifetime.Durable)

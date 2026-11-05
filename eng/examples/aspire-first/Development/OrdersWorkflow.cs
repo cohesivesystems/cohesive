@@ -7,7 +7,7 @@ using ModelContextProtocol.Client;
 // An opt-in integration exercise, not an MCP tool. All edits/builds run in an isolated source copy.
 internal static class OrdersWorkflow
 {
-    internal static async Task RunAsync(string root)
+    internal static async Task RunAsync(string root, string? authoringBase)
     {
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         var token = timeout.Token;
@@ -32,6 +32,15 @@ internal static class OrdersWorkflow
                 File.Copy(source, destination, overwrite: true);
             }
 
+            // With a base revision, replay the actual edits to the two authoring files in the isolated copy.
+            // The host, serializer and tool versions stay fixed for both snapshots.
+            string[] authoringFiles = ["eng/examples/aspire-first/Orders.Model/FulfillmentQueries.cs", "eng/examples/aspire-first/Orders.Model/OrderApi.cs"];
+            if (authoringBase is not null)
+            {
+                var commit = (await RunProcess(root, "git", ["rev-parse", "--verify", "--end-of-options", authoringBase + "^{commit}"], token)).Trim();
+                foreach (var relative in authoringFiles)
+                    await File.WriteAllTextAsync(Path.Combine(scratch, relative), await RunProcess(root, "git", ["show", commit + ":" + relative], token), token);
+            }
             await Export();
             await using var client = await McpClient.CreateAsync(new StdioClientTransport(new()
             {
@@ -41,9 +50,47 @@ internal static class OrdersWorkflow
             var tools = await client.ListToolsAsync(cancellationToken: token);
             Require(tools.Select(t => t.Name).Order().SequenceEqual(new[] { "check", "compare", "compatibility", "impact", "inspect", "learn", "references", "resolve", "workspace" }), "Tool discovery differed.");
             var guide = await Call("learn");
-            Require(guide.GetProperty("content").GetString()!.Contains(OrdersWorkspace.Project, StringComparison.Ordinal), "Project guidance is missing.");
+            Require(guide.GetProperty("content").GetString()!.Contains("Author a query and expose it as a read endpoint", StringComparison.Ordinal), "Query authoring recipe is missing.");
+            JsonElement? authoringComparison = null;
+            JsonElement? existingClients = null;
+            JsonElement? proposedClients = null;
+            const string skuQuery = "fulfillment/reservations-by-sku";
+            const string skuEndpoint = "api:Order.ReservationsBySku";
+            if (authoringBase is not null)
+            {
+                var baseline = await Workspace();
+                foreach (var id in new[] { skuQuery, skuEndpoint })
+                {
+                    var resolvedBase = await Call("resolve", new() { ["query"] = id, ["expectedSnapshot"] = baseline.SnapshotId });
+                    Require(resolvedBase.GetProperty("result").GetProperty("total").GetInt32() == 0, $"Authoring base already contains {id}.");
+                }
+                // Write the edits with fresh modification times so incremental compilation sees the restored source.
+                foreach (var relative in authoringFiles)
+                    await File.WriteAllBytesAsync(Path.Combine(scratch, relative), await File.ReadAllBytesAsync(Path.Combine(root, relative), token), token);
+                await Export();
+                var proposed = await Workspace();
+                authoringComparison = await Call("compare", new() { ["baselineSnapshot"] = baseline.SnapshotId, ["expectedSnapshot"] = proposed.SnapshotId, ["limit"] = 100 });
+                foreach (var id in new[] { skuQuery, skuEndpoint })
+                    Require(authoringComparison.Value.GetProperty("result").GetProperty("changes").GetProperty("items").EnumerateArray()
+                        .Any(item => item.GetProperty("id").GetString() == id && (!item.TryGetProperty("before", out var old) || old.ValueKind == JsonValueKind.Null)),
+                        $"Authored addition missing: {id}.");
+                async Task<JsonElement> CompareClients(string direction) => await Call("compatibility", new()
+                {
+                    ["id"] = skuEndpoint, ["baselineSnapshot"] = baseline.SnapshotId, ["expectedSnapshot"] = proposed.SnapshotId, ["direction"] = direction
+                });
+                existingClients = await CompareClients("ExistingClientToProposedServer");
+                proposedClients = await CompareClients("ProposedClientToExistingServer");
+                Require(existingClients.Value.GetProperty("result").GetProperty("verdict").GetString() == "Compatible", "Existing clients should tolerate an added endpoint.");
+                var reverse = proposedClients.Value.GetProperty("result");
+                Require(reverse.GetProperty("verdict").GetString() == "Breaking" && reverse.GetProperty("diagnostics").EnumerateArray()
+                    .Any(d => d.GetProperty("code").GetString() == "api.compatibility.endpointRemoved"), "New clients require the missing endpoint.");
+            }
             var before = await Workspace();
             Require(before.ChangedInputs.IsEmpty && before.Result.Total > 5, "Expected fresh execution, relation and endpoint documents.");
+            var skuReferences = await Call("references", new() { ["id"] = skuQuery, ["expectedSnapshot"] = before.SnapshotId });
+            Require(skuReferences.GetProperty("result").GetProperty("references").GetProperty("items").EnumerateArray().Any(row =>
+                row.GetProperty("source").GetProperty("definitionId").GetString() == skuEndpoint && row.GetProperty("isContentMatch").GetBoolean()),
+                "Reservations-by-SKU endpoint does not reference the authored query fingerprint.");
             var resolved = await Call("resolve", new() { ["query"] = "fulfillment/reserve", ["expectedSnapshot"] = before.SnapshotId });
             Require(resolved.GetProperty("result").GetProperty("total").GetInt32() == 1, "Reservation identity is ambiguous.");
             var inspection = await Call("inspect", new()
@@ -197,6 +244,7 @@ internal static class OrdersWorkflow
             Require(commentComparison.GetProperty("result").GetProperty("changes").GetProperty("total").GetInt32() == 0, "Comment-only comparison reported semantic changes.");
             var evidence = new
             {
+                AuthoringBase = authoringBase, AuthoringComparison = authoringComparison, ExistingClients = existingClients, ProposedClients = proposedClients, SkuReferences = skuReferences,
                 ToolNames = tools.Select(t => t.Name).Order(), Before = before.SnapshotId, After = after.SnapshotId,
                 ChangedInputsBeforeExport = stale.ChangedInputs, Inspection = inspection, SourceMap = sourceMap, Guard = guard, Checks = checks,
                 AdditiveCompatibility = additiveCompatibility, OldGeneratedReaderAcceptedAddition = true, RevisedPayload = emitted, OldGeneratedReaderRejected = true, FieldIdentity = fieldId, FieldImpact = fieldImpact, ResponseComparison = responseComparison, Compatibility = compatibility,

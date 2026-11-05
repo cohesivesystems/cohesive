@@ -1,7 +1,6 @@
 # Orders authoring and inspection
 
-This host exports the actual Aspire fulfillment model's transitions, process, service, native query documents and API endpoint inspection projections. It does not start
-Aspire, databases, workers or containers. Call workspace and retain snapshotId; resolve identities before
+This host exports the Aspire fulfillment model's entities, shapes, transitions, process, service, native queries and portable API contracts. Call workspace and retain snapshotId; resolve identities before
 inspection. Static learn guidance works before the first export.
 
 Build and export from the repository root:
@@ -43,3 +42,20 @@ and endpoint binding projection change. Query source locations are not supplied 
 Resolve AvailableStock, use impact on the qualified field to trace the Orders query and api:Order.Details, then compare portable API contracts after rebuilding. The exercise checks both an additive inventoryPartition and a rename from availableStock to remainingStock with generated JSON readers/writers.
 
 The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v1`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.
+
+## Author a query and expose it as a read endpoint
+
+1. Call workspace and keep its snapshot ID. Inspect fulfillment/reservation-availability, then use references to find its bound endpoint. The current examples are FulfillmentQueries.ReservationAvailability and OrderApi.Availability in eng/examples/aspire-first/Orders.Model.
+2. In FulfillmentQueries.cs declare a typed query using Queries.WithInput<T> and Array. Filter the owning domain source by its partition and the named input. Project only the fields in the public result. Use the existing reservation entity and partition convention.
+3. In OrderApi.cs declare the GET route, typed route parameter and array result. In OrderEndpoints bind the endpoint to that same query with its explicit revision, row/byte limits and matching route input. Inspect the Orders runtime host's read capability registrations as well as the offline export.
+4. Rebuild and export from the root using the command above. Keep the same MCP session, obtain a fresh workspace snapshot, run check, and compare against the retained baseline. Verify the added query and endpoint, and use references on the query to verify the binding. For an added endpoint, compatibility should be Compatible for ExistingClientToProposedServer and Breaking for ProposedClientToExistingServer.
+5. Exercise the bound read on at least two matching rows and one other key, and check an absent key returns an empty array. Check the returned identities as well as the count.
+
+
+For the working SKU example, inspect fulfillment/reservations-by-sku and api:Order.ReservationsBySku. The route is GET /orders/reservations/by-sku/{sku}. The query asks for IndependentSources, which both Orders hosts can provide.
+
+To verify the HTTP result with the repository's PostgreSQL fixture, set COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING to a disposable PostgreSQL test database and run:
+
+    dotnet test src/Cohesive.Adapters.Aspire.Tests --filter FullyQualifiedName~Declared_join_returns_empty_and_multiple_reservations_with_local_partition_isolation
+
+The test is skipped without that connection string. Confirm it ran before treating the result as behavior evidence.
