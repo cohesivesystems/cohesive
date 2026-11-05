@@ -27,7 +27,6 @@ This guide belongs to the server build, not to an application snapshot. A custom
 guidance, validators and domain-owned reference readers through DevelopmentMcpServer.RunAsync. Consult the installed domain's authoring API
 and executable examples for version-specific syntax; this server does not provide general documentation search.
 
-The default host supports execution, native relation-query, and Application endpoint-inspection documents.
-Relations preserve their original fingerprints without inventing revisions. Endpoint fingerprints cover the existing
-route/binding projection only; API semantic validation is unavailable. Entity/shape dependencies and full API/client
-propagation remain incomplete. Services and hosted queries project dependencies from their owning canonical definitions.
+The default host reads entity state, qualified shape/field/type members, relationship catalogs, native queries, execution documents and portable API contracts. Legacy endpoint-inspection documents retain their narrower fingerprint scope. Resolve a field, then use impact to find potential consumers; expression-level coverage is partial.
+
+The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v1`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.

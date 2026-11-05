@@ -39,7 +39,7 @@ internal static class OrdersWorkflow
                 Arguments = [typeof(OrdersWorkspace).Assembly.Location, "serve", scratch]
             }), cancellationToken: token);
             var tools = await client.ListToolsAsync(cancellationToken: token);
-            Require(tools.Select(t => t.Name).Order().SequenceEqual(new[] { "check", "compare", "impact", "inspect", "learn", "references", "resolve", "workspace" }), "Tool discovery differed.");
+            Require(tools.Select(t => t.Name).Order().SequenceEqual(new[] { "check", "compare", "compatibility", "impact", "inspect", "learn", "references", "resolve", "workspace" }), "Tool discovery differed.");
             var guide = await Call("learn");
             Require(guide.GetProperty("content").GetString()!.Contains(OrdersWorkspace.Project, StringComparison.Ordinal), "Project guidance is missing.");
             var before = await Workspace();
@@ -134,26 +134,80 @@ internal static class OrdersWorkflow
             var queryImpact = await Call("impact", new() { ["id"] = queryId, ["expectedSnapshot"] = queryAfter.SnapshotId });
             Require(queryImpact.GetProperty("result").GetProperty("items").GetArrayLength() == 1, "Expected the actual query endpoint consumer.");
 
+            var fields = await Call("resolve", new() { ["query"] = "AvailableStock", ["expectedSnapshot"] = queryAfter.SnapshotId, ["limit"] = 100 });
+            JsonElement fieldImpact = default;
+            string? fieldId = null;
+            foreach (var candidate in fields.GetProperty("result").GetProperty("items").EnumerateArray())
+            {
+                var candidateId = candidate.GetProperty("id").GetString()!;
+                var evidencePath = await Call("impact", new() { ["id"] = candidateId, ["expectedSnapshot"] = queryAfter.SnapshotId, ["maxDepth"] = 8, ["limit"] = 100 });
+                var ids = evidencePath.GetProperty("result").GetProperty("items").EnumerateArray().Select(i => i.GetProperty("consumer").GetProperty("definitionId").GetString()).ToArray();
+                if (ids.Contains(queryId) && ids.Contains(endpointId)) { fieldId = candidateId; fieldImpact = evidencePath; break; }
+            }
+            Require(fieldId is not null, "No field → shape/type → query → API path was found.");
+            var responseSource = await File.ReadAllTextAsync(queryPath, token);
+            responseSource = ReplaceOnce(responseSource, "int AvailableStock);", "int AvailableStock)\n{\n    /// <summary>Optional inventory partition.</summary>\n    public string? InventoryPartition { get; init; }\n}");
+            responseSource = ReplaceOnce(responseSource, ".Field(result => result.AvailableStock, inventory, item => item.Available)",
+                ".Field(result => result.InventoryPartition, inventory, item => item.Partition)\n                    .Field(result => result.AvailableStock, inventory, item => item.Available)");
+            await File.WriteAllTextAsync(queryPath, responseSource, token);
+            await Export();
+            var additive = await Workspace();
+            await Check(additive.SnapshotId);
+            var additiveCompatibility = await Call("compatibility", new() { ["id"] = endpointId, ["baselineSnapshot"] = queryAfter.SnapshotId, ["expectedSnapshot"] = additive.SnapshotId });
+            Require(additiveCompatibility.GetProperty("result").GetProperty("verdict").GetString() == "Compatible",
+                "Adding an optional response field should preserve this tolerant reader contract: " + additiveCompatibility.GetRawText());
+            var additivePayload = await RunProcess(scratch, "dotnet", [Path.Combine(OrdersWorkspace.Project, "bin/Debug/net10.0/Orders.Development.dll"), "wire-sample", scratch], token);
+            Require(JsonSerializer.Deserialize<JsonElement>(additivePayload).GetProperty("reservations")[0].TryGetProperty("inventoryPartition", out _)
+                && JsonSerializer.SerializeToElement(JsonSerializer.Deserialize(additivePayload, OrdersWireContext.Default.OrderDetails), OrdersWireContext.Default.OrderDetails!).GetProperty("reservations")[0].GetProperty("availableStock").GetInt32() == 42,
+                "Old generated reader did not preserve the known value with an additional response field.");
+            responseSource = ReplaceOnce(responseSource, "int AvailableStock)", "int RemainingStock)");
+            responseSource = ReplaceOnce(responseSource, "result => result.AvailableStock", "result => result.RemainingStock");
+            responseSource = ReplaceOnce(responseSource, "<param name=\"AvailableStock\">", "<param name=\"RemainingStock\">");
+            await File.WriteAllTextAsync(queryPath, responseSource, token);
+            Require((await Workspace()).ChangedInputs.Contains(querySource), "Response-field source change was not detected.");
+            await Export();
+            var responseAfter = await Workspace();
+            await Check(responseAfter.SnapshotId);
+            var responseComparison = await Call("compare", new() { ["baselineSnapshot"] = additive.SnapshotId, ["expectedSnapshot"] = responseAfter.SnapshotId, ["limit"] = 100 });
+            Require(responseComparison.GetProperty("result").GetProperty("changes").GetProperty("items").EnumerateArray()
+                .Any(i => i.GetProperty("id").GetString() == endpointId), "Response-field change did not change the portable endpoint contract.");
+            var compatibility = await Call("compatibility", new() { ["id"] = endpointId, ["baselineSnapshot"] = additive.SnapshotId, ["expectedSnapshot"] = responseAfter.SnapshotId });
+            Require(compatibility.GetProperty("result").GetProperty("verdict").GetString() == "Breaking", "Removing an existing required response field must break old clients.");
+            Require(compatibility.GetProperty("result").GetProperty("diagnostics").EnumerateArray().Any(d =>
+                d.GetProperty("code").GetString() == "api.compatibility.requiredField" && d.GetProperty("location").GetString()!.EndsWith("/availableStock", StringComparison.Ordinal)),
+                "Compatibility did not explain the affected response-field path.");
+
+            var payload = await RunProcess(scratch, "dotnet", [Path.Combine(OrdersWorkspace.Project, "bin/Debug/net10.0/Orders.Development.dll"), "wire-sample", scratch], token);
+            var emitted = JsonSerializer.Deserialize<JsonElement>(payload);
+            Require(emitted.GetProperty("reservations")[0].GetProperty("remainingStock").GetInt32() == 42, "Rebuilt generated writer did not emit the revised field.");
+            try
+            {
+                _ = JsonSerializer.Deserialize(payload, OrdersWireContext.Default.OrderDetails);
+                throw new InvalidOperationException("Old generated reader accepted the missing required response field.");
+            }
+            catch (JsonException error) when (error.Message.Contains("availableStock", StringComparison.OrdinalIgnoreCase)) { }
+
             // Rebuild a comment-only source edit to verify metadata/input changes do not invent semantic changes.
             await File.AppendAllTextAsync(path, "\n// Agent exercise: source-only review note.\n", token);
             await Export();
             var comment = await Workspace();
-            var commentComparison = await Call("compare", new() { ["baselineSnapshot"] = queryAfter.SnapshotId, ["expectedSnapshot"] = comment.SnapshotId });
-            Require(comment.ChangedInputs.IsEmpty && comment.InputRevision != queryAfter.InputRevision && comment.SemanticFingerprint == queryAfter.SemanticFingerprint,
+            var commentComparison = await Call("compare", new() { ["baselineSnapshot"] = responseAfter.SnapshotId, ["expectedSnapshot"] = comment.SnapshotId });
+            Require(comment.ChangedInputs.IsEmpty && comment.InputRevision != responseAfter.InputRevision && comment.SemanticFingerprint == responseAfter.SemanticFingerprint,
                 "Comment-only edit changed semantics or failed to update source identity.");
             Require(commentComparison.GetProperty("result").GetProperty("changes").GetProperty("total").GetInt32() == 0, "Comment-only comparison reported semantic changes.");
             var evidence = new
             {
                 ToolNames = tools.Select(t => t.Name).Order(), Before = before.SnapshotId, After = after.SnapshotId,
                 ChangedInputsBeforeExport = stale.ChangedInputs, Inspection = inspection, SourceMap = sourceMap, Guard = guard, Checks = checks,
+                AdditiveCompatibility = additiveCompatibility, OldGeneratedReaderAcceptedAddition = true, RevisedPayload = emitted, OldGeneratedReaderRejected = true, FieldIdentity = fieldId, FieldImpact = fieldImpact, ResponseComparison = responseComparison, Compatibility = compatibility,
                 QueryInspection = queryBefore, EndpointInspection = endpointBefore, QueryComparison = queryComparison, QueryImpact = queryImpact, TransitionImpact = transitionImpact,
                 Comparison = comparison, ConsumersBeforeEdit = consumers, ConsumerInspection = consumerInspection, CommentOnlyChanges = 0,
-                Scope = "Offline source/lowering/MCP exercise; bounded dependency reachability and endpoint binding evidence only; no runtime, storage or API compatibility proof. Source-map line numbers describe the isolated copy."
+                Scope = "Offline source/lowering/MCP exercise; bounded dependencies and directional HTTP/JSON policy checked against generated Orders readers/writers; no deployed runtime or storage qualification. Source-map line numbers describe the isolated copy."
             };
             var report = Path.Combine(root, "tmp", "orders-development-exercise.json");
             Directory.CreateDirectory(Path.GetDirectoryName(report)!);
             await File.WriteAllTextAsync(report, JsonSerializer.Serialize(evidence, new JsonSerializerOptions { WriteIndented = true }), token);
-            Console.WriteLine($"PASS: mixed domain documents; stale source and snapshot rejection; transition/service/API propagation; query/API change; bounded impact; comment-only equivalence. Evidence: {report}");
+            Console.WriteLine($"PASS: mixed domain documents; stale source and snapshot rejection; transition/service/API propagation; query/API change; bounded impact; additive and breaking response-field compatibility; comment-only equivalence. Evidence: {report}");
 
             async Task Export()
             {
@@ -171,10 +225,16 @@ internal static class OrdersWorkflow
                 (await Call("workspace")).Deserialize<WorkspaceResult<WorkspacePage<WorkspaceSubject>>>(StrictDocumentJson.CreateOptions())!;
             async Task<JsonElement> Check(string snapshot)
             {
-                var result = await Call("check", new() { ["expectedSnapshot"] = snapshot });
-                foreach (var check in result.GetProperty("result").GetProperty("items").EnumerateArray())
-                    Require(check.GetProperty("isValid").GetBoolean() && (check.GetProperty("domainValidationAvailable").GetBoolean()
-                        || check.GetProperty("id").GetString()!.StartsWith("api:", StringComparison.Ordinal)), check.GetRawText());
+                JsonElement result;
+                var offset = 0;
+                do
+                {
+                    result = await Call("check", new() { ["expectedSnapshot"] = snapshot, ["offset"] = offset, ["limit"] = 100 });
+                    foreach (var check in result.GetProperty("result").GetProperty("items").EnumerateArray())
+                        Require(check.GetProperty("isValid").GetBoolean() && check.GetProperty("domainValidationAvailable").GetBoolean(), check.GetRawText());
+                    offset = result.GetProperty("result").TryGetProperty("nextOffset", out var next) && next.ValueKind == JsonValueKind.Number
+                        ? next.GetInt32() : -1;
+                } while (offset >= 0);
                 return result;
             }
         }

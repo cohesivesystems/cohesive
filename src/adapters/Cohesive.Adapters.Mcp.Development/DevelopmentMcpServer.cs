@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using Cohesive.Model;
+using Cohesive.Relations.IR;
 using Cohesive.Api.Services;
 using System.Reflection;
 using Cohesive.Execution;
@@ -40,7 +43,7 @@ public static class DevelopmentMcpServer
             [ProcessDefinitionDocuments.Kind] = ReadProcessReferences,
             [HostedQueryDefinitionDocuments.Kind] = document => document.GetDefinition<Cohesive.Relations.IR.HostedQueryDefinition>().Dependencies.Select(d => d.Definition).ToArray(),
             [TransitionDefinitionDocuments.Kind] = _ => []
-        }, DomainDocumentReaders.Readers);
+        }, DomainDocumentReaders.Readers, ReadContractReferences);
 
     /// <summary>Runs the same tools over a caller-configured workspace without loading plug-ins or application assemblies.</summary>
     /// <param name="workspace">Workspace owning validator policy and repository scope.</param>
@@ -68,14 +71,33 @@ public static class DevelopmentMcpServer
         return new()
         {
             ServerInfo = new() { Name = "cohesive-development", Version = Version },
-            ServerInstructions = "Use learn for host guidance without a snapshot. Call workspace for exported semantics and retain snapshotId. Use inspect sourceMappings to locate declarations and references to find direct consumers and impact for bounded transitive evidence paths. Edit owning source and re-export. ChangedInputs means the model is stale. Read limitations; this server never edits IR or executes application code.",
+            ServerInstructions = "Use learn for host guidance without a snapshot. Call workspace for exported semantics and retain snapshotId. Use inspect sourceMappings to locate declarations and references to find direct consumers and impact for bounded transitive evidence paths. Edit owning source and re-export. ChangedInputs means the model is stale. Use compatibility with both snapshots for directional portable HTTP/JSON contract findings. Read limitations; this server never edits IR or executes application code.",
             ToolCollection =
             [
                 McpServerTool.Create(tools.Workspace), McpServerTool.Create(tools.Resolve),
                 McpServerTool.Create(tools.Inspect), McpServerTool.Create(tools.Check),
-                McpServerTool.Create(tools.Compare), McpServerTool.Create(tools.Learn), McpServerTool.Create(tools.References), McpServerTool.Create(tools.Impact)
+                McpServerTool.Create(tools.Compare), McpServerTool.Create(tools.Learn), McpServerTool.Create(tools.References), McpServerTool.Create(tools.Impact), McpServerTool.Create(tools.Compatibility)
             ]
         };
+    }
+
+    static ImmutableArray<WorkspaceDocumentReference> ReadContractReferences(ExecutionDefinitionDocument document)
+    {
+        IEnumerable<ValueContract> contracts = document.Kind == TransitionDefinitionDocuments.Kind ? Transition(document.GetDefinition<TransitionDefinition>())
+            : document.Kind == ProcessDefinitionDocuments.Kind ? Process(document.GetDefinition<ProcessDefinition>())
+            : document.Kind == HostedQueryDefinitionDocuments.Kind ? Query(document.GetDefinition<HostedQueryDefinition>()) : [];
+        var shapes = contracts.Where(c => c.Shape is not null).Select(c => c.Shape!.Value);
+        if (document.Kind == ServiceDefinitionDocuments.Kind)
+            shapes = shapes.Concat(document.GetDefinition<ServiceDefinition>().Operations.Select(o => o switch
+            {
+                ServiceTransitionOperation t => (QualifiedShapeId?)t.Entity,
+                ServiceProcessEntityResultOperation r => r.Entity,
+                _ => null
+            }).OfType<QualifiedShapeId>());
+        return [.. shapes.Distinct().Select(s => ShapeWorkspaceProjection.Identity(ShapeWorkspaceProjection.ShapeId(s)))];
+        static IEnumerable<ValueContract> Transition(TransitionDefinition d) => [d.Input, d.Observation, d.Outcome];
+        static IEnumerable<ValueContract> Process(ProcessDefinition d) => [d.Input, d.Result];
+        static IEnumerable<ValueContract> Query(HostedQueryDefinition d) => [d.Input, d.Result];
     }
 
     static IReadOnlyList<ExecutionDefinitionReference> ReadProcessReferences(ExecutionDefinitionDocument document)

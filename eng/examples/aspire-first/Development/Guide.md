@@ -40,8 +40,6 @@ Inspect fulfillment/order-details, then references and impact to discover its ac
 The exercise changes the Orders query filter to select Submitted orders, rebuilds, and checks that the query
 and endpoint binding projection change. Query source locations are not supplied by this producer; use these owning files.
 
-Native relation/query JSON and validators remain authoritative. Endpoint artifacts reuse ApplicationEndpointExplanation;
-their fingerprints cover only that route/binding inspection projection. They do not constitute a complete API IR.
-CLR request/response shapes, callbacks, generated clients, entity/shape graphs and target realization remain outside coverage.
-Relation and API readers explicitly report incomplete dependencies. An endpoint check verifies integrity but reports
-DomainValidationAvailable=false. Missing references and unknown revisions are never treated as proof of compatibility.
+Resolve AvailableStock, use impact on the qualified field to trace the Orders query and api:Order.Details, then compare portable API contracts after rebuilding. The exercise checks both an additive inventoryPartition and a rename from availableStock to remainingStock with generated JSON readers/writers.
+
+The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v1`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.

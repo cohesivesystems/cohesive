@@ -95,13 +95,24 @@ dotnet test src/Cohesive.Semantics.Tests
 
 Tests exercise deterministic export, input freshness, failed refreshes, stale request rejection, ambiguity,
 fingerprint integrity, comparison, bounded retention, path containment, JSON pointers, and an official SDK client
-calling all eight tools over a real stdio subprocess. The sample transition is authored through the fluent API,
-not hand-constructed IR. The Orders exercise additionally verifies native query-to-endpoint changes; full API/client compatibility remains outside coverage.
+calling the workspace tools over a real stdio subprocess. The sample transition is authored through the fluent API,
+not hand-constructed IR. The Orders exercise additionally verifies native query-to-endpoint changes and checks the ninth tool, `compatibility`, against real generated JSON payloads.
 
 ## Bounded impact
 
 `impact(id, expectedSnapshot, maxDepth: 4, limit: 20)` returns potential transitive consumers with shortest evidence
 paths. Inspect each edge and `incompleteDefinitions`; `depthLimitReached` and `resultLimitReached` report omitted
 scope. Cycles are suppressed. Bounds are depth 1–16, 1–100 results, 256 exported documents and 4096 indexed edges.
-The default adapter references Cohesive.Application to reuse its endpoint projection; no API model is duplicated
-inside MCP. The endpoint artifact fingerprint covers route/binding inspection, not a full API semantic contract.
+Shape graphs expand into qualified, independently inspectable subjects; each workspace admits at most 4096 distinct subjects. Distinct graph slices retain their own fingerprints. Conflicting qualified members are rejected.
+
+## Directional API compatibility
+
+The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v1`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.
+
+For Orders, resolve `AvailableStock`, call `impact` on the returned field identity, and retain the snapshot before editing. After rebuilding and exporting:
+
+```json
+{"id":"api:Order.Details","baselineSnapshot":"<before>","expectedSnapshot":"<after>","direction":"ExistingClientToProposedServer"}
+```
+
+Legacy application endpoint documents remain readable as route/binding projections. They do not carry portable wire types.

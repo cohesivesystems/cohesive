@@ -471,7 +471,7 @@ public sealed class SemanticWorkspaceTests : IDisposable
         var tools = new DevelopmentTools(workspace, guide);
         // No export exists yet; the static guide is still available.
         Assert.Same(guide, tools.Learn());
-        Assert.Equal(8, DevelopmentMcpServer.CreateOptions(workspace, guide).ToolCollection!.Count);
+        Assert.Equal(9, DevelopmentMcpServer.CreateOptions(workspace, guide).ToolCollection!.Count);
         Export();
         var result = tools.Check(workspace.Describe().SnapshotId).Result.Items[0];
         Assert.False(result.GetProperty("isValid").GetBoolean());
@@ -492,7 +492,7 @@ public sealed class SemanticWorkspaceTests : IDisposable
                 Path.Combine(basePath, "Cohesive.Adapters.Mcp.Development.dll"), root, Bundle]
         }), cancellationToken: timeout.Token);
         var tools = await client.ListToolsAsync(cancellationToken: timeout.Token);
-        Assert.Equal(["check", "compare", "impact", "inspect", "learn", "references", "resolve", "workspace"], tools.Select(t => t.Name).Order());
+        Assert.Equal(["check", "compare", "compatibility", "impact", "inspect", "learn", "references", "resolve", "workspace"], tools.Select(t => t.Name).Order());
         var discovery = await client.CallToolAsync("workspace", cancellationToken: timeout.Token);
         Assert.False(discovery.IsError ?? false);
         var snapshot = discovery.StructuredContent!.Value.GetProperty("snapshotId").GetString()!;

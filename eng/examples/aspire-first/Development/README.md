@@ -30,7 +30,7 @@ Codex supports user configuration in `~/.codex/config.toml` and project configur
 for trusted projects. See the [official MCP configuration instructions](https://developers.openai.com/codex/mcp).
 The CLI command registers this checkout's absolute path; point it at the intended worktree, and update it if that
 worktree moves. This repository ships configuration without rewriting anyone's personal client settings.
-Start a new client session after configuration and confirm the eight tools appear. Initialization instructions
+Start a new client session after configuration and confirm the nine tools appear. Initialization instructions
 explain the cross-tool workflow; tool descriptions/schemas explain arguments; `learn` supplies this project's
 export command and scope. Clients may prefix tool names with `cohesive_orders`.
 
@@ -80,7 +80,7 @@ dotnet run --project eng/examples/aspire-first/Development -- exercise "$PWD"
 The exercise copies tracked files from the current working tree to a temporary directory, including local edits,
 and adds this host's source files if it is not yet committed. Other untracked authoring files are not included;
 add them to Git before using this exercise. Missing tracked files and symbolic-link files fail explicitly.
-It never changes the original model. It builds/exports the real Orders project four times and uses the official
+It never changes the original model. It builds/exports the real Orders project six times and uses the official
 MCP SDK client with one retained server session to verify:
 
 - Tool discovery, project guidance, fresh execution, native query and endpoint documents, source attribution and domain validation.
@@ -95,7 +95,7 @@ may require network access. Failures produce a nonzero exit and do not publish s
 
 ## Coverage and next gaps
 
-The export includes four transitions, one generated process, its service, two native queries and endpoint projections. Their domain-owned IDs, explicit revisions,
+The export includes four transitions, one generated process, its service, two native queries, entity/shape and relationship documents, and portable API contracts. Their domain-owned IDs, explicit revisions,
 fingerprints and compiler source maps remain intact; the export's input revision does not overwrite them.
 
 Input discovery conservatively covers C# build files under `src/Cohesive*`, `src/adapters`, `Orders.Model`, and this host plus root props,
@@ -103,12 +103,9 @@ NuGet configuration and the embedded guide. This is broader than necessary and c
 build dependency completeness or attest SDK/package-cache/environment state. New input files are discovered
 at re-export, not during freshness checks.
 
-Native query declarations retain the Relations serializer and fingerprint authority. Endpoint documents reuse
-`ApplicationEndpointExplanation`, preserving route, response behavior, exact execution/service binding and attributed
-references. Their fingerprint scope is explicitly an inspection projection; CLR request/response types, callbacks,
-generated clients and full API compatibility are not represented. Relation/entity/shape dependency indexing and target
-realization remain incomplete, explicitly reported by `incompleteDefinitions`. Endpoint checks report integrity success
-with `domainValidationAvailable=false`. No query revision is synthesized to satisfy an execution reference.
+The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v1`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.
+
+For the response exercise, resolve `AvailableStock` and use `impact` on the qualified field identity. The exercise follows the field through the Orders query to `api:Order.Details`, then rebuilds twice. Adding optional `inventoryPartition` preserves the old reader; renaming required `availableStock` to `remainingStock` breaks it. The generated JSON writer and original generated reader provide a separate check on both classifications. Expression-level dependencies and target realization remain partial.
 
 For the query exercise, inspect `fulfillment/order-details`, call `references` to resolve the bound `api:` endpoint,
 and inspect that returned ID. Source is `Orders.Model/FulfillmentQueries.cs`; bindings are in `Orders.Model/OrderApi.cs`.

@@ -97,7 +97,7 @@ asynchronous cancellation of in-progress inspection are intentionally deferred. 
 ## Next extensions
 
 Add domain-specific indexing and authored source locations only where the owning domain can provide reliable
-evidence. Priorities are entity/shape and full API contract coverage, a CLI over the same API, version-matched
+evidence. Remaining opportunities include expression-level field provenance, additional wire policies, a CLI over the same API, version-matched
 knowledge retrieval, and then narrowly scoped source-edit recipes. The current `learn` guide is host-owned, versioned static guidance, not a general knowledge graph or a
 compatibility guarantee for any project.
 
@@ -136,3 +136,5 @@ fingerprints; strict readers predating the optional location field must be upgra
 
 [Source-map cost measurements](../../docs/performance/source-locations.md) quantify the optional metadata's
 construction and serialization overhead; the existing full-content freshness policy is unchanged.
+
+Entity and shape inspection uses qualified field and type identities. Graph slices with different content remain separate; identical members are shared and conflicting identities are rejected. The index is bounded to 4096 distinct subjects. Domain comparison runs against immutable documents from two retained snapshots; the API package owns directional HTTP/JSON policy, not the workspace.

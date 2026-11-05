@@ -35,6 +35,8 @@ public sealed record WorkspaceDocument(WorkspaceDocumentReference Reference, str
     DocumentValidationResult Validation, bool DomainValidationAvailable,
     ImmutableArray<WorkspaceDocumentReference>? Dependencies, bool ReferencesComplete)
 {
+    /// <summary>Independently addressable views derived from this document; bounded to 4096 subjects per snapshot.</summary>
+    public ImmutableArray<WorkspaceDocument> Members { get; init; } = [];
     internal Func<DocumentValidationResult>? ValidateDomain { get; init; }
     internal Func<ImmutableArray<WorkspaceDocumentReference>>? ReadDependencies { get; init; }
 }

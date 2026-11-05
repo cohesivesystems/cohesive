@@ -263,6 +263,31 @@ public abstract record RelationQueryDefinition : IImmutableExecutionDefinition
     /// <summary>Shared logical query body.</summary>
     public LogicalQueryDefinition Body { get; init; }
 
+    /// <summary>Projects qualified source, intermediate and result shape dependencies from canonical query nodes.</summary>
+    /// <returns>Distinct shape identities in deterministic order; field expressions and external function contracts are not included.</returns>
+    public ImmutableArray<QualifiedShapeId> GetShapeDependencies()
+    {
+        var shapes = new HashSet<QualifiedShapeId>();
+        foreach (var node in Body.Nodes)
+        {
+            switch (node)
+            {
+                case SourceQueryNode source: shapes.Add(source.Shape); break;
+                case ProjectQueryNode projection: shapes.Add(projection.ResultShape); break;
+                case AggregateQueryNode aggregate: shapes.Add(aggregate.ResultShape); break;
+                case ExpandCollectionQueryNode { ItemShape: { } item }: shapes.Add(item); break;
+            }
+        }
+        if (Assembly is { } assembly) shapes.Add(assembly.Shape);
+        if (this is RelationDefinition relation) shapes.Add(relation.Output.Shape);
+        return [.. shapes.OrderBy(s => s.GraphId.Value, StringComparer.Ordinal).ThenBy(s => s.ShapeId.Value, StringComparer.Ordinal)];
+    }
+
+    /// <summary>Projects referenced relationship identities from canonical traversal nodes.</summary>
+    /// <returns>Distinct identities; catalog resolution supplies endpoint and field dependencies.</returns>
+    public ImmutableArray<RelationshipId> GetRelationshipDependencies() =>
+        [.. Body.Nodes.OfType<TraverseRelationshipQueryNode>().Select(n => n.Relationship).Distinct().OrderBy(r => r.Value, StringComparer.Ordinal)];
+
     /// <summary>Optional terminal nested-result assembly over raw rows; for a rooted relation it is applied independently per root.</summary>
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public NestedQueryResultAssembly? Assembly { get; init; }

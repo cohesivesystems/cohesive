@@ -114,3 +114,12 @@ request contract. Conflicting types/transports fail before operation registratio
 retains the same canonical operation. `WithHttp` retains both tags and rejects incompatible DTO bindings.
 Untyped endpoint catalogs and native delegate mapping remain available; the tags alone do not validate
 an arbitrary ASP.NET `Delegate` handler's signature or select request parsing implicitly.
+
+
+## Portable contracts and compatibility
+
+`ApiContractDocument.Lower` materializes an authored operation using explicit JSON serializer options and a versioned serializer profile. The portable document contains wire names, core shape/type definitions, request and result bindings, authorization declarations and any supplied exact execution/service references. Source attribution is retained separately from the semantic fingerprint. Unsupported serialization behavior is recorded as a coverage gap.
+
+`ApiContractCompatibility.Compare(baseline, proposed, direction)` asks whether the selected client's requests can be accepted by the selected server and whether that client's reader can consume the server's results. The default direction keeps the existing client. The versioned HTTP/JSON policy assumes readers tolerate additional object fields and requires exact scalar formats. A missing required field is a break with a wire path; an unsupported converter, query DTO binding convention or changed authorization requirement is unknown. The analysis checks declared wire semantics, not endpoint behavior, deployed routing, or compatibility of every generated client. Root nullability that the authoring operation does not declare is outside this guarantee.
+
+The Orders development example qualifies both an additive nested field and a required field rename against generated JSON readers and writers.

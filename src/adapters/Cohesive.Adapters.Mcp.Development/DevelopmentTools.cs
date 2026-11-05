@@ -60,6 +60,13 @@ internal sealed class DevelopmentTools(SemanticWorkspace workspace, DevelopmentG
     public WorkspaceResult<WorkspaceImpact> Impact(string id, string expectedSnapshot, int maxDepth = 4, int limit = 20)
         => Invoke(() => workspace.Impact(id, expectedSnapshot, maxDepth, limit));
 
+    [McpServerTool(Name = "compatibility", ReadOnly = true, OpenWorld = false, UseStructuredContent = true)]
+    [Description("Compare a portable api-contract in two exact snapshots under http-json-tolerant-readers/v1. Default direction is existing clients to proposed server; reverse direction is explicit. Results are Compatible, Breaking or Unknown with structured findings. Does not prove behavior, security or generated-client compatibility. Endpoint additions and removals are interpreted directionally.")]
+    public WorkspaceResult<JsonElement> Compatibility(string id, string baselineSnapshot, string expectedSnapshot,
+        Cohesive.Api.ApiCompatibilityDirection direction = Cohesive.Api.ApiCompatibilityDirection.ExistingClientToProposedServer)
+        => Invoke(() => workspace.CompareDocuments(id, baselineSnapshot, expectedSnapshot, (before, after) =>
+            JsonSerializer.SerializeToElement(Cohesive.Api.ApiContractCompatibility.CompareDocuments(before, after, direction), DiagnosticOptions)));
+
     static T Invoke<T>(Func<T> operation)
     {
         try { return operation(); }

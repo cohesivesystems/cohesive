@@ -15,11 +15,14 @@ namespace Cohesive.Semantics;
 public sealed class SemanticWorkspace
 {
     const int MaximumSnapshots = 4;
+    /// <summary>Maximum number of original and projected subjects in one indexed workspace.</summary>
+    public const int MaximumSubjects = 4096;
     const int MaximumReferenceEdges = 4096;
     const int MaximumPageSize = 100;
     const int MaximumInspectionBytes = 16 * 1024;
     const int DiagnosticPageSize = 20;
     readonly IReadOnlyDictionary<string, Func<JsonElement, WorkspaceDocument>> documentReaders;
+    readonly Func<ExecutionDefinitionDocument, ImmutableArray<WorkspaceDocumentReference>>? additionalReferences;
     readonly string root;
     readonly string bundlePath;
     readonly ImmutableDictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, DocumentValidationResult>> validators;
@@ -39,13 +42,16 @@ public sealed class SemanticWorkspace
     /// <param name="bundlePath">Relative path to a derived workspace bundle.</param>
     /// <param name="validators">Domain-owned validators keyed by their existing canonical kind; these supplement mandatory shared integrity validation.</param>
     /// <param name="referenceReaders">Domain-owned direct reference projections; absent kinds have explicitly incomplete coverage.</param>
+    /// <param name="additionalReferences">Optional domain projection of non-execution references; coverage is conservatively partial when supplied.</param>
     /// <param name="documentReaders">Additional schema-keyed domain readers; each must validate original integrity and return an immutable inspection projection.</param>
     /// <exception cref="ArgumentException">The bundle path escapes the repository, traverses a symbolic link, or a validator/reference reader has an uninitialized kind or null delegate.</exception>
     public SemanticWorkspace(string root, string bundlePath,
         IReadOnlyDictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, DocumentValidationResult>>? validators = null,
         IReadOnlyDictionary<ExecutionDefinitionKind, Func<ExecutionDefinitionDocument, IReadOnlyList<ExecutionDefinitionReference>>>? referenceReaders = null,
-        IReadOnlyDictionary<string, Func<JsonElement, WorkspaceDocument>>? documentReaders = null)
+        IReadOnlyDictionary<string, Func<JsonElement, WorkspaceDocument>>? documentReaders = null,
+        Func<ExecutionDefinitionDocument, ImmutableArray<WorkspaceDocumentReference>>? additionalReferences = null)
     {
+        this.additionalReferences = additionalReferences;
         this.documentReaders = documentReaders?.ToImmutableDictionary(StringComparer.Ordinal) ?? ImmutableDictionary<string, Func<JsonElement, WorkspaceDocument>>.Empty;
         if (this.documentReaders.Any(pair => string.IsNullOrWhiteSpace(pair.Key) || pair.Value is null))
             throw new ArgumentException("Document readers require schema names and non-null delegates.", nameof(documentReaders));
@@ -265,6 +271,29 @@ public sealed class SemanticWorkspace
             return new WorkspaceComparison(baselineSnapshot, Page(changes, offset, limit));
         });
 
+    /// <summary>Runs a domain-owned comparison over two verified documents without releasing snapshot guarantees.</summary>
+    /// <typeparam name="T">Domain comparison result.</typeparam>
+    /// <param name="id">Stable document identity present in at least one snapshot.</param><param name="baselineSnapshot">Retained baseline.</param>
+    /// <param name="expectedSnapshot">Expected current snapshot.</param><param name="interpret">Read-only domain interpreter over original JSON; null represents absence.</param>
+    /// <returns>Current freshness evidence with the interpreted comparison.</returns>
+    /// <exception cref="KeyNotFoundException">The baseline or document is unavailable.</exception>
+    /// <exception cref="InvalidOperationException">Integrity or expected snapshot validation fails.</exception>
+    /// <exception cref="ArgumentNullException">The interpreter is null.</exception>
+    public WorkspaceResult<T> CompareDocuments<T>(string id, string baselineSnapshot, string expectedSnapshot, Func<JsonElement?, JsonElement?, T> interpret)
+    {
+        ArgumentNullException.ThrowIfNull(interpret);
+        return Read(RequireSnapshot(expectedSnapshot), current =>
+        {
+            if (!snapshots.TryGetValue(baselineSnapshot, out var before)) throw new KeyNotFoundException("Baseline snapshot is unavailable.");
+            if (before.Fingerprint is null || current.Fingerprint is null) throw new InvalidOperationException("Comparison requires valid integrity.");
+            JsonElement? Find(Snapshot snapshot) => snapshot.Documents.FirstOrDefault(d => d.Reference.DefinitionId.Value == id)?.Json;
+            var old = Find(before);
+            var proposed = Find(current);
+            if (old is null && proposed is null) throw new KeyNotFoundException("Neither snapshot contains document: " + id);
+            return interpret(old, proposed);
+        });
+    }
+
     WorkspaceResult<T> Read<T>(string? expectedSnapshot, Func<Snapshot, T> operation)
     {
         lock (gate)
@@ -321,20 +350,30 @@ public sealed class SemanticWorkspace
                 throw new JsonException("Input fingerprints must be lowercase SHA-256 digests.");
         }
         var documents = ImmutableArray.CreateBuilder<WorkspaceDocument>(bundle.Documents.Length);
-        var identities = new HashSet<ExecutionDefinitionId>();
+        var identities = new Dictionary<ExecutionDefinitionId, WorkspaceDocument>();
         var valid = true;
         foreach (var json in bundle.Documents)
         {
             var schema = json.TryGetProperty("schemaVersion", out var schemaValue) ? schemaValue.GetString()! : "";
             var document = documentReaders.TryGetValue(schema, out var reader) ? reader(json) : ReadExecution(json);
+            Add(document);
+        }
+        void Add(WorkspaceDocument document, bool member = false)
+        {
+            if (documents.Count == MaximumSubjects) throw new JsonException("Workspace exceeds 4096 projected subjects; split the export scope.");
             if (document is null || string.IsNullOrWhiteSpace(document.Reference.DefinitionId.Value)
                 || document.Reference.Fingerprint is null || document.Json.ValueKind != JsonValueKind.Object)
                 throw new JsonException("Domain readers must return an identified document with fingerprint evidence and owned object JSON.");
-            var validation = document.Validation;
-            valid &= validation.IsValid;
-            if (!identities.Add(document.Reference.DefinitionId))
-                throw new JsonException("A workspace export must contain one revision per definition identity.");
+            valid &= document.Validation.IsValid;
+            if (!identities.TryAdd(document.Reference.DefinitionId, document))
+            {
+                var prior = identities[document.Reference.DefinitionId];
+                if (member && prior.Reference == document.Reference && JsonElement.DeepEquals(prior.Json, document.Json)
+                    && (prior.Dependencies ?? []).SequenceEqual(document.Dependencies ?? [])) return;
+                throw new JsonException("Conflicting workspace identity: " + document.Reference.DefinitionId.Value);
+            }
             documents.Add(document);
+            foreach (var child in document.Members) Add(child, member: true);
         }
         var ordered = documents.OrderBy(d => d.Reference.DefinitionId.Value, StringComparer.Ordinal).ToImmutableArray();
         var inputRevision = SemanticWorkspaceExport.InputRevision(bundle.ProducerVersion, bundle.Inputs);
@@ -354,15 +393,15 @@ public sealed class SemanticWorkspace
         var hasReader = referenceReaders.TryGetValue(document.Kind, out var read);
         return new(WorkspaceDocumentReference.FromExecution(document.Reference), document.Kind.Value, document.Metadata.DisplayName,
             JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(document)), document.Metadata.Provenance.Source,
-            document.Metadata.SourceMap, integrity, available, null, hasReader && document.Extensions.IsDefaultOrEmpty)
+            document.Metadata.SourceMap, integrity, available, null, hasReader && additionalReferences is null && document.Extensions.IsDefaultOrEmpty)
         {
             ValidateDomain = Validate,
-            ReadDependencies = hasReader ? () =>
+            ReadDependencies = hasReader || additionalReferences is not null ? () =>
             {
                 if (!Validate().IsValid) throw new InvalidOperationException("Reference inspection requires valid domain semantics. Use check for diagnostics.");
-                var targets = read!(document);
+                var targets = hasReader ? read!(document) : [];
                 if (targets.Count > MaximumReferenceEdges) throw new InvalidOperationException("Reference graph exceeds 4096 edges; split the export scope.");
-                return [.. targets.Select(WorkspaceDocumentReference.FromExecution)];
+                return [.. targets.Select(WorkspaceDocumentReference.FromExecution), .. additionalReferences?.Invoke(document) ?? []];
             } : null
         };
     }

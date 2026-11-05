@@ -1,3 +1,6 @@
+using Cohesive.Transitions.Model;
+using Cohesive.Api;
+using Cohesive.Model.Serialization;
 using System.Text.Json;
 using Cohesive.Application;
 using Cohesive.Execution;
@@ -7,14 +10,18 @@ using AspireFirst.Orders;
 using Cohesive.Adapters.Mcp.Development;
 using Cohesive.Semantics;
 
-if (args.Length != 2 || args[0] is not ("export" or "serve" or "exercise"))
+if (args.Length != 2 || args[0] is not ("export" or "serve" or "exercise" or "wire-sample"))
 {
-    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise> <repository-root>");
+    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise|wire-sample> <repository-root>");
     return 2;
 }
 var root = Path.GetFullPath(args[1]);
 switch (args[0])
 {
+    case "wire-sample":
+        Console.WriteLine(JsonSerializer.Serialize(new OrderDetails("order", OrderStatus.Submitted,
+            [new ReservationSummary("reservation", "sku", 1, 42)]), OrdersWireContext.Default.OrderDetails));
+        break;
     case "export":
         Console.WriteLine(OrdersWorkspace.Export(root));
         break;
@@ -56,10 +63,20 @@ internal static class OrdersWorkspace
                 domain.InventoryTransitions.Release.Document, domain.ReservationTransitions.Create.Document, process.Definition.Document }
                 .Concat(endpoints.Implementations.Where(e => e.Service is not null).Select(e => e.Service!.Declaration))
                 .DistinctBy(d => d.Reference);
-            return [.. executions.Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d))),
+            var requests = endpoints.QueryDependencies.Queries.Select(q => q.Request).ToArray();
+            var entities = domain.Definition.Entities;
+            var shapes = requests.SelectMany(r => r.ShapeDocuments)
+                .Concat(entities.Select(e => e.ShapeGraph?.Document ?? ShapeGraphDocument.FromGraph(e.StateShape.Graph)))
+                .Select(d => JsonSerializer.Serialize(d, RelationQueryJsonSerializer.CreateOptions())).Distinct()
+                .Select(json => JsonSerializer.Deserialize<JsonElement>(json));
+            var catalogs = requests.Select(r => r.RelationshipCatalogDocument).OfType<RelationshipCatalogDocument>()
+                .DistinctBy(d => d.CatalogFingerprint).Select(d => JsonSerializer.Deserialize<JsonElement>(RelationshipCatalogJsonSerializer.Serialize(d)));
+            return [.. entities.Select(EntityStateDocument.Export), .. shapes, .. catalogs, .. executions.Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d))),
                 .. endpoints.QueryDependencies.Queries.Select(q => q.Request.DefinitionDocument)
                     .Select(d => JsonSerializer.Deserialize<JsonElement>(RelationQueryJsonSerializer.Serialize(d))),
-                .. endpoints.Implementations.Select(e => ApplicationEndpointDocument.Create(new(e)).ToJson())];
+                .. endpoints.Implementations.Select(e => ApiContractDocument.Lower(e.Endpoint,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web), "aspnet-web-defaults/v1",
+                    e.Execution, e.Service?.Declaration.Reference, e.Service?.Operation.Id).ToJson())];
         });
     }
 }
