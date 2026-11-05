@@ -379,3 +379,26 @@ contributor reconstruction and is not upgraded or advertised as equivalent by th
 native ingestion API was introduced; existing entity decoding and validation remain authoritative. Adding the
 PostgreSQL project to the strict benchmark build also required a nullable-flow correction in that query reader,
 using a captured non-null cell rather than indexing twice; decoding behavior is unchanged.
+
+
+[Linux PostgreSQL run 41937774381](https://github.com/cohesivesystems/cohesive/actions/runs/41937774381),
+source `95009d8c`, completed all six cases against an ephemeral PostgreSQL 14 service on AMD EPYC 9V45:
+
+| Rows | Dictionary reference, us | Existing native ordinal, us | Reference bytes | Ordinal bytes |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 92.786 | 93.390 | 3,184 | 2,304 |
+| 32 | 148.675 | 144.562 | 80,328 | 52,168 |
+| 1,024 | 2,206.130 | 1,943.792 | 2,542,888 | 1,641,768 |
+
+At 1,024 rows, observed latency is 12% lower and allocation 35% lower while retaining all entity snapshot
+metadata and DTOs. One-row latency is effectively unchanged; this does not establish a universal latency win.
+Three alternating local repeats against PostgreSQL 14.23 on Docker favored ordinal storage by 6% latency /
+35% allocation on average, with noticeable timing variation. Source hashes, raw reports and database/boundary
+notes are under `docs/performance/evidence/postgres-ordinal-ingestion`. Sixty-one PostgreSQL tests passed
+against the disposable local database, including native bounds/cancellation and real provenance assertions.
+The local container was removed after validation; CI automatically removes its service.
+
+These measurements verify a pre-existing native ordinal implementation; they are not a newly introduced
+production speedup over the prior repository. The only alternate realization is an internal dictionary reference
+for differential conformance and benchmarking. Additional PostgreSQL query-row contributor support remains
+unimplemented and must be modeled before that API can claim equivalent provenance.

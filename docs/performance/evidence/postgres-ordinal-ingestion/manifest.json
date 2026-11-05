@@ -1,0 +1,14 @@
+{
+  "revision": "95009d8c",
+  "measurement": "3 alternating repeats; one fresh process per case, 4 warmups and six 200ms iterations at 1024 rows. No concurrent build/test/profile load.",
+  "database": "Disposable Docker PostgreSQL 14.23 (Debian 14.23-1.pgdg13+1); loopback TCP from local client to Docker VM. Container removed after timing and live tests.",
+  "local_source_note": "Timed binary was built before committing identical execution source as 95009d8c; later test assertions and documentation do not change timed code.",
+  "authority": "Existing PostgresEntityRepository already ingested directly into ordinal storage before this change. New dictionary realization is an internal differential reference, not a new public ingestion strategy. Public/default routing remains ordinal.",
+  "boundary": "Real query execution, wire transfer, native decode, shape and entity validation, identity/partition/version/xmin reconstruction, retained EntitySnapshot and DTO, reader disposal. Excludes connection opening, pool checkout, compilation, table setup and serialization.",
+  "scope": "Entity snapshot provenance only. Query-row join-contributor lineage is not implemented by this experiment.",
+  "source_hashes": {
+    "src/adapters/Cohesive.Adapters.Postgres/PostgresEntityRepository.cs": "889e7e12a7e46a24bc267a09b98dcd85cffe2f32966edc999255c2c295c0ae2d",
+    "src/Cohesive.Relations.Benchmarks/PostgresOrdinalIngestionBenchmarks.cs": "a419de223937e67a98403d37e109a1bd2621f3833d385964ca68844f0996c38d",
+    "src/Cohesive.Tests/Postgres/PostgresOrdinalIngestionFixture.cs": "31f5f7e9914e7c59fb90c8ef4cb80e95e850ef5832b7a530d369d13e1c2ce33a"
+  }
+}
