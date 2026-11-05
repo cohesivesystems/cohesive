@@ -68,7 +68,10 @@ public enum RelationQueryOperatingBoundaryKind
     ExactTemporalDomain = 18,
 
     /// <summary>Limits rooted relation execution to one explicitly supplied root occurrence per invocation.</summary>
-    SuppliedRelationRoot = 19
+    SuppliedRelationRoot = 19,
+
+    /// <summary>Requires operators to preserve individual source-contributor combinations rather than merge rowsets.</summary>
+    RowPreservingTopology = 20
 }
 
 /// <summary>One explicit, inspectable target operating boundary.</summary>

@@ -1607,7 +1607,7 @@ export const relationQueryUnavailableReasonLabels: Record<RelationQueryUnavailab
   PrerequisiteBlocked: 'PrerequisiteBlocked',
 };
 
-export type RelationQueryOperatingBoundaryKind = 'MaximumInputRows' | 'MaximumOutputRows' | 'MaximumFanOut' | 'MaximumPageSize' | 'MaximumFieldPathDepth' | 'MaximumExpressionDepth' | 'MaximumBatchSize' | 'SingleSource' | 'SinglePartition' | 'MaterializedInputs' | 'CompleteInputEvidence' | 'NonNullOperands' | 'ScalarOperands' | 'HomogeneousTemporalDomain' | 'FiniteTemporalBounds' | 'StableUniqueOrdering' | 'DeterministicProvider' | 'ExactNumericAggregateDomain' | 'ExactTemporalDomain' | 'SuppliedRelationRoot';
+export type RelationQueryOperatingBoundaryKind = 'MaximumInputRows' | 'MaximumOutputRows' | 'MaximumFanOut' | 'MaximumPageSize' | 'MaximumFieldPathDepth' | 'MaximumExpressionDepth' | 'MaximumBatchSize' | 'SingleSource' | 'SinglePartition' | 'MaterializedInputs' | 'CompleteInputEvidence' | 'NonNullOperands' | 'ScalarOperands' | 'HomogeneousTemporalDomain' | 'FiniteTemporalBounds' | 'StableUniqueOrdering' | 'DeterministicProvider' | 'ExactNumericAggregateDomain' | 'ExactTemporalDomain' | 'SuppliedRelationRoot' | 'RowPreservingTopology';
 
 export const relationQueryOperatingBoundaryKinds = {
   maximumInputRows: 'MaximumInputRows',
@@ -1630,6 +1630,7 @@ export const relationQueryOperatingBoundaryKinds = {
   exactNumericAggregateDomain: 'ExactNumericAggregateDomain',
   exactTemporalDomain: 'ExactTemporalDomain',
   suppliedRelationRoot: 'SuppliedRelationRoot',
+  rowPreservingTopology: 'RowPreservingTopology',
 } as const satisfies Record<string, RelationQueryOperatingBoundaryKind>;
 
 export const relationQueryOperatingBoundaryKindLabels: Record<RelationQueryOperatingBoundaryKind, string> = {
@@ -1653,6 +1654,7 @@ export const relationQueryOperatingBoundaryKindLabels: Record<RelationQueryOpera
   ExactNumericAggregateDomain: 'ExactNumericAggregateDomain',
   ExactTemporalDomain: 'ExactTemporalDomain',
   SuppliedRelationRoot: 'SuppliedRelationRoot',
+  RowPreservingTopology: 'RowPreservingTopology',
 };
 
 export type RelationDraftId = string;
