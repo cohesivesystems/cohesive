@@ -311,6 +311,42 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
         where TRightNode : LogicalQueryNode where TRight : notnull
         => JoinCore(right, predicate, JoinKind.Inner);
 
+    /// <summary>Inner-joins and projects two focused branches through the existing canonical join and projection.</summary>
+    /// <typeparam name="TRightNode">Right logical node type.</typeparam>
+    /// <typeparam name="TRight">Right row type.</typeparam>
+    /// <typeparam name="TResult">Projected output type.</typeparam>
+    /// <param name="right">Right branch from this session.</param>
+    /// <param name="predicate">Explicit join predicate.</param>
+    /// <param name="projection">Projection over the left and right rows.</param>
+    /// <returns>The focused projected branch; unmatched rows are omitted.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="ArgumentException">A handle or expression has invalid ownership or types.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Join<TRightNode, TRight, TResult>(
+        RelationQueryExpressionBoundNode<TRightNode, TRight> right,
+        Expression<Func<TValue, TRight, bool>> predicate, Expression<Func<TValue, TRight, TResult>> projection)
+        where TRightNode : LogicalQueryNode where TRight : notnull where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        return Join(right, predicate).Select(projection);
+    }
+
+    /// <summary>Declares grouping and sums using this branch's focused binding.</summary>
+    /// <typeparam name="TResult">Aggregate output shape.</typeparam>
+    /// <param name="configure">Declares grouping and sum assignments; runs only during authoring.</param>
+    /// <returns>The canonical aggregate branch. Grouped empty input produces no groups.</returns>
+    /// <exception cref="ArgumentNullException">The callback is null.</exception>
+    /// <exception cref="ArgumentException">The assignments or numeric contracts are invalid, or no sum is declared.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    /// <exception cref="InvalidOperationException">The output type cannot be represented as a shape.</exception>
+    public RelationQueryExpressionBoundNode<AggregateQueryNode, TResult> Aggregate<TResult>(
+        Action<RelationQueryFocusedAggregateBuilder<TValue, TResult>> configure) where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        return Binding.Owner.Aggregate<TNode, TResult>(Node,
+            aggregate => configure(new(aggregate, Binding)));
+    }
+
     /// <summary>Left-joins another branch, preserving rows with no matching right value.</summary>
     /// <typeparam name="TRightNode">Right logical node type.</typeparam>
     /// <typeparam name="TRight">Right focused row type.</typeparam>
@@ -324,6 +360,26 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
         RelationQueryExpressionBoundNode<TRightNode, TRight> right, Expression<Func<TValue, TRight, bool>> predicate)
         where TRightNode : LogicalQueryNode where TRight : notnull
         => JoinCore(right, predicate, JoinKind.Left);
+
+    /// <summary>Left-joins and projects with canonical missing-binding semantics; no default values are invented.</summary>
+    /// <typeparam name="TRightNode">Right node type.</typeparam>
+    /// <typeparam name="TRight">Right row type.</typeparam>
+    /// <typeparam name="TResult">Projected output type.</typeparam>
+    /// <param name="right">Right branch from this session.</param>
+    /// <param name="predicate">Explicit join predicate.</param>
+    /// <param name="projection">Projection over both rows, retaining canonical missing semantics.</param>
+    /// <returns>The projected left-join branch.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="ArgumentException">A handle or expression has invalid ownership or types.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> LeftJoin<TRightNode, TRight, TResult>(
+        RelationQueryExpressionBoundNode<TRightNode, TRight> right,
+        Expression<Func<TValue, TRight, bool>> predicate, Expression<Func<TValue, TRight, TResult>> projection)
+        where TRightNode : LogicalQueryNode where TRight : notnull where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(projection);
+        return LeftJoin(right, predicate).Select(projection);
+    }
 
     RelationQueryExpressionJoinedNode<TValue, TRight> JoinCore<TRightNode, TRight>(
         RelationQueryExpressionBoundNode<TRightNode, TRight> right, Expression<Func<TValue, TRight, bool>> predicate, JoinKind kind)

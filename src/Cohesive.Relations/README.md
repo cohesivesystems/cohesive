@@ -315,3 +315,14 @@ inspectable compilation artifacts and an explicitly identified `EvaluateAsync` p
 It inherits the scalar DTO mapper boundary and does not execute the projection as a direct CLR delegate.
 See [the complete quickstart](docs/GETTING_STARTED.md#common-local-dto-projection) for the example, provenance,
 ownership, bounds, failures and the expanded authoring path.
+
+### Composed DTO relations
+
+Focused branches support `Aggregate<TDto>(g => g.Group(...).Sum(...))` and
+`Join(right, predicate, projection)` / `LeftJoin(right, predicate, projection)`. These delegate to the existing
+canonical aggregate, join and projection operations. Prepare a composed mapping with
+`RelationDtoMapping.Create(root, output, mode: RelationOutputMode.ZeroOrOnePerRoot)` and pass an explicitly
+configured evaluator and invocation to `MapAsync`. Source acquisition, unique-key evidence, completeness,
+missing values, cardinality, numeric rules and provenance retain their existing authorities.
+See the [three-source example](docs/GETTING_STARTED.md#compact-joins-and-grouped-totals) for the complete
+load/customer/line-item declaration, result, binding requirements and exact equivalence to expanded authoring.

@@ -8,7 +8,7 @@ using Cohesive.Relations.IR;
 
 namespace Cohesive.Relations.Mapping;
 
-/// <summary>Authors and prepares reusable local DTO projections through canonical relations.</summary>
+/// <summary>Authors and prepares reusable DTO projections and composed canonical relations.</summary>
 public static class RelationDtoMapping
 {
     /// <summary>Lowers one projection and prepares its single-source, one-output-per-input mapping.</summary>
@@ -36,6 +36,35 @@ public static class RelationDtoMapping
         var author = RelationQuery.Expression();
         var source = author.Source<TSource>();
         var relation = author.Project(source, projection).BuildRelation();
+        return new(Prepare<TOutput>(author, relation), maximumRows);
+    }
+
+    /// <summary>Prepares a composed relation while keeping its root and output cardinality explicit.</summary>
+    /// <typeparam name="TRoot">Root source type.</typeparam>
+    /// <typeparam name="TNode">Output node type.</typeparam>
+    /// <typeparam name="TOutput">DTO type.</typeparam>
+    /// <param name="root">Source defining relation-root occurrences.</param>
+    /// <param name="output">Composed output from the same authoring session.</param>
+    /// <param name="mode">Required explicit per-root cardinality; enforced by canonical interpretation.</param>
+    /// <returns>A prepared mapping usable with an explicitly configured evaluator.</returns>
+    /// <exception cref="ArgumentNullException">A required handle is null.</exception>
+    /// <exception cref="ArgumentException">Handles, output shape or relation declaration are invalid.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The output mode is unsupported.</exception>
+    /// <exception cref="RelationQueryPreparationException">Semantic or DTO compilation fails; original diagnostics are retained.</exception>
+    public static RelationDtoMapping<TOutput> Create<TRoot, TNode, TOutput>(
+        RelationQueryExpressionBoundNode<SourceQueryNode, TRoot> root,
+        RelationQueryExpressionBoundNode<TNode, TOutput> output, RelationOutputMode mode)
+        where TRoot : notnull where TNode : LogicalQueryNode where TOutput : notnull
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        ArgumentNullException.ThrowIfNull(output);
+        var author = root.Binding.Owner;
+        return Prepare<TOutput>(author, author.BuildRelation(root, output, mode));
+    }
+
+    static RelationDtoMapping<TOutput> Prepare<TOutput>(RelationQueryExpressionAuthoring author,
+        RelationQueryAuthoringResult<RelationDefinition> relation) where TOutput : notnull
+    {
         var request = new RelationQueryCompilationRequest(relation.CreateDocument(), author.ShapeDocuments,
             author.CreateRelationshipCatalogDocument());
         var compilation = RelationQueryEvaluator.CompileRequest(request);
@@ -47,7 +76,7 @@ public static class RelationDtoMapping
             throw new RelationQueryPreparationException("DTO materialization", compilation,
                 detail: string.Join(Environment.NewLine, materialization.Diagnostics.Select(d => $"{d.Code}: {d.Message}")),
                 dtoDiagnostics: materialization.Diagnostics);
-        return new(compilation, materialization.Mapper!, relation.Provenance, maximumRows);
+        return new(compilation, materialization.Mapper!, relation.Provenance);
     }
 }
 
@@ -62,25 +91,23 @@ public sealed class RelationDtoMapping<TSource, TOutput>
 {
     static readonly RelationQueryEvaluationId LocalEvaluation = new("cohesive.relations/dto-mapping/local");
     readonly RelationQueryEvaluator evaluator;
+    readonly RelationDtoMapping<TOutput> prepared;
 
-    internal RelationDtoMapping(RelationQueryCompilationResult compilation,
-        CompiledRelationDtoMapper<TOutput> mapper, RelationQueryAuthoringManifest authoringProvenance, int maximumRows)
+    internal RelationDtoMapping(RelationDtoMapping<TOutput> prepared, int maximumRows)
     {
-        Compilation = compilation;
-        Mapper = mapper;
-        AuthoringProvenance = authoringProvenance;
+        this.prepared = prepared;
         MaximumRows = maximumRows;
         evaluator = RelationQueryEvaluator.CreateSuppliedOnly(maximumRootRows: maximumRows);
     }
 
     /// <summary>Exact portable definition and shape snapshots, suitable for serialization and other interpretations.</summary>
-    public RelationQueryCompilationRequest CompilationRequest => Compilation.Request;
+    public RelationQueryCompilationRequest CompilationRequest => prepared.CompilationRequest;
     /// <summary>Reusable static plan and its structured diagnostics.</summary>
-    public RelationQueryCompilationResult Compilation { get; }
+    public RelationQueryCompilationResult Compilation => prepared.Compilation;
     /// <summary>Prepared DTO mapper, including binding decisions and provenance-preserving result APIs.</summary>
-    public CompiledRelationDtoMapper<TOutput> Mapper { get; }
+    public CompiledRelationDtoMapper<TOutput> Mapper => prepared.Mapper;
     /// <summary>Original expression-lowering decisions and attributable source references.</summary>
-    public RelationQueryAuthoringManifest AuthoringProvenance { get; }
+    public RelationQueryAuthoringManifest AuthoringProvenance => prepared.AuthoringProvenance;
     /// <summary>Maximum complete input count admitted per invocation.</summary>
     public int MaximumRows { get; }
 

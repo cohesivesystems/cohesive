@@ -48,6 +48,89 @@ explicit domain identities and alternate targets use the expanded authoring/eval
 source is not a second semantic authority; its request can be inspected, serialized or realized elsewhere through
 the existing compiler APIs.
 
+## Compact joins and grouped totals
+
+Compose the existing typed source handles, then prepare a relation with explicit root cardinality:
+
+```csharp
+using Cohesive.Relations.Authoring;
+using Cohesive.Relations.IR;
+using Cohesive.Relations.Mapping;
+
+var q = RelationQuery.Expression();
+var loads = q.Source<Load>();
+var items = q.Source<LineItem>();
+var customers = q.Source<Customer>();
+
+var totals = items.Aggregate<LoadTotal>(g => g
+    .Group(t => t.LoadId, i => i.LoadId)
+    .Sum(t => t.Total, i => i.Quantity * i.UnitPrice));
+
+var summaries = loads
+    .Join(customers, (l, c) => l.CustomerId == c.Id,
+        (l, c) => new LoadCustomer(l.Id, c.Name))
+    .Join(totals, (l, t) => l.Id == t.LoadId,
+        (l, t) => new LoadSummaryDto(l.Id, l.CustomerName, t.Total));
+
+var mapping = RelationDtoMapping.Create(loads, summaries,
+    mode: RelationOutputMode.ZeroOrOnePerRoot);
+
+var evaluation = mapping.Evaluate(new("load-summary/request-42"))
+    .Supply(loadValues, load => load.Id)
+    .Build();
+var dtos = await mapping.MapAsync(evaluator, evaluation);
+```
+
+Here `evaluator` is an explicitly configured, caller-owned evaluator: the load roots are supplied and its
+readers acquire customers and line items through existing bounded placements. `loadValues` is the supplied
+load collection. No data source, snapshot guarantee or client registration is hidden by the facade.
+
+The DTO declarations are ordinary records:
+
+```csharp
+public record Load(string Id, string CustomerId);
+public record Customer(string Id, string Name);
+public record LineItem(string Id, string LoadId, decimal Quantity, decimal UnitPrice);
+public record LoadTotal(string LoadId, decimal Total);
+public record LoadCustomer(string Id, string CustomerName);
+public record LoadSummaryDto(string Id, string CustomerName, decimal Total);
+```
+
+The acceptance fixture supplies `new Load("load-42", "customer-7")`, a customer named `Acme` and two items
+`2 * 50m` and `1 * 25m`. The resulting DTO is
+`LoadSummaryDto { Id = load-42, CustomerName = Acme, Total = 125 }`. Its detailed source row retains all four
+contributing occurrences: the load, the customer and both line items. The test uses the existing deterministic
+source readers and actual physical planner/executor/reference interpreter, not a callback emulating the join.
+
+The focused `Aggregate` builder delegates grouping and sums to the existing canonical aggregate builder.
+Three-argument `Join` is exactly `Join(...).Select(...)`; `LeftJoin` has the corresponding explicit overload.
+No new expression interpreter, query IR or DTO conversion authority is introduced. The composed prepared
+mapping owns the same request/compilation/mapper/provenance components reused by the single-source facade.
+The compact and expanded examples have identical persisted IR, semantic fingerprints and authoring manifests.
+
+Both joins above are inner joins. Loads without line items or customers are omitted; grouped empty item input
+produces no groups, not a synthetic zero total. `ZeroOrOnePerRoot` is explicitly declared and checked by canonical
+interpretation; `OnePerRoot` fails if a load is omitted. Multiple matches violating the selected cardinality fail.
+Incomplete item evidence cannot become a conclusive zero. Left-join missing values, nulls, numeric-domain and
+overflow behavior retain the existing canonical rules; this facade invents no default/coalesce policy.
+Grouping and sum input/output types are inferred independently so the shorthand cannot introduce an implicit
+numeric widening conversion that the expanded builder would reject; write conversions explicitly when intended.
+
+The existing bounded equijoin planner still requires unique-key evidence on at least one side. In this fixture,
+placements explicitly bind the semantic `Load.Id` and `Customer.Id` fields to their observation identities.
+Naming a POCO property `Id` does not assert uniqueness. Providers remain responsible for the identity evidence,
+read completeness, partition scope, resource bounds and consistency they declare. Native-target capability
+mismatches (including unsupported exact-contributor aggregation) still produce existing diagnostics; the facade
+does not silently replace or weaken the chosen target.
+
+`mapping.EvaluateAsync(evaluator, evaluation)` retains full phase diagnostics and execution evidence; use
+`mapping.Mapper.Map(outcome.PhysicalExecution!)` for DTO rows with provenance. `MapAsync` returns only a complete
+DTO array in canonical result order, and throws for unsuccessful/inconclusive evaluation or strict mapping failure.
+It does not promise input order for a composed relation unless that order is declared. Foreign compilation-request
+instances are rejected, cancellation propagates, and caller-owned clients/evaluators are never disposed or retried.
+Parameters and supplied-root completeness can be declared through the existing evaluation builder. Richer aggregate
+operations remain available on the expanded builder; the focused convenience currently exposes Group and Sum.
+
 ## 1. Map one object shape to a DTO shape
 
 Start with ordinary CLR types:
