@@ -23,6 +23,72 @@ namespace Cohesive.Tests.Api;
 [Collection(Cohesive.Tests.Observability.OperationTelemetryEmitterTestCollection.Name)]
 public sealed class ServiceRuntimeTests
 {
+    [Theory]
+    [InlineData(long.MaxValue - 1, ServiceTransitionAvailabilityKind.Permitted)]
+    [InlineData(long.MaxValue, ServiceTransitionAvailabilityKind.Indeterminate)]
+    public async Task Inspection_prepares_candidate_without_writing_and_matches_invocation(
+        long version, ServiceTransitionAvailabilityKind expected)
+    {
+        var fixture = await Fixture.Create(version);
+        var inspected = Assert.Single(await fixture.Runtime.InspectTransitionsAsync(OperationContext.Create(),
+            fixture.Repository.EntityDefinition.StateShape.QualifiedId, "note-1",
+            new Dictionary<string, PortableValue> { ["revise"] = fixture.Input }));
+        Assert.Equal(expected, inspected.Kind);
+        Assert.Equal(TransitionDecisionKind.Applied, inspected.Decision);
+        Assert.Equal(fixture.Initial.ConcurrencyToken, inspected.ConcurrencyToken);
+        Assert.Equal(0, fixture.Repository.Writes);
+        var retained = await fixture.Repository.Inner.TryGet(OperationContext.Create(), "note-1",
+            EntityReadOptions.Full.WithPartitionKey("tenant-a"));
+        Assert.Equal(version, retained!.Entity.Version);
+        Assert.Equal(fixture.Initial.ConcurrencyToken, retained.ConcurrencyToken);
+        Assert.Equal("before", retained.Entity.Observation.GetField("Text").GetString());
+
+        var invoked = await fixture.Invoke();
+        if (expected == ServiceTransitionAvailabilityKind.Permitted)
+        {
+            Assert.Equal(ApiResultKind.Success, invoked.Kind);
+            Assert.Empty(inspected.Diagnostics);
+        }
+        else
+        {
+            Assert.Equal(ApiResultKind.InfrastructureError, invoked.Kind);
+            var diagnostic = Assert.Single(inspected.Diagnostics);
+            Assert.Equal("transition.state.versionOverflow", diagnostic.Code);
+            Assert.Equal("/current/version", diagnostic.Location);
+            Assert.Equal(Assert.Single(invoked.Diagnostics), diagnostic);
+            Assert.Equal(0, fixture.Repository.Writes);
+        }
+    }
+
+    [Fact]
+    public async Task Inspection_allows_no_commit_decisions_at_version_limit()
+    {
+        var fixture = await Fixture.Create(version: long.MaxValue);
+        var entity = fixture.Repository.EntityDefinition;
+        var transition = TransitionAuthoring.Create<Note, Note.ReviseInput, bool>(entity.Shape,
+            new("inspection.no-change"), new("1"), t => t
+                .Return(new("result"), TransitionOutcomeDisposition.NoChange, true));
+        var compiled = transition.Compile();
+        Assert.True(compiled.IsSuccessful);
+        var service = ServiceDefinitionDocuments.Create(new("inspection"), new("1"),
+            new ServiceDefinition([new ServiceTransitionOperation("revise", entity.StateShape.QualifiedId,
+                compiled.Plan!.DefinitionReference, [new("notes.revise")])]),
+            new(new("tests"), new("tests/inspection"), DocumentOrigin.User));
+        var runtime = new ServiceRuntime(service,
+            [new ServiceTransitionBinding("revise", compiled.Plan, entity, _ => fixture.Repository)], fixture.Authority);
+        var input = PortableValue.Concrete(transition.Definition.Input, ObservationValue.FromObject(new Note.ReviseInput("after")));
+        var inspected = Assert.Single(await runtime.InspectTransitionsAsync(OperationContext.Create(),
+            entity.StateShape.QualifiedId, "note-1", new Dictionary<string, PortableValue> { ["revise"] = input }));
+        Assert.Equal(ServiceTransitionAvailabilityKind.Permitted, inspected.Kind);
+        Assert.Equal(TransitionDecisionKind.NoChange, inspected.Decision);
+        Assert.Empty(inspected.Diagnostics);
+        var invoked = await runtime.InvokeAsync(OperationContext.Create(), "revise", "note-1",
+            inspected.ConcurrencyToken, new("tests/inspection/no-change"), input);
+        Assert.Equal(ApiResultKind.Success, invoked.Kind);
+        Assert.Equal(inspected.ConcurrencyToken, invoked.ConcurrencyToken);
+        Assert.Equal(0, fixture.Repository.Writes);
+    }
+
     [Fact]
     public async Task Candidate_preparation_failure_returns_structured_service_error_without_write()
     {
@@ -433,6 +499,163 @@ public sealed class ServiceRuntimeTests
         Assert.Equal(0, fixture.Repository.Writes);
     }
 
+    [Fact]
+    public async Task InspectionIsAuthorizedAdvisoryAndNeverCommits()
+    {
+        var fixture = await Fixture.Create();
+        var entity = fixture.Repository.EntityDefinition.StateShape.QualifiedId;
+        var pending = Assert.Single(await fixture.Runtime.InspectTransitionsAsync(OperationContext.Create(), entity, "note-1"));
+        Assert.Equal(ServiceTransitionAvailabilityKind.RequiresInput, pending.Kind);
+        Assert.Equal(fixture.Plan.Definition.Input, pending.Input);
+        Assert.Equal(fixture.Initial.ConcurrencyToken, pending.ConcurrencyToken);
+        var permitted = Assert.Single(await fixture.Runtime.InspectTransitionsAsync(OperationContext.Create(), entity, "note-1",
+            new Dictionary<string, PortableValue> { ["revise"] = fixture.Input }));
+        Assert.Equal(ServiceTransitionAvailabilityKind.Permitted, permitted.Kind);
+        Assert.Equal(0, fixture.Repository.Writes);
+        fixture.Authority.AllowAdmission = false;
+        Assert.Empty(await fixture.Runtime.InspectTransitionsAsync(OperationContext.Create(), entity, "note-1"));
+        Assert.Equal(ApiResultKind.Forbidden, (await fixture.Invoke()).Kind);
+        Assert.Equal(0, fixture.Repository.Writes);
+    }
+
+    [Fact]
+    public async Task DiscoveryCanExposeForbiddenOperationsWithoutEvaluatingThem()
+    {
+        var fixture = await Fixture.Create();
+        var discovery = new Authority();
+        var runtime = new ServiceRuntime(fixture.Document,
+            [new ServiceTransitionBinding("revise", fixture.Plan, fixture.Repository.EntityDefinition, _ => fixture.Repository)],
+            fixture.Authority, discoveryAuthorization: discovery);
+        fixture.Authority.AllowAdmission = false;
+        var result = Assert.Single(await runtime.InspectTransitionsAsync(OperationContext.Create(),
+            fixture.Repository.EntityDefinition.StateShape.QualifiedId, "note-1",
+            new Dictionary<string, PortableValue> { ["revise"] = fixture.Input }));
+        Assert.Equal(ServiceTransitionAvailabilityKind.Forbidden, result.Kind);
+        Assert.Null(result.Decision);
+        Assert.Equal(0, fixture.Repository.Writes);
+        discovery.AllowResource = false;
+        Assert.Empty(await runtime.InspectTransitionsAsync(OperationContext.Create(),
+            fixture.Repository.EntityDefinition.StateShape.QualifiedId, "note-1"));
+    }
+
+    [Fact]
+    public async Task InspectionTokenDoesNotBypassConcurrentChangesOrResourceChecks()
+    {
+        var fixture = await Fixture.Create();
+        var entity = fixture.Repository.EntityDefinition.StateShape.QualifiedId;
+        var inspected = Assert.Single(await fixture.Runtime.InspectTransitionsAsync(OperationContext.Create(), entity, "note-1",
+            new Dictionary<string, PortableValue> { ["revise"] = fixture.Input }));
+        Assert.Equal(ApiResultKind.Success, (await fixture.Invoke()).Kind);
+        var stale = await fixture.Runtime.InvokeAsync(OperationContext.Create(), "revise", "note-1", inspected.ConcurrencyToken,
+            new("stale-inspection"), fixture.Input);
+        Assert.Equal(ApiResultKind.Conflict, stale.Kind);
+        fixture.Authority.AllowResource = false;
+        Assert.Empty(await fixture.Runtime.InspectTransitionsAsync(OperationContext.Create(), entity, "note-1"));
+        Assert.Equal(1, fixture.Repository.Writes);
+    }
+
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    public async Task InspectionUsesExplicitLiveCapabilityGrants(bool granted, bool expired, bool visible)
+    {
+        var fixture = await Fixture.Create();
+        var actor = new PrincipalRef("dispatcher", PrincipalKind.User);
+        var scope = new ScopeRef("tenant-a", "tenant");
+        var identity = new IdentityContext(actor, EffectiveScope: new([scope], ScopeSelectionMode.Single, ScopeSelectionSource.Ambient),
+            Grants: granted ? [new IdentityScopeGrant(actor, scope, ["notes.revise"], "dispatcher-role", expired ? DateTimeOffset.MinValue : null)] : []);
+        var runtime = new ServiceRuntime(fixture.Document,
+            [new ServiceTransitionBinding("revise", fixture.Plan, fixture.Repository.EntityDefinition, _ => fixture.Repository)],
+            new IdentityServiceInvocationAuthorization("tenant", new("Tenant")));
+        var results = await runtime.InspectTransitionsAsync(OperationContext.Create().WithIdentityContext(identity),
+            fixture.Repository.EntityDefinition.StateShape.QualifiedId, "note-1",
+            new Dictionary<string, PortableValue> { ["revise"] = fixture.Input });
+        Assert.Equal(visible ? 1 : 0, results.Length);
+        if (visible) Assert.Equal(ServiceTransitionAvailabilityKind.Permitted, results[0].Kind);
+        Assert.Equal(visible ? 1 : 0, fixture.Repository.Reads);
+        Assert.Equal(0, fixture.Repository.Writes);
+    }
+
+    [Fact]
+    public async Task InspectionEvaluatesTransitionPreconditionsWithoutApplyingChanges()
+    {
+        var fixture = await Fixture.Create();
+        var entity = fixture.Repository.EntityDefinition;
+        var transition = TransitionAuthoring.Create<Note, Note.ReviseInput, bool>(entity.Shape,
+            new("inspection.requires"), new("1"), t => t
+                .Requires(new("allowed"), (note, input) => input.Text != "blocked", (note, input) => false)
+                .Set(new("text"), note => note.Text, (note, input) => input.Text)
+                .Return(new("result"), TransitionOutcomeDisposition.Applied, true));
+        var compiled = transition.Compile();
+        Assert.True(compiled.IsSuccessful);
+        var service = ServiceDefinitionDocuments.Create(new("inspection"), new("1"),
+            new ServiceDefinition([new ServiceTransitionOperation("revise", entity.StateShape.QualifiedId, compiled.Plan!.DefinitionReference,
+                [new("notes.revise")])]), new(new("tests"), new("tests/inspection"), DocumentOrigin.User));
+        var runtime = new ServiceRuntime(service,
+            [new ServiceTransitionBinding("revise", compiled.Plan, entity, _ => fixture.Repository)], fixture.Authority);
+        var rejected = Assert.Single(await runtime.InspectTransitionsAsync(OperationContext.Create(), entity.StateShape.QualifiedId, "note-1",
+            new Dictionary<string, PortableValue> { ["revise"] = PortableValue.Concrete(transition.Definition.Input,
+                ObservationValue.FromObject(new Note.ReviseInput("blocked"))) }));
+        Assert.Equal(ServiceTransitionAvailabilityKind.Unavailable, rejected.Kind);
+        Assert.Equal(TransitionDecisionKind.AdmissionRejected, rejected.Decision);
+        Assert.Equal(0, fixture.Repository.Writes);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task InspectionReusesSnapshotsButAuthorizesEachOperation(bool distinctRepositories, bool distinctScopes)
+    {
+        var fixture = await Fixture.Create();
+        var second = distinctRepositories ? new RecordingRepository(fixture.Repository.Inner) : fixture.Repository;
+        if (distinctScopes) fixture.Authority.ScopeFor = operation =>
+            new ScopeRef(operation.Id, "tenant", PartitionKey: "tenant-a");
+        var entity = fixture.Repository.EntityDefinition;
+        var document = ServiceDefinitionDocuments.Create(new("two-operations"), new("1"), new ServiceDefinition([
+            new ServiceTransitionOperation("first", entity.StateShape.QualifiedId, fixture.Plan.DefinitionReference, [new("notes.revise")]),
+            new ServiceTransitionOperation("second", entity.StateShape.QualifiedId, fixture.Plan.DefinitionReference, [new("notes.revise")])]),
+            new(new("tests"), new("discovery/reuse"), DocumentOrigin.User));
+        var runtime = new ServiceRuntime(document, [
+            new ServiceTransitionBinding("first", fixture.Plan, entity, _ => fixture.Repository),
+            new ServiceTransitionBinding("second", fixture.Plan, entity, _ => second)], fixture.Authority);
+        var inputs = new Dictionary<string, PortableValue> { ["first"] = fixture.Input, ["second"] = fixture.Input };
+        var result = await runtime.InspectTransitionsAsync(OperationContext.Create(), entity.StateShape.QualifiedId, "note-1", inputs);
+        Assert.Equal(2, result.Length);
+        Assert.All(result, entry => Assert.Equal(ServiceTransitionAvailabilityKind.Permitted, entry.Kind));
+        Assert.Equal(distinctScopes ? 2 : 1, fixture.Repository.Reads);
+        if (distinctRepositories) Assert.Equal(1, second.Reads);
+        Assert.Equal(2, fixture.Authority.AdmissionChecks);
+        Assert.Equal(2, fixture.Authority.ResourceChecks);
+        Assert.Equal(0, fixture.Repository.Writes);
+        // Cache lifetime is one inspection, never a reusable permission or stale entity snapshot.
+        await runtime.InspectTransitionsAsync(OperationContext.Create(), entity.StateShape.QualifiedId, "note-1", inputs);
+        Assert.Equal(distinctScopes ? 4 : 2, fixture.Repository.Reads);
+        Assert.Equal(4, fixture.Authority.AdmissionChecks);
+        Assert.Equal(4, fixture.Authority.ResourceChecks);
+        fixture.Authority.DeniedOperation = "second";
+        var filtered = await runtime.InspectTransitionsAsync(OperationContext.Create(), entity.StateShape.QualifiedId, "note-1", inputs);
+        Assert.Equal("first", Assert.Single(filtered).OperationId);
+        Assert.Equal(6, fixture.Authority.ResourceChecks);
+    }
+
+    [Fact]
+    public async Task SeparateDiscoveryAndInvocationPoliciesEachAuthorizeOnce()
+    {
+        var fixture = await Fixture.Create();
+        var visibility = new Authority();
+        var entity = fixture.Repository.EntityDefinition;
+        var runtime = new ServiceRuntime(fixture.Document,
+            [new ServiceTransitionBinding("revise", fixture.Plan, entity, _ => fixture.Repository)],
+            fixture.Authority, visibility);
+        await runtime.InspectTransitionsAsync(OperationContext.Create(), entity.StateShape.QualifiedId, "note-1");
+        Assert.Equal(1, visibility.AdmissionChecks);
+        Assert.Equal(1, visibility.ResourceChecks);
+        Assert.Equal(1, fixture.Authority.AdmissionChecks);
+        Assert.Equal(1, fixture.Authority.ResourceChecks);
+    }
+
     sealed class Fixture
     {
         public required CompiledTransitionPlan Plan { get; init; }
@@ -480,15 +703,19 @@ public sealed class ServiceRuntimeTests
         public bool AllowAdmission { get; set; } = true;
         public bool AllowResource { get; set; } = true;
         public int ResourceChecks { get; private set; }
+        public int AdmissionChecks { get; private set; }
+        public Func<ServiceOperation, ScopeRef>? ScopeFor { get; set; }
+        public string? DeniedOperation { get; set; }
         public ValueTask<ScopeRef?> AdmitAsync(OperationContext context, ServiceOperation operation)
         {
+            AdmissionChecks++;
             Assert.Equal("notes.revise", Assert.Single(operation.AuthorizationRequirements).Id);
-            return ValueTask.FromResult<ScopeRef?>(AllowAdmission ? new("tenant-a", "tenant") : null);
+            return ValueTask.FromResult<ScopeRef?>(AllowAdmission ? ScopeFor?.Invoke(operation) ?? new("tenant-a", "tenant") : null);
         }
         public ValueTask<bool> AuthorizeResourceAsync(OperationContext context, ServiceOperation operation, EntitySnapshot snapshot)
         {
             ResourceChecks++;
-            return ValueTask.FromResult(AllowResource && snapshot.Entity.Observation.GetField("Tenant").GetString() == "tenant-a");
+            return ValueTask.FromResult(AllowResource && operation.Id != DeniedOperation && snapshot.Entity.Observation.GetField("Tenant").GetString() == "tenant-a");
         }
     }
 

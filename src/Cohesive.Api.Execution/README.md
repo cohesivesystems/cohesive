@@ -498,3 +498,10 @@ Source preparation returns the named `PreparedMaterializationReadSource` delegat
 only when invoked. Target adapters validate direct binding callers; composition independently validates target
 identity because custom adapter implementations also cross this boundary. Backend labels are presentation metadata,
 not capability or identity evidence (`ElasticMaterializationReadBinding.BackendName` is the Elasticsearch label).
+
+## Entity transition discovery
+
+`ServiceRuntime.InspectTransitionsAsync` exposes actor-specific, snapshot-bound availability of registered
+entity transitions, using the existing authorization policy and canonical Transition interpreter without writes.
+See [transition discovery](Services/TRANSITION_DISCOVERY.md) for capability grants, visibility policy, input
+requirements, result semantics and execution rechecks.
