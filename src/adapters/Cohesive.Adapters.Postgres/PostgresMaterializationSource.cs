@@ -162,6 +162,11 @@ public sealed class PostgresMaterializationSource : IMaterializationSource
         }
     }
 
+    /// <summary>Whether an event store shares the exact host-owned pool admitted for this baseline.</summary>
+    /// <param name="pool">Borrowed pool used by the event store.</param>
+    /// <returns>True when the native binding uses this pool instance.</returns>
+    public bool UsesDataSource(Npgsql.NpgsqlDataSource pool) => pool is not null && ReferenceEquals(reader.RuntimeBinding?.DataSource, pool);
+
     /// <inheritdoc />
     public MaterializationQuerySourceDescriptor Descriptor { get; }
 

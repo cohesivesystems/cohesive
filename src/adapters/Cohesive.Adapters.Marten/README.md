@@ -111,3 +111,30 @@ when constructing the native DI-owned store; the host still supplies its connect
 Preparation rejects mismatched schemas, automatic schema changes, stream identity or event
 registration before native I/O. Validation-only remains the default; `CreateIfMissing` must be
 explicit. Use a dedicated history store because native initialization covers its configured objects.
+
+## Feed a materialization from committed events
+
+A PostgreSQL materialization can bind individual relation inputs to a
+`MartenMaterializationEventSource<TEvent>` through `PostgresMaterializationStorageOptions.EventSources`.
+Other inputs continue to use their declared PostgreSQL feeds. The relation owns the affected-root
+routes and result hydration. The event binding supplies the old and new source observations
+needed by those routes. On a reservation move this includes both order references.
+
+Use a dedicated string-keyed, append-only stream per input and partition. Register its event
+type on the borrowed Marten store and use the same Npgsql pool as the baseline reader.
+Atomically append every relevant event with its relational mutation. All writers, including
+bulk writers, must honor this contract. The adapter handles one configured event contract per
+stream. A producer can use that contract to describe creates, updates and deletes. A retained
+stream is an explicit delivery choice independent of the entity's state authority.
+
+The cursor authenticates the stream, incarnation, placement and last consumed event version
+and ID. Pages follow committed versions within that stream. On resume the adapter verifies
+the anchor and checks for missing or unexpected events before returning a page. Keep history
+available and use a new incarnation and rebuild when changing the database, projection or
+stream lifetime. The source enforces delivery-count and canonical byte limits. Marten reads
+a bounded number of event records into memory before the encoded delivery-size check, so
+producers should also bound event size.
+
+The normal materialization executor persists pending target work and commits the feed
+checkpoint after target writes. Redelivery therefore uses the same pending work and target
+identities. Each input advances independently. See the [fulfillment move and recovery example](../../../eng/examples/aspire-first/OrderMaterialization/README.md#reservation-events).

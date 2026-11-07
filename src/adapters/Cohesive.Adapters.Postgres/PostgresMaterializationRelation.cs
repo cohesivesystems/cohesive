@@ -79,6 +79,7 @@ public sealed class PostgresMaterializationRelation
     /// <param name="partition">Stable placement-subject identity.</param>
     /// <param name="authenticationKey">Persistent continuation authentication key.</param>
     /// <param name="slotFactory">Explicit slot/publication incarnation per canonical input.</param>
+    /// <param name="eventSources">Alternative retained feeds for explicitly selected inputs.</param>
     /// <param name="replicationPolicy">Native feed bounds and inactivity policy.</param>
     /// <param name="cancellationToken">Cancels native preflight.</param>
     /// <returns>A complete partition binding usable by rebuild and catch-up.</returns>
@@ -87,7 +88,8 @@ public sealed class PostgresMaterializationRelation
         NpgsqlDataSource database, PostgresNpgsqlRuntimeBinding native, PostgresRelationQuerySourcePolicy policy,
         string partition, ReadOnlyMemory<byte> authenticationKey,
         Func<RelationQueryInputId, PostgresLogicalReplicationBinding> slotFactory,
-        PostgresLogicalReplicationSourcePolicy replicationPolicy, CancellationToken cancellationToken = default)
+        PostgresLogicalReplicationSourcePolicy replicationPolicy,
+        IReadOnlyDictionary<RelationQueryInputId, Func<PostgresMaterializationSource, IMaterializationRetainedChangeSource>> eventSources, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(document);
         _ = MaterializationImpactPlanLinker.Link(impact, document.Definition);
@@ -118,6 +120,12 @@ public sealed class PostgresMaterializationRelation
         {
             var isRoot = impactBinding.Input == root.Input.Id;
             var binding = isRoot ? baselineBinding : impactBinding;
+            if (eventSources.TryGetValue(binding.Input, out var bindEvents))
+            {
+                var baseline = new PostgresMaterializationSource(isRoot ? baselineReader : readers[binding.Source], binding, authenticationKey.Span);
+                sources.Add(new(binding.Input, baseline.Scope, bindEvents(baseline)));
+                continue;
+            }
             var source = await PostgresLogicalReplicationMaterializationChangeSource.CreateAsync(isRoot ? baselineReader : readers[binding.Source], binding,
                 native, slotFactory(binding.Input),
                 authenticationKey, policy: replicationPolicy, cancellationToken: cancellationToken);
