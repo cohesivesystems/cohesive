@@ -59,3 +59,17 @@ To verify the HTTP result with the repository's PostgreSQL fixture, set COHESIVE
     dotnet test src/Cohesive.Adapters.Aspire.Tests --filter FullyQualifiedName~Declared_join_returns_empty_and_multiple_reservations_with_local_partition_isolation
 
 The test is skipped without that connection string. Confirm it ran before treating the result as behavior evidence.
+
+## Author cancellation with recovery
+
+Start with learn, retain workspace's snapshot, then inspect fulfillment/submit and fulfillment/release and follow their references. The owning declarations are in Orders.Model/FulfillmentDomain.cs and OrderApi.cs. Review FulfillmentProcessIntegrationTests and DurableFulfillmentIntegrationTests for native transition receipts, continuation identity, and recovery fixtures.
+
+Author cancellation through typed transitions and ProcessModel. Declare which order states permit cancellation and when cancellation becomes complete. Read reservation identity, SKU and quantity from canonical state. Guard positive quantities and handle missing or conflicting reservation evidence explicitly. Keep intermediate progress inspectable so a failed release can be resumed. Inventory release must happen at most once across repeated commands, concurrent attempts and interrupted process occurrences. A per-occurrence receipt only deduplicates that occurrence: establish how separate command identities are rejected or share the same authoritative operation before adding stock.
+
+Expose the command through the existing accepted-process API and result route, including explicit authorization and lifetime. Reuse native storage and receipt composition. After building, export the new transitions/process/service/endpoints and use check, compare, references and compatibility in both directions. Review existing response contracts when extending lifecycle enums. Execute real repository tests with failures injected before and after inventory release, recreate runtime preparation, and retry. Verify final order state, reservation progress, inventory totals, and results for same and distinct command identities.
+
+The cancellation recipe supports the example's one-item fulfillment: exactly one reservation with identity equal to the order identity. It queries the complete reservation set and rejects multiple, missing or inconsistent reservations before claiming work. Orders move Submitted -> Cancelling -> Cancelled. The original continuation must resume Cancelling work. Separate continuations receive InProgress, or AlreadyCancelled after completion. Released remains visible on reservation reads.
+
+Use ProcessQuery to attach a canonical bounded native query to ProcessContext.Query. The original query, row/byte bounds, consistency requirement and observational contract are exported. Use an explicit typed evidence projection with an existence flag when guards need nonnullable operands from an optional point read. Bind awaited results to locals before returning them. The supported loop authoring surface uses partitioned child processes; the current single-item recipe rejects multiple reservations.
+
+For an existing Orders database apply eng/examples/aspire-first/migrations/002-reservation-cancellation.sql before host startup. The new Released column defaults to false. Run the PostgreSQL-backed CancellationIntegrationTests with COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING set. A skipped test requires a configured test database before behavior is qualified.

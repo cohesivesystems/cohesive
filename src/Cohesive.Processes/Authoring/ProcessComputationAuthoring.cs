@@ -133,6 +133,17 @@ public sealed class ProcessContext
         ProcessReadPolicy? policy = null, ExecutionNodeId? id = null, string nextRole = "next", string outputRole = "result")
         where TEntity : class => throw SyntaxOnly();
 
+    /// <summary>Declares a bounded native query through its portable observational contract.</summary>
+    /// <typeparam name="TInput">Invocation projection.</typeparam><typeparam name="TResult">Complete result projection.</typeparam>
+    /// <param name="query">Native query and acquisition policy.</param><param name="input">Portable invocation input.</param>
+    /// <param name="policy">Optional read deadline and retry policy.</param><param name="id">Optional stable node identity.</param>
+    /// <param name="nextRole">Continuation role.</param><param name="outputRole">Result role.</param>
+    /// <returns>Syntax-only result for generated lowering.</returns>
+    /// <exception cref="InvalidOperationException">Always thrown if invoked at runtime.</exception>
+    public ProcessAwaitable<TResult> Query<TInput, TResult>(ProcessQuery<TInput, TResult> query, TInput input,
+        ProcessReadPolicy? policy = null, ExecutionNodeId? id = null, string nextRole = "next", string outputRole = "result")
+        where TInput : notnull where TResult : notnull => throw SyntaxOnly();
+
     /// <summary>Declares a point read with its explicit native entity attachment.</summary>
     /// <typeparam name="TEntity">Entity state.</typeparam><typeparam name="TInput">Input.</typeparam><typeparam name="TResult">Result.</typeparam>
     /// <param name="query">Exact query and point-read recipe.</param><param name="input">Portable invocation input.</param>

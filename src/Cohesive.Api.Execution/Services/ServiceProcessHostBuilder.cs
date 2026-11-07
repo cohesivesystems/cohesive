@@ -47,8 +47,8 @@ public sealed class ServiceProcessHostBuilder<TInput, TResult>
         : this(null, operation.Id, process, contracts)
     { declared = declaration; declaredTimeout = operation.Execution!.Timeout; }
 
-    internal void Use(ServiceDependencies dependencies, Func<ValueContract, IEntityRepository> repositories) =>
-        dependencies.Apply(this, process, repositories, contracts);
+    internal void Use(ServiceDependencies dependencies, Func<ValueContract, IEntityRepository> repositories, IServicePersistence? persistence = null) =>
+        dependencies.Apply(this, process, repositories, contracts, persistence);
 
     internal void Query(ProcessDefinitionLink link, ProcessRelationHandlerRegistration handler)
     { links.Add(link); queries.Add(handler); }

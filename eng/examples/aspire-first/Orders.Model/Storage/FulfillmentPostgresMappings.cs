@@ -17,7 +17,7 @@ public sealed class FulfillmentPostgresMappings
         Reservations = PostgresEntityRepositoryMapping.For(domain.Reservations)
             .Table("public", "cohesive_reservations").Identity(x => x.Id, "reservation_id")
             .Partition(x => x.Partition, "partition_key").Column(x => x.OrderId, "order_id")
-            .Column(x => x.Sku, "sku").Column(x => x.Quantity, "quantity").Build();
+            .Column(x => x.Sku, "sku").Column(x => x.Quantity, "quantity").Column(x => x.Released, "released").Build();
         Inventory = PostgresEntityRepositoryMapping.For(domain.Inventory)
             .Table("public", "cohesive_inventory").Identity(x => x.Sku, "sku")
             .Partition(x => x.Partition, "partition_key").Column(x => x.Available, "available").Build();

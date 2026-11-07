@@ -45,12 +45,13 @@ public static class Service
     /// <param name="dependencies">Immutable canonical definitions and native query selections.</param>
     /// <param name="repositories">Setup-time resolver of exact observation contracts to entity authorities.</param>
     /// <param name="contracts">Optional interaction catalog; omission selects an empty catalog.</param>
+    /// <param name="persistence">Optional native query resolver, required by ProcessQuery attachments.</param>
     /// <returns>A prepared binding phase; invocation policy remains in the service document.</returns>
     /// <exception cref="ServiceBindingValidationException">Document, execution mode or exact dependencies are invalid.</exception>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     public static ServiceProcessHostBuilder<TInput, TResult> Bind<TInput, TResult>(ExecutionDefinitionDocument declaration,
         Process<TInput, TResult> process, ServiceDependencies dependencies, Func<ValueContract, IEntityRepository> repositories,
-        InteractionContractCatalog? contracts = null)
+        InteractionContractCatalog? contracts = null, IServicePersistence? persistence = null)
     {
         ArgumentNullException.ThrowIfNull(declaration); ArgumentNullException.ThrowIfNull(process);
         ArgumentNullException.ThrowIfNull(dependencies); ArgumentNullException.ThrowIfNull(repositories);
@@ -66,7 +67,7 @@ public static class Service
             throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.ProcessSelectionInvalid,
                 "This finite host requires one exact, unclassified ephemeral process operation.", "/bindings/process");
         var host = new ServiceProcessHostBuilder<TInput, TResult>(declaration, operation, process, contracts);
-        host.Use(dependencies, repositories);
+        host.Use(dependencies, repositories, persistence);
         return host;
     }
 
@@ -120,13 +121,27 @@ public sealed class ServiceBuilder
         Func<ValueContract, IEntityRepository> repositories, InteractionContractCatalog? contracts = null) =>
         Service.Bind(Build(), process, Dependencies, repositories, contracts);
 
+    /// <summary>Binds a process to its repositories and native bounded query readers.</summary>
+    /// <typeparam name="TInput">Input projection.</typeparam><typeparam name="TResult">Result projection.</typeparam>
+    /// <param name="process">Exact process.</param><param name="persistence">Host-owned repositories and query preparation.</param>
+    /// <param name="contracts">Optional interaction contracts.</param><returns>Reusable binding phase.</returns>
+    /// <exception cref="ArgumentNullException">Persistence is null.</exception>
+    /// <exception cref="ServiceBindingValidationException">Dependencies or execution policy are invalid.</exception>
+    public ServiceProcessHostBuilder<TInput, TResult> Bind<TInput, TResult>(Process<TInput, TResult> process,
+        IServicePersistence persistence, InteractionContractCatalog? contracts = null)
+    {
+        ArgumentNullException.ThrowIfNull(persistence);
+        return Service.Bind(Build(), process, Dependencies, persistence.Repository, contracts, persistence);
+    }
+
     /// <summary>Prepares one declared process and its generated dependencies without selecting an execution provider.</summary>
     /// <typeparam name="TInput">Process input.</typeparam><typeparam name="TResult">Process result.</typeparam>
     /// <param name="process">Exact declared process.</param><param name="repositories">Native observation-contract resolver.</param>
     /// <param name="contracts">Optional interaction contracts.</param><returns>Reusable native preparation.</returns>
+    /// <param name="persistence">Optional native query resolver.</param>
     /// <exception cref="ServiceBindingValidationException">The process is undeclared or dependencies are invalid.</exception>
     public PreparedServiceProcess PrepareProcess<TInput, TResult>(Process<TInput, TResult> process,
-        Func<ValueContract, IEntityRepository> repositories, InteractionContractCatalog? contracts = null)
+        Func<ValueContract, IEntityRepository> repositories, InteractionContractCatalog? contracts = null, IServicePersistence? persistence = null)
     {
         ArgumentNullException.ThrowIfNull(process); ArgumentNullException.ThrowIfNull(repositories);
         var declaration = Build();
@@ -134,7 +149,7 @@ public sealed class ServiceBuilder
             throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.ProcessSelectionInvalid,
                 "Prepare a process declared by this service.", "/bindings/process");
         var preparation = new ServiceProcessHostBuilder<TInput, TResult>(null, "", process, contracts);
-        preparation.Use(Dependencies, repositories);
+        preparation.Use(Dependencies, repositories, persistence);
         return preparation.Prepare();
     }
 

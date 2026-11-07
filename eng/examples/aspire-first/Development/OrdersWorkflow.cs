@@ -138,7 +138,7 @@ internal static class OrdersWorkflow
             // A demonstration policy change: retain at least one unit rather than exhausting available stock.
             var edited = ReplaceOnce(source, "item.Available >= input.Quantity", "item.Available > input.Quantity");
             edited = ReplaceOnce(edited, "id: new(\"fulfillment/reserve\"), revision: new(\"2\")", "id: new(\"fulfillment/reserve\"), revision: new(\"3\")");
-            edited = ReplaceOnce(edited, "[Process(id: \"fulfillment/submit\", revision: \"7\")]", "[Process(id: \"fulfillment/submit\", revision: \"8\")]");
+            edited = ReplaceOnce(edited, "[Process(id: \"fulfillment/submit\", revision: \"8\")]", "[Process(id: \"fulfillment/submit\", revision: \"9\")]");
             await File.WriteAllTextAsync(path, edited, token);
             var stale = await Workspace();
             Require(stale.SnapshotId == before.SnapshotId && stale.ChangedInputs.Contains(OrdersWorkspace.DomainSource), "Source edit was not reported before export.");
@@ -193,7 +193,7 @@ internal static class OrdersWorkflow
             }
             Require(fieldId is not null, "No field → shape/type → query → API path was found.");
             var responseSource = await File.ReadAllTextAsync(queryPath, token);
-            responseSource = ReplaceOnce(responseSource, "int AvailableStock);", "int AvailableStock)\n{\n    /// <summary>Optional inventory partition.</summary>\n    public string? InventoryPartition { get; init; }\n}");
+            responseSource = ReplaceOnce(responseSource, "int AvailableStock, bool Released = false);", "int AvailableStock, bool Released = false)\n{\n    /// <summary>Optional inventory partition.</summary>\n    public string? InventoryPartition { get; init; }\n}");
             responseSource = ReplaceOnce(responseSource, ".Field(result => result.AvailableStock, inventory, item => item.Available)",
                 ".Field(result => result.InventoryPartition, inventory, item => item.Partition)\n                    .Field(result => result.AvailableStock, inventory, item => item.Available)");
             await File.WriteAllTextAsync(queryPath, responseSource, token);
@@ -207,7 +207,7 @@ internal static class OrdersWorkflow
             Require(JsonSerializer.Deserialize<JsonElement>(additivePayload).GetProperty("reservations")[0].TryGetProperty("inventoryPartition", out _)
                 && JsonSerializer.SerializeToElement(JsonSerializer.Deserialize(additivePayload, OrdersWireContext.Default.OrderDetails), OrdersWireContext.Default.OrderDetails!).GetProperty("reservations")[0].GetProperty("availableStock").GetInt32() == 42,
                 "Old generated reader did not preserve the known value with an additional response field.");
-            responseSource = ReplaceOnce(responseSource, "int AvailableStock)", "int RemainingStock)");
+            responseSource = ReplaceOnce(responseSource, "int AvailableStock,", "int RemainingStock,");
             responseSource = ReplaceOnce(responseSource, "result => result.AvailableStock", "result => result.RemainingStock");
             responseSource = ReplaceOnce(responseSource, "<param name=\"AvailableStock\">", "<param name=\"RemainingStock\">");
             await File.WriteAllTextAsync(queryPath, responseSource, token);
@@ -301,7 +301,7 @@ internal static class OrdersWorkflow
         if (!condition) throw new InvalidOperationException(message);
     }
 
-    static async Task<string> RunProcess(string root, string command, string[] arguments, CancellationToken token)
+    internal static async Task<string> RunProcess(string root, string command, string[] arguments, CancellationToken token)
     {
         var start = new ProcessStartInfo(command) { WorkingDirectory = root, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var argument in arguments) start.ArgumentList.Add(argument);

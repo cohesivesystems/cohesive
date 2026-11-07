@@ -22,7 +22,7 @@ namespace Cohesive.Api.Execution.Services;
 public sealed class ServiceDependencies
 {
     delegate ProcessTransitionOperationBinding TransitionFactory(Func<ValueContract, IEntityRepository> resolve, InteractionContractCatalog contracts);
-    delegate (ProcessDefinitionLink Link, ProcessRelationHandlerRegistration Handler) LookupFactory(Func<ValueContract, IEntityRepository> resolve);
+    delegate (ProcessDefinitionLink Link, ProcessRelationHandlerRegistration Handler) LookupFactory(Func<ValueContract, IEntityRepository> resolve, IServicePersistence? persistence);
 
     readonly ImmutableDictionary<ExecutionDefinitionReference, TransitionFactory> transitions;
     readonly ImmutableDictionary<ExecutionDefinitionReference, LookupFactory> lookups;
@@ -42,7 +42,7 @@ public sealed class ServiceDependencies
     {
         var required = Required(process);
         RequireDependencies(required);
-        return [.. required.Transitions.Concat(required.Queries).Select(reference => observations[reference]).Distinct()];
+        return [.. required.Transitions.Concat(required.Queries).Where(observations.ContainsKey).Select(reference => observations[reference]).Distinct()];
     }
 
     /// <summary>Explicit relational query roots selected for this service's transports.</summary>
@@ -87,6 +87,8 @@ public sealed class ServiceDependencies
         internal ServiceDependencies Dependencies { get; private set; } = dependencies;
         public void Transition<TEntity, TInput, TResult>(Transition<TEntity, TInput, TResult> transition) where TEntity : notnull =>
             Dependencies = Dependencies.Transition(transition);
+        public void Query<TInput, TResult>(ProcessQuery<TInput, TResult> query) where TInput : notnull where TResult : notnull =>
+            Dependencies = Dependencies.ProcessQuery(query);
         public void PointRead<TEntity, TInput, TResult>(EntityPointRead<TEntity, TInput, TResult> read)
             where TEntity : class where TInput : notnull where TResult : notnull =>
             Dependencies = Dependencies.Lookup(read.Query, read.Entity, read.Key, read.Result);
@@ -130,7 +132,7 @@ public sealed class ServiceDependencies
         if (query.EvaluationSemantics != Cohesive.Relations.IR.HostedQueryEvaluationSemantics.Observation)
             throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.LookupSemanticsInvalid,
                 "An entity lookup cannot implement a deterministic-computation contract.", "/bindings/lookup");
-        return new(transitions, lookups.Add(query.Reference, resolve =>
+        return new(transitions, lookups.Add(query.Reference, (resolve, _) =>
         {
             var repository = resolve(ValueContract.FromShape(entity.Definition.Shape));
             if (repository.EntityDefinition != entity.Definition)
@@ -144,6 +146,33 @@ public sealed class ServiceDependencies
             return (query.CreateProcessDefinitionLink(), ProcessRelationHandlerRegistration.Create(query,
                 async (context, _, input) => result(await typed.TryGetEntity(context, key(input), options).ConfigureAwait(false))));
         }), Queries, observations.Add(query.Reference, ValueContract.FromShape(entity.Definition.Shape)));
+    }
+
+    /// <summary>Attaches a bounded native reader to its portable Process query contract.</summary>
+    /// <typeparam name="TInput">Invocation projection.</typeparam><typeparam name="TResult">Complete result projection.</typeparam>
+    /// <param name="query">Exact query and acquisition policy.</param><returns>New immutable registrations.</returns>
+    /// <exception cref="ArgumentNullException">Query is null.</exception>
+    /// <exception cref="ArgumentException">The exact attachment is already registered.</exception>
+    /// <exception cref="ServiceBindingValidationException">Native query selections conflict.</exception>
+    public ServiceDependencies ProcessQuery<TInput, TResult>(ProcessQuery<TInput, TResult> query)
+        where TInput : notnull where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var reference = ServiceQueryBinding.GetReference(query.Revision, query.Query.CompilationRequest);
+        var selected = Select(new(reference, query.Query.CompilationRequest, query.MaximumRows, query.MaximumBytes, query.Consistency));
+        return new(transitions, lookups.Add(query.Reference, (_, persistence) =>
+        {
+            if (persistence is null)
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryMissing,
+                    "Native Process queries require an IServicePersistence binding.", "/bindings/process/queries");
+            var reader = ServiceQueryConsistencyValidation.Require(
+                persistence.Query(query.Query, query.MaximumRows, query.MaximumBytes, query.Consistency), query.Consistency);
+            if (!ReferenceEquals(reader.Definition, query.Query))
+                throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.GeneratedDependencyMismatch,
+                    "The prepared reader differs from the selected native query authority.", "/bindings/process/queries");
+            return (query.Contract.CreateProcessDefinitionLink(), ProcessRelationHandlerRegistration.Create(query.Contract,
+                async (context, _, input) => await reader.ReadAsync(input, context.CancellationToken).ConfigureAwait(false)));
+        }), selected.Queries, observations);
     }
 
     /// <summary>Selects a canonical relational query once for transport reading and infrastructure preparation.</summary>
@@ -160,7 +189,22 @@ public sealed class ServiceDependencies
         var reference = ServiceQueryBinding.GetReference(revision, query.CompilationRequest);
         if (Queries.Any(item => item.Reference.DefinitionId == reference.DefinitionId))
             throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.QueryDuplicate, "A query is already selected.", "/bindings/queries");
-        return new(transitions, lookups, Queries.Add(new(reference, query.CompilationRequest, maximumRows, maximumBytes, consistency)), observations);
+        return Select(new(reference, query.CompilationRequest, maximumRows, maximumBytes, consistency));
+    }
+
+    internal ServiceDependencies Select(ServiceQuerySelection selection, string conflictCode = ServiceBindingDiagnosticCodes.QueryDuplicate)
+    {
+        var existing = Queries.FirstOrDefault(item => item.Reference.DefinitionId == selection.Reference.DefinitionId);
+        if (existing is not null)
+        {
+            if (existing.Reference != selection.Reference
+                || RelationQueryCompilationRequestReference.From(existing.Request) != RelationQueryCompilationRequestReference.From(selection.Request)
+                || existing.MaximumRows != selection.MaximumRows || existing.MaximumBytes != selection.MaximumBytes
+                || existing.Consistency != selection.Consistency)
+                throw ServiceBindingValidationException.Error(conflictCode, "A query has conflicting selections.", "/bindings/queries");
+            return this;
+        }
+        return new(transitions, lookups, Queries.Add(selection), observations);
     }
 
     // Shared preparation slots retain successful projections only for the definition's lifetime.
@@ -208,7 +252,7 @@ public sealed class ServiceDependencies
     }
 
     internal void Apply<TInput, TResult>(ServiceProcessHostBuilder<TInput, TResult> host, Process<TInput, TResult> process,
-        Func<ValueContract, IEntityRepository> resolve, InteractionContractCatalog contracts)
+        Func<ValueContract, IEntityRepository> resolve, InteractionContractCatalog contracts, IServicePersistence? persistence = null)
     {
         var required = Required(process.Definition);
         RequireDependencies(required);
@@ -218,7 +262,7 @@ public sealed class ServiceDependencies
         }
         foreach (var reference in required.Queries)
         {
-            var binding = lookups[reference](resolve);
+            var binding = lookups[reference](resolve, persistence);
             host.Query(binding.Link, binding.Handler);
         }
     }

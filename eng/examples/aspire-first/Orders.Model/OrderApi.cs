@@ -14,11 +14,21 @@ public sealed class OrderApi : ApiModel
     /// <summary>Declares the public contract using the exact transition reference.</summary>
     /// <param name="process">Execution contract.</param>
     /// <param name="domain">Canonical entities and order behavior, without runtime bindings.</param>
+    /// <param name="cancellation">Canonical cancellation process; source composition supplies the shared instance.</param>
     /// <param name="execution">Explicit execution lifetime; the mixed-store example retains host execution.</param>
-    public OrderApi(FulfillmentDomain domain, FulfillmentProcess process, FulfillmentExecutionPolicy? execution = null)
+    public OrderApi(FulfillmentDomain domain, FulfillmentProcess process, FulfillmentExecutionPolicy? execution = null, CancellationProcess? cancellation = null)
     {
+        cancellation ??= new CancellationProcess(domain, new FulfillmentQueries(domain));
+        Cancellation = Endpoints.Process(cancellation).Accepted<ServiceProcessCommand<CancelOrder>>(
+            id: new("cancellation"), revision: new("1"),
+            configure: service => service
+                .Operation("cancel").Require(new("fulfillment.write")).Run(cancellation.Definition)
+                .ReturnAfterAdmission(execution?.Lifetime ?? ProcessExecutionLifetime.Host)
+                .Operation("result").Require(new("fulfillment.read")).ReadResultOf(cancellation.Definition),
+            startOperationId: "cancel", resultOperationId: "result",
+            startRoute: "/fulfillment/cancellations", resultRoute: "/fulfillment/cancellations/results/{instanceId}");
         Fulfill = Endpoints.Process(process).Accepted<ServiceProcessCommand<FulfillOrder>>(
-            id: new("fulfillment"), revision: new("4"),
+            id: new("fulfillment"), revision: new("5"),
             configure: service => service
                 .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
                 .ReturnAfterAdmission(execution?.Lifetime ?? ProcessExecutionLifetime.Host)
@@ -42,6 +52,9 @@ public sealed class OrderApi : ApiModel
         ReservationsBySku = orders.Query("ReservationsBySku").Route("GET", "/orders/reservations/by-sku/{sku}")
             .RouteParameter<string>("sku").Build<ReservationBySku[]>();
     }
+
+    /// <summary>Admits cancellation and exposes its independently authorized result.</summary>
+    public ColocatedProcessApi<ServiceProcessCommand<CancelOrder>, CancelOrder, CancellationResult> Cancellation { get; }
 
     /// <summary>Acknowledges fulfillment and exposes its independently authorized result.</summary>
     public ColocatedProcessApi<ServiceProcessCommand<FulfillOrder>, FulfillOrder, FulfillmentResult> Fulfill { get; }
@@ -95,10 +108,17 @@ public sealed class OrderEndpoints : ApiBindingModel
                 consistency: RelationQueryConsistency.IndependentSources);
             var authorization = new IdentityServiceInvocationAuthorization("demo", new(FulfillmentDomain.PartitionField));
             if (execution?.Lifetime == ProcessExecutionLifetime.Durable)
+            {
                 bindings.BindDurable(endpoint => endpoint.Fulfill, authority: "aspire-first", authorization, logPrivateFailures: true);
+                bindings.BindDurable(endpoint => endpoint.Cancellation, authority: "aspire-first", authorization, logPrivateFailures: true);
+            }
             else
+            {
                 bindings.BindHosted(endpoint => endpoint.Fulfill, authority: "aspire-first", authorization,
                     maximumExecutions: 1000, logPrivateFailures: true);
+                bindings.BindHosted(endpoint => endpoint.Cancellation, authority: "aspire-first", authorization,
+                    maximumExecutions: 1000, logPrivateFailures: true);
+            }
         });
     }
 }

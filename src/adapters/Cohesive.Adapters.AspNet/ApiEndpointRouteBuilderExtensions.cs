@@ -114,7 +114,7 @@ public static class ApiEndpointRouteBuilderExtensions
         /// </summary>
         /// <param name="endpoint">Endpoint whose HTTP projection is mapped.</param>
         /// <param name="handler">Minimal API handler.</param>
-        /// <param name="endpointNameSelector">Optional selector for the ASP.NET endpoint name.</param>
+        /// <param name="endpointNameSelector">Optional selector for the ASP.NET endpoint name; defaults to the canonical operation ID.</param>
         /// <param name="configure">Optional callback that configures the mapped endpoint.</param>
         /// <param name="authorizationPolicyResolver">
         /// Optional interpreter from semantic requirements to ASP.NET policy names. It is required when the
@@ -160,7 +160,7 @@ public static class ApiEndpointRouteBuilderExtensions
         var http = operation.Http ?? throw new InvalidOperationException(
             $"API endpoint '{endpoint.Id}' does not declare an HTTP projection and cannot be mapped to ASP.NET.");
         var builder = endpoints.MapMethods(http.Route, [http.Method], handler);
-        var endpointName = endpointNameSelector?.Invoke(operation) ?? operation.Name;
+        var endpointName = endpointNameSelector?.Invoke(operation) ?? operation.Id.ToString();
         ApplyMetadata(builder, operation, http, endpointName: endpointName);
         configure?.Invoke(builder, operation);
 

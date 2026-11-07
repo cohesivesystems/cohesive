@@ -41,7 +41,7 @@ public sealed class CompositionModelTests
     {
         var model = TestModels.Fulfillment();
         var process = model.Process;
-        var separate = Service.Define(new("fulfillment"), new("4"), process.Provenance)
+        var separate = Service.Define(new("fulfillment"), new("5"), process.Provenance)
             .Use(new ServiceDependencies().Process(process))
             .Operation("fulfill").Require(new("fulfillment.write")).Run(process.Definition)
             .ReturnAfterAdmission(ProcessExecutionLifetime.Host)
@@ -58,7 +58,7 @@ public sealed class CompositionModelTests
     {
         var model = TestModels.Fulfillment();
         var api = model.Api;
-        Assert.Equal(8, api.Definition.Endpoints.Count);
+        Assert.Equal(10, api.Definition.Endpoints.Count);
         Assert.Equal(api.Fulfill.Service.Build().Reference, api.Fulfill.Declaration.Reference);
         Assert.Equal(ApiResultKind.Accepted, api.Fulfill.Start.Operation.PrimaryResult.Kind);
         Assert.Equal(api.Fulfill.Start.Id, api.Fulfill.Result.Operation.ResultOf);
