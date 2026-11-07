@@ -91,6 +91,12 @@ jobs:
       - name: Install frontend dependencies
         run: corepack pnpm install --frozen-lockfile
 
+      - name: Check logistics API generation and browser client
+        run: |
+          dotnet run --project eng/examples/load-actions -- --check-generated
+          node node_modules/typescript/bin/tsc -p eng/examples/load-actions
+          node --test eng/examples/load-actions/test.mjs
+
       - name: Build frontend packages
         run: corepack pnpm frontend:build
 

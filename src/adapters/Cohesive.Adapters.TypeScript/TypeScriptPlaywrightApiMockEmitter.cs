@@ -1795,12 +1795,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
         return builder.ToString();
     }
 
-    static string GetTypeName(Type type)
-    {
-        var name = type.Name;
-        var genericTick = name.IndexOf('`');
-        return genericTick >= 0 ? name[..genericTick] : name;
-    }
+    static string GetTypeName(Type type) => TypeScriptTypeNames.FromClr(type);
 
     static string Quote(string value)
     {
