@@ -210,6 +210,20 @@ app.MapServiceTransition<ReviseNote, bool>(
     authorizationPolicyResolver: (_, requirement) => requirement.Id);
 ```
 
+A separately projected transition catalog can be mapped as one operation:
+
+```csharp
+app.MapServiceTransitions<ReviseNote, bool>(runtime, commands,
+    authorizationPolicyResolver: (_, requirement) => requirement.Id);
+```
+
+`commands` is the same `ApiDefinition` consumed by client generation. The bulk mapping validates every
+entry against its runtime transition before registering routes, then preserves the supplied endpoint's
+identity, HTTP route, result bindings and authorization metadata. This typed profile requires shared input
+and outcome contracts, POST bodies, a string subject route parameter, and a string expected-token header;
+unsupported or mixed catalogs fail registration. It delegates execution to the same handler as the single
+transition mapping.
+
 The CLR types must match the referenced Transition contracts. The caller sends the opaque reviewed token
 in `X-Expected-Concurrency-Token` and receives the next token in the same response header. The response
 body is the Transition outcome. Routes retain standard API metadata and native ASP.NET authorization
@@ -301,6 +315,18 @@ var get = Api.Define().Entity<Order>().Query("Get")
 app.MapEntityApi<Order>(entity, repository, "local", endpoints => endpoints
     .Get(get, order => TypedResults.Ok(new OrderSummary(order.Id, order.Status))));
 ```
+
+When identity lives in entity metadata rather than the POCO, use the identity-aware overload:
+
+```csharp
+app.MapEntityApi<Order>(entity, repository, "local", endpoints => endpoints
+    .Get(get, (id, order) => TypedResults.Ok(new OrderSummary(id, order.Status))));
+```
+
+Both overloads use the same point-read and prepared materializer. Missing entities receive the existing
+empty 404 response; typed enum and other field conversion is owned by the materializer. Only the domain
+response projection remains in the host. The explicit partition selects storage; it is not an authorization
+policy. Response JSON follows the host's ASP.NET JSON profile, which must match client-generation options.
 
 The equivalent combined form creates that same endpoint representation:
 

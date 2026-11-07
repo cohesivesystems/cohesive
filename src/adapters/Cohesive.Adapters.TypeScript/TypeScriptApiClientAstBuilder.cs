@@ -939,12 +939,7 @@ public sealed class TypeScriptApiClientAstBuilder
         return separator >= 0 ? token[..separator] : token;
     }
 
-    static string GetTypeName(Type type)
-    {
-        var name = type.Name;
-        var genericTick = name.IndexOf('`');
-        return genericTick >= 0 ? name[..genericTick] : name;
-    }
+    static string GetTypeName(Type type) => TypeScriptTypeNames.FromClr(type);
 
     static string GetTypeName(string typeName)
     {

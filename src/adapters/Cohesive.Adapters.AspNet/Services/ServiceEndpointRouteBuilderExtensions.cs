@@ -42,6 +42,14 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         var projection = runtime.Project<TInput, TOutcome>(operationId, new("POST", route,
             [new(subjectParameter, HttpParameterSource.Route, typeof(string)),
              new(tokenHeader, HttpParameterSource.Header, typeof(string))], new(typeof(TInput))));
+        return MapTransition<TInput, TOutcome>(endpoints, runtime, operationId, projection,
+            authorizationPolicyResolver, subjectParameter, tokenHeader);
+    }
+
+    static RouteHandlerBuilder MapTransition<TInput, TOutcome>(IEndpointRouteBuilder endpoints,
+        ServiceRuntime runtime, string operationId, ApiEndpoint projection,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver, string subjectParameter, string tokenHeader)
+    {
         var contract = runtime.InputContract(operationId);
         var readOutcome = ObservationMaterializer.PrepareJsonValue<TOutcome>(OutcomeJson, ObservationBytesJsonEncoding.Base64String);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
