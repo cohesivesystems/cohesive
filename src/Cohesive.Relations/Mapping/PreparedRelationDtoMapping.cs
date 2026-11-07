@@ -26,6 +26,29 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
     /// <summary>Original expression-lowering decisions and source references.</summary>
     public RelationQueryAuthoringManifest AuthoringProvenance { get; }
 
+    /// <summary>Creates an evaluator for supplied roots and complete in-memory source sets.</summary>
+    /// <param name="configure">Declares the root identity and binds each acquired shape to a finite collection.</param>
+    /// <param name="maximumRows">Positive row limit applied to each snapshot and to local execution.</param>
+    /// <returns>A reusable evaluator for this prepared request using owned source snapshots and canonical planning.</returns>
+    /// <exception cref="ArgumentNullException">The configuration callback is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The row limit is not positive.</exception>
+    /// <exception cref="ArgumentException">A configured source or its rows violate their contract.</exception>
+    /// <exception cref="InvalidOperationException">A binding is missing, placement is invalid, or the plan requires relationship lookup.</exception>
+    /// <remarks>The callback runs during preparation. Roots are supplied per invocation. Use explicit placement
+    /// for relationship lookup or multiple acquired inputs sharing a shape.</remarks>
+    public IRelationQueryEvaluator CreateInMemoryEvaluator(Action<RelationQueryInMemorySources> configure,
+        int maximumRows = (int)RelationQueryEvaluator.DefaultMaximumRootRows)
+    {
+        ArgumentNullException.ThrowIfNull(configure);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRows);
+        var plan = Compilation.Plan!;
+        if (!plan.InputContract.Traversals.IsDefaultOrEmpty)
+            throw new InvalidOperationException("In-memory collection bindings support source-set enumeration. Relationship traversal requires explicit lookup placement.");
+        var sources = new RelationQueryInMemorySources(plan, maximumRows);
+        configure(sources);
+        return sources.Build(CompilationRequest);
+    }
+
     /// <summary>Starts an invocation of this exact prepared snapshot.</summary>
     /// <param name="evaluation">Explicit caller-owned invocation identity.</param>
     /// <returns>The existing evaluation builder; callers may supply roots or parameter values as required.</returns>

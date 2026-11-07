@@ -75,12 +75,22 @@ var summaries = loads
 var mapping = RelationDtoMapping.Create(loads, summaries,
     mode: RelationOutputMode.ZeroOrOnePerRoot);
 
+var evaluator = mapping.CreateInMemoryEvaluator(sources => sources
+    .Root(q.Clr.Shape<Load>(), l => l.Id)
+    .Bind(q.Clr.Shape<Customer>(), [new Customer("customer-7", "Acme")], c => c.Id)
+    .Bind(q.Clr.Shape<LineItem>(),
+        [new LineItem("item-1", "load-42", 2m, 50m), new LineItem("item-2", "load-42", 1m, 25m)],
+        i => i.Id));
+
+var loadValues = new[] { new Load("load-42", "customer-7") };
 var dtos = await mapping.MapAsync(evaluator, loadValues, load => load.Id);
 ```
 
-Here `evaluator` is an explicitly configured, caller-owned evaluator: the load roots are supplied and its
-readers acquire customers and line items through existing bounded placements. `loadValues` is the supplied
-load collection. No data source, snapshot guarantee or client registration is hidden by the facade.
+Each bound collection is snapshotted at evaluator creation. The identity selectors name direct string
+properties, and acquired rows must have unique, nonempty identities. Supplied roots must use the identity
+declared by `Root`. The optional `maximumRows` argument limits each snapshot and local execution.
+The binder supports complete source sets with one acquired input per shape. Use explicit placement for
+relationship lookups or multiple acquired inputs sharing a shape.
 
 The direct invocation supplies a complete root collection using the existing whole-source partition default.
 It enumerates inputs once, observes cancellation between inputs and delegates identity/shape validation to
@@ -119,8 +129,8 @@ public record LoadSummaryDto(string Id, string CustomerName, decimal Total);
 The acceptance fixture supplies `new Load("load-42", "customer-7")`, a customer named `Acme` and two items
 `2 * 50m` and `1 * 25m`. The resulting DTO is
 `LoadSummaryDto { Id = load-42, CustomerName = Acme, Total = 125 }`. Its detailed source row retains all four
-contributing occurrences: the load, the customer and both line items. The test uses the existing deterministic
-source readers and actual physical planner/executor/reference interpreter, not a callback emulating the join.
+contributing occurrences: the load, the customer and both line items. The acceptance tests run the physical
+planner, executor and reference interpreter with the collection binder and with explicitly configured readers.
 
 The focused `Aggregate` builder delegates grouping and sums to the existing canonical aggregate builder.
 Three-argument `Join` is exactly `Join(...).Select(...)`; `LeftJoin` has the corresponding explicit overload.

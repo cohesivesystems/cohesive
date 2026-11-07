@@ -417,6 +417,15 @@ public sealed record RelationQuerySourceReadFieldResult
         EvidenceReference = evidenceReference;
     }
 
+    internal static RelationQuerySourceReadFieldResult Project(RelationQuerySourceReadField field, ObservationValue row)
+    {
+        if (!row.TryGetField(field.SemanticPath, out var value) || value.Kind == ObservationValueKind.Undefined)
+            return new(field, RelationQuerySourceReadFieldState.Missing);
+        return value.Kind == ObservationValueKind.Null
+            ? new(field, RelationQuerySourceReadFieldState.Null)
+            : new(field, RelationQuerySourceReadFieldState.Value, value);
+    }
+
     /// <summary>Exact requested field selection.</summary>
     public RelationQuerySourceReadField Field { get; }
 

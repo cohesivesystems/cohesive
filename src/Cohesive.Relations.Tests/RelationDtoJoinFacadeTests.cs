@@ -50,6 +50,42 @@ public sealed class RelationDtoJoinFacadeTests
     }
 
     [Fact]
+    public async Task CollectionBindingsUseOwnedSnapshotsAndPreserveExactContributors()
+    {
+        var mapping = Build(out var q, compact: true);
+        var customers = new List<Customer> { new("customer-7", "Acme") };
+        var items = new List<LineItem> { new("item-1", "load-42", 2m, 50m), new("item-2", "load-42", 1m, 25m) };
+        var evaluator = mapping.CreateInMemoryEvaluator(sources => sources
+            .Root(q.Clr.Shape<Load>(), l => l.Id)
+            .Bind(q.Clr.Shape<Customer>(), customers, c => c.Id)
+            .Bind(q.Clr.Shape<LineItem>(), items, i => i.Id));
+        customers.Clear();
+        items.Clear();
+
+        var outcome = await mapping.EvaluateAsync(evaluator, Loads(), l => l.Id);
+        Assert.True(outcome.IsSuccessful, Explain(outcome));
+        var row = Assert.Single(mapping.Mapper.Map(outcome.PhysicalExecution!).Rows);
+        Assert.Equal(new Summary("load-42", "Acme", 125m), row.Value);
+        Assert.Equal(new[] { "customer-7", "item-1", "item-2", "load-42" },
+            row.Source.InputOccurrences.Select(x => x.ObservationIdentity!).Order(StringComparer.Ordinal));
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, Loads(), _ => "other-id"));
+    }
+
+    [Fact]
+    public void CollectionBindingsRejectDuplicateIdentitiesIncompleteConfigurationAndOversizedSnapshots()
+    {
+        var mapping = Build(out var q, compact: true);
+        var customer = new Customer("customer-7", "Acme");
+        Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(sources => sources
+            .Bind(q.Clr.Shape<Customer>(), new[] { customer, customer }, c => c.Id)));
+        Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(sources => sources
+            .Bind(q.Clr.Shape<Customer>(), new[] { customer, new Customer("customer-8", "Other") }, c => c.Id),
+            maximumRows: 1));
+        Assert.Throws<InvalidOperationException>(() => mapping.CreateInMemoryEvaluator(sources => sources
+            .Root(q.Clr.Shape<Load>(), l => l.Id)));
+    }
+
+    [Fact]
     public async Task DirectInvocationMatchesTheExpandedEvaluationAndDtoResult()
     {
         var mapping = Build(compact: true);
@@ -194,9 +230,13 @@ public sealed class RelationDtoJoinFacadeTests
         Assert.Equal(Define(false), Define(true));
     }
 
-    static RelationDtoMapping<Summary> Build(bool compact, RelationOutputMode mode = RelationOutputMode.ZeroOrOnePerRoot)
+    static RelationDtoMapping<Summary> Build(bool compact, RelationOutputMode mode = RelationOutputMode.ZeroOrOnePerRoot) =>
+        Build(out _, compact, mode);
+
+    static RelationDtoMapping<Summary> Build(out RelationQueryExpressionAuthoring q, bool compact,
+        RelationOutputMode mode = RelationOutputMode.ZeroOrOnePerRoot)
     {
-        var q = RelationQuery.Expression();
+        q = RelationQuery.Expression();
         var loads = q.Source<Load>(); var items = q.Source<LineItem>(); var customers = q.Source<Customer>();
         var totals = compact
             ? items.Aggregate<LoadTotal>(g => g.Group(t => t.LoadId, i => i.LoadId)
