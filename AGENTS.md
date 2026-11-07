@@ -382,6 +382,20 @@ independent risk or must be inspected to verify a breaking emitted contract. Sum
 changes elsewhere in the pull request without presenting every affected file as critical review material.
 
 
+## Semantic development MCP workflow
+
+When working on the Aspire Orders example's exported transitions, process, entities, shapes, queries or API contracts, use the `cohesive_orders` MCP
+server when configured. Read `learn`, then `workspace`, retain its snapshot, resolve the relevant identity and
+inspect its structured source mappings and use `references` to discover direct consumers before editing. Setup and the exact export command are documented in
+[Orders development onboarding](eng/examples/aspire-first/Development/README.md).
+
+After source edits, rebuild and re-export before relying on `check`; review `changedInputs`, domain validation
+coverage and diagnostics. Compare with the retained baseline. Use `impact` for bounded transitive consumer paths;
+review truncation, incomplete coverage, and each edge’s fingerprint/revision evidence. Neither reachability nor
+fingerprint equality establishes API compatibility. Use `compatibility` against retained snapshots for directional HTTP/JSON findings under its declared policy. Edit typed authoring source, never derived JSON. If the
+server is unavailable, use the documented setup or report that semantic tool verification was not performed;
+do not claim tool results from source reading alone. Other repository areas are not automatically in this scope.
+
 ## Testing
 
 Testing pyramid:

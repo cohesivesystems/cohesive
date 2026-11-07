@@ -54,12 +54,24 @@ public sealed record ProcessDefinition : IImmutableExecutionDefinition
     /// </remarks>
     /// <returns>The deterministic direct dependency set.</returns>
     public ImmutableArray<ExecutionDefinitionReference> GetProcessDependencies()
+        => GetDependencies(includeDataOperations: false);
+
+    /// <summary>Derives exact direct process, transition and hosted-query references from built-in nodes.</summary>
+    /// <returns>Unique references in canonical order; extension-owned references are not included.</returns>
+    public ImmutableArray<ExecutionDefinitionReference> GetDefinitionDependencies() => GetDependencies(includeDataOperations: true);
+
+    ImmutableArray<ExecutionDefinitionReference> GetDependencies(bool includeDataOperations)
     {
         HashSet<ExecutionDefinitionReference> observed = [];
         foreach (var node in Nodes)
         {
             if (node is not null && ProcessRequestSemantics.TryProjectChild(node, out var child) && child.Process is { } reference)
                 observed.Add(reference);
+            if (includeDataOperations)
+            {
+                if (node is InvokeTransitionProcessNode transition) observed.Add(transition.Transition);
+                else if (node is EvaluateRelationProcessNode query) observed.Add(query.Relation);
+            }
         }
         return observed.OrderBy(static reference => reference,
             Comparer<ExecutionDefinitionReference>.Create(ExecutionDefinitionReference.CompareCanonical))

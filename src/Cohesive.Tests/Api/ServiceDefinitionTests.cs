@@ -34,6 +34,7 @@ public sealed class ServiceDefinitionTests
         Assert.Equal(query.Query, Assert.IsType<ServiceQueryOperation>(actual.Operations[2]).Query);
         Assert.Equal(control, Assert.IsType<ServiceProcessControlOperation>(actual.Operations[3]));
         Assert.Equal(document.Metadata.Fingerprint, restored!.Metadata.Fingerprint);
+        Assert.Equal(new[] { transition.Transition, query.Query, process.Process }, actual.GetDefinitionDependencies());
     }
 
     [Theory]
@@ -50,6 +51,8 @@ public sealed class ServiceDefinitionTests
             ExecutionDefinitionJsonSerializer.Serialize(document), out var restored).IsValid);
         Assert.True(ServiceDefinitionDocuments.ValidateAndProject(restored!, out var definition).IsValid);
         Assert.Equal(operation, Assert.Single(definition!.Operations));
+        Assert.Equal(classified ? new[] { operation.ResultClassifier!, operation.Process } : new[] { operation.Process },
+            definition.GetDefinitionDependencies());
         Assert.NotEqual(operation, new ServiceProcessEntityResultOperation("result", operation.Process,
             new("other-commit"), operation.Entity, operation.AuthorizationRequirements));
     }
@@ -67,6 +70,8 @@ public sealed class ServiceDefinitionTests
             ExecutionDefinitionJsonSerializer.Serialize(document), out var restored).IsValid);
         Assert.True(ServiceDefinitionDocuments.ValidateAndProject(restored!, out var definition).IsValid);
         Assert.Equal(operation, Assert.Single(definition!.Operations));
+        Assert.Equal(classified ? new[] { operation.ResultClassifier!, operation.Process } : new[] { operation.Process },
+            definition.GetDefinitionDependencies());
         Assert.NotEqual(operation, new ServiceProcessResultOperation("result", Reference("other/process"), operation.AuthorizationRequirements));
     }
 

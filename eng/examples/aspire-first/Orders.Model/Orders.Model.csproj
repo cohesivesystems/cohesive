@@ -4,6 +4,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Explicit portable source root for CallerFilePath and generated process attribution. -->
+    <PathMap>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)../../../..'))=/_</PathMap>
     <EnableCohesiveGlobalUsings>false</EnableCohesiveGlobalUsings>
   </PropertyGroup>
   <ItemGroup>

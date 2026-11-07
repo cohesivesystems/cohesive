@@ -8,7 +8,7 @@ namespace AspireFirst.Orders;
 /// <summary>Immutable canonical fulfillment query declarations; backend preparation belongs to host composition.</summary>
 public sealed class FulfillmentQueries : QueryModel
 {
-    /// <summary>Declares both queries against the supplied canonical domain.</summary>
+    /// <summary>Declares fulfillment queries against the supplied canonical domain.</summary>
     /// <param name="domain">Shared entity and relationship authority.</param>
     public FulfillmentQueries(FulfillmentDomain domain)
     {
@@ -40,6 +40,11 @@ public sealed class FulfillmentQueries : QueryModel
                 .Select((row, item) => new ReservationAvailability(
                     row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available));
         });
+
+        ReservationsBySku = Queries.WithInput<string>("sku").Array("fulfillment/reservations-by-sku", (query, sku) =>
+            query.Source(domain.Reservations)
+                .Where(row => row.Partition == FulfillmentStoragePolicy.LocalPartition && row.Sku == sku.Value)
+                .Select(row => new ReservationBySku(row.Id, row.OrderId, row.Sku, row.Quantity)));
     }
 
     /// <summary>Shared rooted definition for live keyed reads and per-root materialization hydration.</summary>
@@ -50,6 +55,9 @@ public sealed class FulfillmentQueries : QueryModel
 
     /// <summary>Canonical query shared by native and composed registrations.</summary>
     public RelationQuery<string, ReservationAvailability[]> ReservationAvailability { get; }
+
+    /// <summary>Reservations for one SKU in the Orders partition.</summary>
+    public RelationQuery<string, ReservationBySku[]> ReservationsBySku { get; }
 
     static RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(RelationQueryExpressionAuthoring query,
         RelationQueryExpressionParameter<string> orderId, FulfillmentDomain domain) =>
@@ -80,3 +88,8 @@ public sealed record ReservationDemand(string OrderId, string? ReservationId, st
 /// <param name="Sku">Referenced inventory identity when present.</param><param name="Quantity">Demand when present.</param>
 /// <param name="Available">Inventory when present; separate reads do not imply a distributed snapshot.</param>
 public sealed record ReservationAvailability(string OrderId, string? ReservationId, string? Sku, int? Quantity, int? Available);
+
+/// <summary>Reservation returned by the SKU read.</summary>
+/// <param name="Id">Reservation identity.</param><param name="OrderId">Owning order.</param>
+/// <param name="Sku">Reserved inventory identity.</param><param name="Quantity">Reserved quantity.</param>
+public sealed record ReservationBySku(string Id, string OrderId, string Sku, int Quantity);

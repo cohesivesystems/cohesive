@@ -242,6 +242,31 @@ public sealed record ServiceDefinition
     /// <summary>Canonical exposed operation order; these declarations own service membership.</summary>
     public ImmutableArray<ServiceOperation> Operations { get; }
 
+    /// <summary>Projects exact behavior dependencies from the canonical operation family.</summary>
+    /// <returns>Distinct references in ordinal identity, revision and fingerprint order.</returns>
+    /// <exception cref="NotSupportedException">An operation family has no dependency interpretation.</exception>
+    public ImmutableArray<ExecutionDefinitionReference> GetDefinitionDependencies()
+    {
+        var references = new HashSet<ExecutionDefinitionReference>();
+        foreach (var operation in Operations)
+        {
+            var (primary, classifier) = operation switch
+            {
+                ServiceTransitionOperation transition => (transition.Transition, (ExecutionDefinitionReference?)null),
+                ServiceQueryOperation query => (query.Query, null),
+                ServiceProcessOperation process => (process.Process, process.ResultClassifier),
+                ServiceProcessResultOperation result => (result.Process, result.ResultClassifier),
+                ServiceProcessEntityResultOperation entity => (entity.Process, entity.ResultClassifier),
+                ServiceProcessControlOperation control => (control.Process, null),
+                _ => throw new NotSupportedException("Unknown service dependency semantics.")
+            };
+            references.Add(primary);
+            if (classifier is not null) references.Add(classifier);
+        }
+        return [.. references.OrderBy(r => r.DefinitionId.Value, StringComparer.Ordinal)
+            .ThenBy(r => r.RevisionId.Value, StringComparer.Ordinal).ThenBy(r => r.Fingerprint.Value, StringComparer.Ordinal)];
+    }
+
     /// <summary>Compares the canonical operation set by value.</summary>
     public bool Equals(ServiceDefinition? other) => ReferenceEquals(this, other)
         || other is not null && Operations.SequenceEqual(other.Operations);

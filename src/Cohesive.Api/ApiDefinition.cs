@@ -119,6 +119,10 @@ public readonly record struct ApiEndpointId
     /// <summary>
     /// Creates an endpoint id.
     /// </summary>
+    /// <param name="value">Nonempty logical endpoint identity.</param>
+    /// <exception cref="ArgumentNullException">The identity is null.</exception>
+    /// <exception cref="ArgumentException">The identity is empty or whitespace.</exception>
+    [System.Text.Json.Serialization.JsonConstructor]
     public ApiEndpointId(string value) => Value = Guard.RequireNotNullOrWhiteSpace(value);
 
     /// <summary>

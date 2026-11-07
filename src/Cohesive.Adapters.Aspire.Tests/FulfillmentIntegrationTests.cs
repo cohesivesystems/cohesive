@@ -33,6 +33,7 @@ public sealed partial class OrderStorageIntegrationTests
         var id = Guid.NewGuid().ToString("D");
         var outsideId = Guid.NewGuid().ToString("D");
         var sku = "book-" + Guid.NewGuid().ToString("N");
+        var otherSku = sku + "-other";
         try
         {
             await orders.Upsert(context, OrderTestFixture.RegisterOrder(Model.Domain, Guid.Parse(id)));
@@ -58,10 +59,12 @@ public sealed partial class OrderStorageIntegrationTests
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{outsideId}/details")).StatusCode);
             Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync($"/orders/{Guid.NewGuid():D}/details")).StatusCode);
             await inventory.Upsert(context, new InventoryItem(sku, "local", 8));
+            var expected = new List<ReservationBySku>();
             for (var index = 1; index <= 2; index++)
             {
                 var reservationId = Guid.NewGuid().ToString("D");
                 await reservations.Upsert(context, new Reservation(reservationId, "local", id, sku, index));
+                expected.Add(new(reservationId, id, sku, index));
             }
             var joined = await client.GetFromJsonAsync<OrderDetails>($"/orders/{id}/details");
             Assert.Equal(2, joined!.Reservations.Count);
@@ -122,6 +125,23 @@ public sealed partial class OrderStorageIntegrationTests
                 new(new("wrong-database"), database, "tests/fulfillment"), 10, 1000));
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => queryReader.ReadAsync(id, new CancellationToken(true)));
             Assert.Null(await queryReader.ReadAsync("' OR true --"));
+
+            // The Orders schema rejects foreign-partition reservations, even for a known SKU.
+            await using (var outside = database.CreateCommand("UPDATE public.cohesive_reservations SET partition_key = $1 WHERE reservation_id = $2"))
+            {
+                outside.Parameters.AddWithValue("outside");
+                outside.Parameters.AddWithValue(expected[0].Id);
+                var failure = await Assert.ThrowsAsync<PostgresException>(() => outside.ExecuteNonQueryAsync());
+                Assert.Equal(PostgresErrorCodes.CheckViolation, failure.SqlState);
+            }
+            await inventory.Upsert(context, new InventoryItem(otherSku, FulfillmentStoragePolicy.LocalPartition, 10));
+            var other = new Reservation(Guid.NewGuid().ToString("D"), FulfillmentStoragePolicy.LocalPartition, id, otherSku, 3);
+            await reservations.Upsert(context, other);
+            var bySku = await client.GetFromJsonAsync<ReservationBySku[]>($"/orders/reservations/by-sku/{sku}");
+            Assert.Equal(expected.OrderBy(row => row.Id), bySku!.OrderBy(row => row.Id));
+            var alternate = await client.GetFromJsonAsync<ReservationBySku[]>($"/orders/reservations/by-sku/{otherSku}");
+            Assert.Equal(new ReservationBySku(other.Id, other.OrderId, other.Sku, other.Quantity), Assert.Single(alternate!));
+            Assert.Empty((await client.GetFromJsonAsync<ReservationBySku[]>($"/orders/reservations/by-sku/{sku}-missing"))!);
             await app.StopAsync();
         }
         finally
@@ -130,6 +150,7 @@ public sealed partial class OrderStorageIntegrationTests
             {
                 ("DELETE FROM public.cohesive_reservations WHERE order_id = $1", id),
                 ("DELETE FROM public.cohesive_inventory WHERE sku = $1", sku),
+                ("DELETE FROM public.cohesive_inventory WHERE sku = $1", otherSku),
                 ("DELETE FROM public.cohesive_orders WHERE order_id = $1", id),
                 ("DELETE FROM public.cohesive_orders WHERE order_id = $1", outsideId)
             })

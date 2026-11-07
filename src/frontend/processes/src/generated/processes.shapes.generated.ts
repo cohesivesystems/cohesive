@@ -997,6 +997,7 @@ export interface ExecutionSourceProvenance {
   reference: string;
   semanticPath?: ExecutionSemanticPath | null;
   description?: string | null;
+  location?: ExecutionSourceLocation | null;
 }
 
 export type PortableValueState = 'Missing' | 'Absent' | 'Null' | 'Unknown' | 'Failed' | 'Concrete';
@@ -1181,6 +1182,12 @@ export interface ProcessTraceOccurrenceEvidence {
 
 export interface ExecutionSemanticPath {
   segments: string[];
+}
+
+export interface ExecutionSourceLocation {
+  path: string;
+  startLine: number;
+  endLine: number;
 }
 
 export type ExecutionTraceEvidenceDisclosure = 'Unknown' | 'Disclosed' | 'Redacted' | 'Unavailable' | 'Unsupported';
