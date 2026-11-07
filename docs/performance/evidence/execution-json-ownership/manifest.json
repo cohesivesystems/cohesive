@@ -1,0 +1,64 @@
+{
+  "current_main_base": "b0af008d85871ad8866d7d4311707ecd926529de",
+  "controlled_base": "9808a4b68c8a7e64660e381507bd41866cc8901e (published alpha.158)",
+  "ari_main": "88a29989dc46113c8203b50e23f6b23e893e694d (#253, exact reviewed #252 tree)",
+  "runtime": {
+    "framework": ".NET 10.0.13",
+    "architecture": "Arm64",
+    "os": "macOS 27.0.1",
+    "entrypoint": "/private/tmp/cohesive-json-ownership-evidence/ari-after/ProtocolPreparation.dll",
+    "relationsAssembly": "/private/tmp/cohesive-json-ownership-evidence/ari-after/Cohesive.Relations.dll",
+    "relationsSha256": "2DAB7C06DC23CA4DD0003D46D4498B83252309CB8125278D50C30F78F95F7D85"
+  },
+  "changed_modules": {
+    "Cohesive.dll": {
+      "before": "38fadfe9aa2e23a8596607865305ead98a6f0c24d0a7b69074104b9c8bf2a78d",
+      "after": "8aac64643e49055463e6ad5f87979ebbc9605d5d73db1e0534487645826e5c9d"
+    }
+  },
+  "validation": {
+    "main": {
+      "passed": 5273,
+      "failed": 0,
+      "skipped": 60
+    },
+    "relations": {
+      "passed": 1186,
+      "failed": 0,
+      "skipped": 0
+    },
+    "sqlite": {
+      "passed": 233,
+      "failed": 0,
+      "skipped": 0
+    },
+    "ari-engine": {
+      "passed": 1014,
+      "failed": 0,
+      "skipped": 18
+    },
+    "ari-native": {
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    }
+  },
+  "serialization_suite_on_controlled_alpha158": "30 tests passed",
+  "allocation_guards": "All three fixed ceilings fail on unchanged alpha.158 and pass after; median of seven batches of eight creates after eight warmups.",
+  "normal_x12_cases": 768,
+  "traces": 4,
+  "native_recovery_combinations": 9,
+  "pinned_graph_fingerprints": "Both unchanged from alpha.158",
+  "source_sha256": {
+    "src/Cohesive/Execution/ExecutionDefinitionTypes.cs": "7f74de964959c4f17bdcbfbede96411061037b3934bebad41f4ccc88fd781313",
+    "src/Cohesive/Execution/ExecutionDefinitionDocument.cs": "2d0984c71b48c889a764e13ed04fc0c6c9eacc5761ca458bb18b0fbd9be6b882",
+    "src/Cohesive/Execution/ExecutionDefinitionDocumentProjection.cs": "9f3a508d1d0322a610fc72290a592399c64dd681cf9691667791cdf6754a7727"
+  },
+  "patch_sha256": "d8d237ca0fd476b9a7ba30157961b1b3aad710f7e01d2b937938f8ce46582ea5",
+  "raw_artifacts": "/tmp/cohesive-json-ownership-evidence",
+  "package_cache": "Unmodified official package cache. Only isolated harness/test outputs overlay the source-qualified Core DLL.",
+  "benchmark": "BenchmarkDotNet 0.15.8 ShortRun: one launch, three warmups and measurements, 100 ms iteration target; flat, nested/collection-heavy and bounded-large inputs prepared outside measurement.",
+  "limits": "Core/Relations/SQLite suites run on current Cohesive main plus the fix; X12 and native/Engine evidence isolate the same three-method patch on the exact published alpha.158 source. This is not publication or Ari package adoption of the new fix. Cumulative allocation is not retained heap. Timing is mixed with broad ShortRun errors and variable JIT counters; no stable application CPU/latency or retained-memory claim. No owned builds/tests ran during benchmark/counter collection. Sampled trace attribution is not an exact component budget.",
+  "sdk": "10.0.402",
+  "benchmark_source_sha256": "5b2f32d0aea794daf36c8316975a6cddca8b906f20d93f8c20b52a14de82c644"
+}

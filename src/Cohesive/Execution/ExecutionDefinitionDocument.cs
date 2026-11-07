@@ -219,8 +219,9 @@ public sealed record ExecutionDefinitionDocument
         ArgumentNullException.ThrowIfNull(provenance);
 
         var normalizedExtensions = NormalizeExtensions(extensions);
-        var definitionElement = ExecutionDefinitionFingerprinter.NormalizeDefinition(
-            ExecutionDefinitionTypes.Serialize(definition));
+        JsonElement definitionElement;
+        using (var serialized = ExecutionDefinitionTypes.Serialize(definition))
+            definitionElement = ExecutionDefinitionFingerprinter.NormalizeDefinition(serialized.RootElement);
 
         var fingerprint = ExecutionDefinitionFingerprinter.ComputeNormalized(
             CurrentSchemaVersion,
