@@ -89,7 +89,6 @@ public static class RelationDtoMapping
 public sealed class RelationDtoMapping<TSource, TOutput>
     where TSource : notnull where TOutput : notnull
 {
-    static readonly RelationQueryEvaluationId LocalEvaluation = new("cohesive.relations/dto-mapping/local");
     readonly RelationQueryEvaluator evaluator;
     readonly RelationDtoMapping<TOutput> prepared;
 
@@ -140,7 +139,7 @@ public sealed class RelationDtoMapping<TSource, TOutput>
     /// with an explicit identity for attributable execution and retained phase diagnostics/provenance.</remarks>
     public async Task<TOutput[]> MapManyAsync(IEnumerable<TSource> sources, CancellationToken cancellationToken = default)
     {
-        var outcome = await EvaluateAsync(sources, LocalEvaluation, cancellationToken).ConfigureAwait(false);
+        var outcome = await EvaluateAsync(sources, RelationDtoMapping<TOutput>.LocalEvaluation, cancellationToken).ConfigureAwait(false);
         if (!outcome.IsSuccessful)
             throw new InvalidOperationException($"DTO projection evaluation failed with status {outcome.Status}; use EvaluateAsync for phase diagnostics.");
         var mapped = Mapper.Map(outcome.PhysicalExecution!, cancellationToken: cancellationToken);

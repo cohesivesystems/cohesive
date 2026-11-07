@@ -50,6 +50,75 @@ public sealed class RelationDtoJoinFacadeTests
     }
 
     [Fact]
+    public async Task DirectInvocationMatchesTheExpandedEvaluationAndDtoResult()
+    {
+        var mapping = Build(compact: true);
+        var evaluator = Evaluator(mapping);
+        var seen = 0;
+        IEnumerable<Load> Roots()
+        {
+            foreach (var root in Loads()) { seen++; yield return root; }
+        }
+        Assert.Equal([new Summary("load-42", "Acme", 125m)],
+            await mapping.MapAsync(evaluator, Roots(), x => x.Id));
+        Assert.Equal(1, seen);
+        var direct = await mapping.EvaluateAsync(evaluator, Loads(), x => x.Id, evaluation: new("direct/request-42"));
+        var expanded = await mapping.EvaluateAsync(evaluator,
+            mapping.Evaluate(new("direct/request-42")).Supply(Loads(), x => x.Id).Build());
+        Assert.True(direct.IsSuccessful, Explain(direct));
+        Assert.Equal(expanded.Evaluation.Fingerprint, direct.Evaluation.Fingerprint);
+        Assert.Same(mapping.CompilationRequest, direct.Evaluation.Compilation);
+        var row = Assert.Single(mapping.Mapper.Map(direct.PhysicalExecution!).Rows);
+        Assert.Equal(4, row.Source.InputOccurrences.Length);
+        var local = await mapping.EvaluateAsync(evaluator, Loads(), x => x.Id);
+        Assert.Equal("cohesive.relations/dto-mapping/local", local.Evaluation.Evaluation.Value);
+        Assert.Empty(await mapping.MapAsync(evaluator, Array.Empty<Load>(), x => x.Id));
+    }
+
+    [Fact]
+    public async Task DirectInvocationCancellationDoesNotEnumerateOrAcquire()
+    {
+        var mapping = Build(compact: true);
+        var evaluator = new UnusedEvaluator();
+        using var canceled = new CancellationTokenSource(); canceled.Cancel();
+        var seen = 0;
+        IEnumerable<Load> Roots()
+        {
+            seen++;
+            yield return Loads()[0];
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            mapping.MapAsync(evaluator, Roots(), x => x.Id, cancellationToken: canceled.Token));
+        Assert.Equal(0, seen);
+        using var duringEnumeration = new CancellationTokenSource();
+        IEnumerable<Load> CancelDuringEnumeration()
+        {
+            yield return Loads()[0];
+            duringEnumeration.Cancel();
+            yield return new("second", "customer-7");
+        }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => mapping.MapAsync(evaluator,
+            CancelDuringEnumeration(), x => x.Id, cancellationToken: duringEnumeration.Token));
+        Assert.Equal(0, evaluator.Calls);
+    }
+
+    [Fact]
+    public async Task DirectInvocationPreservesIdentityAndRootValidationBeforeAcquisition()
+    {
+        var mapping = Build(compact: true);
+        var evaluator = new UnusedEvaluator();
+        await Assert.ThrowsAsync<ArgumentNullException>(() => mapping.MapAsync<Load>(evaluator, null!, x => x.Id));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => mapping.MapAsync(evaluator, Loads(), null!));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => mapping.MapAsync(null!, Loads(), x => x.Id));
+        await Assert.ThrowsAsync<ArgumentNullException>(() => mapping.MapAsync(evaluator, new Load[] { null! }, x => x.Id));
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, Loads().Concat(Loads()), x => x.Id));
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, Loads(), _ => ""));
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator,
+            new[] { new Load("invalid", null!) }, x => x.Id));
+        Assert.Equal(0, evaluator.Calls);
+    }
+
+    [Fact]
     public async Task KeepsInnerOmissionsAndEnforcesExplicitPerRootCardinality()
     {
         var mapping = Build(compact: true);
@@ -142,6 +211,17 @@ public sealed class RelationDtoJoinFacadeTests
             ? withCustomers.Join(totals, (l, t) => l.Id == t.LoadId, (l, t) => new Summary(l.Id, l.CustomerName, t.Total))
             : withCustomers.Join(totals, (l, t) => l.Id == t.LoadId).Select((l, t) => new Summary(l.Id, l.CustomerName, t.Total));
         return RelationDtoMapping.Create(loads, output, mode);
+    }
+
+    sealed class UnusedEvaluator : IRelationQueryEvaluator
+    {
+        public int Calls { get; private set; }
+        public ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync(RelationQueryEvaluation evaluation,
+            CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            throw new InvalidOperationException("Invalid or canceled input must fail before evaluator invocation.");
+        }
     }
 
     static Load[] Loads() => [new("load-42", "customer-7")];

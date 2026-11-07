@@ -11,6 +11,8 @@ namespace Cohesive.Relations.Mapping;
 /// No join, cardinality, missing-value, aggregate or provenance semantics are added by this facade.</remarks>
 public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
 {
+    internal static readonly RelationQueryEvaluationId LocalEvaluation = new("cohesive.relations/dto-mapping/local");
+
     internal RelationDtoMapping(RelationQueryCompilationResult compilation, CompiledRelationDtoMapper<TOutput> mapper,
         RelationQueryAuthoringManifest authoringProvenance)
     { Compilation = compilation; Mapper = mapper; AuthoringProvenance = authoringProvenance; }
@@ -29,6 +31,67 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
     /// <returns>The existing evaluation builder; callers may supply roots or parameter values as required.</returns>
     /// <exception cref="ArgumentException">The evaluation identity is invalid.</exception>
     public RelationQueryEvaluationBuilder Evaluate(RelationQueryEvaluationId evaluation) => new(CompilationRequest, evaluation);
+
+    /// <summary>Supplies a complete root collection and evaluates it through the existing invocation builder.</summary>
+    /// <typeparam name="TRoot">CLR root type, admitted against the prepared relation's root shape.</typeparam>
+    /// <param name="evaluator">Caller-owned evaluator providing related sources, limits and target guarantees.</param>
+    /// <param name="roots">Finite, non-null root collection, enumerated once. Inputs must remain stable during admission.</param>
+    /// <param name="selectIdentity">Selects a nonempty, unique identity for each supplied root.</param>
+    /// <param name="evaluation">Explicit invocation identity, or null for the operation-local mapping identity.</param>
+    /// <param name="cancellationToken">Cancels enumeration, admission, acquisition and interpretation.</param>
+    /// <returns>The full phase outcome, including diagnostics and source provenance.</returns>
+    /// <exception cref="ArgumentNullException">A required argument, root or selected identity is null.</exception>
+    /// <exception cref="ArgumentException">Root identities are empty/duplicated, root data violates its shape, or the invocation is invalid.</exception>
+    /// <exception cref="NotSupportedException">A root cannot be represented as observation data.</exception>
+    /// <exception cref="InvalidOperationException">Placement or provider state is incompatible with the declared request.</exception>
+    /// <exception cref="OperationCanceledException">The invocation is canceled.</exception>
+    /// <remarks>Uses Supply's existing complete-evidence and whole-source partition defaults. Use Evaluate(...)
+    /// for partial root evidence, explicit partitions, parameters or other invocation refinements. The local
+    /// default identity is not globally unique; provide evaluation when retaining cross-invocation attribution.</remarks>
+    public ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync<TRoot>(IRelationQueryEvaluator evaluator,
+        IEnumerable<TRoot> roots, Func<TRoot, string> selectIdentity,
+        RelationQueryEvaluationId? evaluation = null, CancellationToken cancellationToken = default) where TRoot : notnull
+        => EvaluateAsync(evaluator, SuppliedEvaluation(evaluator, roots, selectIdentity, evaluation, cancellationToken), cancellationToken);
+
+    /// <summary>Maps a supplied complete root collection without manually constructing an evaluation.</summary>
+    /// <typeparam name="TRoot">CLR root type admitted against the canonical root shape.</typeparam>
+    /// <param name="evaluator">Caller-owned evaluator supplying related sources and execution limits.</param>
+    /// <param name="roots">Finite, non-null roots, enumerated once with cancellation between inputs.</param>
+    /// <param name="selectIdentity">Selects each root's nonempty unique identity; no key convention is inferred.</param>
+    /// <param name="evaluation">Optional explicit invocation identity; defaults to an operation-local identity.</param>
+    /// <param name="cancellationToken">Cancels enumeration, admission, acquisition and mapping.</param>
+    /// <returns>A complete owned DTO array in canonical result order. Declared joins and cardinality determine omissions.</returns>
+    /// <exception cref="ArgumentNullException">A required argument, root or selected identity is null.</exception>
+    /// <exception cref="ArgumentException">Root identities are empty/duplicated, root data violates its shape, or the invocation is invalid.</exception>
+    /// <exception cref="NotSupportedException">A root cannot be represented as observation data.</exception>
+    /// <exception cref="InvalidOperationException">Evaluation is inconclusive/failed, or strict materialization fails.</exception>
+    /// <exception cref="OperationCanceledException">The invocation is canceled.</exception>
+    /// <remarks>Preserves Supply's complete-root/whole-source defaults and the existing strict mapping policy.
+    /// Use the evaluation-builder overload for parameters, partial evidence or explicit partitions.</remarks>
+    public Task<TOutput[]> MapAsync<TRoot>(IRelationQueryEvaluator evaluator,
+        IEnumerable<TRoot> roots, Func<TRoot, string> selectIdentity,
+        RelationQueryEvaluationId? evaluation = null, CancellationToken cancellationToken = default) where TRoot : notnull
+        => MapAsync(evaluator, SuppliedEvaluation(evaluator, roots, selectIdentity, evaluation, cancellationToken), cancellationToken);
+
+    RelationQueryEvaluation SuppliedEvaluation<TRoot>(IRelationQueryEvaluator evaluator, IEnumerable<TRoot> roots,
+        Func<TRoot, string> selectIdentity, RelationQueryEvaluationId? evaluation, CancellationToken cancellationToken)
+        where TRoot : notnull
+    {
+        ArgumentNullException.ThrowIfNull(evaluator);
+        ArgumentNullException.ThrowIfNull(roots);
+        ArgumentNullException.ThrowIfNull(selectIdentity);
+        cancellationToken.ThrowIfCancellationRequested();
+        return Evaluate(evaluation ?? LocalEvaluation).Supply(CancellableRoots(), selectIdentity).Build();
+
+        IEnumerable<TRoot> CancellableRoots()
+        {
+            foreach (var root in roots)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                yield return root;
+            }
+        }
+    }
 
     /// <summary>Evaluates using explicit source placement, readers, limits and policies.</summary>
     /// <param name="evaluator">Caller-owned evaluator; no client or source binding is inferred.</param>

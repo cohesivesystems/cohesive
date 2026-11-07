@@ -326,3 +326,10 @@ configured evaluator and invocation to `MapAsync`. Source acquisition, unique-ke
 missing values, cardinality, numeric rules and provenance retain their existing authorities.
 See the [three-source example](docs/GETTING_STARTED.md#compact-joins-and-grouped-totals) for the complete
 load/customer/line-item declaration, result, binding requirements and exact equivalence to expanded authoring.
+
+For a composed mapping's common complete-root invocation, use
+`await mapping.MapAsync(evaluator, loadValues, load => load.Id)`. Optional `evaluation:` supplies a caller-owned
+invocation identity; the default is operation-local. `EvaluateAsync` accepts the same inputs for retained phase
+results. These overloads delegate to the existing evaluation builder and Supply admission; parameters, partial
+root evidence and explicit partitions use the full builder. Source identities, evaluator binding and resource
+limits are explicit, with cancellation checked before enumeration and between roots.

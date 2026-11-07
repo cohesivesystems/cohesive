@@ -75,15 +75,35 @@ var summaries = loads
 var mapping = RelationDtoMapping.Create(loads, summaries,
     mode: RelationOutputMode.ZeroOrOnePerRoot);
 
-var evaluation = mapping.Evaluate(new("load-summary/request-42"))
-    .Supply(loadValues, load => load.Id)
-    .Build();
-var dtos = await mapping.MapAsync(evaluator, evaluation);
+var dtos = await mapping.MapAsync(evaluator, loadValues, load => load.Id);
 ```
 
 Here `evaluator` is an explicitly configured, caller-owned evaluator: the load roots are supplied and its
 readers acquire customers and line items through existing bounded placements. `loadValues` is the supplied
 load collection. No data source, snapshot guarantee or client registration is hidden by the facade.
+
+The direct invocation supplies a complete root collection using the existing whole-source partition default.
+It enumerates inputs once, observes cancellation between inputs and delegates identity/shape validation to
+`Supply`; duplicate or empty root identities are rejected. The root identity selector remains explicit.
+For caller-attributed invocations, pass an identity directly:
+
+```csharp
+var dtos = await mapping.MapAsync(evaluator, loadValues, load => load.Id,
+    evaluation: new("load-summary/request-42"), cancellationToken: cancellationToken);
+```
+
+Omitting `evaluation` uses the same fixed operation-local identity as the single-source mapping facade;
+it is not a globally unique request identifier. Use explicit identities when retaining cross-invocation attribution.
+The corresponding `EvaluateAsync(evaluator, roots, selectIdentity, evaluation: ...)` overload retains the full
+outcome. For parameters, partial root evidence, explicit partitions or other refinements, the builder path is
+still the complete invocation surface:
+
+```csharp
+var evaluation = mapping.Evaluate(new("load-summary/request-42"))
+    .Supply(loadValues, load => load.Id)
+    .Build();
+var dtos = await mapping.MapAsync(evaluator, evaluation);
+```
 
 The DTO declarations are ordinary records:
 
