@@ -26,3 +26,47 @@ the typed enum discriminator, guard, entity and transition.
 
 The source uses only existing repository projects; it requires no external service or new dependency.
 For the API contract, see [transition discovery](../../../src/Cohesive.Api.Execution/Services/TRANSITION_DISCOVERY.md).
+
+## Browser example and generated API
+
+Install the repository's existing frontend dependencies once, then build and run from the repository root:
+
+```sh
+corepack pnpm install --frozen-lockfile
+bash eng/examples/load-actions/build.sh
+ASPNETCORE_ENVIRONMENT=Development dotnet run --no-build --project eng/examples/load-actions -- --serve --urls http://127.0.0.1:5189
+```
+
+Open <http://127.0.0.1:5189>. Select a role and load, select an action, enter a reason, check availability,
+then submit. `LD-2041` has complete documents; `LD-2042` is missing documents. A supervisor can cancel either
+load. Editing the reason, choosing another action, or changing the load or role invalidates the checked
+version. The browser never infers permissions or machine guards. To see conflict recovery, check an action
+in one tab, complete a competing action in another, then submit the first tab's stale action.
+
+`LoadApplication` owns the shared entity, machine, transitions, service operations and API declarations.
+Both the console and web host consume it. `LoadClientGeneration` projects those declarations through the
+existing TypeScript shape and API emitters into `ui/generated`; these files are derived and must not be
+edited. The HTTP endpoint adapters consume the same API projection. The small DOM view in `ui/app.ts`
+uses generated contracts, availability classifications and API identities; `transport.ts` joins returned
+actions to generated invocation functions. The page layout and command field rendering are a local sample
+renderer, not a general Presentation compiler. The typed inspection endpoint currently requires one shared
+command contract per entity and fails registration for unsupported input families.
+
+The host exposes catalog/detail reads, typed action inspection, and service-projected invocation routes.
+The role header is an explicit **Development-only demo identity resolver**. Native ASP.NET authorization
+policies defer to runtime capability/scope/resource authorization. A production host must use trusted
+identity enrichment and its actual endpoint policies instead. Storage is in memory; restarting resets the
+loads. This source example is intended to run from its project build output, not as a published deployment.
+
+Verify generated artifacts and exercise the actual server through the compiled TypeScript client:
+
+```sh
+dotnet run --project eng/examples/load-actions -- --check-generated
+node node_modules/typescript/bin/tsc -p eng/examples/load-actions
+node --test eng/examples/load-actions/test.mjs
+```
+
+CI runs these checks. The integration test starts its own server on an ephemeral loopback port and verifies
+role filtering, required input, document guards, no-write inspection, unauthorized invocation, unknown
+operation rejection, successful cancellation and stale-version conflict. The .NET tests additionally cover
+projection contracts, HTTP serialization and shared generic naming across shape/client/mock generation.

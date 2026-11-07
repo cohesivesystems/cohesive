@@ -23,6 +23,64 @@ namespace Cohesive.Tests.Api;
 [Collection(Cohesive.Tests.Observability.OperationTelemetryEmitterTestCollection.Name)]
 public sealed class ServiceRuntimeTests
 {
+    [Fact]
+    public async Task Inspection_projection_validates_input_and_links_invocation_identity()
+    {
+        var fixture = await Fixture.Create();
+        var entity = fixture.Repository.EntityDefinition.StateShape.QualifiedId;
+        var binding = new HttpBinding("POST", "/notes/{id}/actions",
+            [new("id", HttpParameterSource.Route, typeof(string))], new(typeof(ServiceTransitionInspection<Note.ReviseInput>)));
+        var projection = fixture.Runtime.ProjectTransitionInspection<Note.ReviseInput>(entity, binding);
+        Assert.Equal(typeof(ServiceTransitionAction[]), projection.Operation.ResponseType);
+        Assert.Contains("/entity/", projection.Operation.Id.Value);
+        Assert.DoesNotContain("/operation/", projection.Operation.Id.Value);
+        Assert.Throws<ArgumentException>(() => fixture.Runtime.ProjectTransitionInspection<string>(entity, binding));
+        Assert.Throws<ArgumentException>(() => fixture.Runtime.ProjectTransitionInspection<Note.ReviseInput>(entity,
+            new HttpBinding("POST", "/notes/{id}/actions", binding.Parameters, new(typeof(Note.ReviseInput)))));
+        var available = Assert.Single(await fixture.Runtime.InspectTransitionsAsync(OperationContext.Create(), entity, "note-1"));
+        var action = fixture.Runtime.ProjectTransitionAction(available);
+        Assert.Equal(fixture.Runtime.Project<Note.ReviseInput, bool>("revise").Operation.Id.Value, action.ApiOperationId);
+        Assert.Equal(fixture.Initial.ConcurrencyToken.Value, action.ConcurrencyToken);
+    }
+
+    [Theory]
+    [InlineData("{}", true, 200, "RequiresInput")]
+    [InlineData("{\"Inputs\":{\"revise\":{\"Text\":\"after\"}}}", true, 200, "Permitted")]
+    [InlineData("{\"Inputs\":{\"unknown\":{\"Text\":\"after\"}}}", true, 400, null)]
+    [InlineData("{}", false, 200, null)]
+    public async Task Http_inspection_is_typed_authorized_and_never_writes(string body, bool authorized, int status, string? kind)
+    {
+        var fixture = await Fixture.Create();
+        fixture.Authority.AllowAdmission = authorized;
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create());
+        await using var app = builder.Build();
+        app.MapServiceTransitionInspection<Note.ReviseInput>(fixture.Runtime,
+            fixture.Repository.EntityDefinition.StateShape.QualifiedId, "/notes/{id}/actions");
+        var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints).Single();
+        var bytes = Encoding.UTF8.GetBytes(body);
+        var http = new DefaultHttpContext { RequestServices = app.Services };
+        http.Request.Method = "POST";
+        http.Request.ContentType = "application/json";
+        http.Request.ContentLength = bytes.Length;
+        http.Request.Body = new MemoryStream(bytes);
+        http.Request.RouteValues["id"] = "note-1";
+        http.Response.Body = new MemoryStream();
+        await endpoint.RequestDelegate!(http);
+        Assert.Equal(status, http.Response.StatusCode);
+        Assert.Equal(0, fixture.Repository.Writes);
+        http.Response.Body.Position = 0;
+        using var json = await System.Text.Json.JsonDocument.ParseAsync(http.Response.Body);
+        if (kind is not null)
+        {
+            var action = Assert.Single(json.RootElement.EnumerateArray());
+            Assert.Equal(kind, action.GetProperty("Kind").GetString());
+            Assert.Equal(fixture.Initial.ConcurrencyToken.Value, action.GetProperty("ConcurrencyToken").GetString());
+            Assert.False(action.TryGetProperty("Input", out _));
+        }
+        else if (!authorized) Assert.Equal(0, json.RootElement.GetArrayLength());
+    }
+
     [Theory]
     [InlineData(long.MaxValue - 1, ServiceTransitionAvailabilityKind.Permitted)]
     [InlineData(long.MaxValue, ServiceTransitionAvailabilityKind.Indeterminate)]

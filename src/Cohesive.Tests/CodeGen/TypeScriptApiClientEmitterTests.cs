@@ -12,6 +12,27 @@ namespace Cohesive.Tests.CodeGen;
 public sealed class TypeScriptApiClientEmitterTests
 {
     [Fact]
+    public void Emit_ClosedGenericContracts_ShareNamesWithShapesAndMocks()
+    {
+        var definition = Cohesive.Api.Api.Define("Generic")
+            .Action("Inspect").Route("POST", "/inspect")
+            .Body<Envelope<CompletedReview>>().Returns<Envelope<PendingReview>>().Done().Build();
+        var graph = new Cohesive.Model.ClrShapeGraphBuilder()
+            .AddShape<Envelope<CompletedReview>>().AddShape<Envelope<PendingReview>>().Build(new("generic"));
+        var shapes = Assert.Single(new TypeScriptShapeEmitter().Emit(graph).Documents).Text;
+        var client = Assert.Single(new TypeScriptApiClientEmitter().Emit(definition).Documents).Text;
+        var mock = Assert.Single(new TypeScriptPlaywrightApiMockEmitter().Emit(new ApiCodeGenerationRequest(definition)).Documents).Text;
+        Assert.Contains("interface EnvelopeCompletedReview", shapes);
+        Assert.Contains("interface EnvelopePendingReview", shapes);
+        Assert.Contains("body: EnvelopeCompletedReview", client);
+        Assert.Contains("Promise<EnvelopePendingReview>", client);
+        Assert.Contains("EnvelopeCompletedReview", mock);
+        Assert.Contains("EnvelopePendingReview", mock);
+    }
+
+    sealed record Envelope<T>(T Value);
+
+    [Fact]
     public void Emit_AlternatingSuccessfulBodies_UsesDeclaredHttpResponseUnion()
     {
         var definition = Cohesive.Api.Api.Define("Review")

@@ -206,6 +206,9 @@ public static class ServiceApiProjection
         return CreateResult<TResponse>(declaration.Reference, result, http, scopePolicies: scopePolicies);
     }
 
+    internal static string EntityInspectionIdentity(ExecutionDefinitionReference reference, QualifiedShapeId entity) =>
+        $"service/{Uri.EscapeDataString(reference.DefinitionId.Value)}/entity/{Uri.EscapeDataString(entity.GraphId.Value)}/{Uri.EscapeDataString(entity.ShapeId.Value)}/inspectTransitions";
+
     internal static string OperationIdentity(ExecutionDefinitionReference reference, string operationId) =>
         $"service/{Uri.EscapeDataString(reference.DefinitionId.Value)}/operation/{Uri.EscapeDataString(operationId)}";
 
