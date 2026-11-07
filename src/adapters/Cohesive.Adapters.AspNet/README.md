@@ -43,6 +43,8 @@ The root `Cohesive.Adapters.AspNet` namespace owns the direct Minimal API interp
 `ApiEndpoint`. Mapping preserves each original `ApiOperation`, `HttpBinding`, authorization requirement, scope
 policy, and semantic reference as endpoint metadata. Definitions are mapped in stable declaration order, and the
 optional callback can attach additional ASP.NET metadata without changing semantic authority.
+The default ASP.NET endpoint name is the canonical operation ID, so services may reuse local names
+such as `result`. Explicit endpoint-name selectors override that projection.
 
 ```csharp
 using Cohesive.Adapters.AspNet;

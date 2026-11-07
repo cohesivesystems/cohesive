@@ -65,7 +65,7 @@ public sealed class ApiEndpointRouteBuilderExtensionsTests
         Assert.Equal(["POST"], endpoints[1].Metadata.GetMetadata<IHttpMethodMetadata>()!.HttpMethods);
 
         var get = endpoints[0];
-        Assert.Equal("GetById", get.Metadata.GetMetadata<IEndpointNameMetadata>()!.EndpointName);
+        Assert.Equal(definition.Operations[0].Id.ToString(), get.Metadata.GetMetadata<IEndpointNameMetadata>()!.EndpointName);
         Assert.Equal("Get a shipment by id.", get.Metadata.GetMetadata<IEndpointSummaryMetadata>()!.Summary);
         Assert.Equal(
             "Loads the shipment read model from the API surface.",

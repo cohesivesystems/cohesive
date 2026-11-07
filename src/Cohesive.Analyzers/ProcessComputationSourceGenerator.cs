@@ -5134,6 +5134,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.PointRead({relationReference})");
                 relationReference = $"{relationReference}.Reference";
             }
+            else if (relation.Parameter?.Type is INamedTypeSymbol { Name: "ProcessQuery", Arity: 2 } native
+                && native.ContainingNamespace.ToDisplayString() == "Cohesive.Processes.Authoring")
+            {
+                dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.Query({relationReference})");
+                relationReference = $"{relationReference}.Reference";
+            }
             else if (IsTypedCanonicalRelationQueryHandle(relation.Parameter?.Type))
                 relationReference = $"{relationReference}.Reference";
 

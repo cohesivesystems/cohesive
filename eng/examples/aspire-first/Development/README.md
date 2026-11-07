@@ -138,3 +138,44 @@ The repeatable exercise uses the official SDK over stdio, checks stale-source re
 validates the mixed documents with explicit coverage, compares transition and query changes, and verifies comment-only
 equivalence. It runs offline in CI. No live infrastructure, API invocation, or generated client is exercised. Assertions
 fail when a source-edit recipe no longer matches exactly, so qualification evolves with the owning model.
+
+## Cancellation authoring qualification
+
+The cancellation recipe is returned by `learn`. The authored command accepts a `ServiceProcessCommand<CancelOrder>` at `POST /fulfillment/cancellations` and returns a protected polling location. Use the same command, instance and attempt identities when retrying. A persisted begin-transition receipt gives the original occurrence exclusive ownership of stock release. A new occurrence gets `InProgress` while cancellation is unfinished and `AlreadyCancelled` after completion.
+
+This recipe supports the one-item fulfillment flow. It requires exactly one reservation whose identity equals the order identity, and rejects unsupported reservation sets before any write. Read projections expose `Released`. Recovery tests recreate process preparation after injected failures before release, after release and after marking the reservation, and verify the stock total.
+
+Apply the explicit reservation migration before starting an existing database:
+
+```sh
+psql "$ORDERS_TEST_DATABASE_URL" -f eng/examples/aspire-first/migrations/002-reservation-cancellation.sql
+```
+
+With a disposable PostgreSQL test database configured:
+
+```sh
+dotnet test src/Cohesive.Adapters.Aspire.Tests --filter FullyQualifiedName~CancellationIntegrationTests
+```
+
+Set `COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING` for this command and confirm tests execute. To replay source authoring through one MCP session, retain the pre-cancellation Git commit and run:
+
+```sh
+dotnet run --project eng/examples/aspire-first/Development -- cancellation-exercise "$PWD" a2461a5098bd337977af8540ff233f7753501d36
+```
+
+The replay builds an isolated baseline tree, calls `learn`, applies the tracked working source, rebuilds and exports. It saves validation, dependency paths and directional contract findings to `tmp/orders-cancellation-exercise.json`. Both new endpoints must be Compatible for existing clients and Breaking for proposed clients against the old server. Existing Order responses gain lifecycle enum values, for which the current policy reports Unknown in both directions. Clients consuming those states need an explicit enum-evolution review.
+
+The replay records all eight existing endpoints as well as the two additions. Against the pre-cancellation baseline:
+
+| Contract | Existing client → proposed server | Proposed client → existing server |
+| --- | --- | --- |
+| Order.Create, Order.availability | Compatible | Compatible |
+| Order.Get, Order.Submit | Unknown (enum) | Unknown (enum) |
+| Order.Details | Unknown (enum) | Breaking (required Released field), plus enum uncertainty |
+| Order.ReservationsBySku | Compatible | Breaking (required Released field) |
+| Fulfillment admission and polling | Unknown (structural wire coverage) | Unknown (structural wire coverage) |
+| Cancellation admission and polling | Compatible (addition) | Breaking (missing endpoint) |
+
+A C# optional constructor argument is not a portable promise that an older server emits the new field.
+The impact exercise requires an untruncated exact-reference path from inventory release to cancellation admission;
+it also preserves incomplete-definition coverage in the report. Reachability is not a whole-system compatibility proof.

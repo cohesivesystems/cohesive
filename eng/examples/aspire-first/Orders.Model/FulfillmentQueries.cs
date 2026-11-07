@@ -24,7 +24,8 @@ public sealed class FulfillmentQueries : QueryModel
                 items => items
                     .Field(result => result.Sku, inventory, item => item.Sku)
                     .Field(result => result.Quantity, reservations, reservation => reservation.Quantity)
-                    .Field(result => result.AvailableStock, inventory, item => item.Available))
+                    .Field(result => result.AvailableStock, inventory, item => item.Available)
+                    .Field(result => result.Released, reservations, reservation => reservation.Released))
             .BuildRelation(new("fulfillment/order-details/relation"));
         OrderDetails = Query(OrderDetailsRelation.ReadById(new("fulfillment/order-details")));
         var queries = Queries.WithInput<string>("orderId");
@@ -41,10 +42,15 @@ public sealed class FulfillmentQueries : QueryModel
                     row.OrderId, row.ReservationId, row.Sku, row.Quantity, item.Available));
         });
 
+        ReservationsByOrder = Queries.WithInput<string>("orderId").Array("fulfillment/reservations-by-order", (query, orderId) =>
+            query.Source(domain.Reservations)
+                .Where(row => row.Partition == FulfillmentStoragePolicy.LocalPartition && row.OrderId == orderId.Value)
+                .Select(row => new Reservation(row.Id, row.Partition, row.OrderId, row.Sku, row.Quantity, row.Released)));
+
         ReservationsBySku = Queries.WithInput<string>("sku").Array("fulfillment/reservations-by-sku", (query, sku) =>
             query.Source(domain.Reservations)
                 .Where(row => row.Partition == FulfillmentStoragePolicy.LocalPartition && row.Sku == sku.Value)
-                .Select(row => new ReservationBySku(row.Id, row.OrderId, row.Sku, row.Quantity)));
+                .Select(row => new ReservationBySku(row.Id, row.OrderId, row.Sku, row.Quantity, row.Released)));
     }
 
     /// <summary>Shared rooted definition for live keyed reads and per-root materialization hydration.</summary>
@@ -58,6 +64,9 @@ public sealed class FulfillmentQueries : QueryModel
 
     /// <summary>Reservations for one SKU in the Orders partition.</summary>
     public RelationQuery<string, ReservationBySku[]> ReservationsBySku { get; }
+
+    /// <summary>All reservation facts for one order, including released facts for stable cancellation replay.</summary>
+    public RelationQuery<string, Reservation[]> ReservationsByOrder { get; }
 
     static RelationQueryExpressionBoundNode<FilterQueryNode, Order> OrdersById(RelationQueryExpressionAuthoring query,
         RelationQueryExpressionParameter<string> orderId, FulfillmentDomain domain) =>
@@ -76,14 +85,15 @@ public sealed record OrderDetails(string Id, OrderStatus Status, IReadOnlyList<R
 /// <param name="Sku">Inventory identity.</param>
 /// <param name="Quantity">Reserved quantity.</param>
 /// <param name="AvailableStock">Current availability in the query snapshot.</param>
-public sealed record ReservationSummary(string Id, string Sku, int Quantity, int AvailableStock);
+/// <param name="Released">Whether cancellation returned this reservation to inventory.</param>
+public sealed record ReservationSummary(string Id, string Sku, int Quantity, int AvailableStock, bool Released = false);
 
 /// <summary>Reservation demand before inventory enrichment; absent reservations remain distinguishable.</summary>
 /// <param name="OrderId">Owning order.</param><param name="ReservationId">Reservation identity when present.</param>
 /// <param name="Sku">Referenced inventory identity when present.</param><param name="Quantity">Demand when present.</param>
 public sealed record ReservationDemand(string OrderId, string? ReservationId, string? Sku, int? Quantity);
 
-/// <summary>Reservation demand enriched with independently placeable current inventory.</summary>
+/// <summary>Historical reservation demand enriched with independently placeable current inventory, including cancelled orders.</summary>
 /// <param name="OrderId">Owning order.</param><param name="ReservationId">Reservation identity when present.</param>
 /// <param name="Sku">Referenced inventory identity when present.</param><param name="Quantity">Demand when present.</param>
 /// <param name="Available">Inventory when present; separate reads do not imply a distributed snapshot.</param>
@@ -92,4 +102,5 @@ public sealed record ReservationAvailability(string OrderId, string? Reservation
 /// <summary>Reservation returned by the SKU read.</summary>
 /// <param name="Id">Reservation identity.</param><param name="OrderId">Owning order.</param>
 /// <param name="Sku">Reserved inventory identity.</param><param name="Quantity">Reserved quantity.</param>
-public sealed record ReservationBySku(string Id, string OrderId, string Sku, int Quantity);
+/// <param name="Released">Whether cancellation returned this reservation to inventory.</param>
+public sealed record ReservationBySku(string Id, string OrderId, string Sku, int Quantity, bool Released = false);

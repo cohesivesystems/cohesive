@@ -112,8 +112,8 @@ public sealed class PostgresCosmosCompositionTests
         Assert.All(model.Endpoints.Plan.QueryDependencies.Queries,
             query => Assert.Equal(RelationQueryConsistency.IndependentSources, query.Consistency));
         var prepared = model.Storage.RequireComposition<PostgresComposedStorageComposition>().PrepareEvidence(model.Endpoints.Plan.QueryDependencies.Queries);
-        Assert.Equal(3, prepared.ExecutionEvidence.Length);
-        Assert.Equal(3, prepared.Postgres.Requirements.Length);
+        Assert.Equal(4, prepared.ExecutionEvidence.Length);
+        Assert.Equal(4, prepared.Postgres.Requirements.Length);
         var remote = Assert.Single(prepared.Sources).Value;
         Assert.Equal(2, remote.Requirements.Length);
         Assert.All(prepared.Requirements.Concat(prepared.Postgres.Requirements).Concat(remote.Requirements),

@@ -10,9 +10,9 @@ using AspireFirst.Orders;
 using Cohesive.Adapters.Mcp.Development;
 using Cohesive.Semantics;
 
-if (args.Length is < 2 or > 3 || args[0] is not ("export" or "serve" or "exercise" or "wire-sample") || (args.Length == 3 && args[0] != "exercise"))
+if (args.Length is < 2 or > 3 || args[0] is not ("export" or "serve" or "exercise" or "wire-sample" or "cancellation-exercise") || (args.Length == 3 && args[0] is not ("exercise" or "cancellation-exercise")))
 {
-    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise|wire-sample> <repository-root> [authoring-base-commit for exercise]");
+    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise|wire-sample|cancellation-exercise> <repository-root> [authoring-base-commit for exercise]");
     return 2;
 }
 var root = Path.GetFullPath(args[1]);
@@ -29,6 +29,9 @@ switch (args[0])
         using (var reader = new StreamReader(typeof(OrdersWorkspace).Assembly.GetManifestResourceStream("Orders.Development.Guide.md")!))
             await DevelopmentMcpServer.RunAsync(DevelopmentMcpServer.CreateDefaultWorkspace(root, OrdersWorkspace.Bundle),
                 new DevelopmentGuide(OrdersWorkspace.ProducerVersion, reader.ReadToEnd()));
+        break;
+    case "cancellation-exercise":
+        await CancellationWorkflow.RunAsync(root, args.Length == 3 ? args[2] : "a2461a5098bd337977af8540ff233f7753501d36");
         break;
     case "exercise":
         await OrdersWorkflow.RunAsync(root, args.Length == 3 ? args[2] : null);
@@ -58,9 +61,12 @@ internal static class OrdersWorkspace
             var domain = new FulfillmentDomain();
             var process = new FulfillmentProcess(domain);
             var queries = new FulfillmentQueries(domain);
-            var endpoints = new OrderEndpoints(new OrderApi(domain, process), domain, queries).Plan;
+            var cancellation = new CancellationProcess(domain, queries);
+            var endpoints = new OrderEndpoints(new OrderApi(domain, process, cancellation: cancellation), domain, queries).Plan;
             var executions = new[] { domain.OrderTransitions.Submit.Document, domain.InventoryTransitions.Reserve.Document,
-                domain.InventoryTransitions.Release.Document, domain.ReservationTransitions.Create.Document, process.Definition.Document }
+                domain.InventoryTransitions.Release.Document, domain.ReservationTransitions.Create.Document, process.Definition.Document,
+                domain.OrderTransitions.BeginCancellation.Document, domain.OrderTransitions.CompleteCancellation.Document,
+                domain.ReservationTransitions.MarkReleased.Document, cancellation.Definition.Document, cancellation.Reservations.Contract.Document, cancellation.ReservationEvidence.Query.Document }
                 .Concat(endpoints.Implementations.Where(e => e.Service is not null).Select(e => e.Service!.Declaration))
                 .DistinctBy(d => d.Reference);
             var requests = endpoints.QueryDependencies.Queries.Select(q => q.Request).ToArray();
