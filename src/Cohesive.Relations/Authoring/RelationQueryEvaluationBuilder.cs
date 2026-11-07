@@ -854,6 +854,31 @@ public sealed class RelationQueryEvaluationBuilder
         return Supply(observations, completeness, evidenceReference, logicalPartition);
     }
 
+    internal RelationQueryEvaluationBuilder SupplyByIdentityField<T>(IEnumerable<T> values, string identityField,
+        CancellationToken cancellationToken) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        cancellationToken.ThrowIfCancellationRequested();
+        var shape = ResolveGraphShape(RequireRelationRootShape());
+        return Supply(ObserveRoots(), observation =>
+        {
+            if (!observation.TryGetField(identityField, out var key) || key.Kind != ObservationValueKind.String
+                || string.IsNullOrWhiteSpace(key.String))
+                throw new ArgumentException($"Root identity field '{identityField}' must contain a nonempty string.", nameof(values));
+            return key.String;
+        });
+
+        IEnumerable<CoreObservation> ObserveRoots()
+        {
+            foreach (var value in values)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ArgumentNullException.ThrowIfNull(value);
+                yield return CoreObservation.Create(shape, ObservationValue.FromObject(value));
+            }
+        }
+    }
+
     /// <summary>Builds an immutable target-neutral evaluation descriptor.</summary>
     /// <returns>
     /// An evaluation retaining the exact compilation context, identity, complete declared-parameter states,

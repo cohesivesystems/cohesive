@@ -68,7 +68,48 @@ public sealed class RelationDtoJoinFacadeTests
         Assert.Equal(new Summary("load-42", "Acme", 125m), row.Value);
         Assert.Equal(new[] { "customer-7", "item-1", "item-2", "load-42" },
             row.Source.InputOccurrences.Select(x => x.ObservationIdentity!).Order(StringComparer.Ordinal));
+        Assert.Equal(row.Value, Assert.Single(await mapping.MapAsync(evaluator, Loads())));
         await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, Loads(), _ => "other-id"));
+    }
+
+    [Fact]
+    public async Task SelectorFreeMappingUsesTheDeclaredFieldAndRejectsDuplicateKeys()
+    {
+        var author = RelationQuery.Expression();
+        var roots = author.Source<Load>();
+        var output = roots.Select(load => new Summary(load.Id, load.CustomerId, 0m));
+        var mapping = RelationDtoMapping.Create(roots, output, RelationOutputMode.OnePerRoot);
+        var evaluator = mapping.CreateInMemoryEvaluator(sources => sources
+            .Root(author.Clr.Shape<Load>(), load => load.CustomerId));
+        var input = new[] { new Load("same-id", "customer-1"), new Load("same-id", "customer-2") };
+        var result = await mapping.MapAsync(evaluator, input);
+        Assert.Equal(new[] { "customer-1", "customer-2" }, result.Select(row => row.CustomerName).Order(StringComparer.Ordinal));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, new[] { input[0], input[0] }));
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, new[] { new Load("id", "") }));
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, new[] { new Load("id", null!) }));
+    }
+
+    [Fact]
+    public async Task SelectorFreeMappingChecksEvaluatorAndCancellationBeforeReadingRoots()
+    {
+        var mapping = Build(out var q, compact: true);
+        var evaluator = mapping.CreateInMemoryEvaluator(sources => sources
+            .Root(q.Clr.Shape<Load>(), l => l.Id)
+            .Bind(q.Clr.Shape<Customer>(), Array.Empty<Customer>(), c => c.Id)
+            .Bind(q.Clr.Shape<LineItem>(), Array.Empty<LineItem>(), i => i.Id));
+        var seen = 0;
+        IEnumerable<Load> Roots()
+        {
+            seen++;
+            yield return Loads()[0];
+        }
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(new UnusedEvaluator(), Roots()));
+        await Assert.ThrowsAsync<ArgumentException>(() => Build(compact: true).MapAsync(evaluator, Roots()));
+        using var canceled = new CancellationTokenSource();
+        canceled.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => mapping.MapAsync(evaluator, Roots(), canceled.Token));
+        Assert.Equal(0, seen);
     }
 
     [Fact]

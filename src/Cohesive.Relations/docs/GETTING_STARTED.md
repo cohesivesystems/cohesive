@@ -83,12 +83,13 @@ var evaluator = mapping.CreateInMemoryEvaluator(sources => sources
         i => i.Id));
 
 var loadValues = new[] { new Load("load-42", "customer-7") };
-var dtos = await mapping.MapAsync(evaluator, loadValues, load => load.Id);
+var dtos = await mapping.MapAsync(evaluator, loadValues);
 ```
 
 Each bound collection is snapshotted at evaluator creation. The identity selectors name direct string
-properties, and acquired rows must have unique, nonempty identities. Supplied roots must use the identity
-declared by `Root`. The optional `maximumRows` argument limits each snapshot and local execution.
+properties, and acquired rows must have unique, nonempty identities. The two-argument mapping call reads
+the identity declared by `Root` from each admitted observation. The optional `maximumRows` argument limits
+each snapshot and local execution.
 The binder supports complete source sets with one acquired input per shape. Use explicit placement for
 relationship lookups or multiple acquired inputs sharing a shape.
 

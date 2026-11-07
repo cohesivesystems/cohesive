@@ -144,22 +144,28 @@ public sealed class RelationQueryInMemorySources
         return new BoundEvaluator(request, field, new RelationQueryEvaluator(_ => placed, policy, readers));
     }
 
-    sealed class BoundEvaluator(RelationQueryCompilationRequest request, string rootIdentityField,
+    internal sealed class BoundEvaluator(RelationQueryCompilationRequest request, string rootIdentityField,
         RelationQueryEvaluator evaluator) : IRelationQueryEvaluator
     {
+        internal string RequireRootIdentityField(RelationQueryCompilationRequest compilation, string parameterName)
+        {
+            if (!ReferenceEquals(request, compilation))
+                throw new ArgumentException("The in-memory evaluator belongs to a different prepared request.", parameterName);
+            return rootIdentityField;
+        }
+
         public ValueTask<RelationQueryEvaluationOutcome> EvaluateAsync(RelationQueryEvaluation evaluation,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(evaluation);
             cancellationToken.ThrowIfCancellationRequested();
-            if (!ReferenceEquals(request, evaluation.Compilation))
-                throw new ArgumentException("The in-memory evaluator belongs to a different prepared request.", nameof(evaluation));
+            var identityField = RequireRootIdentityField(evaluation.Compilation, nameof(evaluation));
             if (evaluation.SuppliedRoots is { } roots)
             {
                 foreach (var root in roots.Observations)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (!root.Fields.TryGetValue(rootIdentityField, out var key)
+                    if (!root.Fields.TryGetValue(identityField, out var key)
                         || key.Kind != ObservationValueKind.String
                         || !string.Equals(key.String, root.Identity, StringComparison.Ordinal))
                         throw new ArgumentException("Supplied root identities must match the declared identity field.", nameof(evaluation));

@@ -76,6 +76,32 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
         RelationQueryEvaluationId? evaluation = null, CancellationToken cancellationToken = default) where TRoot : notnull
         => EvaluateAsync(evaluator, SuppliedEvaluation(evaluator, roots, selectIdentity, evaluation, cancellationToken), cancellationToken);
 
+    /// <summary>Maps a complete root collection using the identity field declared on an in-memory evaluator.</summary>
+    /// <typeparam name="TRoot">CLR root type admitted against the canonical root shape.</typeparam>
+    /// <param name="evaluator">An in-memory evaluator created for this prepared mapping.</param>
+    /// <param name="roots">Finite, non-null roots, enumerated once with cancellation between inputs.</param>
+    /// <param name="cancellationToken">Cancels enumeration, admission, acquisition and mapping.</param>
+    /// <returns>A complete owned DTO array in canonical result order.</returns>
+    /// <exception cref="ArgumentNullException">A required argument or root is null.</exception>
+    /// <exception cref="ArgumentException">The evaluator is incompatible, or roots violate their shape or identity contract.</exception>
+    /// <exception cref="NotSupportedException">A root cannot be represented as observation data.</exception>
+    /// <exception cref="InvalidOperationException">Evaluation is inconclusive or strict materialization fails.</exception>
+    /// <exception cref="OperationCanceledException">The invocation is canceled.</exception>
+    /// <remarks>Uses the operation-local evaluation identity. Identities come from the admitted observation's
+    /// configured field. Use the explicit selector or evaluation builder when supplying invocation metadata.</remarks>
+    public Task<TOutput[]> MapAsync<TRoot>(IRelationQueryEvaluator evaluator,
+        IEnumerable<TRoot> roots, CancellationToken cancellationToken = default) where TRoot : notnull
+    {
+        ArgumentNullException.ThrowIfNull(evaluator);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (evaluator is not RelationQueryInMemorySources.BoundEvaluator bound)
+            throw new ArgumentException("Use an evaluator created with CreateInMemoryEvaluator to reuse its root identity.", nameof(evaluator));
+
+        var identityField = bound.RequireRootIdentityField(CompilationRequest, nameof(evaluator));
+        var evaluation = Evaluate(LocalEvaluation).SupplyByIdentityField(roots, identityField, cancellationToken).Build();
+        return MapAsync(evaluator, evaluation, cancellationToken);
+    }
+
     /// <summary>Maps a supplied complete root collection without manually constructing an evaluation.</summary>
     /// <typeparam name="TRoot">CLR root type admitted against the canonical root shape.</typeparam>
     /// <param name="evaluator">Caller-owned evaluator supplying related sources and execution limits.</param>
