@@ -1,0 +1,50 @@
+[
+  {
+    "side": "control",
+    "method": "CompiledKernelOnlySimple",
+    "median_ns": 27101.614852729883,
+    "min_ns": 26860.385617846925,
+    "max_ns": 27705.564467095854,
+    "bytes": 57368.0
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledKernelOnlySimple",
+    "median_ns": 22238.552932919625,
+    "min_ns": 22049.42891081871,
+    "max_ns": 22829.15539927405,
+    "bytes": 57368.0
+  },
+  {
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsSimple",
+    "median_ns": 24533.01750753012,
+    "min_ns": 24152.22045233463,
+    "max_ns": 24636.022192028988,
+    "bytes": 57368.0
+  },
+  {
+    "side": "control",
+    "method": "CompiledKernelOnlyJoined",
+    "median_ns": 96896.39841731265,
+    "min_ns": 96663.01722756411,
+    "max_ns": 109145.48197115386,
+    "bytes": 106520.0
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledKernelOnlyJoined",
+    "median_ns": 82543.84265350876,
+    "min_ns": 80031.84281517094,
+    "max_ns": 94138.10918491484,
+    "bytes": 106520.0
+  },
+  {
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsJoined",
+    "median_ns": 81169.73810483872,
+    "min_ns": 81141.08785635965,
+    "max_ns": 81531.43464052287,
+    "bytes": 106520.0
+  }
+]

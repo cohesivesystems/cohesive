@@ -1,0 +1,86 @@
+[
+  {
+    "method": "CanonicalIngestion",
+    "parameters": "RowCount=1&Join=Inner",
+    "mean_ns": 450834.2711588542,
+    "standard_error_ns": 1603.3962173368934,
+    "bytes": 10782
+  },
+  {
+    "method": "OrdinalIngestion",
+    "parameters": "RowCount=1&Join=Inner",
+    "mean_ns": 451199.1637369792,
+    "standard_error_ns": 6222.139482183633,
+    "bytes": 10269
+  },
+  {
+    "method": "CanonicalIngestion",
+    "parameters": "RowCount=1&Join=Left",
+    "mean_ns": 493400.548828125,
+    "standard_error_ns": 1866.2646980969903,
+    "bytes": 12098
+  },
+  {
+    "method": "OrdinalIngestion",
+    "parameters": "RowCount=1&Join=Left",
+    "mean_ns": 491852.11344401044,
+    "standard_error_ns": 2445.0977142725774,
+    "bytes": 11585
+  },
+  {
+    "method": "CanonicalIngestion",
+    "parameters": "RowCount=32&Join=Inner",
+    "mean_ns": 584905.4518229166,
+    "standard_error_ns": 10405.23005144158,
+    "bytes": 104825
+  },
+  {
+    "method": "OrdinalIngestion",
+    "parameters": "RowCount=32&Join=Inner",
+    "mean_ns": 587056.97265625,
+    "standard_error_ns": 15945.339738626091,
+    "bytes": 91315
+  },
+  {
+    "method": "CanonicalIngestion",
+    "parameters": "RowCount=32&Join=Left",
+    "mean_ns": 672571.2037760416,
+    "standard_error_ns": 12023.654185102507,
+    "bytes": 135123
+  },
+  {
+    "method": "OrdinalIngestion",
+    "parameters": "RowCount=32&Join=Left",
+    "mean_ns": 630034.5279947916,
+    "standard_error_ns": 1792.2953731140408,
+    "bytes": 116432
+  },
+  {
+    "method": "CanonicalIngestion",
+    "parameters": "RowCount=1024&Join=Inner",
+    "mean_ns": 39272306.230769224,
+    "standard_error_ns": 761491.9005313166,
+    "bytes": 3139274
+  },
+  {
+    "method": "OrdinalIngestion",
+    "parameters": "RowCount=1024&Join=Inner",
+    "mean_ns": 35765847.844444446,
+    "standard_error_ns": 311824.85721125855,
+    "bytes": 2715219
+  },
+  {
+    "method": "CanonicalIngestion",
+    "parameters": "RowCount=1024&Join=Left",
+    "mean_ns": 37175545.19047619,
+    "standard_error_ns": 542604.9818247126,
+    "bytes": 4133739
+  },
+  {
+    "method": "OrdinalIngestion",
+    "parameters": "RowCount=1024&Join=Left",
+    "mean_ns": 36777248.5952381,
+    "standard_error_ns": 111848.59835935653,
+    "bytes": 3530571
+  }
+]

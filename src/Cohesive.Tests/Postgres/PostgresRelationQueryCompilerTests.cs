@@ -17,6 +17,20 @@ namespace Cohesive.Tests.Postgres;
 
 public sealed class PostgresRelationQueryCompilerTests
 {
+    [Fact]
+    public void ExactContributorsRejectCollapsingOperatorsRatherThanDroppingSourceOccurrences()
+    {
+        foreach (var fixture in new[] { CreateRowsAndAggregatesFixture(includePaging: false), CreateDistinctFixture(keyed: false) })
+        {
+            var feasibility = RelationQueryRealizationCompiler.Compile(fixture.Plan, PostgresRelationQueryTargetProfile.Default,
+                PostgresRelationQueryTargetProfile.Policy, RelationQueryResultObservability.ExactContributors);
+            var result = new PostgresRelationQueryCompiler().Compile(
+                new RelationQueryBoundRealizationRequest(fixture.Plan, feasibility, fixture.Placement.Placement), fixture.Storage);
+            Assert.False(result.IsSuccessful);
+            Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Code == PostgresRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported);
+        }
+    }
+
     [NativePostgresFact]
     public async Task LocalPostgres_NativeRowsPreserveValuesAndEnforceBounds()
     {
@@ -210,8 +224,8 @@ public sealed class PostgresRelationQueryCompilerTests
         Assert.Contains("\"customer_name\"", artifact.Statement.Text, StringComparison.Ordinal);
         Assert.Contains("\"customer_type\"", artifact.Statement.Text, StringComparison.Ordinal);
         Assert.Contains("\"LoadSearchDto_result\"", artifact.Statement.Text, StringComparison.Ordinal);
-        Assert.Contains("\"Load__customerId\"", artifact.Statement.Text, StringComparison.Ordinal);
-        Assert.Contains("\"Customer__name\"", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains("Load__customerId\"", artifact.Statement.Text, StringComparison.Ordinal);
+        Assert.Contains("Customer__name\"", artifact.Statement.Text, StringComparison.Ordinal);
         Assert.Contains("AS \"customerName\"", artifact.Statement.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("AS \"field_", artifact.Statement.Text, StringComparison.Ordinal);
         Assert.DoesNotMatch("\"[qv][0-9]+\"", artifact.Statement.Text);
@@ -234,9 +248,9 @@ public sealed class PostgresRelationQueryCompilerTests
             statement.Parameters,
             static parameter => Equals(parameter.Value, "customer-1"));
         Assert.Equal(fixture.Storage.Fingerprint, artifact.StorageBinding.Fingerprint);
-        Assert.Equal("cohesive.relations.postgres-artifact/v4", artifact.SchemaVersion);
+        Assert.Equal("cohesive.relations.postgres-artifact/v5", artifact.SchemaVersion);
         Assert.Equal(
-            "cohesive.relations.postgres-artifact/v4-c14n/v1",
+            "cohesive.relations.postgres-artifact/v5-c14n/v1",
             artifact.Fingerprint.Canonicalization);
         Assert.Equal(fixture.Plan.Provenance.DefinitionFingerprint, artifact.Provenance.Plan.DefinitionFingerprint);
         Assert.Equal(fixture.Placement.Placement.Fingerprint, artifact.Provenance.Placement);

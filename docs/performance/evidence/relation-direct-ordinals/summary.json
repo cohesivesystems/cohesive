@@ -1,0 +1,26 @@
+[
+  {
+    "method": "DirectPipelineCanonicalJoined",
+    "mean_ns": 19972619.22222222,
+    "mean_bytes": 14215058.0,
+    "repeats": 3
+  },
+  {
+    "method": "DirectPipelineCanonicalSimple",
+    "mean_ns": 3743384.1298611113,
+    "mean_bytes": 4680745.0,
+    "repeats": 3
+  },
+  {
+    "method": "DirectPipelineOrdinalJoined",
+    "mean_ns": 17599685.77777778,
+    "mean_bytes": 13482496.666666666,
+    "repeats": 3
+  },
+  {
+    "method": "DirectPipelineOrdinalSimple",
+    "mean_ns": 3616420.9697916666,
+    "mean_bytes": 4253786.0,
+    "repeats": 3
+  }
+]

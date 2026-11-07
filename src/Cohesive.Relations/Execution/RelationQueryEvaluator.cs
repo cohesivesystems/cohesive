@@ -310,6 +310,9 @@ public sealed class RelationQueryEvaluationOutcome
 /// </summary>
 public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
 {
+    /// <summary>Default complete supplied-root bound for local relation evaluation.</summary>
+    public const long DefaultMaximumRootRows = 10_000;
+
     const string SuppliedOnlyConventionSetVersion = "cohesive.relations/supplied-only-conventions/v1";
     const string SuppliedOnlySourceKey = "cohesive.relations/supplied-only";
 
@@ -343,7 +346,7 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
     /// <paramref name="maximumRootRows"/> is not positive or exceeds the portable integer range.
     /// </exception>
     public static RelationQueryEvaluator CreateSuppliedOnly(
-        long maximumRootRows = 10_000,
+        long maximumRootRows = DefaultMaximumRootRows,
         IRelationRequirementGapPolicy? requirementGapPolicy = null)
     {
         RelationQuerySourcePlacementLimits limits = new(
@@ -622,6 +625,11 @@ public sealed class RelationQueryEvaluator : IRelationQueryEvaluator
             interpreter);
         return new(compilation, realization, placement, physicalPlanning);
     }
+
+    // Shared by convenience preparation and evaluator execution: one exact request owns one static plan.
+    internal static RelationQueryCompilationResult CompileRequest(RelationQueryCompilationRequest request) =>
+        SharedCompilations.GetValue(request, static _ => new()).Get(request,
+            static candidate => RelationQueryStaticCompiler.Compile(candidate));
 
     sealed record EvaluationPreparation(
         RelationQueryCompilationResult Compilation,

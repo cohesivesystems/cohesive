@@ -1,0 +1,11 @@
+{
+  "candidate_revision": "332b15a0a0289ad3c35e699293b74af398c3928a",
+  "local_source_note": "Timing uses identical production source frozen before that commit; source hashes identify exact inputs.",
+  "measurement": "3 alternating repeats; one case per fresh process, four warmups and six 200ms iterations at 1024 rows. No builds, tests or profiling overlap timing.",
+  "boundary": "Real SQLite command execution on prepared local connection/command; binding, advancement, all-field decoding, complete shape admission, retained observation storage, DTO construction and reader disposal included. No contributor identity reconstruction in either path. Setup excludes artifact/layout/DTO compilation and population.",
+  "reference": "Benchmark dictionary admission through same adapter TryGetField decoder and same shape/materializer; not the provenance-bearing artifact ReadCurrentRow API. Valid benchmark bindings present; null/missing optional payloads distributed over 1/32/1024 rows.",
+  "source_hashes": {
+    "src/adapters/Cohesive.Adapters.SQLite/SqliteRelationQueryRowReader.cs": "8fe02869d7c75dba0797a318769de775ec61a2c721fc8a7936640df6bce52279",
+    "src/Cohesive.Relations.Benchmarks/SqliteOrdinalIngestionBenchmarks.cs": "9b0ebac82d339e7183162b4a5a8b78086372387784e65180eda357141f52419d"
+  }
+}

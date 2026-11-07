@@ -1,0 +1,30 @@
+{
+  "relations": {
+    "passed": 1197,
+    "failed": 0,
+    "skipped": 0
+  },
+  "core": {
+    "passed": 5306,
+    "failed": 0,
+    "skipped": 64
+  },
+  "coverage": [
+    "layout reorder and exact identity",
+    "partial optional layouts and absent optional fields",
+    "numeric widening through shared generic fallback",
+    "required absence, null and invalid kind rejected at admission",
+    "foreign layout plan-mismatch diagnostic",
+    "independent DTO ownership and concurrent invocation",
+    "destination-only allocation guard"
+  ],
+  "production_scope": "Internal opt-in ordinal kernel; default public canonical Map routing, diagnostics, provenance and cancellation unchanged. No new public types or dependencies.",
+  "measured_tradeoff": "Matched original harness at 1024 rows: simple scalar-only kernel +4.3%, joined +0.9%; full canonical +0.5%/+1.0%. An alternate string-check ordering did not resolve the simple scalar-only difference and was reverted.",
+  "linux_ci": {
+    "run": 41876590708,
+    "revision": "343f2e98424c21ee52e062f1289c81452110368c",
+    "cases": 54,
+    "conclusion": "success",
+    "benchmark_build": "Release, warnings as errors; zero warnings/errors"
+  }
+}

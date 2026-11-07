@@ -1,0 +1,13 @@
+repeat,join,method,ns,bytes
+1,Inner,CanonicalIngestion,13649622.333333334,3139006
+1,Inner,OrdinalIngestion,13449266.015384614,2713259
+1,Left,CanonicalIngestion,13927669.333333334,4133720
+1,Left,OrdinalIngestion,14249338.285714284,3530370
+2,Left,OrdinalIngestion,13965318.940476188,3530370
+2,Left,CanonicalIngestion,13717810.26153846,4133623
+2,Inner,OrdinalIngestion,13473097.614285713,2713053
+2,Inner,CanonicalIngestion,13705159.179487178,3138906
+3,Inner,CanonicalIngestion,13693861.102564102,3138906
+3,Inner,OrdinalIngestion,13466164.190476192,2713176
+3,Left,CanonicalIngestion,13710691.782051282,4133654
+3,Left,OrdinalIngestion,13746097.714285716,3530399

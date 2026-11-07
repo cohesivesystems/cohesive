@@ -221,6 +221,17 @@ public sealed record PostgresRelationQueryResultFieldBinding
     public ImmutableArray<ValueBindingId> PresenceDependencies { get; }
 }
 
+/// <summary>One hidden native identity column retaining a query-row contributor occurrence.</summary>
+/// <param name="Binding">Canonical source binding contributing to the result.</param>
+/// <param name="Shape">Exact qualified source shape.</param>
+/// <param name="PlacementBinding">Physical placement owning the identity contract.</param>
+/// <param name="Alias">Compiler-generated SQL result alias.</param>
+public sealed record PostgresRelationQueryContributorBinding(
+    ValueBindingId Binding,
+    QualifiedShapeId Shape,
+    RelationQuerySourcePlacementBindingId PlacementBinding,
+    string Alias);
+
 /// <summary>Hidden result column that distinguishes an absent outer-joined binding from a present row.</summary>
 public sealed record PostgresRelationQueryPresenceBinding
 {
@@ -555,7 +566,10 @@ public enum PostgresRelationQueryLoweringDecisionKind
     Expression = 11,
 
     /// <summary>A rooted relation rowset is correlated to its one supplied invocation root.</summary>
-    RelationRootCorrelation = 12
+    RelationRootCorrelation = 12,
+
+    /// <summary>Hidden source identity columns retain exact query-row contributors.</summary>
+    ContributorProjection = 13
 }
 
 /// <summary>One inspectable PostgreSQL lowering choice with semantic and physical attribution.</summary>
@@ -633,7 +647,7 @@ public sealed record PostgresRelationQueryLoweringDecision
 public sealed class PostgresRelationQueryCompiledArtifact
 {
     /// <summary>Current persisted PostgreSQL native-artifact schema version.</summary>
-    public const string CurrentSchemaVersion = "cohesive.relations.postgres-artifact/v4";
+    public const string CurrentSchemaVersion = "cohesive.relations.postgres-artifact/v5";
 
     /// <summary>Creates or rehydrates one validated PostgreSQL native artifact.</summary>
     /// <param name="schemaVersion">Persisted artifact schema version.</param>
@@ -651,6 +665,7 @@ public sealed class PostgresRelationQueryCompiledArtifact
     /// <param name="loweringDecisions">Attributable PostgreSQL lowering decisions.</param>
     /// <param name="provenance">Target-neutral compilation provenance.</param>
     /// <param name="fingerprint">Persisted fingerprint expected to match normalized content.</param>
+    /// <param name="contributors">Hidden source identities retained for exact query-row provenance; empty for value-only artifacts.</param>
     /// <exception cref="ArgumentNullException">A required reference is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">
     /// The schema is unsupported; metadata is invalid or inconsistent; runtime slots do not align; or the persisted
@@ -672,7 +687,8 @@ public sealed class PostgresRelationQueryCompiledArtifact
         ImmutableArray<PostgresRelationQueryInvariantBinding> invariants,
         ImmutableArray<PostgresRelationQueryLoweringDecision> loweringDecisions,
         RelationQueryNativeCompilationProvenance provenance,
-        PostgresRelationQueryArtifactFingerprint fingerprint)
+        PostgresRelationQueryArtifactFingerprint fingerprint,
+        ImmutableArray<PostgresRelationQueryContributorBinding> contributors = default)
     {
         if (!string.Equals(schemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
             throw new ArgumentException($"Unsupported PostgreSQL artifact schema '{schemaVersion}'.", nameof(schemaVersion));
@@ -702,6 +718,21 @@ public sealed class PostgresRelationQueryCompiledArtifact
                 decision.ExpressionSite?.Value ?? string.Empty,
                 decision.Assignment?.Value ?? string.Empty),
             nameof(loweringDecisions));
+        Contributors = Normalize(contributors, static contributor => contributor.Binding.Value, nameof(contributors));
+        if (!Contributors.IsEmpty && Branch.Kind != RelationQueryNativeResultKind.QueryRows)
+            throw new ArgumentException("Contributor columns require a query-row branch.", nameof(contributors));
+        foreach (var contributor in Contributors)
+        {
+            _ = PostgresSqlDialect.Identifier(contributor.Alias);
+            var table = StorageBinding.Tables.SingleOrDefault(table => table.PlacementBinding == contributor.PlacementBinding);
+            if (table is null || string.IsNullOrWhiteSpace(contributor.Binding.Value) || contributor.Shape != table.Shape || table.Identity is null)
+                throw new ArgumentException("Contributor metadata requires a source binding, exact table shape and identity contract.", nameof(contributors));
+        }
+        var aliases = ResultFields.Select(field => field.Alias).Concat(PresenceBindings.Select(field => field.Alias))
+            .Concat(RelationKey is null ? [] : new[] { RelationKey.Alias }).Concat(Invariants.Select(field => field.Alias))
+            .Concat(Contributors.Select(field => field.Alias)).ToArray();
+        if (aliases.Distinct(StringComparer.Ordinal).Count() != aliases.Length)
+            throw new ArgumentException("Contributor aliases must not collide with other result aliases.", nameof(contributors));
         Provenance = Guard.RequireNotNull(provenance);
         Fingerprint = Guard.RequireNotNull(fingerprint);
         if (Branch.Id != Provenance.Branch)
@@ -731,7 +762,7 @@ public sealed class PostgresRelationQueryCompiledArtifact
             RelationKey,
             Invariants,
             LoweringDecisions,
-            Provenance);
+            Provenance, Contributors);
         if (!Equals(Fingerprint, computed))
             throw new ArgumentException("Persisted PostgreSQL artifact fingerprint does not match normalized content.", nameof(fingerprint));
     }
@@ -747,6 +778,9 @@ public sealed class PostgresRelationQueryCompiledArtifact
 
     /// <summary>Exact multi-table PostgreSQL storage binding used by compilation.</summary>
     public PostgresRelationQueryStorageBinding StorageBinding { get; }
+
+    /// <summary>Hidden identities used to reconstruct exact contributors, in canonical binding order.</summary>
+    public ImmutableArray<PostgresRelationQueryContributorBinding> Contributors { get; }
 
     /// <summary>Exact compiled semantic fields read from physical columns.</summary>
     public ImmutableArray<PostgresRelationQuerySelectedField> SelectedFields { get; }

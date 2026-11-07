@@ -1,0 +1,20 @@
+{
+  "canonical-regression/measure.py": "e52739c5a0d1485fa59c4a5a671dc7a93b57defae57190da0abae6143b94e154",
+  "canonical-regression/raw-reports.tar.gz": "ffbf6f6eec990b39db0d3ccf10540adcaf914d04514cc56e77a83e31a19f92de",
+  "canonical-regression/summary.json": "eb9e68801ba41c39e545c601009a7dbf588739b0b9410e38e8bc31163c30fd77",
+  "canonical-regression/timing.csv": "3303981119339fd5e351b2d2cb1da082e9b4f023dfae2df84329c0c92153e6fe",
+  "ci/raw-reports.tar.gz": "c419b1e441edbc0f7c1a8fd0bde2d191f9399c7c35dfd78128619a2e8dda695f",
+  "ci/summary.json": "26850562ab3b989ae624f77f4410cebc3e584e839fe58e61a8f9eeb870506ece",
+  "manifest.json": "5379ef74cf917dc902d3bf8e4a3280826e3d9bceeb5d3826f8d7c175697423cf",
+  "rejected-string-order/measure.py": "ddb39db10f72d7bf56ea136a70446bdd571f13336264ea335f3c3160928d7f4d",
+  "rejected-string-order/patch.tar.gz": "a2e4a0a5104bf240e41813ddb632d056321eb6659f3eac6125533b0199ad8bd3",
+  "rejected-string-order/raw-reports.tar.gz": "cc263ef58d18dd042e909689e411358f3bcaa6e32fb233632a38bec2b7c9c86b",
+  "rejected-string-order/source-hash.txt": "5b50a5114658ed1232d36bf8283720f00f3e153b7abee2dff4281e3975c97cc1",
+  "rejected-string-order/summary.json": "6e08d8eddfcdfd333231ae8ae2e9b09d4144f86437de7d3ea22253a5045fffe0",
+  "rejected-string-order/timing.csv": "3e513db930083bb2805a60134417cb5b5e746440a54181cc9984ca9fa135dfe8",
+  "verification.json": "cd5c5671c11335859dd7923a2602f8655d1d499974d5f20ed56c686bc5f70146",
+  "warm-and-admission/measure.py": "2170f192f9c1d530c44bef26f9f5f67e6ac9ff26db792c943359c42ac5043c76",
+  "warm-and-admission/raw-reports.tar.gz": "8d6fbd48815b13bd5b42aacf12d11a940c20d4ec1e6b786d3f316b8035b10123",
+  "warm-and-admission/summary.json": "8d5bba761c30929ce45e9cb8bca2648c98aa95bfb023c7deda5f60c6492ad9e9",
+  "warm-and-admission/timing.csv": "2a3e2e7495de4375e365678e0ffaa99a8061808696a35c59398d000ee559478d"
+}
