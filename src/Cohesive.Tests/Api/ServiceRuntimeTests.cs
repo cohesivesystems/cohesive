@@ -24,6 +24,26 @@ namespace Cohesive.Tests.Api;
 public sealed class ServiceRuntimeTests
 {
     [Fact]
+    public async Task Transition_catalog_validation_precedes_route_registration()
+    {
+        var fixture = await Fixture.Create();
+        var good = fixture.Runtime.Project<Note.ReviseInput, bool>("revise", new("POST", "/notes/{id}/revise",
+            [new("id", HttpParameterSource.Route, typeof(string)),
+             new("X-Expected-Concurrency-Token", HttpParameterSource.Header, typeof(string))], new(typeof(Note.ReviseInput))));
+        var unknown = new ApiOperation("unknown", ApiOperationKind.Command, typeof(Note.ReviseInput), typeof(bool))
+            .WithHttp(new("POST", "/notes/{id}/unknown", good.Operation.Http!.Parameters, new(typeof(Note.ReviseInput))));
+        await using var app = WebApplication.CreateSlimBuilder().Build();
+        Assert.Throws<ArgumentException>(() => app.MapServiceTransitions<Note.ReviseInput, bool>(fixture.Runtime,
+            new ApiDefinition([good.Operation, unknown]), authorizationPolicyResolver: (_, requirement) => requirement.Id));
+        Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
+        var unsupported = fixture.Runtime.Project<Note.ReviseInput, bool>("revise",
+            new("POST", "/notes/{id}/revise", parameters: [], new(typeof(Note.ReviseInput))));
+        Assert.Throws<ArgumentException>(() => app.MapServiceTransitions<Note.ReviseInput, bool>(fixture.Runtime,
+            new ApiDefinition([unsupported.Operation]), authorizationPolicyResolver: (_, requirement) => requirement.Id));
+        Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
+    }
+
+    [Fact]
     public async Task Inspection_projection_validates_input_and_links_invocation_identity()
     {
         var fixture = await Fixture.Create();
@@ -520,12 +540,16 @@ public sealed class ServiceRuntimeTests
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(OperationContext.Create());
         await using var app = builder.Build();
-        app.MapServiceTransition<TInput, TOutcome>(runtime, "revise", "/notes/{id}/revise",
+        var projection = runtime.Project<TInput, TOutcome>("revise", new("POST", "/notes/{id}/revise",
+            [new("id", HttpParameterSource.Route, typeof(string)),
+             new("X-Expected-Concurrency-Token", HttpParameterSource.Header, typeof(string))], new(typeof(TInput))));
+        app.MapServiceTransitions<TInput, TOutcome>(runtime, new ApiDefinition([projection.Operation]),
             authorizationPolicyResolver: (_, requirement) => requirement.Id);
         afterMapping?.Invoke();
         var endpoint = ((IEndpointRouteBuilder)app).DataSources.SelectMany(source => source.Endpoints)
             .OfType<RouteEndpoint>().Single();
         Assert.Same(runtime.Declaration, endpoint.Metadata.GetMetadata<ExecutionDefinitionDocument>());
+        Assert.Same(projection.Operation, endpoint.Metadata.GetMetadata<ApiOperation>());
         var bytes = Encoding.UTF8.GetBytes(body);
         var http = new DefaultHttpContext { RequestServices = app.Services };
         http.Request.Method = "POST";

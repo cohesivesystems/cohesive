@@ -29,6 +29,8 @@ test('logistics actions use authorized discovery, machine guards and optimistic 
   const catalog = await queries.catalog(httpClient('', '', base));
   const client = role => httpClient(catalog.RoleHeader, role, base);
   const [ready, missing] = catalog.Loads;
+  await assert.rejects(queries.detailsLoad(client('viewer'), 'missing'), error => error instanceof HttpFailure && error.status === 404);
+  assert.equal((await queries.detailsLoad(client('viewer'), ready)).Id, ready);
   const dispatcher = client('dispatcher');
   const supervisor = client('supervisor');
   const viewer = client('viewer');
@@ -44,7 +46,7 @@ test('logistics actions use authorized discovery, machine guards and optimistic 
   assert.equal(release.Kind, kinds.permitted);
   const [blocked] = await inspect(dispatcher, missing, full);
   assert.equal(blocked.Kind, kinds.unavailable);
-  assert.equal((await queries.details(dispatcher, ready)).LastReason, '');
+  assert.equal((await queries.detailsLoad(dispatcher, ready)).LastReason, '');
   await assert.rejects(invokeAction(viewer, ready, release, command), error => error instanceof HttpFailure && error.status === 403);
   await assert.rejects(inspect(dispatcher, ready, { unknown: command }), error => error instanceof HttpFailure && error.status === 400);
   const supervisorPending = await inspect(supervisor, ready);
@@ -56,7 +58,7 @@ test('logistics actions use authorized discovery, machine guards and optimistic 
   assert.equal(cancel.ConcurrencyToken, release.ConcurrencyToken);
   await invokeAction(dispatcher, ready, release, command);
   await assert.rejects(invokeAction(supervisor, ready, cancel, command), error => error instanceof HttpFailure && error.status === 409);
-  const record = await queries.details(supervisor, ready);
+  const record = await queries.detailsLoad(supervisor, ready);
   assert.equal(record.Status, 'Released');
   assert.equal(record.LastReason, command.Reason);
   assert.ok((await inspect(supervisor, ready, supervisorInputs)).every(action => action.Kind === kinds.unavailable));
@@ -64,5 +66,5 @@ test('logistics actions use authorized discovery, machine guards and optimistic 
   const otherActions = await inspect(supervisor, missing, supervisorInputs);
   const otherCancel = otherActions.find(action => action.OperationId === cancel.OperationId);
   await invokeAction(supervisor, missing, otherCancel, command);
-  assert.equal((await queries.details(supervisor, missing)).Status, 'Cancelled');
+  assert.equal((await queries.detailsLoad(supervisor, missing)).Status, 'Cancelled');
 });

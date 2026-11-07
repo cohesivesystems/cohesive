@@ -70,3 +70,9 @@ CI runs these checks. The integration test starts its own server on an ephemeral
 role filtering, required input, document guards, no-write inspection, unauthorized invocation, unknown
 operation rejection, successful cancellation and stale-version conflict. The .NET tests additionally cover
 projection contracts, HTTP serialization and shared generic naming across shape/client/mock generation.
+
+The web host maps the command catalog with `MapServiceTransitions<Command, string>`, retaining the same
+endpoint declarations used for code generation. Details use the existing `MapEntityApi<Load>` point-read
+pipeline and its identity-aware `Get` projection. Loading, missing-entity responses and typed materialization
+(including enum conversion) are framework-owned; only construction of `LoadDetails` is domain-specific.
+The host's HTTP JSON naming profile matches the profile used to generate the client.

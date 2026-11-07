@@ -1,4 +1,4 @@
-import { catalog, details, inspectTransitionsload } from './generated/queries.generated.js';
+import { catalog, detailsLoad as details, inspectTransitionsload } from './generated/queries.generated.js';
 import { serviceTransitionAvailabilityKinds as kinds } from './generated/contracts.generated.js';
 import type { ServiceTransitionAction } from './generated/contracts.generated.js';
 import { httpClient, HttpFailure, invokeAction } from './transport.js';

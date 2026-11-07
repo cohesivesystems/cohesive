@@ -76,12 +76,12 @@ internal sealed class LoadApplication
                 new(typeof(Command)))).Operation).ToArray());
         Inspection = Runtime.ProjectTransitionInspection<Command>(Entity.StateShape.QualifiedId,
             new("POST", InspectionRoute, [new("id", HttpParameterSource.Route, typeof(string))], new(typeof(ServiceTransitionInspection<Command>))));
+        Details = Cohesive.Api.Api.Define("LoadOperations").Entity<Load>()
+            .Query("Details").Route("GET", "/api/loads/{id}").RouteParameter<string>("id")
+            .Returns<LoadDetails>().Result(ApiResultKind.NotFound).Build();
         var reads = Cohesive.Api.Api.Define("LoadOperations")
-            .Action("Details").Route("GET", "/api/loads/{id}").RouteParameter<string>("id")
-                .Returns<LoadDetails>().Result<ApiProblem>(ApiResultKind.NotFound).Done()
             .Action("Catalog").Route("GET", "/api/catalog").Returns<LoadCatalog>().Done()
             .Build();
-        Details = reads.Endpoints.Single(endpoint => endpoint.Operation.Name == "Details");
         Catalog = reads.Endpoints.Single(endpoint => endpoint.Operation.Name == "Catalog");
     }
 

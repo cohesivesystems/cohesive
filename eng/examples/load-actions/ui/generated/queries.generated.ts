@@ -4,19 +4,19 @@ import type { LoadCatalog, LoadDetails, ServiceTransitionAction, ServiceTransiti
 
 export type ApiHttpClient = (path: string, init: RequestInit) => Promise<unknown>;
 
-export type ApiOperationKey = 'catalog' | 'details' | 'inspectTransitionsload';
+export type ApiOperationKey = 'catalog' | 'detailsLoad' | 'inspectTransitionsload';
 
 export const apiOperationIds = {
   catalog: 'LoadOperations.Catalog',
-  details: 'LoadOperations.Details',
+  detailsLoad: 'LoadOperations.Load.Details',
   inspectTransitionsload: 'service/loads/entity/cohesive.transitions%2Finline-entity-shape%2Fsha256%2F0145744c7c10bece16a183e2399b26148a5b1b4cb5b5f87f8c1b081521f82c39/shape.entity.load/inspectTransitions',
 } as const satisfies Record<ApiOperationKey, string>;
 
-export type ApiEndpointKey = 'catalog' | 'details' | 'inspectTransitionsload';
+export type ApiEndpointKey = 'catalog' | 'detailsLoad' | 'inspectTransitionsload';
 
 export const apiEndpointIds = {
   catalog: 'LoadOperations.Catalog',
-  details: 'LoadOperations.Details',
+  detailsLoad: 'LoadOperations.Load.Details',
   inspectTransitionsload: 'service/loads/entity/cohesive.transitions%2Finline-entity-shape%2Fsha256%2F0145744c7c10bece16a183e2399b26148a5b1b4cb5b5f87f8c1b081521f82c39/shape.entity.load/inspectTransitions',
 } as const satisfies Record<ApiEndpointKey, string>;
 
@@ -40,9 +40,9 @@ export const apiOperationMetadata = {
       route: '/api/catalog',
     },
   },
-  details: {
-    id: 'LoadOperations.Details',
-    kind: 'action',
+  detailsLoad: {
+    id: 'LoadOperations.Load.Details',
+    kind: 'query',
     requestContract: 'void',
     authorizationRequirementIds: [],
     results: [
@@ -55,7 +55,7 @@ export const apiOperationMetadata = {
       {
         id: 'notFound',
         kind: 'notFound',
-        bodyContract: 'ApiProblem',
+        bodyContract: 'void',
         isPrimary: false,
       },
     ],
@@ -111,7 +111,7 @@ export interface ApiScopePolicyMetadata {
 
 export interface ApiScopePolicyByOperation {
   readonly catalog: readonly ApiScopePolicyMetadata[];
-  readonly details: readonly ApiScopePolicyMetadata[];
+  readonly detailsLoad: readonly ApiScopePolicyMetadata[];
   readonly inspectTransitionsload: readonly ApiScopePolicyMetadata[];
 }
 
@@ -119,7 +119,7 @@ export type ApiScopePolicyByEndpoint = Pick<ApiScopePolicyByOperation, ApiEndpoi
 
 export const apiScopePolicies = {
   catalog: [],
-  details: [],
+  detailsLoad: [],
   inspectTransitionsload: [],
 } as const satisfies ApiScopePolicyByOperation;
 
@@ -129,7 +129,7 @@ export function catalog(http: ApiHttpClient): Promise<LoadCatalog> {
   return http(path, { method: 'GET' }) as Promise<LoadCatalog>;
 }
 
-export function details(http: ApiHttpClient, id: string): Promise<LoadDetails> {
+export function detailsLoad(http: ApiHttpClient, id: string): Promise<LoadDetails> {
   const basePath = `/api/loads/${encodeURIComponent(String(id))}`;
   const path = basePath;
   return http(path, { method: 'GET' }) as Promise<LoadDetails>;

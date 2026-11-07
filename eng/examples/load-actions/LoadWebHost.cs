@@ -1,9 +1,9 @@
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
+using Cohesive.Adapters.AspNet.Entities;
 using Cohesive.Api;
 using Cohesive.Identity;
 using Cohesive.Model;
-using Cohesive.Storage;
 
 internal static class LoadWebHost
 {
@@ -13,6 +13,8 @@ internal static class LoadWebHost
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = args, WebRootPath = Path.Combine(root, "wwwroot") });
         // This explicit local demo host accepts selectable identities only in Development.
         if (!builder.Environment.IsDevelopment()) throw new InvalidOperationException("Run the demo with ASPNETCORE_ENVIRONMENT=Development.");
+        builder.Services.ConfigureHttpJsonOptions(options =>
+            options.SerializerOptions.PropertyNamingPolicy = LoadClientGeneration.Json.PropertyNamingPolicy);
         builder.Services.AddRequestOperationContext();
         builder.Services.AddSingleton<IHttpOperationContextEnricher>(new DemoIdentity(model));
         builder.Services.AddCohesiveExceptionHandling();
@@ -29,18 +31,12 @@ internal static class LoadWebHost
         app.UseDefaultFiles();
         app.UseStaticFiles();
         app.MapApiEndpoint(model.Catalog, () => Results.Json(new LoadCatalog(LoadApplication.Roles, LoadApplication.Loads.Select(load => load.Id).ToArray(), LoadApplication.RoleHeader), LoadClientGeneration.Json));
-        app.MapApiEndpoint(model.Details, async (OperationContext context, string id) =>
-        {
-            var snapshot = await model.Repository.TryGet(context, id, EntityReadOptions.Full.WithPartitionKey(LoadApplication.Organization));
-            if (snapshot is null) return Results.NotFound(new ApiProblem("load.missing", "Load not found."));
-            var fields = snapshot.Entity.Observation;
-            return Results.Json(new LoadDetails(id, Enum.Parse<LoadStatus>(fields.GetField(nameof(Load.Status)).GetString()!),
-                fields.GetField(nameof(Load.DocumentsComplete)).GetBoolean(), fields.GetField(nameof(Load.LastReason)).GetString()!), LoadClientGeneration.Json);
-        });
+        app.MapEntityApi<Load>(model.Entity, model.Repository, LoadApplication.Organization, bindings =>
+            bindings.Get(model.Details, (id, load) => TypedResults.Ok(
+                new LoadDetails(id, load.Status, load.DocumentsComplete, load.LastReason))));
         app.MapServiceTransitionInspection<Command>(model.Runtime, model.Entity.StateShape.QualifiedId, model.InspectionRoute);
-        foreach (var operation in model.Commands.Operations)
-            app.MapServiceTransition<Command, string>(model.Runtime, operation.Name, operation.Http!.Route,
-                authorizationPolicyResolver: (_, requirement) => requirement.Id);
+        app.MapServiceTransitions<Command, string>(model.Runtime, model.Commands,
+            authorizationPolicyResolver: (_, requirement) => requirement.Id);
         await app.RunAsync();
     }
 
