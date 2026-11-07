@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using Cohesive.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
@@ -13,9 +15,16 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
 {
     internal static readonly RelationQueryEvaluationId LocalEvaluation = new("cohesive.relations/dto-mapping/local");
 
+    readonly ImmutableDictionary<Type, QualifiedShapeId> sourceTypes;
+
     internal RelationDtoMapping(RelationQueryCompilationResult compilation, CompiledRelationDtoMapper<TOutput> mapper,
-        RelationQueryAuthoringManifest authoringProvenance)
-    { Compilation = compilation; Mapper = mapper; AuthoringProvenance = authoringProvenance; }
+        RelationQueryAuthoringManifest authoringProvenance, ImmutableDictionary<Type, QualifiedShapeId> sourceTypes)
+    {
+        Compilation = compilation;
+        Mapper = mapper;
+        AuthoringProvenance = authoringProvenance;
+        this.sourceTypes = sourceTypes;
+    }
 
     /// <summary>Exact portable definition, shapes and output demand.</summary>
     public RelationQueryCompilationRequest CompilationRequest => Compilation.Request;
@@ -27,15 +36,16 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
     public RelationQueryAuthoringManifest AuthoringProvenance { get; }
 
     /// <summary>Creates an evaluator for supplied roots and complete in-memory source sets.</summary>
-    /// <param name="configure">Declares the root identity and binds each acquired shape to a finite collection.</param>
+    /// <param name="configure">Binds each acquired input to a finite collection and optionally overrides the root identity.</param>
     /// <param name="maximumRows">Positive row limit applied to each snapshot and to local execution.</param>
     /// <returns>A reusable evaluator for this prepared request using owned source snapshots and canonical planning.</returns>
     /// <exception cref="ArgumentNullException">The configuration callback is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The row limit is not positive.</exception>
     /// <exception cref="ArgumentException">A configured source or its rows violate their contract.</exception>
     /// <exception cref="InvalidOperationException">A binding is missing, placement is invalid, or the plan requires relationship lookup.</exception>
-    /// <remarks>The callback runs during preparation. Roots are supplied per invocation. Use explicit placement
-    /// for relationship lookup or multiple acquired inputs sharing a shape.</remarks>
+    /// <remarks>The callback runs during preparation. Roots are supplied per invocation. By default the evaluator
+    /// uses the root shape's sole string identity field, or its string field named Id when no identity is declared.
+    /// Use explicit placement for relationship lookup or multiple acquired inputs sharing a shape.</remarks>
     public IRelationQueryEvaluator CreateInMemoryEvaluator(Action<RelationQueryInMemorySources> configure,
         int maximumRows = (int)RelationQueryEvaluator.DefaultMaximumRootRows)
     {
@@ -44,7 +54,7 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
         var plan = Compilation.Plan!;
         if (!plan.InputContract.Traversals.IsDefaultOrEmpty)
             throw new InvalidOperationException("In-memory collection bindings support source-set enumeration. Relationship traversal requires explicit lookup placement.");
-        var sources = new RelationQueryInMemorySources(plan, maximumRows);
+        var sources = new RelationQueryInMemorySources(plan, sourceTypes, maximumRows);
         configure(sources);
         return sources.Build(CompilationRequest);
     }

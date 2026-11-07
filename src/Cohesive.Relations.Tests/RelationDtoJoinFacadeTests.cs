@@ -30,6 +30,52 @@ public sealed class RelationDtoJoinFacadeTests
     }
 
     [Fact]
+    public async Task AnonymousProjectionsAndDefaultCollectionBindingsPreserveResultsAndContributors()
+    {
+        var q = RelationQuery.Expression();
+        var loads = q.Source<Load>();
+        var summaries = loads
+            .Join(q.Source<LineItem>().SumBy(i => i.LoadId, i => i.Quantity * i.UnitPrice,
+                    (loadId, total) => new { LoadId = loadId, Total = total }),
+                (l, t) => l.Id == t.LoadId,
+                (l, t) => new { l.Id, l.CustomerId, t.Total })
+            .Join(q.Source<Customer>(), (l, c) => l.CustomerId == c.Id,
+                (l, c) => new Summary(l.Id, c.Name, l.Total));
+        var mapping = RelationDtoMapping.Create(loads, summaries, RelationOutputMode.ZeroOrOnePerRoot);
+        Customer[] customers = [new("customer-7", "Acme")];
+        LineItem[] items = [new("item-1", "load-42", 2m, 50m), new("item-2", "load-42", 1m, 25m)];
+        var evaluator = mapping.CreateInMemoryEvaluator(sources => sources.Bind(customers).Bind(items));
+
+        var outcome = await mapping.EvaluateAsync(evaluator, Loads(), load => load.Id);
+        Assert.True(outcome.IsSuccessful, Explain(outcome));
+        var row = Assert.Single(mapping.Mapper.Map(outcome.PhysicalExecution!).Rows);
+        Assert.Equal(new Summary("load-42", "Acme", 125m), row.Value);
+        Assert.Equal(new[] { "customer-7", "item-1", "item-2", "load-42" },
+            row.Source.InputOccurrences.Select(x => x.ObservationIdentity!).Order(StringComparer.Ordinal));
+        Assert.Equal(row.Value, Assert.Single(await mapping.MapAsync(evaluator, Loads())));
+        Assert.Empty(await mapping.MapAsync(evaluator, [new Load("no-items", "customer-7")]));
+
+        Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(sources => sources.Bind(Loads())));
+        Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(sources => sources.Bind(customers.Concat(customers))));
+    }
+
+    [Fact]
+    public async Task DefaultRootRequiresAnIdentityFieldAndAllowsAnExplicitOverride()
+    {
+        var q = RelationQuery.Expression();
+        var roots = q.Source<KeyedLoad>();
+        var output = roots.Select(load => new Summary(load.Key, load.Customer, 0m));
+        var mapping = RelationDtoMapping.Create(roots, output, RelationOutputMode.OnePerRoot);
+
+        Assert.Throws<InvalidOperationException>(() => mapping.CreateInMemoryEvaluator(_ => { }));
+        var evaluator = mapping.CreateInMemoryEvaluator(sources => sources.Root(q.Clr.Shape<KeyedLoad>(), load => load.Key));
+        Assert.Equal(new Summary("load-42", "Acme", 0m),
+            Assert.Single(await mapping.MapAsync(evaluator, [new KeyedLoad("load-42", "Acme")])));
+    }
+
+    sealed record KeyedLoad(string Key, string Customer);
+
+    [Fact]
     public async Task ExecutesTheThreeSourceExampleWithExactContributors()
     {
         var mapping = Build(compact: true);
@@ -280,8 +326,8 @@ public sealed class RelationDtoJoinFacadeTests
         q = RelationQuery.Expression();
         var loads = q.Source<Load>(); var items = q.Source<LineItem>(); var customers = q.Source<Customer>();
         var totals = compact
-            ? items.Aggregate<LoadTotal>(g => g.Group(t => t.LoadId, i => i.LoadId)
-                .Sum(t => t.Total, i => i.Quantity * i.UnitPrice))
+            ? items.SumBy(i => i.LoadId, i => i.Quantity * i.UnitPrice,
+                (loadId, total) => new LoadTotal(loadId, total))
             : q.Aggregate(items.Node, q.Clr.Shape<LoadTotal>(), g => g
                 .Group(t => t.LoadId, (LineItem i) => i.LoadId, items.Binding)
                 .Value(t => t.Total, AggregateOperator.Sum, (LineItem i) => i.Quantity * i.UnitPrice, items.Binding));

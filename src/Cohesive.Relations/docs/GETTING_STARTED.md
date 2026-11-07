@@ -50,7 +50,8 @@ the existing compiler APIs.
 
 ## Compact joins and grouped totals
 
-Compose the existing typed source handles, then prepare a relation with explicit root cardinality:
+Compose the typed source handles with anonymous intermediate shapes, then prepare a relation with explicit
+root cardinality.
 
 ```csharp
 using Cohesive.Relations.Authoring;
@@ -59,43 +60,45 @@ using Cohesive.Relations.Mapping;
 
 var q = RelationQuery.Expression();
 var loads = q.Source<Load>();
-var items = q.Source<LineItem>();
-var customers = q.Source<Customer>();
-
-var totals = items.Aggregate<LoadTotal>(g => g
-    .Group(t => t.LoadId, i => i.LoadId)
-    .Sum(t => t.Total, i => i.Quantity * i.UnitPrice));
-
 var summaries = loads
-    .Join(customers, (l, c) => l.CustomerId == c.Id,
-        (l, c) => new LoadCustomer(l.Id, c.Name))
-    .Join(totals, (l, t) => l.Id == t.LoadId,
-        (l, t) => new LoadSummaryDto(l.Id, l.CustomerName, t.Total));
+    .Join(q.Source<LineItem>().SumBy(i => i.LoadId, i => i.Quantity * i.UnitPrice,
+            (loadId, total) => new { LoadId = loadId, Total = total }),
+        (l, t) => l.Id == t.LoadId,
+        (l, t) => new { l.Id, l.CustomerId, t.Total })
+    .Join(q.Source<Customer>(), (l, c) => l.CustomerId == c.Id,
+        (l, c) => new LoadSummaryDto(l.Id, c.Name, l.Total));
 
-var mapping = RelationDtoMapping.Create(loads, summaries,
-    mode: RelationOutputMode.ZeroOrOnePerRoot);
+var mapping = RelationDtoMapping.Create(loads, summaries, mode: RelationOutputMode.ZeroOrOnePerRoot);
+
+Load[] loadValues = [new("load-42", "customer-7")];
+Customer[] customerValues = [new("customer-7", "Acme")];
+LineItem[] lineItemValues = [
+    new("item-1", "load-42", 2m, 50m),
+    new("item-2", "load-42", 1m, 25m)
+];
 
 var evaluator = mapping.CreateInMemoryEvaluator(sources => sources
-    .Root(q.Clr.Shape<Load>(), l => l.Id)
-    .Bind(q.Clr.Shape<Customer>(), [new Customer("customer-7", "Acme")], c => c.Id)
-    .Bind(q.Clr.Shape<LineItem>(),
-        [new LineItem("item-1", "load-42", 2m, 50m), new LineItem("item-2", "load-42", 1m, 25m)],
-        i => i.Id));
-
-var loadValues = new[] { new Load("load-42", "customer-7") };
+    .Bind(customerValues)
+    .Bind(lineItemValues));
 var dtos = await mapping.MapAsync(evaluator, loadValues);
+foreach (var dto in dtos)
+    Console.WriteLine(dto);
+
+public record Load(string Id, string CustomerId);
+public record Customer(string Id, string Name);
+public record LineItem(string Id, string LoadId, decimal Quantity, decimal UnitPrice);
+public record LoadSummaryDto(string Id, string CustomerName, decimal Total);
 ```
 
-Each bound collection is snapshotted at evaluator creation. The identity selectors name direct string
-properties, and acquired rows must have unique, nonempty identities. The two-argument mapping call reads
-the identity declared by `Root` from each admitted observation. The optional `maximumRows` argument limits
-each snapshot and local execution.
-The binder supports complete source sets with one acquired input per shape. Use explicit placement for
-relationship lookups or multiple acquired inputs sharing a shape.
+The evaluator matches each collection's exact CLR element type to one acquired input in the prepared relation
+and snapshots its rows. For roots and acquired inputs, it uses the shape's sole string identity field, or a
+string field named `Id` when no identity field is declared. Every identity must be unique and nonempty within
+its input. Use `Root(shape, identity)` or `Bind(shape, rows, identity)` to select another field, and explicit
+placement for relationship lookups or multiple acquired inputs sharing a shape. The optional `maximumRows`
+argument limits each snapshot and local execution.
 
-The direct invocation supplies a complete root collection using the existing whole-source partition default.
-It enumerates inputs once, observes cancellation between inputs and delegates identity/shape validation to
-`Supply`; duplicate or empty root identities are rejected. The root identity selector remains explicit.
+The two-argument mapping call reads identities from the admitted observations. It supplies a complete root
+collection using the existing whole-source partition default and observes cancellation between inputs.
 For caller-attributed invocations, pass an identity directly:
 
 ```csharp
@@ -116,28 +119,12 @@ var evaluation = mapping.Evaluate(new("load-summary/request-42"))
 var dtos = await mapping.MapAsync(evaluator, evaluation);
 ```
 
-The DTO declarations are ordinary records:
+The example prints `LoadSummaryDto { Id = load-42, CustomerName = Acme, Total = 125 }`.
+Its detailed source row retains all four contributing occurrences, including the load, customer and both items.
 
-```csharp
-public record Load(string Id, string CustomerId);
-public record Customer(string Id, string Name);
-public record LineItem(string Id, string LoadId, decimal Quantity, decimal UnitPrice);
-public record LoadTotal(string LoadId, decimal Total);
-public record LoadCustomer(string Id, string CustomerName);
-public record LoadSummaryDto(string Id, string CustomerName, decimal Total);
-```
-
-The acceptance fixture supplies `new Load("load-42", "customer-7")`, a customer named `Acme` and two items
-`2 * 50m` and `1 * 25m`. The resulting DTO is
-`LoadSummaryDto { Id = load-42, CustomerName = Acme, Total = 125 }`. Its detailed source row retains all four
-contributing occurrences: the load, the customer and both line items. The acceptance tests run the physical
-planner, executor and reference interpreter with the collection binder and with explicitly configured readers.
-
-The focused `Aggregate` builder delegates grouping and sums to the existing canonical aggregate builder.
-Three-argument `Join` is exactly `Join(...).Select(...)`; `LeftJoin` has the corresponding explicit overload.
-No new expression interpreter, query IR or DTO conversion authority is introduced. The composed prepared
-mapping owns the same request/compilation/mapper/provenance components reused by the single-source facade.
-The compact and expanded examples have identical persisted IR, semantic fingerprints and authoring manifests.
+`SumBy` is shorthand for one grouping key and one exact sum. Its result constructor assigns the key and sum
+directly to two properties, and it lowers through the same canonical builder as `Aggregate`. Three-argument
+`Join` is equivalent to `Join(...).Select(...)`. `LeftJoin` has the corresponding explicit overload.
 
 Both joins above are inner joins. Loads without line items or customers are omitted; grouped empty item input
 produces no groups, not a synthetic zero total. `ZeroOrOnePerRoot` is explicitly declared and checked by canonical

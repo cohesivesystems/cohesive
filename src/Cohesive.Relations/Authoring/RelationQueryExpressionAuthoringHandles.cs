@@ -347,6 +347,29 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
             aggregate => configure(new(aggregate, Binding)));
     }
 
+    /// <summary>Groups rows by one key and projects the key and its exact sum into an inferred result type.</summary>
+    /// <typeparam name="TKey">Grouping key type.</typeparam>
+    /// <typeparam name="TNumber">Input and result numeric type.</typeparam>
+    /// <typeparam name="TResult">Result shape, which may be anonymous.</typeparam>
+    /// <param name="key">Grouping expression over the focused row.</param>
+    /// <param name="value">Numeric expression over the focused row.</param>
+    /// <param name="result">A two-property constructor projection assigning the key and sum directly.</param>
+    /// <returns>The canonical grouped-sum branch. Empty input produces no groups.</returns>
+    /// <exception cref="ArgumentNullException">A required expression is null.</exception>
+    /// <exception cref="ArgumentException">The result, grouping or numeric contract is invalid.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    /// <exception cref="InvalidOperationException">The result type cannot be represented as a shape.</exception>
+    public RelationQueryExpressionBoundNode<AggregateQueryNode, TResult> SumBy<TKey, TNumber, TResult>(
+        Expression<Func<TValue, TKey>> key, Expression<Func<TValue, TNumber>> value,
+        Expression<Func<TKey, TNumber, TResult>> result) where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(value);
+        ArgumentNullException.ThrowIfNull(result);
+        var (keyField, sumField) = Binding.Owner.ExpressionLowerer.ResolveGroupedSumTargets(result);
+        return Aggregate<TResult>(aggregate => aggregate.Group(keyField, key).Sum(sumField, value));
+    }
+
     /// <summary>Left-joins another branch, preserving rows with no matching right value.</summary>
     /// <typeparam name="TRightNode">Right logical node type.</typeparam>
     /// <typeparam name="TRight">Right focused row type.</typeparam>

@@ -27,14 +27,17 @@ public sealed class RelationQueryInMemorySources
         ]);
 
     readonly CompiledRelationQueryPlan plan;
+    readonly ImmutableDictionary<Type, QualifiedShapeId> sourceTypes;
     readonly int maximumRows;
     readonly RelationQueryPlacementBuilder placement;
     readonly Dictionary<RelationQueryInputId, ImmutableArray<(string Id, ObservationValue Value)>> sources = [];
     string? rootIdentityField;
 
-    internal RelationQueryInMemorySources(CompiledRelationQueryPlan plan, int maximumRows)
+    internal RelationQueryInMemorySources(CompiledRelationQueryPlan plan,
+        ImmutableDictionary<Type, QualifiedShapeId> sourceTypes, int maximumRows)
     {
         this.plan = plan;
+        this.sourceTypes = sourceTypes;
         this.maximumRows = maximumRows;
         placement = RelationQueryPlacement.For(plan);
     }
@@ -52,9 +55,10 @@ public sealed class RelationQueryInMemorySources
     {
         if (rootIdentityField is not null)
             throw new InvalidOperationException("The supplied root is already configured.");
-        var input = FindInput(shape, root: true);
+        ArgumentNullException.ThrowIfNull(shape);
+        var input = FindInput(shape.Id, root: true, nameof(shape));
         var field = IdentityField(shape, identity);
-        Place(input, shape, field);
+        ConfigurePlacement(placement.Place(input, DeclareSource(input), shape), field);
         rootIdentityField = field;
         return this;
     }
@@ -73,13 +77,38 @@ public sealed class RelationQueryInMemorySources
     public RelationQueryInMemorySources Bind<T>(RelationQueryClrShape<T> shape, IEnumerable<T> rows,
         Expression<Func<T, string>> identity) where T : notnull
     {
+        ArgumentNullException.ThrowIfNull(shape);
         ArgumentNullException.ThrowIfNull(rows);
-        var input = FindInput(shape, root: false);
+        var input = FindInput(shape.Id, root: false, nameof(shape));
+        return Bind(input, rows, IdentityField(shape, identity), shape);
+    }
+
+    /// <summary>Snapshots a complete collection for the acquired input authored with its exact CLR row type.</summary>
+    /// <typeparam name="T">CLR source row type registered during authoring.</typeparam>
+    /// <param name="rows">Finite rows with unique, nonempty identities, enumerated once at configuration time.</param>
+    /// <returns>This configuration builder.</returns>
+    /// <exception cref="ArgumentNullException">The collection or a row is null.</exception>
+    /// <exception cref="ArgumentException">The row type does not select exactly one acquired input,
+    /// the rows violate the input contract, or the collection exceeds its row limit.</exception>
+    /// <exception cref="InvalidOperationException">The input is already bound or has no unambiguous default string identity.</exception>
+    /// <exception cref="NotSupportedException">A row cannot be represented as observation data.</exception>
+    /// <remarks>Uses the shape's sole string identity field, or its string field named Id if no identity is declared.
+    /// Use the explicit overload to choose another field.</remarks>
+    public RelationQueryInMemorySources Bind<T>(IEnumerable<T> rows) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(rows);
+        if (!sourceTypes.TryGetValue(typeof(T), out var shape))
+            throw new ArgumentException($"Row type '{typeof(T)}' is not a source type of this prepared relation.", nameof(rows));
+        var input = FindInput(shape, root: false, nameof(rows));
+        return Bind(input, rows, DefaultIdentityField(input));
+    }
+
+    RelationQueryInMemorySources Bind<T>(RelationQuerySourceInputContract input, IEnumerable<T> rows, string field,
+        RelationQueryClrShape<T>? shape = null) where T : notnull
+    {
         if (sources.ContainsKey(input.Input.Id))
             throw new InvalidOperationException($"Source '{input.Node}' is already configured.");
-        var field = IdentityField(shape, identity);
-        var graph = plan.Provenance.ShapeDocuments.Single(document => document.Graph.Id == input.Shape.GraphId).Graph;
-        var graphShape = new GraphShapeId(graph, input.Shape.ShapeId);
+        var graphShape = GetGraphShape(input);
         var snapshot = ImmutableArray.CreateBuilder<(string Id, ObservationValue Value)>();
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var row in rows)
@@ -93,19 +122,42 @@ public sealed class RelationQueryInMemorySources
                 throw new ArgumentException($"Source '{input.Node}' requires unique, nonempty string identities.", nameof(rows));
             snapshot.Add((key.String, value));
         }
-        Place(input, shape, field);
+        var source = DeclareSource(input);
+        ConfigurePlacement(shape is null ? placement.Place(input, source) : placement.Place(input, source, shape), field);
         sources.Add(input.Input.Id, snapshot.ToImmutable());
         return this;
     }
 
-    RelationQuerySourceInputContract FindInput<T>(RelationQueryClrShape<T> shape, bool root) where T : notnull
+    RelationQuerySourceInputContract FindInput(QualifiedShapeId shape, bool root, string parameterName)
     {
-        ArgumentNullException.ThrowIfNull(shape);
-        var matches = plan.InputContract.Sources.Where(input => input.Shape == shape.Id
+        var matches = plan.InputContract.Sources.Where(input => input.Shape == shape
             && (input.Role == RelationQuerySourceInputRole.RelationRoot) == root).ToArray();
         if (matches.Length != 1)
-            throw new ArgumentException($"Shape '{shape.Id}' must select exactly one {(root ? "root" : "acquired")} input.", nameof(shape));
+            throw new ArgumentException($"Shape '{shape}' must select exactly one {(root ? "root" : "acquired")} input.", parameterName);
         return matches[0];
+    }
+
+    GraphShapeId GetGraphShape(RelationQuerySourceInputContract input)
+    {
+        var graph = plan.Provenance.ShapeDocuments.Single(document => document.Graph.Id == input.Shape.GraphId).Graph;
+        return new(graph, input.Shape.ShapeId);
+    }
+
+    string DefaultIdentityField(RelationQuerySourceInputContract input)
+    {
+        var graphShape = GetGraphShape(input);
+        var shape = graphShape.Graph.GetShape(input.Shape);
+        var declared = shape.Fields.Where(static field => field.Role == FieldRole.Identity).ToArray();
+        var identity = declared.Length switch
+        {
+            0 when shape.TryGetField("Id", out var conventional) => conventional,
+            1 => declared[0],
+            _ => null
+        };
+        if (identity is { Cardinality: FieldCardinality.Single, Type: ScalarTypeRef { Kind: ScalarTypeKind.String } })
+            return identity.Name.Value;
+        var binding = input.Role == RelationQuerySourceInputRole.RelationRoot ? nameof(Root) : nameof(Bind);
+        throw new InvalidOperationException($"Source '{input.Node}' has no unambiguous default string identity. Specify its identity using {binding}.");
     }
 
     static string IdentityField<T>(RelationQueryClrShape<T> shape, Expression<Func<T, string>> identity) where T : notnull
@@ -116,19 +168,26 @@ public sealed class RelationQueryInMemorySources
         return field;
     }
 
-    void Place<T>(RelationQuerySourceInputContract input, RelationQueryClrShape<T> shape, string field) where T : notnull
-    {
-        var source = placement.Source(input.Input.Id.Value, Profile,
+    RelationQueryPlacementSourceHandle DeclareSource(RelationQuerySourceInputContract input) =>
+        placement.Source(input.Input.Id.Value, Profile,
             limits: new(maximumBatchSize: maximumRows, maximumBufferedRows: maximumRows,
                 maximumFanOut: maximumRows, maximumConcurrency: 1));
-        placement.Place(input, source, shape).FieldsBySemanticPath()
+
+    static void ConfigurePlacement(RelationQueryPlacementInputBuilder binding, string field) =>
+        binding.FieldsBySemanticPath()
             .Identity(FieldPath.FromField(field), RelationQueryPlacementBuilder.FrameworkIdentitySourceSelector);
-    }
 
     internal IRelationQueryEvaluator Build(RelationQueryCompilationRequest request)
     {
-        if (rootIdentityField is not { } field || sources.Count != plan.InputContract.Sources.Length - 1)
-            throw new InvalidOperationException("Configure the supplied root and each acquired source before creating the evaluator.");
+        if (sources.Count != plan.InputContract.Sources.Length - 1)
+            throw new InvalidOperationException("Bind each acquired source before creating the evaluator.");
+        var field = rootIdentityField;
+        if (field is null)
+        {
+            var root = plan.InputContract.Sources.Single(input => input.Role == RelationQuerySourceInputRole.RelationRoot);
+            field = DefaultIdentityField(root);
+            ConfigurePlacement(placement.Place(root, DeclareSource(root)), field);
+        }
         var placed = placement.Build().RequireValue().Placement;
         var readers = placed.Bindings.Where(binding => sources.ContainsKey(binding.Input))
             .Select(binding =>

@@ -76,7 +76,7 @@ public static class RelationDtoMapping
             throw new RelationQueryPreparationException("DTO materialization", compilation,
                 detail: string.Join(Environment.NewLine, materialization.Diagnostics.Select(d => $"{d.Code}: {d.Message}")),
                 dtoDiagnostics: materialization.Diagnostics);
-        return new(compilation, materialization.Mapper!, relation.Provenance);
+        return new(compilation, materialization.Mapper!, relation.Provenance, author.SnapshotSourceTypes(compilation.Plan!));
     }
 }
 
