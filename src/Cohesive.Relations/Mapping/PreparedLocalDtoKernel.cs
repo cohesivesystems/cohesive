@@ -1,6 +1,8 @@
+using System.Buffers;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Cohesive.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
@@ -13,9 +15,15 @@ namespace Cohesive.Relations.Mapping;
 // Value-only realization of a restricted canonical slice. Static input rows and grouped totals are
 // obtained from the canonical interpreter; field aliases become expressions rather than new rows.
 sealed class PreparedLocalDtoKernel<TOutput>(
-    GraphShapeId rootShape, long maximumRoots, PreparedLocalDtoKernel<TOutput>.MapRow map) where TOutput : notnull
+    GraphShapeId rootShape, ObservationLayout rootLayout, string identityField, int identityOrdinal,
+    ulong[] allPresent, long maximumRoots, PreparedLocalDtoKernel<TOutput>.MapRow map) where TOutput : notnull
 {
-    internal delegate bool MapRow(ObservationValue root, out TOutput result);
+    // Keep the optional rental bounded even when an evaluator has a much larger row limit.
+    const int MaximumPooledRootSlots = 64 * 1024;
+
+    readonly WeakPreparationCache<Type, ObservationValue.ScalarProjection?> rootProjections = new();
+
+    internal delegate bool MapRow(ObservationValue root, ObservationValue[]? slots, int offset, out TOutput result);
 
     internal static bool CanPrepare(CompiledRelationQueryPlan plan) =>
         RuntimeFeature.IsDynamicCodeSupported
@@ -43,7 +51,10 @@ sealed class PreparedLocalDtoKernel<TOutput>(
         var root = plan.InputContract.Sources.Single(source => source.Role == RelationQuerySourceInputRole.RelationRoot);
         var graph = plan.Provenance.ShapeDocuments.Single(document => document.Graph.Id == root.Shape.GraphId).Graph;
         var rootShape = new GraphShapeId(graph, root.Shape.ShapeId);
-        var compiler = new Compiler(plan, evidence.PreparedSources, root);
+        var rootLayout = ObservationLayout.Create(rootShape);
+        if (!rootLayout.TryGetOrdinal(rootIdentityField, out var identityOrdinal))
+            return null;
+        var compiler = new Compiler(plan, evidence.PreparedSources, root, rootLayout);
         if (!compiler.HasValidRootContract(rootShape.Graph.GetShape(root.Shape), rootIdentityField)
             || !compiler.Lower(plan.ExecutionSlice.RelationOutput!.Definition.Node)
             || !compiler.CanConstruct(plan.ExecutionSlice.RelationOutput, mapper))
@@ -60,37 +71,139 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             acquiredRows += source.Evidence.Occurrences.Length;
         }
         maximumRoots = Math.Min(maximumRoots, rowLimit - acquiredRows);
-        return new(rootShape, maximumRoots, compiler.Compile(plan.ExecutionSlice.RelationOutput.Binding, materialize));
+
+        var allPresent = new ulong[(rootLayout.Count + 63) / 64];
+        Array.Fill(allPresent, ulong.MaxValue);
+        var remainder = rootLayout.Count % 64;
+        if (remainder != 0)
+            allPresent[^1] = (1UL << remainder) - 1;
+        return new(rootShape, rootLayout, rootIdentityField, identityOrdinal, allPresent, maximumRoots,
+            compiler.Compile(plan.ExecutionSlice.RelationOutput.Binding, materialize));
     }
 
-    internal bool TryMap<TRoot>(IEnumerable<TRoot> roots, string identityField, CancellationToken cancellationToken,
-        out TOutput[] result, out List<(string Id, Observation Value, string Order)> admitted) where TRoot : notnull
+    internal bool TryMap<TRoot>(IEnumerable<TRoot> roots, CancellationToken cancellationToken,
+        out TOutput[] result, out IEnumerable<RelationQuerySuppliedRoot> budgetFallback) where TRoot : notnull
     {
-        admitted = [];
-        foreach (var row in RelationQueryEvaluationBuilder.AdmitByIdentityField(rootShape, roots, identityField, cancellationToken))
-            admitted.Add((row.Id, row.Value, Uri.EscapeDataString(row.Id)));
         cancellationToken.ThrowIfCancellationRequested();
-        // Physical source occurrence IDs share an input prefix and escape the observation identity.
-        admitted.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Order, right.Order));
-        for (var index = 1; index < admitted.Count; index++)
-            if (admitted[index - 1].Id == admitted[index].Id)
-                throw new ArgumentException("Supplied roots cannot repeat an observation identity.", "observations");
+        var type = typeof(TRoot);
+        if (!rootProjections.TryGet(type, out var project))
+            project = rootProjections.Get(type, owner => ObservationValue.CompileCompleteScalarProjection(owner, rootLayout));
 
-        if (admitted.Count > maximumRoots)
+        // Arrays provide an exact extent without consulting caller-defined enumeration or count logic.
+        // A batch that may need canonical budget handling retains the ordinary owned observations.
+        var capacity = roots is TRoot[] array && array.Length <= maximumRoots && array.Length <= MaximumPooledRootSlots
+            ? array.Length
+            : 0;
+        var width = rootLayout.Count;
+        var slots = project is not null && capacity > 0 && capacity <= MaximumPooledRootSlots / width
+            ? ArrayPool<ObservationValue>.Shared.Rent(capacity * width)
+            : null;
+        AdmittedRoot[]? rootBuffer = null;
+        string[]? orderKeys = null;
+        int[]? orderBuffer = null;
+        budgetFallback = [];
+        try
         {
-            result = [];
-            return false;
-        }
+            if (slots is not null && capacity > 1)
+            {
+                rootBuffer = ArrayPool<AdmittedRoot>.Shared.Rent(capacity);
+                orderKeys = ArrayPool<string>.Shared.Rent(capacity);
+                orderBuffer = ArrayPool<int>.Shared.Rent(capacity);
+            }
+            var ownedRoots = rootBuffer is null ? new List<AdmittedRoot>(capacity) : null;
+            var count = 0;
+            foreach (var value in roots)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                AdmittedRoot admitted;
+                if (project is not null && value?.GetType() == type)
+                {
+                    var offset = slots is null ? 0 : count * width;
+                    var projected = slots ?? new ObservationValue[width];
+                    project(value, projected, offset);
+                    var rowValues = projected.AsSpan(offset, width);
+                    Observation? observation = null;
+                    if (slots is null)
+                        observation = Observation.AdmitCompleteProjection(rootShape, rootLayout,
+                            ImmutableCollectionsMarshal.AsImmutableArray(projected), allPresent);
+                    else
+                        Observation.ValidateCompleteProjection(rootShape, rootLayout, rowValues, allPresent);
+                    var id = RelationQueryEvaluationBuilder.RequireRootIdentity(rowValues[identityOrdinal], identityField);
+                    admitted = new(id, Uri.EscapeDataString(id), observation, offset);
+                }
+                else
+                {
+                    var row = RelationQueryEvaluationBuilder.AdmitRootByIdentityField(rootShape, value!, identityField);
+                    admitted = new(row.Id, Uri.EscapeDataString(row.Id), row.Value, 0);
+                }
 
-        result = admitted.Count == 0 ? [] : new TOutput[admitted.Count];
+                if (rootBuffer is null)
+                    ownedRoots!.Add(admitted);
+                else
+                {
+                    rootBuffer[count] = admitted;
+                    orderKeys![count] = admitted.Order;
+                    orderBuffer![count] = count;
+                }
+                count++;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            var rows = rootBuffer is null ? CollectionsMarshal.AsSpan(ownedRoots) : rootBuffer.AsSpan(0, count);
+            var order = orderBuffer is null ? Span<int>.Empty : orderBuffer.AsSpan(0, count);
+            var keys = orderKeys is null ? Span<string>.Empty : orderKeys.AsSpan(0, count);
+            // Physical source occurrence IDs share an input prefix and escape the observation identity.
+            if (order.IsEmpty)
+                rows.Sort();
+            else
+                keys.Sort(order, StringComparer.Ordinal);
+
+            for (var index = 1; index < rows.Length; index++)
+            {
+                // Equal identities always have equal escaped keys. Only a tie needs the original identities.
+                if (!keys.IsEmpty && keys[index - 1] != keys[index])
+                    continue;
+                var left = order.IsEmpty ? index - 1 : order[index - 1];
+                var right = order.IsEmpty ? index : order[index];
+                if (rows[left].Id == rows[right].Id)
+                    throw new ArgumentException("Supplied roots cannot repeat an observation identity.", "observations");
+            }
+
+            if (rows.Length > maximumRoots)
+            {
+                budgetFallback = ownedRoots!.Select(static row => RelationQuerySuppliedRoot.FromObservation(row.Id, row.Value!));
+                result = [];
+                return false;
+            }
+
+            result = MapAdmitted(rows, order, slots, cancellationToken);
+            return true;
+        }
+        finally
+        {
+            if (orderBuffer is not null)
+                ArrayPool<int>.Shared.Return(orderBuffer);
+            if (orderKeys is not null)
+                ArrayPool<string>.Shared.Return(orderKeys, clearArray: true);
+            if (rootBuffer is not null)
+                ArrayPool<AdmittedRoot>.Shared.Return(rootBuffer, clearArray: true);
+            if (slots is not null)
+                ArrayPool<ObservationValue>.Shared.Return(slots, clearArray: true);
+        }
+    }
+
+    TOutput[] MapAdmitted(ReadOnlySpan<AdmittedRoot> admitted, ReadOnlySpan<int> order,
+        ObservationValue[]? slots, CancellationToken cancellationToken)
+    {
+        var result = admitted.IsEmpty ? [] : new TOutput[admitted.Length];
         List<string>? failures = null;
         var count = 0;
-        foreach (var row in admitted)
+        for (var index = 0; index < admitted.Length; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            ref readonly var row = ref admitted[order.IsEmpty ? index : order[index]];
             try
             {
-                if (map(row.Value.Value, out var dto))
+                if (map(row.Value?.Value ?? default, row.Value is null ? slots : null, row.Offset, out var dto))
                     result[count++] = dto;
             }
             catch (RelationDtoRowMappingException exception)
@@ -109,14 +222,33 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             throw new InvalidOperationException(string.Join(Environment.NewLine, failures));
         if (count != result.Length)
             Array.Resize(ref result, count);
-        return true;
+        return result;
+    }
+
+    readonly record struct AdmittedRoot(string Id, string Order, Observation? Value, int Offset) : IComparable<AdmittedRoot>
+    {
+        public int CompareTo(AdmittedRoot other) => string.CompareOrdinal(Order, other.Order);
+    }
+
+    static ObservationValue ReadRoot(ObservationValue row, ObservationValue[]? slots, int offset,
+        ObservationLayout layout, int ordinal, string field)
+    {
+        if (slots is not null)
+            return slots[offset + ordinal];
+
+        return row.Fields is OrdinalObservationFields values && ReferenceEquals(values.Layout, layout)
+            && values.TryGetField(ordinal, out var value)
+            ? value
+            : row.GetProperty(field);
     }
 
     sealed class Compiler(CompiledRelationQueryPlan plan, ImmutableArray<PreparedRelationQuerySource> prepared,
-        RelationQuerySourceInputContract root)
+        RelationQuerySourceInputContract root, ObservationLayout rootLayout)
     {
         readonly RelationQueryCompiledPlanIndex index = RelationQueryCompiledPlanIndex.For(plan);
         readonly ParameterExpression rootValue = Expression.Parameter(typeof(ObservationValue), "root");
+        readonly ParameterExpression rootSlots = Expression.Parameter(typeof(ObservationValue[]), "slots");
+        readonly ParameterExpression rootOffset = Expression.Parameter(typeof(int), "offset");
         readonly ParameterExpression result = Expression.Parameter(typeof(TOutput).MakeByRefType(), "result");
         readonly LabelTarget exit = Expression.Label(typeof(bool));
         readonly List<ParameterExpression> locals = [];
@@ -136,7 +268,10 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                     || definition.Role == FieldRole.Identity && name != identityField)
                     return false;
 
-                fields.Add((root.Binding, name), (Read(rootValue, name), scalar.Kind));
+                fields.Add((root.Binding, name), (Expression.Call(
+                    typeof(PreparedLocalDtoKernel<TOutput>), nameof(ReadRoot), Type.EmptyTypes, rootValue, rootSlots, rootOffset,
+                    Expression.Constant(rootLayout), Expression.Constant(rootLayout.GetOrdinal(name)), Expression.Constant(name)),
+                    scalar.Kind));
             }
             return true;
         }
@@ -263,7 +398,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
         {
             steps.Add(Expression.Assign(result, materialize(name => fields[(output, name)].Value)));
             steps.Add(Expression.Label(exit, Expression.Constant(true)));
-            return Expression.Lambda<MapRow>(Expression.Block(locals, steps), rootValue, result).Compile();
+            return Expression.Lambda<MapRow>(Expression.Block(locals, steps), rootValue, rootSlots, rootOffset, result).Compile();
         }
 
         static MethodCallExpression Read(Expression row, string field) =>

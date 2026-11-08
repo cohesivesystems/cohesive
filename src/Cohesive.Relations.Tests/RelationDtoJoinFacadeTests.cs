@@ -211,6 +211,130 @@ public sealed class RelationDtoJoinFacadeTests
     }
 
     [Fact]
+    public async Task FusedOrdinalAdmissionPreservesProjectionOrderDiagnosticsAndDerivedRootFallback()
+    {
+        var q = RelationQuery.Expression();
+        var loads = q.Source<ObservedLoad>();
+        var output = loads.Join(q.Source<Customer>(), (load, customer) => load.CustomerId == customer.Id,
+            (load, customer) => new Summary(load.Id, customer.Name, load.Amount));
+        var mapping = RelationDtoMapping.Create(loads, output, RelationOutputMode.ZeroOrOnePerRoot);
+        Customer[] customers = [new("customer-7", "Acme")];
+        var evaluator = mapping.CreateInMemoryEvaluator(sources => sources.Bind(customers));
+
+        var reference = new ObservedLoad("customer-7");
+        var root = new ObservedLoad("customer-7");
+        Assert.Equal(await Canonical(reference), await mapping.MapAsync(evaluator, new[] { root }));
+        Assert.Equal(new[] { nameof(ObservedLoad.Id), nameof(ObservedLoad.CustomerId), nameof(ObservedLoad.Amount) }, reference.Reads);
+        Assert.Equal(reference.Reads, root.Reads);
+
+        await CompareFailure<ArgumentException>(new ObservedLoad(null), new ObservedLoad(null));
+        await CompareFailure<System.Reflection.TargetInvocationException>(
+            new ObservedLoad("customer-7", fail: true), new ObservedLoad("customer-7", fail: true));
+        await CompareFailure<ArgumentException>(new DerivedObservedLoad(), new DerivedObservedLoad());
+
+        ObservedLoad[] mixed = [new CompatibleObservedLoad(), new("customer-7"), new("customer-7", id: "load-10")];
+        var mixedDtos = await mapping.MapAsync(evaluator, mixed);
+        Assert.Equal(new[] { "load-é", "load-10", "load-42" }, mixedDtos.Select(dto => dto.Id));
+        Assert.Equal(await mapping.MapAsync(evaluator, mixed, load => load.Id), mixedDtos);
+        Assert.Equal(mixedDtos, await mapping.MapAsync(evaluator, mixed.Where(static _ => true)));
+
+        var budgeted = mapping.CreateInMemoryEvaluator(sources => sources.Bind(customers), maximumRows: 1);
+        var budgetedRoot = new ObservedLoad("customer-7");
+        await Assert.ThrowsAsync<InvalidOperationException>(() => mapping.MapAsync(budgeted, new[] { budgetedRoot }));
+        Assert.Equal(reference.Reads, budgetedRoot.Reads);
+
+        Task<Summary[]> Canonical(ObservedLoad value) => mapping.MapAsync(evaluator, new[] { value }, _ => "load-42");
+
+        async Task CompareFailure<TException>(ObservedLoad ordinary, ObservedLoad fused) where TException : Exception
+        {
+            var expected = await Assert.ThrowsAsync<TException>(() => Canonical(ordinary));
+            var actual = await Assert.ThrowsAsync<TException>(() => mapping.MapAsync(evaluator, new[] { fused }));
+            Assert.Equal(expected.Message, actual.Message);
+            Assert.Equal(expected.InnerException?.Message, actual.InnerException?.Message);
+            Assert.Equal(ordinary.Reads, fused.Reads);
+        }
+    }
+
+    [Fact]
+    public async Task FusedOrdinalAdmissionKeepsWarmBatchAllocationBounded()
+    {
+        const int count = 128;
+        var mapping = Build(compact: true);
+        var loads = Enumerable.Range(0, count).Select(index => new Load($"load-{index}", "customer-7")).ToArray();
+        var items = loads.Select(load => new LineItem(load.Id, load.Id, 2m, 50m)).ToArray();
+        var evaluator = mapping.CreateInMemoryEvaluator(new[] { new Customer("customer-7", "Acme") }, items);
+        Assert.Equal(count, (await mapping.MapAsync(evaluator, loads)).Length);
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var result = mapping.MapAsync(evaluator, loads);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(result.IsCompletedSuccessfully);
+        Assert.Equal(count, (await result).Length);
+        Assert.InRange(allocated, 0, count * 175);
+    }
+
+    [Fact]
+    public async Task FusedLargeBatchMatchesCanonicalEscapedOrderAndDuplicateRejection()
+    {
+        var mapping = Build(compact: true);
+        string[] prefixes = ["load/", "load%", "load-é", "load-"];
+        var loads = Enumerable.Range(0, 2049).Reverse()
+            .Select(index => new Load($"{prefixes[index % prefixes.Length]}{index}", "customer-7")).ToArray();
+        var items = loads.Where((_, index) => index % 7 != 0)
+            .Select((load, index) => new LineItem(load.Id, load.Id, 1m, index)).ToArray();
+        var evaluator = mapping.CreateInMemoryEvaluator(new[] { new Customer("customer-7", "Acme") }, items);
+
+        var expected = await mapping.MapAsync(evaluator, loads, static load => load.Id);
+        Assert.Equal(items.Length, expected.Length);
+        Assert.Equal(expected, await mapping.MapAsync(evaluator, loads));
+
+        Load[] repeated = [.. loads, loads[0]];
+        var canonical = await Assert.ThrowsAsync<ArgumentException>(
+            () => mapping.MapAsync(evaluator, repeated, static load => load.Id));
+        var fused = await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, repeated));
+        Assert.Equal(canonical.Message, fused.Message);
+    }
+
+    class ObservedLoad(string? customerId, bool fail = false, string id = "load-42")
+    {
+        internal List<string> Reads { get; } = [];
+
+        public string Id
+        {
+            get
+            {
+                Reads.Add(nameof(Id));
+                return id;
+            }
+        }
+
+        public string CustomerId
+        {
+            get
+            {
+                Reads.Add(nameof(CustomerId));
+                return fail ? throw new InvalidOperationException("Getter failed.") : customerId!;
+            }
+        }
+
+        public decimal Amount
+        {
+            get
+            {
+                Reads.Add(nameof(Amount));
+                return 125m;
+            }
+        }
+    }
+
+    sealed class DerivedObservedLoad() : ObservedLoad("customer-7")
+    {
+        public string Extra => "undeclared";
+    }
+
+    sealed class CompatibleObservedLoad() : ObservedLoad("customer-7", id: "load-é");
+
+    [Fact]
     public async Task GroupedResultsWithInvocationParametersAreEvaluatedPerCall()
     {
         var q = RelationQuery.Expression();

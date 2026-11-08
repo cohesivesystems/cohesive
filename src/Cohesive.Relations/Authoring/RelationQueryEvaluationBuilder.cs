@@ -872,13 +872,24 @@ public sealed class RelationQueryEvaluationBuilder
         foreach (var value in values)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            ArgumentNullException.ThrowIfNull(value);
-            var observation = CoreObservation.Create(shape, ObservationValue.FromObject(value));
-            if (!observation.TryGetField(identityField, out var key) || key.Kind != ObservationValueKind.String
-                || string.IsNullOrWhiteSpace(key.String))
-                throw new ArgumentException($"Root identity field '{identityField}' must contain a nonempty string.", nameof(values));
-            yield return (key.String, observation);
+            yield return AdmitRootByIdentityField(shape, value, identityField);
         }
+    }
+
+    internal static (string Id, CoreObservation Value) AdmitRootByIdentityField<T>(
+        GraphShapeId shape, T value, string identityField) where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        var observation = CoreObservation.Create(shape, ObservationValue.FromObject(value));
+        _ = observation.TryGetField(identityField, out var key);
+        return (RequireRootIdentity(key, identityField), observation);
+    }
+
+    internal static string RequireRootIdentity(ObservationValue key, string identityField)
+    {
+        if (key.Kind != ObservationValueKind.String || string.IsNullOrWhiteSpace(key.String))
+            throw new ArgumentException($"Root identity field '{identityField}' must contain a nonempty string.", "values");
+        return key.String;
     }
 
     /// <summary>Builds an immutable target-neutral evaluation descriptor.</summary>
