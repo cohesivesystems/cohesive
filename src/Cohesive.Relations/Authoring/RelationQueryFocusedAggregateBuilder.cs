@@ -3,6 +3,13 @@ using Cohesive.Relations.IR;
 
 namespace Cohesive.Relations.Authoring;
 
+/// <summary>The default result shape for a single grouping key and sum.</summary>
+/// <typeparam name="TKey">Grouping key type.</typeparam>
+/// <typeparam name="TNumber">Exact numeric sum type.</typeparam>
+/// <param name="Key">The value shared by the rows in this group.</param>
+/// <param name="Total">The canonical sum for this group.</param>
+public sealed record RelationQueryGroupedSum<TKey, TNumber>(TKey Key, TNumber Total);
+
 /// <summary>Declares grouping and sums over one focused source binding using the canonical aggregate builder.</summary>
 /// <typeparam name="TSource">Focused input row type.</typeparam>
 /// <typeparam name="TResult">Aggregate output type.</typeparam>

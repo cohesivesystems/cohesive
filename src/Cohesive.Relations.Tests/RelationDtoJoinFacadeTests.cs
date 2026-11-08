@@ -30,14 +30,13 @@ public sealed class RelationDtoJoinFacadeTests
     }
 
     [Fact]
-    public async Task AnonymousProjectionsAndDefaultCollectionBindingsPreserveResultsAndContributors()
+    public async Task DefaultGroupedSumAndCollectionBindingsPreserveResultsAndContributors()
     {
         var q = RelationQuery.Expression();
         var loads = q.Source<Load>();
         var summaries = loads
-            .Join(q.Source<LineItem>().SumBy(i => i.LoadId, i => i.Quantity * i.UnitPrice,
-                    (loadId, total) => new { LoadId = loadId, Total = total }),
-                (l, t) => l.Id == t.LoadId,
+            .Join(q.Source<LineItem>().SumBy(i => i.LoadId, i => i.Quantity * i.UnitPrice),
+                (l, t) => l.Id == t.Key,
                 (l, t) => new { l.Id, l.CustomerId, t.Total })
             .Join(q.Source<Customer>(), (l, c) => l.CustomerId == c.Id,
                 (l, c) => new Summary(l.Id, c.Name, l.Total));

@@ -347,6 +347,26 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
             aggregate => configure(new(aggregate, Binding)));
     }
 
+    /// <summary>Groups rows by one key and exposes the key and its exact sum as Key and Total.</summary>
+    /// <typeparam name="TKey">Grouping key type.</typeparam>
+    /// <typeparam name="TNumber">Input and result numeric type.</typeparam>
+    /// <param name="key">Grouping expression over the focused row.</param>
+    /// <param name="value">Numeric expression over the focused row.</param>
+    /// <returns>The canonical grouped-sum branch. Empty input produces no groups.</returns>
+    /// <exception cref="ArgumentNullException">A required expression is null.</exception>
+    /// <exception cref="ArgumentException">The grouping or numeric contract is invalid.</exception>
+    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    /// <exception cref="InvalidOperationException">The key or sum type cannot be represented in the result shape.</exception>
+    public RelationQueryExpressionBoundNode<AggregateQueryNode, RelationQueryGroupedSum<TKey, TNumber>> SumBy<TKey, TNumber>(
+        Expression<Func<TValue, TKey>> key, Expression<Func<TValue, TNumber>> value)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        ArgumentNullException.ThrowIfNull(value);
+        return Aggregate<RelationQueryGroupedSum<TKey, TNumber>>(aggregate => aggregate
+            .Group(row => row.Key, key)
+            .Sum(row => row.Total, value));
+    }
+
     /// <summary>Groups rows by one key and projects the key and its exact sum into an inferred result type.</summary>
     /// <typeparam name="TKey">Grouping key type.</typeparam>
     /// <typeparam name="TNumber">Input and result numeric type.</typeparam>

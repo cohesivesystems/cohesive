@@ -50,8 +50,7 @@ the existing compiler APIs.
 
 ## Compact joins and grouped totals
 
-Compose the typed source handles with anonymous intermediate shapes, then prepare a relation with explicit
-root cardinality.
+Compose the typed source handles and an inline grouped sum, then prepare a relation with explicit root cardinality.
 
 ```csharp
 using Cohesive.Relations.Authoring;
@@ -61,9 +60,8 @@ using Cohesive.Relations.Mapping;
 var q = RelationQuery.Expression();
 var loads = q.Source<Load>();
 var summaries = loads
-    .Join(q.Source<LineItem>().SumBy(i => i.LoadId, i => i.Quantity * i.UnitPrice,
-            (loadId, total) => new { LoadId = loadId, Total = total }),
-        (l, t) => l.Id == t.LoadId,
+    .Join(q.Source<LineItem>().SumBy(i => i.LoadId, i => i.Quantity * i.UnitPrice),
+        (l, t) => l.Id == t.Key,
         (l, t) => new { l.Id, l.CustomerId, t.Total })
     .Join(q.Source<Customer>(), (l, c) => l.CustomerId == c.Id,
         (l, c) => new LoadSummaryDto(l.Id, c.Name, l.Total));
@@ -121,9 +119,10 @@ var dtos = await mapping.MapAsync(evaluator, evaluation);
 The example prints `LoadSummaryDto { Id = load-42, CustomerName = Acme, Total = 125 }`.
 Its detailed source row retains all four contributing occurrences, including the load, customer and both items.
 
-`SumBy` is shorthand for one grouping key and one exact sum. Its result constructor assigns the key and sum
-directly to two properties, and it lowers through the same canonical builder as `Aggregate`. Three-argument
-`Join` is equivalent to `Join(...).Select(...)`. `LeftJoin` has the corresponding explicit overload.
+`SumBy` lowers one grouping key and one exact sum through the canonical `Aggregate` builder. Its default
+result exposes `Key` and `Total`. To name the fields yourself, pass a third argument that constructs the
+result and assigns the key and sum directly to two properties. Three-argument `Join` is equivalent to
+`Join(...).Select(...)`. `LeftJoin` has the corresponding explicit overload.
 
 Both joins above are inner joins. Loads without line items or customers are omitted; grouped empty item input
 produces no groups, not a synthetic zero total. `ZeroOrOnePerRoot` is explicitly declared and checked by canonical
