@@ -189,6 +189,28 @@ public sealed class RelationDtoJoinFacadeTests
     }
 
     [Fact]
+    public async Task FusedMappingPreservesReadBudgetForAnEmptyAcquiredSource()
+    {
+        var q = RelationQuery.Expression();
+        var loads = q.Source<Load>();
+        var output = loads.Join(q.Source<Customer>(), (load, customer) => load.CustomerId == customer.Id,
+            (load, customer) => new LoadCustomer(load.Id, customer.Name));
+        var mapping = RelationDtoMapping.Create(loads, output, RelationOutputMode.ZeroOrOnePerRoot);
+        var evaluator = mapping.CreateInMemoryEvaluator(
+            sources => sources.Bind(Array.Empty<Customer>()), maximumRows: 1);
+
+        var preparation = await mapping.EvaluateAsync(evaluator, Array.Empty<Load>(), load => load.Id);
+        Assert.True(preparation.IsSuccessful, Explain(preparation));
+        Assert.NotNull(PreparedLocalDtoKernel<LoadCustomer>.TryCompile(
+            mapping.Compilation.Plan!, preparation, mapping.Mapper, nameof(Load.Id)));
+
+        var canonical = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => mapping.MapAsync(evaluator, Loads(), load => load.Id));
+        var fused = await Assert.ThrowsAsync<InvalidOperationException>(() => mapping.MapAsync(evaluator, Loads()));
+        Assert.Equal(canonical.Message, fused.Message);
+    }
+
+    [Fact]
     public async Task GroupedResultsWithInvocationParametersAreEvaluatedPerCall()
     {
         var q = RelationQuery.Expression();

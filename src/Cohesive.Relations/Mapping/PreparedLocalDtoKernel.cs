@@ -49,8 +49,17 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             || !compiler.CanConstruct(plan.ExecutionSlice.RelationOutput, mapper))
             return null;
 
-        var maximumRoots = execution.Request.PhysicalPlan.Policy.MaximumLocalRows
-            - evidence.PreparedSources.Sum(static source => (long)source.Evidence.Occurrences.Length);
+        var rowLimit = execution.Request.PhysicalPlan.Policy.MaximumLocalRows;
+        var maximumRoots = rowLimit;
+        var acquiredRows = 0L;
+        // Prepared fragments retain acquisition order. The executor needs positive remaining
+        // capacity to start each read, even when that source returns zero rows.
+        foreach (var source in evidence.PreparedSources)
+        {
+            maximumRoots = Math.Min(maximumRoots, rowLimit - acquiredRows - 1);
+            acquiredRows += source.Evidence.Occurrences.Length;
+        }
+        maximumRoots = Math.Min(maximumRoots, rowLimit - acquiredRows);
         return new(rootShape, maximumRoots, compiler.Compile(plan.ExecutionSlice.RelationOutput.Binding, materialize));
     }
 
