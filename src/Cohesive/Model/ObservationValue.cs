@@ -3,7 +3,9 @@ using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.Buffers;
 using System.Globalization;
+using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
@@ -51,6 +53,52 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
             if (count != prepared.Length) System.Array.Resize(ref prepared, count);
             return prepared;
         });
+
+    // Binds only exact CLR property bags whose entire projection is known. Keep the regular
+    // projection's property order and exception behavior even when the layout order differs.
+    internal delegate void ScalarProjection(object source, ObservationValue[] values, int offset);
+
+    internal static ScalarProjection? CompileCompleteScalarProjection(Type type, ObservationLayout layout)
+    {
+        if (!RuntimeFeature.IsDynamicCodeSupported || !type.IsClass || type.IsAbstract
+            || type == typeof(string) || typeof(Uri).IsAssignableFrom(type)
+            || typeof(IEnumerable).IsAssignableFrom(type) || typeof(JsonNode).IsAssignableFrom(type)
+            || type == typeof(JsonDocument) || UsesDeclaredJsonConversion(type))
+            return null;
+
+        var properties = GetProjectionProperties(type);
+        if (properties.Length != layout.Count)
+            return null;
+
+        var source = Expression.Parameter(typeof(object), "source");
+        var values = Expression.Parameter(typeof(ObservationValue[]), "values");
+        var offset = Expression.Parameter(typeof(int), "offset");
+        var instance = Expression.Convert(source, type);
+        var exception = Expression.Parameter(typeof(Exception), "exception");
+        var wrapper = typeof(TargetInvocationException).GetConstructor([typeof(Exception)])!;
+        var occupied = new bool[layout.Count];
+        List<Expression> steps = [];
+        foreach (var property in properties)
+        {
+            var propertyType = property.Property.PropertyType;
+            if (property.UseDeclaredJson || property.Property.GetMethod is not { IsPublic: true }
+                || string.IsNullOrWhiteSpace(property.Name)
+                || !layout.TryGetOrdinal(property.Name, out var ordinal) || occupied[ordinal])
+                return null;
+
+            var factory = propertyType == typeof(string) ? nameof(FromString)
+                : propertyType == typeof(decimal) ? nameof(FromDecimal) : null;
+            if (factory is null)
+                return null;
+
+            occupied[ordinal] = true;
+            var get = Expression.TryCatch(Expression.Property(instance, property.Property),
+                Expression.Catch(exception, Expression.Throw(Expression.New(wrapper, exception), propertyType)));
+            steps.Add(Expression.Assign(Expression.ArrayAccess(values, Expression.Add(offset, Expression.Constant(ordinal))),
+                Expression.Call(typeof(ObservationValue), factory, Type.EmptyTypes, get)));
+        }
+        return Expression.Lambda<ScalarProjection>(Expression.Block(typeof(void), steps), source, values, offset).Compile();
+    }
 
     readonly ScalarPayload scalar;
     readonly object? reference;
@@ -988,13 +1036,15 @@ public readonly struct ObservationValue : IEquatable<ObservationValue>
     // Reflection facts only; every projected value is still converted per call.
     static readonly WeakPreparationCache<Type, bool> DeclaredJsonConversionByType = new();
 
+    static bool UsesDeclaredJsonConversion(Type type) =>
+        DeclaredJsonConversionByType.Get(type, static owner =>
+            owner.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is not null
+            || PortableJsonValueAttribute.TryGetKind(owner, out _));
+
     static bool TryProjectJsonConvertedValue(object value, out ObservationValue observed)
     {
         var type = value.GetType();
-        var declared = DeclaredJsonConversionByType.Get(type, static owner =>
-            owner.GetCustomAttribute<JsonConverterAttribute>(inherit: true) is not null
-            || PortableJsonValueAttribute.TryGetKind(owner, out _));
-        if (!declared)
+        if (!UsesDeclaredJsonConversion(type))
         {
             observed = default;
             return false;

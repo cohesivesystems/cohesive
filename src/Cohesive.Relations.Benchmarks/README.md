@@ -36,6 +36,9 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
   bookkeeping, and the full compiled canonical mapper.
 - **Compilation:** a cold compiler instance, a cached repeat compilation, and fresh AutoMapper
   configuration validation plus eager mapping-plan compilation.
+- **CLR root admission:** `RelationDtoRootAdmissionBenchmarks` runs the in-memory load-summary pipeline
+  against LINQ and prepared-lookup AutoMapper controls and times evaluator setup and first use separately.
+  See [ordinal root admission results](../../docs/performance/relation-dto-root-admission.md).
 - **End to end:** canonical in-memory interpretation followed by typed materialization.
 - **Diagnostics:** missing joined input and incompatible output-value conversion paths, measured
   independently from successful mapping.

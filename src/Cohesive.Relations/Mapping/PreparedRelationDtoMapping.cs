@@ -159,12 +159,11 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
             return await MapAsync(evaluator, canonical, cancellationToken).ConfigureAwait(false);
         }
 
-        if (kernel.TryMap(roots, identityField, cancellationToken, out var mapped, out var admitted))
+        if (kernel.TryMap(roots, cancellationToken, out var mapped, out var budgetFallback))
             return mapped;
 
         // Reuse already-admitted roots on the canonical budget-failure path.
-        var evaluation = Evaluate(LocalEvaluation)
-            .Supply(admitted.Select(static row => RelationQuerySuppliedRoot.FromObservation(row.Id, row.Value))).Build();
+        var evaluation = Evaluate(LocalEvaluation).Supply(budgetFallback).Build();
         return await MapAsync(evaluator, evaluation, cancellationToken).ConfigureAwait(false);
     }
 

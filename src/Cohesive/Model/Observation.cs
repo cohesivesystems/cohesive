@@ -152,6 +152,24 @@ public sealed class Observation : IEquatable<Observation>, IObservationFieldRead
     public static Observation Create(GraphShapeId shape, ObservationLayout layout, ReadOnlySpan<ObservationValue> valuesByOrdinal) =>
         Create(shape, layout, ImmutableArray.Create(valuesByOrdinal));
 
+    // The compiled property projection produces exactly one concrete value (possibly Null) per slot.
+    internal static Observation AdmitCompleteProjection(GraphShapeId shape, ObservationLayout layout,
+        ImmutableArray<ObservationValue> values, ReadOnlySpan<ulong> allPresent)
+    {
+        ValidateCompleteProjection(shape, layout, values.AsSpan(), allPresent);
+        return new(layout.ShapeId, ObservationValue.FromOrdinalFields(new(layout, values, values.Length)));
+    }
+
+    // Only the failure path needs to snapshot borrowed slots for the canonical diagnostic.
+    internal static void ValidateCompleteProjection(GraphShapeId shape, ObservationLayout layout,
+        ReadOnlySpan<ObservationValue> values, ReadOnlySpan<ulong> allPresent)
+    {
+        if (ObservationValidator.TryValidateAgainstShape(shape, layout, values, allPresent, out _))
+            return;
+
+        _ = Create(shape, ObservationValue.FromOrdinalFields(new(layout, ImmutableArray.Create(values), values.Length)));
+    }
+
     /// <summary>Creates and validates an observation from canonical field values.</summary>
     /// <param name="shape">Exact graph and shape that govern the fields.</param>
     /// <param name="fields">Field values keyed by canonical semantic identity.</param>
