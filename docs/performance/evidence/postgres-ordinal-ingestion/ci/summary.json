@@ -1,0 +1,74 @@
+{
+  "run": "https://github.com/cohesivesystems/cohesive/actions/runs/41937774381",
+  "revision": "95009d8c4069c056fbe9ec53ee1dbb0e468bfb93",
+  "environment": {
+    "BenchmarkDotNetCaption": "BenchmarkDotNet",
+    "BenchmarkDotNetVersion": "0.15.8",
+    "OsVersion": "Linux Ubuntu 26.04.1 LTS (Resolute Raccoon)",
+    "ProcessorName": "AMD EPYC 9V45",
+    "PhysicalProcessorCount": 1,
+    "PhysicalCoreCount": 2,
+    "LogicalCoreCount": 4,
+    "RuntimeVersion": ".NET 10.0.14 (10.0.14, 10.0.1426.52326)",
+    "Architecture": "X64",
+    "HasAttachedDebugger": false,
+    "HasRyuJit": true,
+    "Configuration": "RELEASE",
+    "DotNetCliVersion": "10.0.403",
+    "ChronometerFrequency": {
+      "Hertz": 1000000000
+    },
+    "HardwareTimerKind": "Unknown"
+  },
+  "database": "Ephemeral PostgreSQL 14 GitHub service",
+  "cases": [
+    {
+      "method": "CanonicalIngestion",
+      "parameters": "RowCount=1",
+      "mean_ns": 92785.94205729167,
+      "stddev_ns": 1349.1994612898282,
+      "samples": 3,
+      "bytes": 3184
+    },
+    {
+      "method": "OrdinalIngestion",
+      "parameters": "RowCount=1",
+      "mean_ns": 93390.44401041667,
+      "stddev_ns": 2236.229322116515,
+      "samples": 3,
+      "bytes": 2304
+    },
+    {
+      "method": "CanonicalIngestion",
+      "parameters": "RowCount=32",
+      "mean_ns": 148674.5177408854,
+      "stddev_ns": 3916.309313424606,
+      "samples": 3,
+      "bytes": 80328
+    },
+    {
+      "method": "OrdinalIngestion",
+      "parameters": "RowCount=32",
+      "mean_ns": 144562.1466471354,
+      "stddev_ns": 3085.8629306359217,
+      "samples": 3,
+      "bytes": 52168
+    },
+    {
+      "method": "CanonicalIngestion",
+      "parameters": "RowCount=1024",
+      "mean_ns": 2206129.5904947915,
+      "stddev_ns": 22624.95922196981,
+      "samples": 3,
+      "bytes": 2542888
+    },
+    {
+      "method": "OrdinalIngestion",
+      "parameters": "RowCount=1024",
+      "mean_ns": 1943791.8841145833,
+      "stddev_ns": 15685.144572162504,
+      "samples": 3,
+      "bytes": 1641768
+    }
+  ]
+}

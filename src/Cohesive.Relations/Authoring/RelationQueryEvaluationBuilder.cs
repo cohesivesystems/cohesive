@@ -141,8 +141,11 @@ public sealed record RelationQuerySuppliedRootSet
 /// </remarks>
 public sealed class RelationQueryEvaluation
 {
-    static readonly ConditionalWeakTable<RelationQueryCompilationRequest, DocumentValidationResult>
-        CompilationValidations = new();
+    static readonly ConditionalWeakTable<RelationQueryDocument, DocumentValidationResult>
+        DocumentValidations = new();
+
+    internal static DocumentValidationResult ValidateDocument(RelationQueryDocument document) =>
+        DocumentValidations.GetValue(document, static snapshot => RelationQueryDocumentSemanticValidator.Validate(snapshot));
 
     /// <summary>Current portable canonical evaluation schema version.</summary>
     public const string CurrentSchemaVersion = "relation-query-evaluation/v3";
@@ -202,9 +205,7 @@ public sealed class RelationQueryEvaluation
         if (!string.Equals(SchemaVersion, CurrentSchemaVersion, StringComparison.Ordinal))
             throw new ArgumentException($"Unsupported relation/query evaluation schema version '{SchemaVersion}'.", nameof(schemaVersion));
         Compilation = Guard.RequireNotNull(compilation);
-        var documentValidation = CompilationValidations.GetValue(
-            Compilation,
-            static request => RelationQueryDocumentSemanticValidator.Validate(request.DefinitionDocument));
+        var documentValidation = ValidateDocument(Compilation.DefinitionDocument);
         if (!documentValidation.IsValid)
         {
             throw new ArgumentException(
@@ -440,7 +441,7 @@ public sealed class RelationQueryEvaluationBuilder
         if (string.IsNullOrWhiteSpace(evaluation.Value))
             throw new ArgumentException("A relation/query evaluation requires a non-empty evaluation identity.", nameof(evaluation));
 
-        var validation = RelationQueryDocumentSemanticValidator.Validate(document);
+        var validation = RelationQueryEvaluation.ValidateDocument(document);
         if (!validation.IsValid)
         {
             throw new ArgumentException(
@@ -852,6 +853,32 @@ public sealed class RelationQueryEvaluationBuilder
         }
 
         return Supply(observations, completeness, evidenceReference, logicalPartition);
+    }
+
+    internal RelationQueryEvaluationBuilder SupplyByIdentityField<T>(IEnumerable<T> values, string identityField,
+        CancellationToken cancellationToken) where T : notnull
+    {
+        var shape = ResolveGraphShape(RequireRelationRootShape());
+        return Supply(AdmitByIdentityField(shape, values, identityField, cancellationToken)
+            .Select(static row => RelationQuerySuppliedRoot.FromObservation(row.Id, row.Value)));
+    }
+
+    internal static IEnumerable<(string Id, CoreObservation Value)> AdmitByIdentityField<T>(
+        GraphShapeId shape, IEnumerable<T> values, string identityField, CancellationToken cancellationToken)
+        where T : notnull
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        cancellationToken.ThrowIfCancellationRequested();
+        foreach (var value in values)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ArgumentNullException.ThrowIfNull(value);
+            var observation = CoreObservation.Create(shape, ObservationValue.FromObject(value));
+            if (!observation.TryGetField(identityField, out var key) || key.Kind != ObservationValueKind.String
+                || string.IsNullOrWhiteSpace(key.String))
+                throw new ArgumentException($"Root identity field '{identityField}' must contain a nonempty string.", nameof(values));
+            yield return (key.String, observation);
+        }
     }
 
     /// <summary>Builds an immutable target-neutral evaluation descriptor.</summary>

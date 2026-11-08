@@ -1,0 +1,15 @@
+{
+  "relations": {
+    "passed": 1195,
+    "failed": 0,
+    "skipped": 0
+  },
+  "core": {
+    "passed": 5306,
+    "failed": 0,
+    "skipped": 64
+  },
+  "benchmark_build": "Release, warnings as errors, passed",
+  "allocation_guard": "Batch allocation equals fresh destination array plus DTO instances, after preparation.",
+  "scope": "Rejected collection prototype; allocation guard included in archived patch. CI used d7fb02a4 with identical production code and benchmark harness."
+}

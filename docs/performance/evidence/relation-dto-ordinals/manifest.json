@@ -1,0 +1,17 @@
+{
+  "candidate_revision": "343f2e98424c21ee52e062f1289c81452110368c",
+  "control_revision": "a62aca11cabe5c15298652da8d5be8f20d7ef954",
+  "measurement": "One selected case per fresh process; three counterbalanced repeats, 4 warmups and six 200ms iterations. Warm/admission use the same candidate harness. Canonical regression uses identical frozen older harness/dependencies and substitutes only Relations.dll. No profiling or tests overlap retained timing.",
+  "exception": "First rejected-string-order repeat overlaps a rebuild and is excluded in full from summary. Two uncontaminated repeats retained for rejected probe only; this probe was reverted.",
+  "boundaries": "Warm ordinal maps already-validated IndexedObservationOccurrence with an exact layout-reference check per row. Admission uses ownership-transfer builder to copy canonical row fields, bind field names and validate; admission-plus-map includes storage and DTO allocation. No public mapper rerouting.",
+  "source_hashes": {
+    "src/Cohesive.Relations/Mapping/RelationDtoMapperBuilder.cs": "6bbee2023b4163568123f4503415811dbf73587781dff20c1f9e4ba83da1cfc5",
+    "src/Cohesive.Relations/Mapping/RelationDtoMapperCompiler.cs": "66cc1d8e36c3446de197a0d9626c032465038774686bb2031b2e22be93e28e2d",
+    "src/Cohesive.Relations.Benchmarks/RelationDtoWarmBenchmarks.cs": "1006f5bcfa0b59d0e7ff70e40a63190d3168c79c5644ecfb7dcf8a13bbd036b5"
+  },
+  "runtime_hashes": {
+    "/private/tmp/ordinal-dto/candidate/Cohesive.Relations.dll": "e6142674591518ea130f816d012e38ab8e2a24350e1eb61856c8cbc4302d3e11",
+    "/private/tmp/ordinal-dto-regression/control/Cohesive.Relations.dll": "e669a3b727e4914365090a2b50d97e76f2e04e87d89e7cba022573c0babe079d"
+  },
+  "local_binary_note": "Local candidate was frozen before committing the identical source tree as 343f2e98; source hashes and binary hashes identify exact inputs independently of assembly informational commit metadata."
+}

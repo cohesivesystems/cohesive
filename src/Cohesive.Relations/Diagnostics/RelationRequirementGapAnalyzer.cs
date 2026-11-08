@@ -73,6 +73,8 @@ public static class RelationRequirementGapAnalyzer
         readonly CompiledRelationQueryPlan plan;
         readonly RelationQueryRuntimeEvidence evidence;
         readonly IRelationRequirementGapPolicy policy;
+        readonly bool hasPreparedScope;
+        readonly bool usePreparedScope;
         readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryRequirementInput> inputs;
         readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryDependencyEntry> dependencies;
         readonly IReadOnlyDictionary<RelationQueryInputId, RelationQuerySourceInputContract> sourceContracts;
@@ -110,6 +112,9 @@ public static class RelationRequirementGapAnalyzer
             this.plan = plan;
             this.evidence = evidence;
             this.policy = policy;
+            hasPreparedScope = !evidence.SuppliedFieldsForAnalysis.IsDefault
+                && evidence.PreparedSources.All(source => ReferenceEquals(source.Plan, plan));
+            usePreparedScope = hasPreparedScope && evidence.PreparedSources.All(static source => source.IsGapFree);
             var planIndex = RelationQueryCompiledPlanIndex.For(plan);
             inputs = planIndex.Inputs;
             dependencies = planIndex.Dependencies;
@@ -121,12 +126,14 @@ public static class RelationRequirementGapAnalyzer
             capabilityContracts = planIndex.CapabilityContracts;
             expansionContracts = planIndex.ExpansionContracts;
             sources = new(evidence.Sources.Length);
-            fields = new(evidence.Fields.Length);
+            fields = new(usePreparedScope ? evidence.SuppliedFieldsForAnalysis.Length : evidence.Fields.Length);
             traversals = new(evidence.Traversals.Length);
             parameters = new(evidence.Parameters.Length);
             capabilities = new(evidence.Capabilities.Length);
             conversions = new(evidence.ConversionFailures.Length);
-            occurrences = new(evidence.OccurrenceEntryCount);
+            occurrences = new(usePreparedScope
+                ? evidence.Sources.Where(source => !IsPreparedSource(source)).Sum(static source => source.Occurrences.Length)
+                : evidence.OccurrenceEntryCount);
             collectionOccurrences = new(evidence.CollectionOccurrences.Length);
         }
 
@@ -171,6 +178,11 @@ public static class RelationRequirementGapAnalyzer
                     traversal.State != RelationQueryTraversalEvidenceState.Inconclusive
                     && (traversal.State != RelationQueryTraversalEvidenceState.Completed
                         || traversal.Completeness == RelationQueryEvidenceCompleteness.Complete));
+            if (hasPreparedScope && !usePreparedScope && isConclusive && normalizedGaps.IsEmpty && diagnostics.Count == 0)
+            {
+                foreach (var prepared in evidence.PreparedSources)
+                    prepared.MarkGapFree();
+            }
             return new(
                 isEvidenceValid: true,
                 isConclusive,
@@ -178,6 +190,9 @@ public static class RelationRequirementGapAnalyzer
                 decisions,
                 NormalizeDiagnostics(diagnostics));
         }
+
+        bool IsPreparedSource(RelationQuerySourceEvidence source) =>
+            evidence.PreparedSources.Any(prepared => ReferenceEquals(prepared.Evidence, source));
 
         void ValidateEvidence()
         {
@@ -202,6 +217,8 @@ public static class RelationRequirementGapAnalyzer
                 }
 
                 sources.Add(source.Input, source);
+                if (usePreparedScope && IsPreparedSource(source))
+                    continue;
 
                 var contract = sourceContracts[source.Input];
                 foreach (var occurrence in source.Occurrences)
@@ -340,7 +357,7 @@ public static class RelationRequirementGapAnalyzer
             }
 
             foreach (var field in QuarantineOrderedDuplicateEvidence(
-                         evidence.Fields,
+                         usePreparedScope ? evidence.SuppliedFieldsForAnalysis : evidence.Fields,
                          static field => (field.Input, field.Owner),
                          static field => field.Input,
                          static field => field.Owner,

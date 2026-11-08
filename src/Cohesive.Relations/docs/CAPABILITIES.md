@@ -109,18 +109,18 @@ changes without regenerating this artifact.
 ### PostgreSQL
 
 - Target: `cohesive.adapters.postgres.sql`
-- Profile: `cohesive.adapters.postgres.sql/canonical-v2`
-- Capability evidence: 129
+- Profile: `cohesive.adapters.postgres.sql/canonical-v3`
+- Capability evidence: 133
 - Definition schemas: `relation-query/v1`
 - Compiler profiles: `relation-query-static/v1`
-- Full-profile SHA-256: `84ff1ef2fd830a1157fd5020f1de9f630680b48dc3f6029cd64128de6c4e1001`
-- Families: boundary validation=11, expression=24, guarantee=22, logical=42, primitive=6, structural=11, temporal=13
+- Full-profile SHA-256: `93dcd4ade5d25c1ca804bab89c56a34e1497bbdb4e65852d15d16f873a3c4411`
+- Families: boundary validation=12, expression=24, guarantee=23, logical=42, primitive=6, structural=13, temporal=13
 
 - Logical semantics: `AggregateFilter`, `AggregateGrouping`, `Aggregation`, `AlwaysPresentBinding`, `AscendingOrdering`, `AtMostOneRelationshipTraversal`, `AverageAggregate`, `CountAggregate`, `DescendingOrdering`, `DistinctRows`, `Filter`, `ForwardRelationshipTraversal`, `InnerJoin`, `InverseRelationshipTraversal`, `Join`, `KeysetPaging`, `LeftOuterJoin`, `ManyPerRootRelationOutput`, `ManyRelationshipTraversal`, `MaximumAggregate`, `MayBeAbsentBinding`, `MinimumAggregate`, `NullsFirst`, `NullsLast`, `OffsetPaging`, `OnePerRootRelationOutput`, `OptionalRelationshipTraversal`, `Ordering`, `Projection`, `ProjectionAssignment`, `QueryAggregationResult`, `QueryRowsResult`, `RelationInvariant`, `RelationOutputIdentity`, `RelationshipTraversal`, `RequiredRelationshipTraversal`, `SetRelationOutput`, `Source`, `StableTieOrdering`, `SumAggregate`, `TemporalJoin`, `ZeroOrOnePerRootRelationOutput`
 - Expression semantics: `Operation:expr.function.endsWith`, `Operation:expr.function.startsWith`, `Operation:expr.function.textContains`, `Operation:expr.node.conditional`, `Operation:expr.node.constant`, `Operation:expr.node.field`, `Operation:expr.node.field.nestedPath`, `Operation:expr.node.parameter`, `Operation:expr.node.typedField`, `Operation:expr.node.typedLiteral`, `Operation:expr.operator.aggregate.average`, `Operation:expr.operator.aggregate.count`, `Operation:expr.operator.aggregate.max`, `Operation:expr.operator.aggregate.min`, `Operation:expr.operator.aggregate.sum`, `Operation:expr.operator.binary.and`, `Operation:expr.operator.binary.eq`, `Operation:expr.operator.binary.ge`, `Operation:expr.operator.binary.gt`, `Operation:expr.operator.binary.le`, `Operation:expr.operator.binary.lt`, `Operation:expr.operator.binary.ne`, `Operation:expr.operator.binary.or`, `Operation:expr.operator.unary.not`
-- Structural paths: `AggregateTarget:NestedField`, `AggregateTarget:TopLevelField`, `BindingRead:NestedField`, `BindingRead:TopLevelField`, `CompleteValue:RootValue`, `GroupingTarget:NestedField`, `GroupingTarget:TopLevelField`, `OutputSelection:NestedField`, `OutputSelection:TopLevelField`, `ProjectionTarget:NestedField`, `ProjectionTarget:TopLevelField`
-- Preserved guarantees: `AbsenceAvailabilityFailureDistinction`, `Aggregation`, `Cardinality`, `ConsistentSnapshot`, `DeterministicResult`, `DuplicateHandling`, `EvidenceCompleteness`, `Grouping`, `InconclusiveEvidence`, `JoinMembership`, `MissingNullDistinction`, `NullPlacement`, `Ordering`, `OutputIdentity`, `OutputMode`, `RelationRootCorrelation`, `RelationshipDirection`, `RelationshipMultiplicity`, `StablePaging`, `TemporalBoundary`, `TemporalDomain`, `UnboundedTemporalBoundary`
-- Enforced boundaries: `postgres/boundary/complete-input-evidence`, `postgres/boundary/deterministic-provider`, `postgres/boundary/exact-numeric-aggregate-domain`, `postgres/boundary/exact-temporal-domain`, `postgres/boundary/homogeneous-temporal-domain`, `postgres/boundary/max-page-size`, `postgres/boundary/non-null-operands`, `postgres/boundary/scalar-operands`, `postgres/boundary/single-database`, `postgres/boundary/stable-unique-ordering`, `postgres/boundary/supplied-relation-root`
+- Structural paths: `AggregateTarget:NestedField`, `AggregateTarget:TopLevelField`, `BindingRead:NestedField`, `BindingRead:TopLevelField`, `CompleteValue:RootValue`, `GroupingTarget:NestedField`, `GroupingTarget:TopLevelField`, `OccurrenceEvidenceReconstruction:NestedField`, `OccurrenceEvidenceReconstruction:TopLevelField`, `OutputSelection:NestedField`, `OutputSelection:TopLevelField`, `ProjectionTarget:NestedField`, `ProjectionTarget:TopLevelField`
+- Preserved guarantees: `AbsenceAvailabilityFailureDistinction`, `Aggregation`, `Cardinality`, `ConsistentSnapshot`, `DeterministicResult`, `DuplicateHandling`, `EvidenceCompleteness`, `Grouping`, `InconclusiveEvidence`, `JoinMembership`, `MissingNullDistinction`, `NullPlacement`, `OccurrenceProvenance`, `Ordering`, `OutputIdentity`, `OutputMode`, `RelationRootCorrelation`, `RelationshipDirection`, `RelationshipMultiplicity`, `StablePaging`, `TemporalBoundary`, `TemporalDomain`, `UnboundedTemporalBoundary`
+- Enforced boundaries: `postgres/boundary/complete-input-evidence`, `postgres/boundary/deterministic-provider`, `postgres/boundary/exact-numeric-aggregate-domain`, `postgres/boundary/exact-temporal-domain`, `postgres/boundary/homogeneous-temporal-domain`, `postgres/boundary/max-page-size`, `postgres/boundary/non-null-operands`, `postgres/boundary/row-preserving-contributors`, `postgres/boundary/scalar-operands`, `postgres/boundary/single-database`, `postgres/boundary/stable-unique-ordering`, `postgres/boundary/supplied-relation-root`
 - Primitive facilities: `BatchedKeyLookup`, `BatchedPredicateLookup`, `CompleteSetEnumeration`, `FieldProjection`, `ObservationIdentityRead`, `RelationshipReferenceRead`
 - Temporal semantics: `DateDomain`, `DateTimeDomain`, `ExclusiveBoundary`, `InclusiveBoundary`, `InconclusiveEvidence`, `InnerJoin`, `InstantDomain`, `LeftOuterJoin`, `NullAsUnbounded`, `PointInInterval`, `PreserveAllMatches`, `UnboundedBoundary`, `ValidateIntervals`
 - Operating boundaries:
@@ -131,6 +131,7 @@ changes without regenerating this artifact.
   - `postgres/boundary/homogeneous-temporal-domain`: HomogeneousTemporalDomain
   - `postgres/boundary/max-page-size`: MaximumPageSize = 1000
   - `postgres/boundary/non-null-operands`: NonNullOperands
+  - `postgres/boundary/row-preserving-contributors`: RowPreservingTopology
   - `postgres/boundary/scalar-operands`: ScalarOperands
   - `postgres/boundary/single-database`: SingleSource
   - `postgres/boundary/stable-unique-ordering`: StableUniqueOrdering

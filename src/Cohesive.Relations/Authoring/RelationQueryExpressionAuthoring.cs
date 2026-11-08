@@ -1242,6 +1242,13 @@ public sealed partial class RelationQueryExpressionAuthoring
             parameterName);
     }
 
+    internal ImmutableDictionary<Type, QualifiedShapeId> SnapshotSourceTypes(CompiledRelationQueryPlan plan)
+    {
+        var sourceShapes = plan.InputContract.Sources.Select(static input => input.Shape).ToHashSet();
+        return clrPaths.Where(entry => sourceShapes.Contains(entry.Value.Id))
+            .ToImmutableDictionary(static entry => entry.Key, static entry => entry.Value.Id);
+    }
+
     internal FieldPath ResolveMemberPath(Type rootType, IReadOnlyList<PropertyInfo> members) =>
         clrPaths.TryGetValue(Nullable.GetUnderlyingType(rootType) ?? rootType, out var registration)
             ? registration.Resolve(members)

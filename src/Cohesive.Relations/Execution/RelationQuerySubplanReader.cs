@@ -221,13 +221,7 @@ public sealed class RelationQuerySubplanReader<TInput, TResult> : IRelationQuery
                 cancellationToken.ThrowIfCancellationRequested();
                 var fields = ImmutableArray.CreateBuilder<RelationQuerySourceReadFieldResult>(request.Fields.Length);
                 foreach (var field in request.Fields)
-                {
-                    var found = rows[index].TryGetField(field.SemanticPath, out var value);
-                    fields.Add(!found || value.Kind == ObservationValueKind.Undefined
-                        ? new(field, RelationQuerySourceReadFieldState.Missing)
-                        : value.Kind == ObservationValueKind.Null ? new(field, RelationQuerySourceReadFieldState.Null)
-                        : new(field, RelationQuerySourceReadFieldState.Value, value));
-                }
+                    fields.Add(RelationQuerySourceReadFieldResult.Project(field, rows[index]));
                 observations.Add(new(index.ToString("D10", CultureInfo.InvariantCulture), request.Shape, fields.MoveToImmutable()));
             }
             return ValueTask.FromResult(new RelationQuerySourceReadResult(RelationQuerySourceReadState.Complete,

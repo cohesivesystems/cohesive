@@ -1,0 +1,16 @@
+Top 15 Functions (Exclusive)                                                  Inclusive           Exclusive
+1.  Thread.<PollGC>g__PollGCWorker|67_0()                                     44.01%              44.01%
+2.  RelationDtoValueReader.Read(value class Cohesive.Model.ObservationValu    41.56%              20.71%
+3.  ObservationValue].Search(!0,class System.Collections.Generic.IComparer    14.83%              11.14%
+4.  Anonymously Hosted DynamicMethods Assembly!dynamicClass.lambda_method5    47.4%               5.84%
+5.  String.CompareOrdinalHelper(class System.String,class System.String)      5.81%               5.81%
+6.  RelationDtoWarmProfile.Measure(class System.Func`1<class System.Object    92.92%              2.88%
+7.  IConverter<T>.Convert(required_modifier System.Runtime.InteropServices    1.86%               1.68%
+8.  IConverter<T>.Convert(required_modifier System.Runtime.InteropServices    1.54%               1.53%
+9.  RelationDtoWarmProfile+<>c__DisplayClass0_0.<Run>b__1()                   10.36%              0.55%
+10. ObservationValue.TryGetProperty(class System.String,value class Cohesi    0.79%               0.19%
+11. InitHelpers.InitClassSlow(value class System.Runtime.CompilerServices.    2.27%               0.19%
+12. CastHelpers.StelemRef(class System.Object[],int,class System.Object)      0.16%               0.16%
+13. DynamicMethod.CreateDelegate(class System.Type,class System.Object)       0.14%               0.14%
+14. ObservationValue].TryGetValue(!0,!1&)                                     0.48%               0.13%
+15. TypeDetails.GetConstructors()                                             0.26%               0.13%
