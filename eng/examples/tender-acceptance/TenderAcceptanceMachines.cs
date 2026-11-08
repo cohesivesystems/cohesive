@@ -14,26 +14,31 @@ internal sealed record Receipt(bool Correlated, bool Positive);
 internal static class TenderAcceptanceMachines
 {
     internal static TenderDeclaration Tender() => new();
-    internal static LinkageDeclaration Linkage() => new();
-    internal static LoadAcknowledgementDeclaration LoadAcknowledgement() => new();
+    internal static LoadAcknowledgementView LoadAcknowledgement() => new();
     internal static CoordinationDeclaration Coordination() => new();
 
+    // One tender lifecycle for this bounded episode: linkage and acceptance share an owner.
+    // AttachLoad observes a persisted relationship; the host must establish load existence.
     internal sealed class TenderDeclaration
     {
         internal MachineDefinition Definition { get; }
+        internal MachineState Unlinked { get; }
         internal MachineState Offered { get; }
         internal MachineState Pending { get; }
         internal MachineState Confirmed { get; }
+        internal MachineMovement AttachLoad { get; }
         internal MachineMovement SendPending { get; }
         internal MachineMovement SendConfirmed { get; }
         internal MachineMovement ReceiptConfirmed { get; }
 
         internal TenderDeclaration()
         {
-            var source = Machine.Define("tender.acceptance", "proposal-1");
-            Offered = source.State("unaccepted").Initial();
+            var source = Machine.Define("tender.acceptance", "proposal-2");
+            Unlinked = source.State("unlinked").Initial();
+            Offered = source.State("unaccepted");
             Pending = source.State("accepted-awaiting-ack");
             Confirmed = source.State("accepted-confirmed").Final();
+            AttachLoad = source.Edge("attach-load").From(Unlinked).To(Offered);
             const string sendResult = "send-result";
             SendPending = source.Edge("send-pending").On(sendResult).From(Offered).To(Pending)
                 .When((AcceptanceFacts facts, SendResult result) => facts.LinkedLoadExists && !facts.Cancelled
@@ -48,24 +53,10 @@ internal static class TenderAcceptanceMachines
         }
     }
 
-    internal sealed class LinkageDeclaration
-    {
-        internal MachineDefinition Definition { get; }
-        internal MachineState Unlinked { get; }
-        internal MachineState Linked { get; }
-        internal MachineMovement AttachLoad { get; }
-
-        internal LinkageDeclaration()
-        {
-            var source = Machine.Define("tender.load-linkage", "proposal-1");
-            Unlinked = source.State("unlinked").Initial();
-            Linked = source.State("linked").Final();
-            AttachLoad = source.Edge("attach-load").From(Unlinked).To(Linked);
-            Definition = source.Build();
-        }
-    }
-
-    internal sealed class LoadAcknowledgementDeclaration
+    // Read-only lifecycle slice for reasoning about a related load. This is not a second
+    // authoritative binding on Load, nor a complete load lifecycle. D02 requires its eventual
+    // projection from the full load machine once dispatch/cancellation behavior is extracted.
+    internal sealed class LoadAcknowledgementView
     {
         internal MachineDefinition Definition { get; }
         internal MachineState Pending { get; }
@@ -73,7 +64,7 @@ internal static class TenderAcceptanceMachines
         internal MachineMovement AcceptPending { get; }
         internal MachineMovement Confirm { get; }
 
-        internal LoadAcknowledgementDeclaration()
+        internal LoadAcknowledgementView()
         {
             var source = Machine.Define("load.tender-acknowledgement", "proposal-1");
             Pending = source.State("not-acknowledged").Initial();

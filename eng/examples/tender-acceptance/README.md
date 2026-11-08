@@ -39,3 +39,13 @@ slice; live differential testing against the original application is still requi
 Domain clarification D01 assigns customer-ordered stops to the load and actual execution history to trips.
 The proposed machines do not require an original trip. The observed trace still includes the legacy trip
 notification so that characterization does not silently rewrite the behavior being extracted.
+
+D02 gives the tender a single lifecycle for linkage and acceptance: `AttachLoad` moves from `Unlinked`
+to `Offered`, after which acceptance is admitted. The independent linkage machine has been removed.
+`LoadAcknowledgement()` returns an explicitly incomplete view of the related load lifecycle;
+`Coordination()` describes process progress across participants. Neither is a second binding on the tender.
+The tender revision is now `proposal-2` because its graph and initial state changed.
+
+The [entity binding contract](../../../docs/research/tender-acceptance/entity-binding.md) records full
+coupling as the required target semantics. These sketches do not implement entity-wide compiler/runtime
+coverage enforcement, and the legacy trace host intentionally preserves observed partial commits.

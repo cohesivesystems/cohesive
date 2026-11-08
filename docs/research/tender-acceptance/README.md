@@ -6,7 +6,7 @@ not a production migration, a complete tender model, or a proof of behavioral eq
 ## Artifacts and authority
 
 - [Evidence manifest](evidence.json): stable claim IDs, source-relative locations, full-file and excerpt SHA-256 hashes.
-- [Proposed fluent source](../../../eng/examples/tender-acceptance/TenderAcceptanceMachines.cs): four small machines using existing Cohesive authoring and lowering.
+- [Proposed fluent source](../../../eng/examples/tender-acceptance/TenderAcceptanceMachines.cs): one tender lifecycle, a related load acknowledgement view, and a coordination process using existing Cohesive authoring and lowering.
 - [Coordination extraction and trace host](../../../eng/examples/tender-acceptance/AcceptanceCoordination.cs): executable, explicitly bounded observations of effect ordering.
 - [Coordination and host design](coordination.md): participant relationships, effect boundaries, failure and recovery obligations.
 - [Characterization tests](../../../src/Cohesive.Tests/Machines/Distillation/TenderAcceptanceCharacterizationTests.cs): source-derived trace expectations, proposed admission, partial commits, and coherence counterexample.
@@ -76,19 +76,46 @@ its trip notification. They are not the target architecture. The proposed fluent
 on linked-load evidence, not on an original-trip predicate; D01 corrects the dossier and future host/data
 bindings without inventing an additional state machine.
 
+## D02 — one authoritative lifecycle per entity (accepted domain clarification)
+
+An entity's valid snapshots and operations already form a concrete transition system. Its bound
+machine is the authoritative abstraction of that system, not an optional observer of selected writes.
+Each machine state classifies a set of entity snapshots. Within the binding's declared domain, every
+valid snapshot must classify into exactly one state, and every entity operation must have an explicit
+or proven interpretation as a movement or state preservation. Source admission, guards, and final
+classification must agree with the concrete entity transition. A named self-loop has its own guards
+and occurrence identity; it is not interchangeable with preservation.
+
+There is one authoritative machine per entity. Owned component machines compose into that authority;
+machines belonging to other entities relate through policies and coordination. Read-only projections
+can simplify a lifecycle without independently governing mutations. Multiple fields or state dimensions
+do not justify multiple independent machine bindings over the same entity.
+
+For this extraction, tender linkage belongs within the tender acceptance lifecycle. Load acknowledgement
+is only a view of the load's lifecycle: dispatch, cancellation, and other load behavior remain outside
+the extracted slice. Acceptance coordination belongs to a process spanning the two entities. None of
+these bounded sketches claims to cover the full production entity lifecycle.
+
+Full coupling is the intended binding contract. The existing framework currently checks explicitly
+linked movements; entity-wide registration and coverage enforcement are not yet implemented. A host
+must not claim full coupling from those opt-in checks alone. Direct storage writes are outside that
+enforcement boundary unless an adapter prevents them; after-the-fact detection cannot prevent a write.
+
 ## Candidate state models
 
-**Tender acceptance**: `unaccepted -> accepted-awaiting-ack -> accepted-confirmed`, with an automatic-ack
-shortcut. The proposed send-result action requires linked-load evidence and excludes cancellation and a
+**Tender acceptance**: `unlinked -> unaccepted -> accepted-awaiting-ack -> accepted-confirmed`, with an automatic-ack
+shortcut from linked/unaccepted to confirmed. `attach-load` belongs to this same machine; there is no
+independently bound linkage machine. Here `unaccepted` denotes the linked, not-yet-accepted configuration. The proposed send-result action requires linked-load evidence and excludes cancellation and a
 known already-accepted link. These facts summarize admission checks; they do not reimplement repository
 lookup or assert that the checks can safely be deferred until after a send.
 
-**Linkage**: `unlinked -> linked`. Identity alias updates and matching tender stops to load-owned ordered stops are accompanying domain changes,
-not additional statuses. Unlink/relink is deliberately excluded from this episode.
+Identity alias updates and matching tender stops to load-owned ordered stops accompany `attach-load`;
+they are not additional statuses. Unlink/relink is deliberately excluded from this episode.
 
-**Load acknowledgement**: `not-acknowledged -> acknowledged`, with a pending-accept self-transition.
-This is independent of load/trip lifecycle status. It represents a projection of the load, not a new stored
-status field requirement.
+**Load acknowledgement view**: `not-acknowledged -> acknowledged`, with a pending-accept self-transition.
+This is a bounded view of the related load, not an independent authoritative binding or a new stored
+status field. It must eventually be derived from the full load lifecycle. That source lifecycle has not
+yet been extracted, so no formal projection proof or full load coverage is claimed.
 
 **Coordination progress**: `preparing -> linked -> awaiting-receipt/confirming -> complete`;
 uncertain results lead to `reconciliation-required`. These are proposed durable progress states, distinct

@@ -64,6 +64,26 @@ public sealed class TenderAcceptanceCharacterizationTests
         Assert.Equal([AcceptanceEffect.PersistAcknowledgementLog], retry.Completed);
     }
 
+    [Fact]
+    public void D02_linkage_and_acceptance_are_movements_of_one_tender_lifecycle()
+    {
+        var tender = TenderAcceptanceMachines.Tender();
+        var facts = ObservationValue.FromObject(new AcceptanceFacts(true, false, false));
+        var input = ObservationValue.FromObject(new SendResult(false));
+        Assert.Equal(tender.Unlinked.Id, tender.Definition.Initial);
+        Assert.Equal(MachineDecisionKind.Illegal, tender.Definition.Evaluate(
+            tender.Unlinked.Id, tender.SendPending.Resolve().Edge.Action, facts, input).Kind);
+
+        var attached = tender.Definition.Decide(tender.Unlinked.Id, tender.AttachLoad.Resolve().Edge.Action)!;
+        Assert.Equal(tender.Offered.Id, attached.To);
+        Assert.Null(tender.Definition.Decide(attached.To, tender.AttachLoad.Resolve().Edge.Action));
+        var accepted = tender.Definition.Evaluate(attached.To, tender.SendPending.Resolve().Edge.Action, facts, input);
+        Assert.Equal(MachineDecisionKind.Accepted, accepted.Kind);
+        Assert.Equal(tender.Pending.Id, accepted.Edge!.To);
+        Assert.Same(tender.Definition, tender.AttachLoad.Resolve().Machine);
+        Assert.Same(tender.Definition, tender.SendPending.Resolve().Machine);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -108,12 +128,16 @@ public sealed class TenderAcceptanceCharacterizationTests
     [Fact]
     public void Proposal_requires_host_coordination_instead_of_claiming_atomic_coherence()
     {
-        var linkage = TenderAcceptanceMachines.Linkage();
+        var process = TenderAcceptanceMachines.Coordination();
         var load = TenderAcceptanceMachines.LoadAcknowledgement();
-        var relation = new MachineCoherenceBuilder(linkage.Definition, load.Definition)
-            .Allow(linkage.Unlinked.Id, load.Pending.Id)
-            .Allow(linkage.Linked.Id, load.Pending.Id)
-            .Allow(linkage.Linked.Id, load.Confirmed.Id);
+        var relation = new MachineCoherenceBuilder(process.Definition, load.Definition);
+        foreach (var state in process.Definition.States)
+        {
+            relation.Allow(state, load.Confirmed.Id);
+            if (state != process.Complete.Id) relation.Allow(state, load.Pending.Id);
+        }
+        // Unchecked process completion could occur before the related load acknowledges.
+        // The host must substantiate ParticipantsConfirmed before advancing the process.
         var claim = relation.Analyze();
         Assert.Equal(MachineProofState.Disproven, claim.State);
         Assert.NotEmpty(claim.Trace);
@@ -138,10 +162,8 @@ public sealed class TenderAcceptanceCharacterizationTests
     public void Declarations_expose_all_handles_from_their_frozen_definition()
     {
         var tender = TenderAcceptanceMachines.Tender();
-        Check(tender.Definition, [tender.Offered, tender.Pending, tender.Confirmed],
-            [tender.SendPending, tender.SendConfirmed, tender.ReceiptConfirmed]);
-        var linkage = TenderAcceptanceMachines.Linkage();
-        Check(linkage.Definition, [linkage.Unlinked, linkage.Linked], [linkage.AttachLoad]);
+        Check(tender.Definition, [tender.Unlinked, tender.Offered, tender.Pending, tender.Confirmed],
+            [tender.AttachLoad, tender.SendPending, tender.SendConfirmed, tender.ReceiptConfirmed]);
         var load = TenderAcceptanceMachines.LoadAcknowledgement();
         Check(load.Definition, [load.Pending, load.Confirmed], [load.AcceptPending, load.Confirm]);
         var coordination = TenderAcceptanceMachines.Coordination();
@@ -177,7 +199,7 @@ public sealed class TenderAcceptanceCharacterizationTests
     [Fact]
     public void Fluent_source_lowers_deterministically_and_round_trips()
     {
-        Func<MachineDefinition>[] sources = [() => TenderAcceptanceMachines.Tender().Definition, () => TenderAcceptanceMachines.Linkage().Definition,
+        Func<MachineDefinition>[] sources = [() => TenderAcceptanceMachines.Tender().Definition,
             () => TenderAcceptanceMachines.LoadAcknowledgement().Definition, () => TenderAcceptanceMachines.Coordination().Definition];
         foreach (var source in sources)
         {

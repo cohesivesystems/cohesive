@@ -21,11 +21,21 @@ strategies with different source behavior (E01/E07).
 | Tender stops correspond to load-owned ordered stops | Order data dependency | Acceptance/amendments update the customer order. Execution trips and their stop visits reference that order; splitting does not rewrite it. D01 supersedes the original-trip workaround. |
 | Receipt refers to outbound attempt | Protocol correlation | Source has partner/control-number matching, including historical numbers. Proposed current-attempt validation needs an explicit policy. |
 
-The test using `MachineCoherenceBuilder` intentionally fails independent-interleaving analysis: a load
-machine can acknowledge before the linkage machine attaches. A declarative allowed-pair relation describes
+The test using `MachineCoherenceBuilder` intentionally fails independent-interleaving analysis: the process
+can reach Complete while the load acknowledgement view remains Pending if completion signals are trusted
+without evidence. A declarative allowed-pair relation describes
 a requirement; it does not coordinate updates or supply a transaction. For a realization using separate
 writes, track intermediate progress and enforce the completion condition at the coordinator boundary.
 Do not merely declare immediate coherence and report it as achieved.
+
+## Ownership and coupling
+
+D02 gives the tender one authoritative lifecycle for this episode, including `attach-load` and acceptance.
+The load is a related entity; its acknowledgement sketch is an incomplete view to be projected from its
+future full lifecycle, not another machine bound to the tender or a separate authority over load writes.
+The coordinator owns process progress. It does not own either participant's business state. See the
+[entity binding contract](entity-binding.md) for classification, complete transition coverage, and the
+current implementation boundary.
 
 ## Proposed coordinator
 
@@ -108,7 +118,7 @@ an uncertain send could contradict a partner that already accepted the response.
 |---|---|---|
 | Tender `send-pending`, `send-confirmed` | E01/E03/E05/E09/E10 | Captures successful acceptance distinctions; admission summary assumes host-resolved facts. |
 | Tender `receipt-confirmed` | E04/E05/E12 + P01 | Observed confirmation with a deliberately stronger positive-result guard. |
-| Linkage `attach-load` | E02/E06/E07 | Episode-level link transition; alias migration and load-owned order changes remain accompanying domain operations. D01 replaces the original-trip stop dependency. |
+| Tender `attach-load` | E02/E06/E07 | Movement of the same tender lifecycle; alias migration and load-owned order changes remain accompanying domain operations. D01 replaces the original-trip stop dependency. |
 | Load `accept-pending`, `confirm` | E08/E11 | Acknowledgement projection only. |
 | Coordination `link-persisted`, `send-*`, `participants-confirmed` | E02/E03/E04 + P02 | Proposed progress observations over non-atomic effects. |
 | Coordination `uncertain-*` | E03/E04 + P02 | Explicit recovery boundary, without inferred retry semantics. |
