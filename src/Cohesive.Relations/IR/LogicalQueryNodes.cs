@@ -280,6 +280,25 @@ public sealed record JoinQueryNode : LogicalQueryNode
     /// <summary>Predicate evaluated over the combined binding environment.</summary>
     public Expr Predicate { get; init; }
 
+    internal bool TryGetEquijoin(out FieldExpr left, out FieldExpr right)
+    {
+        if (Predicate is BinaryExpr
+            {
+                Operator: BinaryOperator.Eq,
+                Left: FieldExpr { Binding: not null } candidateLeft,
+                Right: FieldExpr { Binding: not null } candidateRight
+            }
+            && candidateLeft.Binding != candidateRight.Binding)
+        {
+            left = candidateLeft;
+            right = candidateRight;
+            return true;
+        }
+        left = null!;
+        right = null!;
+        return false;
+    }
+
     /// <inheritdoc />
     public override ImmutableArray<QueryNodeId> Inputs => [Left, Right];
 }

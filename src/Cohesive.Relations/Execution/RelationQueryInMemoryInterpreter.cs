@@ -587,14 +587,20 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             var unknownRight = new bool[right.Length];
             var joined = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>();
 
-            foreach (var leftRow in left)
+            var rightByKey = TryBuildJoinIndex(execution, node, left, right, out var leftKeys);
+            for (var leftIndex = 0; leftIndex < left.Length; leftIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var leftRow = left[leftIndex];
                 var matched = false;
                 var unknown = false;
-                for (var rightIndex = 0; rightIndex < right.Length; rightIndex++)
+                IReadOnlyList<int>? candidates = rightByKey is null ? null
+                    : rightByKey.TryGetValue(leftKeys[leftIndex], out var matches) ? matches : [];
+                var candidateCount = candidates?.Count ?? right.Length;
+                for (var index = 0; index < candidateCount; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    var rightIndex = candidates is null ? index : candidates[index];
                     if (!CanJoinRows(leftRow, right[rightIndex]))
                         continue;
 
@@ -628,6 +634,74 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             }
 
             return joined.ToImmutable();
+        }
+
+        Dictionary<ObservationValue, List<int>>? TryBuildJoinIndex(
+            RelationQueryExecutionNode execution,
+            JoinQueryNode node,
+            ImmutableArray<RelationQueryRuntimeRow> left,
+            ImmutableArray<RelationQueryRuntimeRow> right,
+            out ObservationValue[] leftKeys)
+        {
+            leftKeys = [];
+            // The pair evaluator owns gap activation and diagnostics. Index only when probing a key is
+            // side-effect free, and keep the pair scan for joins too small to benefit from an index.
+            if (left.Length < 2 || right.Length < 2 || directGapsByInput.Count != 0
+                || !node.TryGetEquijoin(out var leftField, out var rightField)
+                || !IsCapabilityAvailable(ExprCapabilities.ForBinary(BinaryOperator.Eq)))
+                return null;
+
+            var leftBindings = nodes[execution.LogicalPlan.EffectiveInputs[0]].OutputBindings;
+            var rightBindings = nodes[execution.LogicalPlan.EffectiveInputs[1]].OutputBindings;
+            if (leftBindings.Any(leftBinding => rightBindings.Any(rightBinding => leftBinding.Binding == rightBinding.Binding)))
+                return null;
+            if (leftBindings.Any(binding => binding.Binding == rightField.Binding))
+                (leftField, rightField) = (rightField, leftField);
+            if (!leftBindings.Any(binding => binding.Binding == leftField.Binding)
+                || !rightBindings.Any(binding => binding.Binding == rightField.Binding))
+                return null;
+
+            leftKeys = new ObservationValue[left.Length];
+            for (var index = 0; index < left.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!TryReadJoinKey(leftField, left[index], out leftKeys[index]))
+                    return null;
+            }
+
+            var rightByKey = new Dictionary<ObservationValue, List<int>>(right.Length, RelationQueryValueSemantics.EqualityComparer);
+            for (var index = 0; index < right.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!TryReadJoinKey(rightField, right[index], out var key))
+                    return null;
+
+                if (!rightByKey.TryGetValue(key, out var matches))
+                {
+                    matches = [];
+                    rightByKey.Add(key, matches);
+                }
+                matches.Add(index);
+            }
+
+            return rightByKey;
+        }
+
+        bool TryReadJoinKey(FieldExpr field, RelationQueryRuntimeRow row, out ObservationValue key)
+        {
+            try
+            {
+                key = evaluator.Evaluate(field, row.CreateExecutionExpressionContext(
+                    implicitBinding: null, parameters, this));
+                return key.Kind is not (ObservationValueKind.Object or ObservationValueKind.Array);
+            }
+            catch (RelationQueryExpressionEvaluationException)
+            {
+                // Re-evaluate in pair order so failures keep their original attribution and only
+                // affect rows that actually reach the predicate.
+                key = default;
+                return false;
+            }
         }
 
         ImmutableArray<RelationQueryRuntimeRow> ExecuteTemporalJoin(
