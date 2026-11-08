@@ -1,9 +1,11 @@
+using System.Runtime.CompilerServices;
 using System.Collections.Immutable;
 using Cohesive.Model;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
+using Cohesive.Relations.Observability;
 
 namespace Cohesive.Relations.Mapping;
 
@@ -16,6 +18,8 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
     internal static readonly RelationQueryEvaluationId LocalEvaluation = new("cohesive.relations/dto-mapping/local");
 
     readonly ImmutableDictionary<Type, QualifiedShapeId> sourceTypes;
+    readonly bool canPrepareLocal;
+    readonly ConditionalWeakTable<RelationQueryInMemorySources.BoundEvaluator, Lazy<Task<PreparedLocalDtoKernel<TOutput>?>>> localKernels = new();
 
     internal RelationDtoMapping(RelationQueryCompilationResult compilation, CompiledRelationDtoMapper<TOutput> mapper,
         RelationQueryAuthoringManifest authoringProvenance, ImmutableDictionary<Type, QualifiedShapeId> sourceTypes)
@@ -24,6 +28,7 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
         Mapper = mapper;
         AuthoringProvenance = authoringProvenance;
         this.sourceTypes = sourceTypes;
+        canPrepareLocal = PreparedLocalDtoKernel<TOutput>.CanPrepare(compilation.Plan!);
     }
 
     /// <summary>Exact portable definition, shapes and output demand.</summary>
@@ -133,8 +138,42 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
             throw new ArgumentException("Use an evaluator created with CreateInMemoryEvaluator to reuse its root identity.", nameof(evaluator));
 
         var identityField = bound.RequireRootIdentityField(CompilationRequest, nameof(evaluator));
+        if (canPrepareLocal && !RelationQueryTelemetryRuntime.IsSourceReadEnabled
+            && !RelationQueryTelemetryRuntime.IsInterpretationEnabled && !RelationQueryTelemetryRuntime.IsDtoMappingEnabled)
+            return MapLocalAsync(bound, roots, identityField, cancellationToken);
+
         var evaluation = Evaluate(LocalEvaluation).SupplyByIdentityField(roots, identityField, cancellationToken).Build();
         return MapAsync(evaluator, evaluation, cancellationToken);
+    }
+
+    async Task<TOutput[]> MapLocalAsync<TRoot>(RelationQueryInMemorySources.BoundEvaluator evaluator,
+        IEnumerable<TRoot> roots, string identityField, CancellationToken cancellationToken) where TRoot : notnull
+    {
+        ArgumentNullException.ThrowIfNull(roots);
+        if (!localKernels.TryGetValue(evaluator, out var preparation))
+            preparation = localKernels.GetValue(evaluator, key => new(() => PrepareLocalAsync(key, identityField)));
+        var kernel = await preparation.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (kernel is null)
+        {
+            var canonical = Evaluate(LocalEvaluation).SupplyByIdentityField(roots, identityField, cancellationToken).Build();
+            return await MapAsync(evaluator, canonical, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (kernel.TryMap(roots, identityField, cancellationToken, out var mapped, out var admitted))
+            return mapped;
+
+        // Reuse already-admitted roots on the canonical budget-failure path.
+        var evaluation = Evaluate(LocalEvaluation)
+            .Supply(admitted.Select(static row => RelationQuerySuppliedRoot.FromObservation(row.Id, row.Value))).Build();
+        return await MapAsync(evaluator, evaluation, cancellationToken).ConfigureAwait(false);
+    }
+
+    async Task<PreparedLocalDtoKernel<TOutput>?> PrepareLocalAsync(RelationQueryInMemorySources.BoundEvaluator evaluator,
+        string identityField)
+    {
+        var empty = Evaluate(LocalEvaluation).Supply(Array.Empty<RelationQuerySuppliedRoot>()).Build();
+        var outcome = await EvaluateAsync(evaluator, empty).ConfigureAwait(false);
+        return PreparedLocalDtoKernel<TOutput>.TryCompile(Compilation.Plan!, outcome, Mapper, identityField);
     }
 
     /// <summary>Maps a supplied complete root collection without manually constructing an evaluation.</summary>

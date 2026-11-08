@@ -87,6 +87,15 @@ read one such source directly and have no invocation parameters. The grouped row
 contributors. Each invocation still checks read and row limits and produces its own result and read traces.
 Plans with collection expansion use ordinary per-invocation acquisition.
 
+For eligible in-memory relations, the value-only `MapAsync(evaluator, roots)` overload lazily compiles a
+fused kernel on its first call. This realization covers zero-or-one-per-root inner string equality joins
+from supplied roots into uniquely keyed acquired rows or their prepared grouped results, followed by
+direct scalar projections. The kernel reuses the DTO mapper's constructor and conversion plan. It
+validates and orders the roots before running one loop for joins, projection, and DTO construction.
+Exact shapes, complete static evidence, and bounded cardinality are required. Other slices, explicit
+evaluation requests, and observed execution use the canonical interpreter. Use `EvaluateAsync` to
+retain full diagnostics, read traces, and contributor provenance.
+
 ## Closed native subplans within composed execution
 
 A complete native row reader can implement a **closed projection** inside a larger query.

@@ -153,6 +153,11 @@ public sealed class CompiledRelationDtoMapper<TOutput>
 
     internal Func<ObservationValue, TOutput> MaterializationKernel => kernel;
 
+    internal Func<Func<string, Expression>, Expression>? ComposeMaterializer { get; init; }
+
+    internal static string ConstructionFailureMessage(Exception exception) =>
+        $"The CLR DTO constructor or member initializer failed with '{exception.GetType().Name}'.";
+
     // Experimental trusted-reader kernel: callers must admit values first. Exact layout identity
     // is checked before target construction; identity alone does not establish value validity.
     internal Func<IOrdinalObservationFieldReader, TOutput>? OrdinalMaterializationKernel { get; init; }
@@ -450,7 +455,7 @@ public sealed class CompiledRelationDtoMapper<TOutput>
                     row,
                     RuntimeDiagnostic(
                         RelationDtoMapperDiagnosticCodes.RuntimeFieldConversionFailed,
-                        $"The CLR DTO constructor or member initializer failed with '{exception.GetType().Name}'.",
+                        ConstructionFailureMessage(exception),
                         evaluation: execution.Evaluation,
                         occurrence: row.Root?.Id,
                         rowIndex: index),

@@ -858,25 +858,26 @@ public sealed class RelationQueryEvaluationBuilder
     internal RelationQueryEvaluationBuilder SupplyByIdentityField<T>(IEnumerable<T> values, string identityField,
         CancellationToken cancellationToken) where T : notnull
     {
+        var shape = ResolveGraphShape(RequireRelationRootShape());
+        return Supply(AdmitByIdentityField(shape, values, identityField, cancellationToken)
+            .Select(static row => RelationQuerySuppliedRoot.FromObservation(row.Id, row.Value)));
+    }
+
+    internal static IEnumerable<(string Id, CoreObservation Value)> AdmitByIdentityField<T>(
+        GraphShapeId shape, IEnumerable<T> values, string identityField, CancellationToken cancellationToken)
+        where T : notnull
+    {
         ArgumentNullException.ThrowIfNull(values);
         cancellationToken.ThrowIfCancellationRequested();
-        var shape = ResolveGraphShape(RequireRelationRootShape());
-        return Supply(ObserveRoots(), observation =>
+        foreach (var value in values)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            ArgumentNullException.ThrowIfNull(value);
+            var observation = CoreObservation.Create(shape, ObservationValue.FromObject(value));
             if (!observation.TryGetField(identityField, out var key) || key.Kind != ObservationValueKind.String
                 || string.IsNullOrWhiteSpace(key.String))
                 throw new ArgumentException($"Root identity field '{identityField}' must contain a nonempty string.", nameof(values));
-            return key.String;
-        });
-
-        IEnumerable<CoreObservation> ObserveRoots()
-        {
-            foreach (var value in values)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                ArgumentNullException.ThrowIfNull(value);
-                yield return CoreObservation.Create(shape, ObservationValue.FromObject(value));
-            }
+            yield return (key.String, observation);
         }
     }
 

@@ -351,22 +351,21 @@ static class RelationDtoMapperBuilder
 
         Func<ObservationValue, TOutput> kernel;
         Func<IOrdinalObservationFieldReader, TOutput>? ordinalKernel = null;
+        Expression BuildMaterializer(Func<RelationDtoCompiledBinding, Type, Expression> read) =>
+            BuildKernelBody<TOutput>(constructor, constructorParameters, parameterProperties,
+                preliminary, compiledBindings, read);
         try
         {
-            kernel = CompileKernel<ObservationValue, TOutput>(
-                constructor,
-                constructorParameters,
-                parameterProperties,
-                preliminary,
-                compiledBindings,
-                ordinalLayout: null
-                );
+            var value = Expression.Parameter(typeof(ObservationValue), "value");
+            kernel = Expression.Lambda<Func<ObservationValue, TOutput>>(
+                BuildMaterializer((binding, type) => Read(value, binding, type)), value).Compile();
             if (ordinalLayout is not null)
             {
-                var prepared = CompileKernel<IOrdinalObservationFieldReader, TOutput>(constructor,
-                    constructorParameters, parameterProperties, preliminary, compiledBindings, ordinalLayout);
-                ordinalKernel = row => ReferenceEquals(row.Layout, ordinalLayout)
-                    ? prepared(row)
+                var row = Expression.Parameter(typeof(IOrdinalObservationFieldReader), "row");
+                var prepared = Expression.Lambda<Func<IOrdinalObservationFieldReader, TOutput>>(
+                    BuildMaterializer((binding, type) => ReadOrdinal(row, binding, type, ordinalLayout)), row).Compile();
+                ordinalKernel = input => ReferenceEquals(input.Layout, ordinalLayout)
+                    ? prepared(input)
                     : throw new InvalidOperationException("Ordinal DTO kernel requires its exact bound layout.");
             }
         }
@@ -400,19 +399,23 @@ static class RelationDtoMapperBuilder
             terminal.Definition.Mode,
             memberDescriptors
             );
-        return new(compilation, new(descriptor, kernel) { OrdinalMaterializationKernel = ordinalKernel }, Sort(diagnostics));
+        return new(compilation, new(descriptor, kernel)
+        {
+            OrdinalMaterializationKernel = ordinalKernel,
+            ComposeMaterializer = field => BuildMaterializer((binding, type) =>
+                ReadProjected(field(binding.OutputField.Path.Segments[0].Segment!), binding, type))
+        }, Sort(diagnostics));
     }
 
-    static Func<TInput, TOutput> CompileKernel<TInput, TOutput>(
+    static Expression BuildKernelBody<TOutput>(
         ConstructorInfo? constructor,
         IReadOnlyList<ParameterInfo> constructorParameters,
         IReadOnlyDictionary<ParameterInfo, PropertyInfo> parameterProperties,
         IReadOnlyList<PreliminaryBinding> preliminary,
         IReadOnlyList<RelationDtoCompiledBinding> compiledBindings,
-        ObservationLayout? ordinalLayout
+        Func<RelationDtoCompiledBinding, Type, Expression> read
         )
     {
-        var value = Expression.Parameter(typeof(TInput), "value");
         var bindingByProperty = preliminary
             .Zip(compiledBindings, static (source, compiled) => (source.Property, Compiled: compiled))
             .ToDictionary(static pair => pair.Property, static pair => pair.Compiled);
@@ -431,7 +434,7 @@ static class RelationDtoMapperBuilder
                 if (parameterProperties.TryGetValue(parameter, out var property)
                     && bindingByProperty.TryGetValue(property, out var binding))
                 {
-                    arguments[index] = Read(value, binding, parameter.ParameterType, ordinalLayout);
+                    arguments[index] = read(binding, parameter.ParameterType);
                 }
                 else
                 {
@@ -449,21 +452,16 @@ static class RelationDtoMapperBuilder
             .Where(binding => !constructorBoundProperties.Contains(binding.Property))
             .Select(binding => Expression.Bind(
                 binding.Property,
-                Read(value, bindingByProperty[binding.Property], binding.Property.PropertyType, ordinalLayout)))
+                read(bindingByProperty[binding.Property], binding.Property.PropertyType)))
             .ToArray();
-        Expression body = initializers.Length == 0
-            ? created
-            : Expression.MemberInit(created, initializers);
-        return Expression.Lambda<Func<TInput, TOutput>>(body, value).Compile();
+        return initializers.Length == 0 ? created : Expression.MemberInit(created, initializers);
     }
 
     static Expression Read(
         ParameterExpression value,
         RelationDtoCompiledBinding binding,
-        Type destinationType,
-        ObservationLayout? ordinalLayout)
+        Type destinationType)
     {
-        if (ordinalLayout is not null) return ReadOrdinal(value, binding, destinationType, ordinalLayout);
         var fast = binding.Conversion switch
         {
             RelationDtoValueConversion.String when destinationType == typeof(string) => ReadStringMethod,
@@ -491,6 +489,18 @@ static class RelationDtoMapperBuilder
         var lookup = Expression.Call(row, typeof(IOrdinalObservationFieldReader).GetMethod(
             nameof(IOrdinalObservationFieldReader.TryGetField), [typeof(int), typeof(ObservationValue).MakeByRefType()])!,
             Expression.Constant(ordinal), value);
+        return ConvertProjected(value, lookup, binding, destinationType);
+    }
+
+    static Expression ReadProjected(Expression input, RelationDtoCompiledBinding binding, Type destinationType)
+    {
+        var value = Expression.Variable(typeof(ObservationValue), "field");
+        return ConvertProjected(value, Expression.Assign(value, input), binding, destinationType);
+    }
+
+    static Expression ConvertProjected(ParameterExpression value, Expression load,
+        RelationDtoCompiledBinding binding, Type destinationType)
+    {
         var fallback = Expression.Call(Reader(nameof(RelationDtoValueReader.ReadValue))
             .MakeGenericMethod(destinationType, GetConverterType(binding.Conversion, destinationType)),
             value, Expression.Constant(binding));
@@ -501,9 +511,9 @@ static class RelationDtoMapperBuilder
             RelationDtoValueConversion.Decimal when destinationType == typeof(decimal) => nameof(RelationDtoValueReader.TryConvertDecimal),
             _ => null
         };
-        if (fast is null) return Expression.Block([value], lookup, fallback);
+        if (fast is null) return Expression.Block([value], load, fallback);
         var converted = Expression.Variable(destinationType, "converted");
-        return Expression.Block([value, converted], lookup, Expression.Condition(
+        return Expression.Block([value, converted], load, Expression.Condition(
             Expression.Call(Reader(fast), value, converted), converted, fallback));
     }
 

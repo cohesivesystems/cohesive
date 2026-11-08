@@ -43,8 +43,18 @@ public sealed class RelationDtoJoinFacadeTests
                 (l, c) => new Summary(l.Id, c.Name, l.Total));
         var mapping = RelationDtoMapping.Create(loads, summaries, RelationOutputMode.ZeroOrOnePerRoot);
         Customer[] customers = [new("customer-7", "Acme")];
-        LineItem[] items = [new("item-1", "load-42", 2m, 50m), new("item-2", "load-42", 1m, 25m)];
+        LineItem[] items =
+        [
+            new("item-1", "load-42", 2m, 50m),
+            new("item-2", "load-42", 1m, 25m),
+            new("item-3", "load-é", 1m, 15m)
+        ];
         var evaluator = mapping.CreateInMemoryEvaluator(customers, items);
+
+        var empty = mapping.Evaluate(new("compile")).Supply(Array.Empty<Load>(), load => load.Id).Build();
+        var preparation = await mapping.EvaluateAsync(evaluator, empty);
+        Assert.True(preparation.IsSuccessful, Explain(preparation));
+        Assert.NotNull(PreparedLocalDtoKernel<Summary>.TryCompile(mapping.Compilation.Plan!, preparation, mapping.Mapper, nameof(Load.Id)));
 
         var outcome = await mapping.EvaluateAsync(evaluator, Loads(), load => load.Id);
         Assert.True(outcome.IsSuccessful, Explain(outcome));
@@ -54,6 +64,12 @@ public sealed class RelationDtoJoinFacadeTests
             row.Source.InputOccurrences.Select(x => x.ObservationIdentity!).Order(StringComparer.Ordinal));
         Assert.Equal(row.Value, Assert.Single(await mapping.MapAsync(evaluator, Loads())));
         Assert.Empty(await mapping.MapAsync(evaluator, [new Load("no-items", "customer-7")]));
+        var twoLoads = Loads().Append(new Load("load-é", "customer-7")).ToArray();
+        var canonical = await mapping.MapAsync(evaluator, mapping.Evaluate(new("canonical")).Supply(twoLoads, load => load.Id).Build());
+        Assert.Equal(new[] { "load-é", "load-42" }, canonical.Select(dto => dto.Id));
+        Assert.Equal(canonical, await mapping.MapAsync(evaluator, twoLoads));
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, twoLoads.Concat(twoLoads)));
+        await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, [new Load("load-42", null!)]));
 
         Assert.Equal(row.Value, Assert.Single(await mapping.MapAsync(mapping.CreateInMemoryEvaluator(items, customers), Loads())));
         Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(Loads(), items));
@@ -143,6 +159,10 @@ public sealed class RelationDtoJoinFacadeTests
         var overBudget = await mapping.EvaluateAsync(evaluator,
             Loads().Append(new Load("load-43", "customer-7")), load => load.Id);
         Assert.False(overBudget.IsSuccessful);
+        var enumerations = 0;
+        await Assert.ThrowsAsync<InvalidOperationException>(() => mapping.MapAsync(evaluator, TooManyRoots()));
+        Assert.Equal(1, enumerations);
+
         Assert.Equal([row.Value], await mapping.MapAsync(evaluator, Loads()));
         Assert.Empty(await mapping.MapAsync(evaluator, [new Load("other-load", "customer-7")]));
 
@@ -159,6 +179,13 @@ public sealed class RelationDtoJoinFacadeTests
             execution.Interpretation!.RequirementGapAnalysis.Gaps.Select(gap => gap.Id));
         Assert.Equal(reference.Diagnostics.Select(diagnostic => diagnostic.Code),
             execution.Interpretation.Diagnostics.Select(diagnostic => diagnostic.Code));
+
+        IEnumerable<Load> TooManyRoots()
+        {
+            enumerations++;
+            yield return Loads()[0];
+            yield return new Load("load-43", "customer-7");
+        }
     }
 
     [Fact]
