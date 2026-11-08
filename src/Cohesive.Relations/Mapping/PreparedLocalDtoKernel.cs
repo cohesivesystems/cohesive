@@ -20,6 +20,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
 {
     // Keep the optional rental bounded even when an evaluator has a much larger row limit.
     const int MaximumPooledRootSlots = 64 * 1024;
+    const int MinimumPackedSortRoots = 128;
 
     readonly WeakPreparationCache<Type, ObservationValue.ScalarProjection?> rootProjections = new();
 
@@ -145,22 +146,8 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             var rows = rootBuffer is null ? CollectionsMarshal.AsSpan(ownedRoots) : rootBuffer.AsSpan(0, count);
             var order = orderBuffer is null ? Span<int>.Empty : orderBuffer.AsSpan(0, count);
             var keys = orderKeys is null ? Span<string>.Empty : orderKeys.AsSpan(0, count);
-            // Physical source occurrence IDs share an input prefix and escape the observation identity.
-            if (order.IsEmpty)
-                rows.Sort();
-            else
-                keys.Sort(order, StringComparer.Ordinal);
-
-            for (var index = 1; index < rows.Length; index++)
-            {
-                // Equal identities always have equal escaped keys. Only a tie needs the original identities.
-                if (!keys.IsEmpty && keys[index - 1] != keys[index])
-                    continue;
-                var left = order.IsEmpty ? index - 1 : order[index - 1];
-                var right = order.IsEmpty ? index : order[index];
-                if (rows[left].Id == rows[right].Id)
-                    throw new ArgumentException("Supplied roots cannot repeat an observation identity.", "observations");
-            }
+            if (count > 1 && SortAndFindDuplicate(rows, keys, order))
+                throw new ArgumentException("Supplied roots cannot repeat an observation identity.", "observations");
 
             if (rows.Length > maximumRoots)
             {
@@ -182,6 +169,89 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                 ArrayPool<AdmittedRoot>.Shared.Return(rootBuffer, clearArray: true);
             if (slots is not null)
                 ArrayPool<ObservationValue>.Shared.Return(slots, clearArray: true);
+        }
+    }
+
+    static bool SortAndFindDuplicate(Span<AdmittedRoot> rows, Span<string> keys, Span<int> order)
+    {
+        // Physical source occurrence IDs share an input prefix and escape the observation identity.
+        if (order.IsEmpty)
+            rows.Sort();
+        else
+        {
+            if (TrySortPackedKeys(rows, keys, order, out var duplicate))
+                return duplicate;
+            keys.Sort(order, StringComparer.Ordinal);
+        }
+
+        for (var index = 1; index < rows.Length; index++)
+        {
+            if (!keys.IsEmpty && keys[index - 1] != keys[index])
+                continue;
+            var left = order.IsEmpty ? index - 1 : order[index - 1];
+            var right = order.IsEmpty ? index : order[index];
+            if (rows[left].Id == rows[right].Id)
+                return true;
+        }
+        return false;
+    }
+
+    static bool TrySortPackedKeys(ReadOnlySpan<AdmittedRoot> rows, ReadOnlySpan<string> keys,
+        Span<int> order, out bool duplicate)
+    {
+        duplicate = false;
+        if (keys.Length < MinimumPackedSortRoots)
+            return false;
+
+        ReadOnlySpan<char> shared = keys[0];
+        var longest = shared.Length;
+        for (var index = 1; index < keys.Length; index++)
+        {
+            var key = keys[index].AsSpan();
+            longest = Math.Max(longest, key.Length);
+            shared = shared[..shared.CommonPrefixLength(key)];
+            if (longest - shared.Length > sizeof(ulong))
+                return false;
+        }
+
+        var buffer = ArrayPool<ulong>.Shared.Rent(keys.Length);
+        try
+        {
+            var packed = buffer.AsSpan(0, keys.Length);
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var suffix = keys[index].AsSpan(shared.Length);
+                ulong value = 0;
+                for (var character = 0; character < suffix.Length; character++)
+                {
+                    var code = suffix[character];
+                    if (code > byte.MaxValue)
+                        return false;
+                    value |= (ulong)code << ((sizeof(ulong) - 1 - character) * 8);
+                }
+                packed[index] = value;
+            }
+
+            packed.Sort(order);
+            for (var index = 1; index < packed.Length; index++)
+            {
+                if (packed[index - 1] != packed[index])
+                    continue;
+                if (rows[order[index - 1]].Id == rows[order[index]].Id)
+                    duplicate = true;
+                else
+                {
+                    // An escaped-key collision must retain the ordinary sort's tie behavior.
+                    for (var original = 0; original < order.Length; original++)
+                        order[original] = original;
+                    return false;
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            ArrayPool<ulong>.Shared.Return(buffer);
         }
     }
 

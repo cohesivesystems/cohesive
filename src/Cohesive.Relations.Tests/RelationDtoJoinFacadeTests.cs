@@ -282,13 +282,22 @@ public sealed class RelationDtoJoinFacadeTests
         Assert.InRange(allocated, 0, count * 175);
     }
 
-    [Fact]
-    public async Task FusedLargeBatchMatchesCanonicalEscapedOrderAndDuplicateRejection()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FusedLargeBatchMatchesCanonicalEscapedOrderAndDuplicateRejection(bool shortSuffixes)
     {
         var mapping = Build(compact: true);
-        string[] prefixes = ["load/", "load%", "load-é", "load-"];
-        var loads = Enumerable.Range(0, 2049).Reverse()
-            .Select(index => new Load($"{prefixes[index % prefixes.Length]}{index}", "customer-7")).ToArray();
+        string[] prefixes = shortSuffixes ? ["load-"] : ["load/", "load%", "load-é", "load-"];
+        string[] edges = shortSuffixes
+            ? ["load-", "load-/", "load-%", "load-\0"]
+            : ["load", "load-prefix", "load-prefix-a", "load-prefix-ab", "load-%C3%A9", "load-🧪"];
+        Load[] loads =
+        [
+            .. Enumerable.Range(0, 2049).Reverse()
+                .Select(index => new Load($"{prefixes[index % prefixes.Length]}{index}", "customer-7")),
+            .. edges.Select(identity => new Load(identity, "customer-7"))
+        ];
         var items = loads.Where((_, index) => index % 7 != 0)
             .Select((load, index) => new LineItem(load.Id, load.Id, 1m, index)).ToArray();
         var evaluator = mapping.CreateInMemoryEvaluator(new[] { new Customer("customer-7", "Acme") }, items);
