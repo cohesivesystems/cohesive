@@ -1,0 +1,9 @@
+source,variant,phase,lost_events,allocation_samples,missing_allocation_stacks,managed_cpu_samples,missing_managed_cpu_stacks
+004010,before,cold,0,963,0,1053,0
+004010,before,repeated,0,30,0,42,0
+004010,after,cold,0,941,0,1067,0
+004010,after,repeated,0,30,0,43,0
+005030,before,cold,0,974,0,1003,0
+005030,before,repeated,0,30,0,51,0
+005030,after,cold,0,958,0,1179,0
+005030,after,repeated,0,30,0,51,0

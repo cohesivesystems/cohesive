@@ -4,10 +4,11 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
+using Xunit.Abstractions;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
-public sealed class ExecutionDefinitionSerializationTests
+public sealed class ExecutionDefinitionSerializationTests(ITestOutputHelper output)
 {
     static readonly ExecutionDefinitionKind TransitionKind = new("transition");
 
@@ -546,6 +547,54 @@ public sealed class ExecutionDefinitionSerializationTests
             numberSemantics: CanonicalJsonNumberSemantics.ExactDecimalRational);
 
         Assert.Equal("{\"decimal\":1,\"negativeZero\":0}", Encoding.UTF8.GetString(canonical));
+    }
+
+    [Theory]
+    [InlineData(128, 15_000)]
+    [InlineData(512, 48_000)]
+    [InlineData(4096, 490_000)]
+    public void Create_WideDefinitionsHaveBoundedTemporaryAllocation(int fields, long ceiling)
+    {
+        var definition = Definition(semanticObject: Enumerable.Range(0, fields)
+            .ToDictionary(static index => $"field-{index:D4}", static index => index, StringComparer.Ordinal));
+        var provenance = Provenance();
+        for (var warmup = 0; warmup < 8; warmup++)
+            GC.KeepAlive(CreateDocument(definition, provenance: provenance));
+
+        const int batch = 8;
+        long[] samples = new long[7];
+        for (var sample = 0; sample < samples.Length; sample++)
+        {
+            var start = GC.GetAllocatedBytesForCurrentThread();
+            for (var iteration = 0; iteration < batch; iteration++)
+                GC.KeepAlive(CreateDocument(definition, provenance: provenance));
+            samples[sample] = (GC.GetAllocatedBytesForCurrentThread() - start) / batch;
+        }
+        Array.Sort(samples);
+        output.WriteLine($"Create {fields} fields: {samples[3]} bytes (median of seven batches).");
+        Assert.True(samples[3] <= ceiling, $"Create {fields} fields allocated {samples[3]} bytes; ceiling {ceiling}.");
+    }
+
+    [Fact]
+    public void Create_CanonicalDefinitionRemainsOwnedAfterFurtherSerializations()
+    {
+        var fields = Enumerable.Range(0, 512).ToDictionary(
+            static index => $"field-{index:D4}", static index => index, StringComparer.Ordinal);
+        var definition = Definition(semanticObject: fields);
+        var original = CreateDocument(definition);
+        var expected = original.Definition.GetRawText();
+        var fingerprint = original.Metadata.Fingerprint;
+
+        // Reuse the same input and similarly sized temporary parse buffers with different content.
+        for (var iteration = 0; iteration < 32; iteration++)
+        {
+            fields["field-0000"] = -iteration - 1;
+            var later = CreateDocument(definition);
+            Assert.NotEqual(fingerprint, later.Metadata.Fingerprint);
+        }
+        Assert.Equal(expected, original.Definition.GetRawText());
+        Assert.Equal(fingerprint, ExecutionDefinitionFingerprinter.Compute(original));
+        Assert.Equal(0, original.GetDefinition<TransitionDefinition>().SemanticObject["field-0000"]);
     }
 
     [Fact]

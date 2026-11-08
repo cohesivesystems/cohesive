@@ -1,0 +1,7 @@
+variant,fields,median_allocated_bytes,ceiling
+before,128,18272,15000
+before,512,63040,48000
+before,4096,593472,490000
+after,128,12872,15000
+after,512,41896,48000
+after,4096,422288,490000
