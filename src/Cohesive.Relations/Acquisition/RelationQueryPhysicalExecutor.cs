@@ -1,6 +1,8 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using Cohesive.Model;
 using Cohesive.Model.Expressions;
 using Cohesive.Relations.Compilation;
@@ -22,6 +24,8 @@ public sealed class RelationQueryPhysicalExecutor
 {
     readonly ImmutableDictionary<RelationQuerySourceInstanceId, IRelationQuerySourceReader> readers;
     readonly IRelationQueryInterpreter interpreter;
+    readonly ConditionalWeakTable<CompiledRelationQueryPhysicalPlan,
+        ConcurrentDictionary<RelationQueryInputId, PreparedRelationQuerySource>>? preparedSources;
 
     // Plan-integrity verification depends only on these immutable instances and the interpreter. Remember each
     // successful verification so an evaluator's cached preparation is not re-fingerprinted and re-planned for
@@ -55,6 +59,8 @@ public sealed class RelationQueryPhysicalExecutor
             throw new ArgumentException("Physical source readers cannot repeat a source identity.", nameof(sourceReaders));
 
         readers = normalized.ToImmutableDictionary(static reader => reader.Descriptor.Source);
+        if (normalized.Any(static reader => reader is RelationQueryInMemorySources.MemoryReader))
+            preparedSources = new();
         this.interpreter = interpreter ?? RelationQueryInMemoryInterpreter.Default;
     }
 
@@ -165,7 +171,10 @@ public sealed class RelationQueryPhysicalExecutor
         if (Preflight(request) is { } preflightFailure)
             return Failed(request, preflightFailure);
 
-        ExecutionContext context = new(request, readers, interpreter);
+        var prepared = request.Plan.InputContract.Traversals.IsDefaultOrEmpty && request.Plan.InputContract.Expansions.IsDefaultOrEmpty
+            ? preparedSources?.GetValue(request.PhysicalPlan, static _ => new())
+            : null;
+        ExecutionContext context = new(request, readers, interpreter, prepared);
         return await context.ExecuteAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -529,6 +538,8 @@ public sealed class RelationQueryPhysicalExecutor
         readonly RelationQueryPhysicalExecutionRequest request;
         readonly IReadOnlyDictionary<RelationQuerySourceInstanceId, IRelationQuerySourceReader> readers;
         readonly IRelationQueryInterpreter interpreter;
+        readonly ConcurrentDictionary<RelationQueryInputId, PreparedRelationQuerySource>? preparedSources;
+        readonly List<PreparedRelationQuerySource>? usedPreparedSources;
         readonly IReadOnlyDictionary<RelationQueryInputId, RelationQuerySourcePlacementBinding> placements;
         readonly IReadOnlyDictionary<RelationQuerySourceInstanceId, RelationQuerySourceInstance> sources;
         readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryFieldInput> fieldInputs;
@@ -547,12 +558,15 @@ public sealed class RelationQueryPhysicalExecutor
         public ExecutionContext(
             RelationQueryPhysicalExecutionRequest request,
             IReadOnlyDictionary<RelationQuerySourceInstanceId, IRelationQuerySourceReader> readers,
-            IRelationQueryInterpreter interpreter
+            IRelationQueryInterpreter interpreter,
+            ConcurrentDictionary<RelationQueryInputId, PreparedRelationQuerySource>? preparedSources
             )
         {
             this.request = request;
             this.readers = readers;
             this.interpreter = interpreter;
+            this.preparedSources = preparedSources;
+            usedPreparedSources = preparedSources is null ? null : [];
             placements = request.PhysicalPlan.Placement.Bindings.ToDictionary(static binding => binding.Input);
             sources = request.PhysicalPlan.Placement.SourceInstances.ToDictionary(static source => source.Id);
             fieldInputs = request.Plan.RequirementGraph.Inputs
@@ -650,8 +664,10 @@ public sealed class RelationQueryPhysicalExecutor
                 request.Parameters,
                 request.Capabilities,
                 request.ConversionFailures,
-                collectionOccurrences: [.. collectionOccurrenceEvidence]
-                );
+                collectionOccurrences: [.. collectionOccurrenceEvidence])
+            {
+                PreparedSources = usedPreparedSources is null ? [] : [.. usedPreparedSources]
+            };
             var interpretation = interpreter.Execute(
                 new(request.Plan, evidence, request.RequirementGapPolicy),
                 cancellationToken);
@@ -880,15 +896,23 @@ public sealed class RelationQueryPhysicalExecutor
                 new RelationQueryBoundedEnumeration(maximumRows),
                 maximumBufferedRows
                 );
+            var reader = readers[source.Id];
             var result = await ReadSourceAsync(
-                readers[source.Id],
+                reader,
                 read,
                 batchOrdinal: 0,
                 cancellationToken).ConfigureAwait(false);
             if (result is null)
                 return Invalid(read, evidenceReference: null, "A source reader returned no result object.");
             AddTrace(read, result, batchOrdinal: 0);
-            if (ValidateResult(read, result, cancellationToken) is { } validation)
+            var cache = reader is RelationQueryInMemorySources.MemoryReader && result.State == RelationQuerySourceReadState.Complete
+                ? preparedSources
+                : null;
+            var prepared = cache is not null && cache.TryGetValue(contract.Input.Id, out var cached)
+                && ReferenceEquals(cached.Plan, request.Plan) && ReferenceEquals(cached.Result, result)
+                    ? cached
+                    : null;
+            if (prepared is null && ValidateResult(read, result, cancellationToken) is { } validation)
                 return validation;
             if (!TryReserveReadRows(stage.Id, source, result.Observations.Length))
                 return Boundary(read, result, "Physical acquisition exceeds an explicit stage or source buffered-row boundary.");
@@ -898,6 +922,18 @@ public sealed class RelationQueryPhysicalExecutor
                 : 0;
             if (!TryReserveLocalRows(materializedRowCount))
                 return Boundary(read, result, "Physical acquisition exceeds the plan-wide local-row boundary.");
+            if (prepared is not null)
+            {
+                // The immutable fragment was validated against this plan. Invocation budgets and
+                // read traces still use this read's bounds, and the plan has no expansions to reserve.
+                cancellationToken.ThrowIfCancellationRequested();
+                sourceEvidence.Add(prepared.Evidence);
+                fieldEvidence.AddRange(prepared.Fields);
+                usedPreparedSources!.Add(prepared);
+                return null;
+            }
+
+            var fieldStart = fieldEvidence.Count;
             var acquiredRows = materializedRowCount == 0
                 ? []
                 : MaterializeSourceRows(contract, result.Observations, cancellationToken);
@@ -909,13 +945,24 @@ public sealed class RelationQueryPhysicalExecutor
                 RelationQuerySourceReadState.Inconclusive => RelationQuerySourceEvidenceState.Inconclusive,
                 _ => throw new ArgumentOutOfRangeException(nameof(result), result.State, "Unsupported source-read state.")
             };
-            sourceEvidence.Add(new(
+            RelationQuerySourceEvidence fragment = new(
                 contract.Input.Id,
                 sourceState,
                 result.Completeness,
                 [.. acquiredRows.Select(static row => row.Occurrence)],
-                result.EvidenceReference));
-            GetOccurrences(contract.Binding).AddRange(acquiredRows);
+                result.EvidenceReference);
+            sourceEvidence.Add(fragment);
+            if (cache is null)
+            {
+                GetOccurrences(contract.Binding).AddRange(acquiredRows);
+            }
+            else
+            {
+                var candidate = new PreparedRelationQuerySource(request.Plan, result, fragment,
+                    ImmutableArray.Create(CollectionsMarshal.AsSpan(fieldEvidence)[fieldStart..]));
+                cache.TryAdd(contract.Input.Id, candidate);
+                usedPreparedSources!.Add(candidate);
+            }
             return null;
         }
 

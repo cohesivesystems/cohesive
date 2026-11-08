@@ -78,6 +78,12 @@ Limits for rows, keys per batch, buffering, fan-out, and concurrency are part of
 planning policy. Exceeding a proven bound fails or chunks according to the explicit plan; it does not silently switch
 to unbounded or per-row acquisition.
 
+Prepared DTO mappings with in-memory collections project the owned snapshots to their exact acquired field
+sets once. With source-set acquisition alone, the executor reuses successfully admitted evidence fragments
+and the interpreter reuses their reconstructed source rows. Each invocation still checks read and row
+limits, admits its supplied roots, analyzes the combined evidence, and produces its own result and read
+traces. Plans with collection expansion use ordinary per-invocation acquisition.
+
 ## Closed native subplans within composed execution
 
 A complete native row reader can implement a **closed projection** inside a larger query.

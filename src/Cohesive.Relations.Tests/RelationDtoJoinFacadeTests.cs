@@ -120,6 +120,32 @@ public sealed class RelationDtoJoinFacadeTests
     }
 
     [Fact]
+    public async Task PreparedCollectionsReuseAcquiredEvidenceAndStillApplyInvocationBudgets()
+    {
+        var mapping = Build(compact: true);
+        Customer[] customers = [new("customer-7", "Acme")];
+        LineItem[] items = [new("item-1", "load-42", 2m, 50m), new("item-2", "load-42", 1m, 25m)];
+        var evaluator = mapping.CreateInMemoryEvaluator(customers, items, maximumRows: 4);
+        var first = await mapping.EvaluateAsync(evaluator, Loads(), load => load.Id, evaluation: new("first"));
+        Assert.True(first.IsSuccessful, Explain(first));
+        var warmed = await mapping.EvaluateAsync(evaluator, Loads(), load => load.Id, evaluation: new("warmed"));
+        Assert.True(warmed.IsSuccessful, Explain(warmed));
+        Assert.Equal(2, warmed.PhysicalExecution!.SourceReads.Length);
+        var root = mapping.Compilation.Plan!.InputContract.Sources.Single(source =>
+            source.Role == RelationQuerySourceInputRole.RelationRoot);
+        foreach (var source in first.PhysicalExecution!.Evidence!.Sources.Where(source => source.Input != root.Input.Id))
+            Assert.Same(source, warmed.PhysicalExecution.Evidence!.Sources.Single(warm => warm.Input == source.Input));
+        var row = Assert.Single(mapping.Mapper.Map(warmed.PhysicalExecution).Rows);
+        Assert.Equal(new Summary("load-42", "Acme", 125m), row.Value);
+        Assert.Equal(4, row.Source.InputOccurrences.Length);
+
+        var overBudget = await mapping.EvaluateAsync(evaluator,
+            Loads().Append(new Load("load-43", "customer-7")), load => load.Id);
+        Assert.False(overBudget.IsSuccessful);
+        Assert.Equal([row.Value], await mapping.MapAsync(evaluator, Loads()));
+    }
+
+    [Fact]
     public async Task SelectorFreeMappingUsesTheDeclaredFieldAndRejectsDuplicateKeys()
     {
         var author = RelationQuery.Expression();

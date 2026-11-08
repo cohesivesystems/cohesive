@@ -193,8 +193,10 @@ public sealed class RelationQueryInMemorySources
             .Select(binding =>
             {
                 var source = placed.SourceInstances.Single(candidate => candidate.Id == binding.Source);
+                var contract = plan.InputContract.Sources.Single(input => input.Input.Id == binding.Input);
+                var fields = RelationQuerySourceReadFields.CreateSemantic(contract.Fields, binding);
                 return new MemoryReader(new(source.Id, source.ExecutionDomain, source.TargetProfile,
-                    RelationQueryLogicalPartitionIdentity.WholeSource), binding, sources[binding.Input]);
+                    RelationQueryLogicalPartitionIdentity.WholeSource), binding, fields, sources[binding.Input]);
             }).ToArray();
         var policy = new RelationQueryPhysicalPlanningPolicy(
             new($"{Convention}/max-{maximumRows.ToString(CultureInfo.InvariantCulture)}"), Convention,
@@ -234,9 +236,12 @@ public sealed class RelationQueryInMemorySources
         }
     }
 
-    sealed class MemoryReader(RelationQuerySourceReaderDescriptor descriptor, RelationQuerySourcePlacementBinding binding,
-        ImmutableArray<(string Id, ObservationValue Value)> rows) : IRelationQuerySourceReader
+    internal sealed class MemoryReader(RelationQuerySourceReaderDescriptor descriptor, RelationQuerySourcePlacementBinding binding,
+        ImmutableArray<RelationQuerySourceReadField> fields, ImmutableArray<(string Id, ObservationValue Value)> rows)
+        : IRelationQuerySourceReader
     {
+        readonly RelationQuerySourceReadResult result = Project(binding, fields, rows);
+
         public RelationQuerySourceReaderDescriptor Descriptor => descriptor;
 
         public ValueTask<RelationQuerySourceReadResult> ReadAsync(RelationQuerySourceReadRequest request,
@@ -244,22 +249,27 @@ public sealed class RelationQueryInMemorySources
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (request.Source != descriptor.Source || request.Shape != binding.Shape || request.PlacementBinding != binding.Id
-                || request.Constraint is not RelationQueryBoundedEnumeration enumeration)
-                throw new InvalidOperationException("An in-memory source requires its exact placement and bounded enumeration.");
-            if (rows.Length > enumeration.MaximumRows || rows.Length > request.MaximumBufferedRows)
+                || request.Constraint is not RelationQueryBoundedEnumeration enumeration
+                || !request.Fields.SequenceEqual(fields))
+                throw new InvalidOperationException("An in-memory source requires its exact placement, field selection and bounded enumeration.");
+            if (result.Observations.Length > enumeration.MaximumRows || result.Observations.Length > request.MaximumBufferedRows)
                 return ValueTask.FromResult(new RelationQuerySourceReadResult(RelationQuerySourceReadState.Inconclusive));
 
+            return ValueTask.FromResult(result);
+        }
+
+        static RelationQuerySourceReadResult Project(RelationQuerySourcePlacementBinding binding,
+            ImmutableArray<RelationQuerySourceReadField> fields, ImmutableArray<(string Id, ObservationValue Value)> rows)
+        {
             var observations = ImmutableArray.CreateBuilder<RelationQuerySourceReadObservation>(rows.Length);
             foreach (var row in rows)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var fields = ImmutableArray.CreateBuilder<RelationQuerySourceReadFieldResult>(request.Fields.Length);
-                foreach (var field in request.Fields)
-                    fields.Add(RelationQuerySourceReadFieldResult.Project(field, row.Value));
-                observations.Add(new(row.Id, binding.Shape, fields.MoveToImmutable()));
+                var projected = ImmutableArray.CreateBuilder<RelationQuerySourceReadFieldResult>(fields.Length);
+                foreach (var field in fields)
+                    projected.Add(RelationQuerySourceReadFieldResult.Project(field, row.Value));
+                observations.Add(new(row.Id, binding.Shape, projected.MoveToImmutable()));
             }
-            return ValueTask.FromResult(new RelationQuerySourceReadResult(RelationQuerySourceReadState.Complete,
-                observations.MoveToImmutable()));
+            return new(RelationQuerySourceReadState.Complete, observations.MoveToImmutable());
         }
     }
 }
