@@ -73,3 +73,18 @@ The cancellation recipe supports a bounded set of reservations. Query the comple
 Use ProcessQuery to attach a canonical bounded native query to ProcessContext.Query. The original query, row/byte bounds, consistency requirement and observational contract are exported. Use an explicit typed evidence projection with an existence flag when guards need nonnullable operands from an optional point read. Bind awaited results to locals before returning them. Use stateful bounded recurrence for sequential processing, with a portable captured sequence and cursor. Verify the final reservation count and every captured row before declaring cancellation complete; this detects observed additions or mutations but does not promise cross-entity atomicity against concurrent external writers.
 
 For an existing Orders database apply eng/examples/aspire-first/migrations/002-reservation-cancellation.sql before host startup. The new Released column defaults to false. Run the PostgreSQL-backed CancellationIntegrationTests with COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING set. A skipped test requires a configured test database before behavior is qualified.
+
+
+## Inspect recovery requirements before choosing an engine
+
+Resolve `recovery:` and inspect its `process-recovery-assessment` subjects. The Orders producer exports the same
+`CancellationProcess.FencedRecoveryCompilation` policy against native PostgreSQL, Durable Task and a finite host.
+Each report retains the exact process reference, required guarantees, source nodes, capability evidence, operating
+boundaries and actionable gaps. These are recovery-only inspection artifacts; integrity validation does not prove
+physical wiring or runtime behavior. A constrained report requires its named boundaries to hold.
+
+The native PostgreSQL fixture uses `CreateFencedRuntime` and attaches its supplied fence to every receipted repository.
+An unqualified runtime rejects the explicit policy before initialization. Durable Task has checkpoint/restoration
+support but does not claim the native transition fencing guarantee. Never remove a requested guarantee merely to
+make target selection pass. Run the shared cancellation recovery conformance scenarios for a target claiming support,
+and retain target-specific lock/race tests alongside them.

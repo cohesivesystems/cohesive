@@ -7,6 +7,7 @@ using Cohesive.Execution;
 using Cohesive.Identity;
 using Cohesive.Model;
 using Cohesive.Processes.Execution;
+using Cohesive.Processes.Compilation;
 using Cohesive.Storage;
 using Cohesive.Storage.Processes;
 using Microsoft.Extensions.DependencyInjection;
@@ -40,36 +41,7 @@ public sealed class FencedCancellationIntegrationTests
     public async Task Expired_or_replaced_worker_cannot_commit_and_replacement_restores_same_continuation(bool replaceBeforeResume)
     {
         await using var fixture = await Fixture.Create();
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var old = fixture.Runtime("old", async (context, invocation, inner) =>
-        {
-            if (invocation.Definition == fixture.Model.Domain.InventoryTransitions.Release.Reference)
-            {
-                var frozen = new FrozenTimeProvider(context.UtcNow);
-                entered.TrySetResult();
-                await resume.Task.WaitAsync(context.CancellationToken);
-                context = context with { TimeProvider = frozen };
-            }
-            return await inner.InvokeTransitionAsync(context, invocation);
-        });
-        var running = fixture.Advance(old);
-        await entered.Task.WaitAsync(fixture.Context.CancellationToken);
-        var checkpoint = (await fixture.Store.LoadAsync(fixture.Context, fixture.Continuation.ProcessInstanceId))!;
-        await fixture.WaitForExpiry();
-        if (replaceBeforeResume)
-        {
-            var acquired = await fixture.AcquireReplacement();
-            Assert.True(acquired.Snapshot!.WorkerLease!.Fence.Ordinal > checkpoint.WorkerLease!.Fence.Ordinal);
-        }
-        resume.SetResult();
-        var rejected = await running;
-        Assert.Equal(replaceBeforeResume ? ProcessDurableRuntimeDisposition.StaleFence : ProcessDurableRuntimeDisposition.LeaseExpired, rejected.Disposition);
-        Assert.Equal(3, await fixture.Stock());
-        var retained = (await fixture.Store.LoadAsync(fixture.Context, fixture.Continuation.ProcessInstanceId))!;
-        Assert.Equal(checkpoint.Checkpoint.Continuation.CompletedActivationCount, retained.Checkpoint.Continuation.CompletedActivationCount);
-        Assert.Equal(ExecutionTerminalOutcomeKind.None, retained.Checkpoint.Continuation.Terminal.Kind);
-        await fixture.AssertCompleted(await fixture.Advance(fixture.Runtime("replacement")));
+        await CancellationRecoveryConformance.RejectStaleWorker(fixture, replaceBeforeResume);
     }
 
     [FulfillmentProcessIntegrationTests.PostgresTheory]
@@ -78,22 +50,7 @@ public sealed class FencedCancellationIntegrationTests
     public async Task New_owner_replays_committed_release_and_mark_receipts_after_worker_crash(bool crashAfterMark)
     {
         await using var fixture = await Fixture.Create();
-        var selected = crashAfterMark ? fixture.Model.Domain.ReservationTransitions.MarkReleased.Reference : fixture.Model.Domain.InventoryTransitions.Release.Reference;
-        var crashed = false;
-        var old = fixture.Runtime("old", async (context, invocation, inner) =>
-        {
-            var result = await inner.InvokeTransitionAsync(context, invocation);
-            if (!crashed && invocation.Definition == selected) { crashed = true; throw new InjectedCrash(); }
-            return result;
-        });
-        await Assert.ThrowsAsync<InjectedCrash>(() => fixture.Advance(old));
-        Assert.InRange(await fixture.Stock(), 4, 5);
-        var oldSnapshot = (await fixture.Store.LoadAsync(fixture.Context, fixture.Continuation.ProcessInstanceId))!;
-        await fixture.WaitForExpiry();
-        await fixture.AssertCompleted(await fixture.Advance(fixture.Runtime("replacement")));
-        var restored = (await fixture.Store.LoadAsync(fixture.Context, fixture.Continuation.ProcessInstanceId))!;
-        Assert.Equal(oldSnapshot.Checkpoint.ContinuationIdentity, restored.Checkpoint.ContinuationIdentity);
-        Assert.True(restored.WorkerLease!.Fence.Ordinal > oldSnapshot.WorkerLease!.Fence.Ordinal);
+        await CancellationRecoveryConformance.RecoverCommittedTransition(fixture, crashAfterMark);
     }
 
     [OrderStorageIntegrationTests.PostgresFact]
@@ -138,7 +95,7 @@ public sealed class FencedCancellationIntegrationTests
         }
     }
 
-    sealed class Fixture : IAsyncDisposable
+    sealed class Fixture : ICancellationRecoveryFixture
     {
         internal readonly FulfillmentApplication Model = ModelActivator.Create<FulfillmentApplication>(services => services
             .AddSingleton(new FulfillmentHistoryPolicy(EntityStateAuthority.State))
@@ -155,7 +112,22 @@ public sealed class FencedCancellationIntegrationTests
         internal PostgresTransitionReceiptStorage receipts = null!;
         IServicePersistence servicePersistence = null!;
         PreparedServiceProcess prepared = null!;
+        Cohesive.Processes.Compilation.CompiledProcessPlan recoveryPlan = null!;
         static readonly TimeSpan Lease = TimeSpan.FromSeconds(3);
+
+        ProcessInterpreterRealizationReport ICancellationRecoveryFixture.Recovery => ProcessRecoveryRequirements.Assess(recoveryPlan, PostgresProcessRecoveryProfile.Fenced);
+        ExecutionDefinitionReference ICancellationRecoveryFixture.Release => Model.Domain.InventoryTransitions.Release.Reference;
+        ExecutionDefinitionReference ICancellationRecoveryFixture.MarkReleased => Model.Domain.ReservationTransitions.MarkReleased.Reference;
+        OperationContext ICancellationRecoveryFixture.Context => Context;
+        ProcessContinuationIdentity ICancellationRecoveryFixture.Continuation => Continuation;
+        Task<ProcessDurableActivationResult> ICancellationRecoveryFixture.Run(string owner,
+            Func<OperationContext, ProcessTransitionInvocation, IAsyncProcessReferenceHost, ValueTask<ProcessOperationResult>>? hook)
+            => Advance(Runtime(owner, hook));
+        async Task<ProcessDurableStoreSnapshot> ICancellationRecoveryFixture.Snapshot() => (await Store.LoadAsync(Context, Continuation.ProcessInstanceId))!;
+        Task ICancellationRecoveryFixture.WaitForExpiry() => WaitForExpiry();
+        Task<ProcessStoreMutationResult> ICancellationRecoveryFixture.AcquireReplacement() => AcquireReplacement();
+        Task<int> ICancellationRecoveryFixture.Stock() => Stock();
+        Task ICancellationRecoveryFixture.AssertCompleted(ProcessDurableActivationResult result) => AssertCompleted(result);
 
         internal static async Task<Fixture> Create()
         {
@@ -172,8 +144,10 @@ public sealed class FencedCancellationIntegrationTests
             await reservations.Upsert(fixture.Context, new Reservation(fixture.OrderId, FulfillmentStoragePolicy.LocalPartition, fixture.OrderId, fixture.Sku, 2));
             await reservations.Upsert(fixture.Context, new Reservation(Guid.NewGuid().ToString("D"), FulfillmentStoragePolicy.LocalPartition, fixture.OrderId, fixture.Sku, 1));
             fixture.prepared = fixture.Prepare(null);
+            fixture.recoveryPlan = ProcessStaticCompiler.Compile(fixture.prepared.Plan.Document, fixture.prepared.Plan.ValidationContext,
+                CancellationProcess.FencedRecoveryCompilation).Plan!;
             await fixture.Store.EnsureCreatedAsync(fixture.Context);
-            var plan = fixture.prepared.Plan;
+            var plan = fixture.recoveryPlan;
             var request = new ProcessStartRequest(ProcessStartRequest.CurrentSchemaVersion, plan.DefinitionReference,
                 new(new(fixture.OrderId), new(fixture.OrderId), new(fixture.OrderId), new("local-demo", new("aspire-first", FulfillmentStoragePolicy.LocalPartition), "test"),
                     fixture.Context.UtcNow, plan.Document.Metadata.Provenance), fixture.Continuation,
@@ -194,13 +168,13 @@ public sealed class FencedCancellationIntegrationTests
             Func<OperationContext, ProcessTransitionInvocation, IAsyncProcessReferenceHost, ValueTask<ProcessOperationResult>>? hook = null)
         {
             var store = Store;
-            return new(store, activationHostFactory: snapshot =>
+            return store.CreateFencedRuntime(fence =>
             {
-                var host = Prepare(store.BindWorkerFence(snapshot)).Host;
+                var host = Prepare(fence).Host;
                 return hook is null ? host : new HookHost(host, hook);
             }, new(owner, owner == "old" ? Lease : TimeSpan.FromSeconds(20)));
         }
-        internal Task<ProcessDurableActivationResult> Advance(ProcessDurableRuntime runtime) => runtime.AdvanceAsync(Context, prepared.Plan, Continuation,
+        internal Task<ProcessDurableActivationResult> Advance(ProcessDurableRuntime runtime) => runtime.AdvanceAsync(Context, recoveryPlan, Continuation,
             new(new("aspire-first", FulfillmentStoragePolicy.LocalPartition), new(OrderId),
                 new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), prepared.Plan.Document.Metadata.Provenance));
         internal async Task WaitForExpiry()
@@ -265,7 +239,4 @@ public sealed class FencedCancellationIntegrationTests
         public ValueTask<ProcessOperationResult> EvaluateRelationAsync(OperationContext context, ProcessRelationEvaluation evaluation) => inner.EvaluateRelationAsync(context, evaluation);
         public ValueTask<ProcessSignalTargetResult> ResolveSignalTargetAsync(OperationContext context, ProcessSignalTargetResolution resolution) => inner.ResolveSignalTargetAsync(context, resolution);
     }
-    sealed class FrozenTimeProvider(DateTimeOffset now) : TimeProvider
-    { public override DateTimeOffset GetUtcNow() => now; }
-    sealed class InjectedCrash : Exception;
 }

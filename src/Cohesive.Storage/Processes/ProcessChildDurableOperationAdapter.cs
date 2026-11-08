@@ -233,7 +233,7 @@ public sealed partial class ProcessDurableRuntime
         RequireInstance(expectedContinuation.ProcessInstanceId);
         context.ThrowIfCancellationRequested();
 
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
@@ -428,7 +428,7 @@ public sealed partial class ProcessDurableRuntime
         ProcessActivationContext activationContext,
         DateTimeOffset preventedAtUtc)
     {
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);

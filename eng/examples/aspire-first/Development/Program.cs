@@ -78,7 +78,7 @@ internal static class OrdersWorkspace
                 .Select(json => JsonSerializer.Deserialize<JsonElement>(json));
             var catalogs = requests.Select(r => r.RelationshipCatalogDocument).OfType<RelationshipCatalogDocument>()
                 .DistinctBy(d => d.CatalogFingerprint).Select(d => JsonSerializer.Deserialize<JsonElement>(RelationshipCatalogJsonSerializer.Serialize(d)));
-            return [.. entities.Select(EntityStateDocument.Export), .. shapes, .. catalogs, .. executions.Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d))),
+            return [.. RecoveryAssessment.Export(cancellation), .. entities.Select(EntityStateDocument.Export), .. shapes, .. catalogs, .. executions.Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d))),
                 .. endpoints.QueryDependencies.Queries.Select(q => q.Request.DefinitionDocument)
                     .Select(d => JsonSerializer.Deserialize<JsonElement>(RelationQueryJsonSerializer.Serialize(d))),
                 .. endpoints.Implementations.Select(e => ApiContractDocument.Lower(e.Endpoint,

@@ -332,3 +332,10 @@ or a guarantee that the generation remains fresh after observation. See the
 Each invocation performs one bounded root/hydration traversal, one candidate scan and
 two position inspections per feed. It performs no comparison polling and no target
 GET per item. Values are retained only for the bounded invocation.
+
+Explicit `ProcessCompilationOptions.RequiredGuarantees` participate in recovery admission. A takeover policy can
+select `ProcessRecoveryRequirements.WorkerTakeover`; the runtime then requires an attributed recovery profile on its
+activation-host composition before creating or advancing checkpoints. Missing guarantees yield the same structured
+realization diagnostics used by tooling. Native PostgreSQL supplies this evidence through `CreateFencedRuntime`.
+Keep the selected policy consistent across restoration; it is explicit compilation configuration, not a new process
+wire identity. Hosts without an explicit policy retain their existing reference/runtime behavior.

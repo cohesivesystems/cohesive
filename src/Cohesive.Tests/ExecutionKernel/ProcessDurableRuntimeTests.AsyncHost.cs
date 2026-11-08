@@ -5,6 +5,23 @@ namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed partial class ProcessDurableRuntimeTests
 {
+    [Fact]
+    public async Task ExplicitRecoveryDemandRejectsUnqualifiedHostBeforeCheckpointInitialization()
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/recovery/admission", semanticVariant: "recovery/admission");
+        var plan = Cohesive.Processes.Compilation.ProcessStaticCompiler.Compile(fixture.Plan.Document,
+            fixture.Plan.ValidationContext, new(requiredGuarantees: Cohesive.Processes.Compilation.ProcessRecoveryRequirements.WorkerTakeover)).Plan!;
+        var store = new InMemoryProcessDurableStore();
+        var host = new AsyncRecordingHost(fixture.OperationResult);
+        var runtime = AsyncRuntime(store, fixture, host);
+        var result = await runtime.InitializeAsync(Context(ProcessDurabilityTestFixture.AcceptedAtUtc), plan, fixture.Start);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Incompatible, result.Disposition);
+        Assert.Contains(result.Diagnostics, d => d.Location == "/recovery/transitionEffectFencing");
+        Assert.Null(await store.LoadAsync(Context(ProcessDurabilityTestFixture.AcceptedAtUtc), fixture.Start.Request.Context.ProcessInstanceId));
+        Assert.Equal(0, host.RelationCalls);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

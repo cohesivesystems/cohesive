@@ -18,6 +18,7 @@ internal static class DomainDocumentReaders
     internal static readonly IReadOnlyDictionary<string, Func<JsonElement, WorkspaceDocument>> Readers =
         new Dictionary<string, Func<JsonElement, WorkspaceDocument>>
         {
+            [ProcessRecoveryWorkspaceProjection.Schema] = ProcessRecoveryWorkspaceProjection.Read,
             [EntityStateDocument.Schema] = Entity,
             [ShapeGraphDocument.CurrentSchemaVersion] = ShapeWorkspaceProjection.Read,
             [RelationshipCatalogDocument.CurrentSchemaVersion] = Relationships,

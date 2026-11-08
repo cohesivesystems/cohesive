@@ -192,3 +192,36 @@ The recovery increment retains the same exported semantic fingerprint. Its 396 d
 API contracts are compared in both directions: five return Compatible and five retain Unknown wire-coverage
 results. The native runtime guarantee is established separately by `FencedCancellationIntegrationTests`, including
 both lock race orders and release/mark receipt recovery under a new worker owner.
+
+## Capability-driven recovery qualification
+
+`CancellationProcess.FencedRecoveryCompilation` is the source-selected takeover policy. It requests checkpoint
+persistence, exact continuation restoration, atomic transition receipt replay and transition-effect fencing through
+the existing canonical guarantee catalog. Durable lifetime, explicit cuts and recurrence derive checkpoint/restoration demands.
+These requirements are compiler policy retained alongside the exact process definition; they do not change its
+canonical executable graph. Apply the same policy when restoring a deployment, and review policy changes separately
+from API or graph compatibility.
+
+`ProcessRecoveryRequirements.Assess(plan, profile)` uses the existing realization matcher and emits source-node
+requirements, attributed evidence, constraints and actionable gaps. PostgreSQL's fenced composition is constrained
+to the same data source and correctly fenced receipt repositories. Durable Task's generic executable profile
+advertises checkpoint/restoration but leaves atomic entity receipt replay and transition-effect fencing unavailable;
+this is a gap in that declared composition, not a claim that no future DTS composition could provide them. The finite
+host explicitly lacks recovery support.
+
+The native `CreateFencedRuntime` passes the acquired fence to the host factory and supplies the native recovery
+profile. The factory must attach that fence to every transition repository. Explicitly requested recovery guarantees
+are checked before initialization and activation; fixed/unqualified hosts cannot satisfy the takeover policy. Older
+hosts without an explicit recovery policy retain their existing behavior. A successful recovery-only assessment does
+not authorize unsupported process constructs or prove arbitrary external effects safe.
+
+The export adds three `process-recovery-assessment` subjects. Use MCP `resolve` with `recovery:`, then `inspect` for
+requirements, selected target decisions and gaps. These artifacts are integrity checked and reference the exact
+process, but deliberately report domain validation unavailable: capability assertions and physical conformance are
+not established by reading JSON. Existing executable documents remain separately validated.
+
+`CancellationRecoveryConformance` contains shared stale-owner and committed-release/mark recovery scenarios through
+an adapter fixture contract. The PostgreSQL fixture supplies real persistence, expiry and replacement workers. Its
+lock linearization and data-source admission cases remain native tests. Targets may claim support only with equivalent
+conformance evidence; there is currently one qualified fenced target. No arbitrary-effect or cross-database guarantee
+is added.
