@@ -599,6 +599,8 @@ public sealed class RelationQueryPhysicalExecutor
                     return Failed(request, diagnostic, [.. traces]);
             }
 
+            var suppliedFieldCount = fieldEvidence.Count;
+            var suppliedSourceCount = sourceEvidence.Count;
             foreach (var source in request.Plan.InputContract.Sources.Where(static source => source.Role != RelationQuerySourceInputRole.RelationRoot))
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -666,7 +668,15 @@ public sealed class RelationQueryPhysicalExecutor
                 request.ConversionFailures,
                 collectionOccurrences: [.. collectionOccurrenceEvidence])
             {
-                PreparedSources = usedPreparedSources is null ? [] : [.. usedPreparedSources]
+                PreparedSources = usedPreparedSources is null ? [] : [.. usedPreparedSources],
+                // Occurrence IDs are namespaced by the exact source input. With only complete local
+                // source sets, supplied evidence can change independently of the prepared fragments.
+                SuppliedFieldsForAnalysis = usedPreparedSources is { Count: > 0 }
+                    && usedPreparedSources.Count == sourceEvidence.Count - suppliedSourceCount
+                    && request.ConversionFailures.IsDefaultOrEmpty
+                    ? RelationQueryRuntimeEvidence.OrderFields(
+                        ImmutableArray.Create(CollectionsMarshal.AsSpan(fieldEvidence)[..suppliedFieldCount]))
+                    : default
             };
             var interpretation = interpreter.Execute(
                 new(request.Plan, evidence, request.RequirementGapPolicy),

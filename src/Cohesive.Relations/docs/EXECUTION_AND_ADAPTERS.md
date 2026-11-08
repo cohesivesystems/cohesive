@@ -80,9 +80,12 @@ to unbounded or per-row acquisition.
 
 Prepared DTO mappings with in-memory collections project the owned snapshots to their exact acquired field
 sets once. With source-set acquisition alone, the executor reuses successfully admitted evidence fragments
-and the interpreter reuses their reconstructed source rows. Each invocation still checks read and row
-limits, admits its supplied roots, analyzes the combined evidence, and produces its own result and read
-traces. Plans with collection expansion use ordinary per-invocation acquisition.
+and the interpreter reuses their reconstructed source rows. Once a complete set of local fragments passes
+canonical analysis without gaps, later calls can reuse that proof for the unchanged acquired fields while
+analyzing supplied roots and other invocation inputs. The interpreter can also reuse grouped results that
+read one such source directly and have no invocation parameters. The grouped rows retain their source
+contributors. Each invocation still checks read and row limits and produces its own result and read traces.
+Plans with collection expansion use ordinary per-invocation acquisition.
 
 ## Closed native subplans within composed execution
 

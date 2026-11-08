@@ -412,7 +412,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             ProjectQueryNode node => ExecuteProject(execution, node),
             DistinctQueryNode node => ExecuteDistinct(execution, node),
             SelectRepresentativeQueryNode node => ExecuteRepresentative(execution, node),
-            AggregateQueryNode node => ExecuteAggregate(execution, node),
+            AggregateQueryNode node => ExecuteGroupedSourceOrAggregate(execution, node),
             OrderQueryNode node => ExecuteOrder(execution, node),
             PageQueryNode node => ExecutePage(execution, node),
             _ => throw Failure(
@@ -1280,6 +1280,36 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 result.Add(winner.Row);
             }
             return result.MoveToImmutable();
+        }
+
+        ImmutableArray<RelationQueryRuntimeRow> ExecuteGroupedSourceOrAggregate(
+            RelationQueryExecutionNode execution,
+            AggregateQueryNode node)
+        {
+            // A grouped aggregate directly over an immutable source has no supplied-root dependency.
+            // Ungrouped aggregates can create rows for supplied roots, even with no input rows.
+            var input = execution.LogicalPlan.EffectiveInputs[0];
+            if (execution.AggregateGroupings.IsDefaultOrEmpty
+                || !request.Plan.InputContract.Parameters.IsDefaultOrEmpty
+                || request.Evidence.SuppliedFieldsForAnalysis.IsDefault
+                || !gapAnalysis.IsConclusive || !gapAnalysis.Gaps.IsEmpty
+                || incompleteNodes.Contains(input)
+                || !sourceInputs.TryGetValue(input, out var source))
+                return ExecuteAggregate(execution, node);
+
+            var prepared = request.Evidence.PreparedSources.FirstOrDefault(fragment =>
+                ReferenceEquals(fragment.Plan, request.Plan) && fragment.Evidence.Input == source.Id);
+            if (prepared is null || !prepared.IsGapFree)
+                return ExecuteAggregate(execution, node);
+
+            if (prepared.GroupedRows.TryGetValue(node.Id, out var cached))
+                return cached;
+
+            var diagnosticsBefore = executionDiagnostics.Count;
+            var rows = ExecuteAggregate(execution, node);
+            if (!incompleteNodes.Contains(node.Id) && executionDiagnostics.Count == diagnosticsBefore)
+                prepared.GroupedRows.TryAdd(node.Id, rows);
+            return rows;
         }
 
         ImmutableArray<RelationQueryRuntimeRow> ExecuteAggregate(

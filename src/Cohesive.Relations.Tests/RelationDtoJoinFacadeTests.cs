@@ -3,6 +3,7 @@ using Cohesive.Model;
 using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Mapping;
@@ -143,6 +144,40 @@ public sealed class RelationDtoJoinFacadeTests
             Loads().Append(new Load("load-43", "customer-7")), load => load.Id);
         Assert.False(overBudget.IsSuccessful);
         Assert.Equal([row.Value], await mapping.MapAsync(evaluator, Loads()));
+        Assert.Empty(await mapping.MapAsync(evaluator, [new Load("other-load", "customer-7")]));
+
+        var noRoots = await mapping.EvaluateAsync(evaluator, mapping.Evaluate(new("no-roots")).Build());
+        var execution = noRoots.PhysicalExecution!;
+        var evidence = execution.Evidence!;
+        var plan = mapping.Compilation.Plan!;
+        var ordinary = new RelationQueryRuntimeEvidence(evidence.Evaluation, plan, evidence.Completeness,
+            sources: evidence.Sources, fields: evidence.Fields, capabilities: evidence.Capabilities);
+        var reference = RelationQueryInMemoryInterpreter.Default.Execute(new(plan, ordinary));
+        Assert.False(noRoots.IsSuccessful);
+        Assert.Equal(reference.Status, execution.Status);
+        Assert.Equal(reference.RequirementGapAnalysis.Gaps.Select(gap => gap.Id),
+            execution.Interpretation!.RequirementGapAnalysis.Gaps.Select(gap => gap.Id));
+        Assert.Equal(reference.Diagnostics.Select(diagnostic => diagnostic.Code),
+            execution.Interpretation.Diagnostics.Select(diagnostic => diagnostic.Code));
+    }
+
+    [Fact]
+    public async Task GroupedResultsWithInvocationParametersAreEvaluatedPerCall()
+    {
+        var q = RelationQuery.Expression();
+        var loads = q.Source<Load>();
+        var multiplier = q.Parameter<decimal>("multiplier");
+        var totals = q.Source<LineItem>().SumBy(i => i.LoadId, i => i.Quantity * i.UnitPrice * multiplier.Value);
+        var output = loads.Join(totals, (l, t) => l.Id == t.Key, (l, t) => new Summary(l.Id, l.CustomerId, t.Total));
+        var mapping = RelationDtoMapping.Create(loads, output, RelationOutputMode.ZeroOrOnePerRoot);
+        LineItem[] items = [new("item-1", "load-42", 2m, 50m), new("item-2", "load-42", 1m, 25m)];
+        var evaluator = mapping.CreateInMemoryEvaluator(sources => sources.Bind(items));
+
+        Assert.Equal(125m, Assert.Single(await Map(1m)).Total);
+        Assert.Equal(250m, Assert.Single(await Map(2m)).Total);
+
+        Task<Summary[]> Map(decimal value) => mapping.MapAsync(evaluator, mapping.Evaluate(new("parameterized-total"))
+            .Supply(Loads(), l => l.Id).Set(multiplier, value).Build());
     }
 
     [Fact]

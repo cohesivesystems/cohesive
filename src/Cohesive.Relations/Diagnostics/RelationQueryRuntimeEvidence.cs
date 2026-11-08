@@ -806,6 +806,13 @@ public sealed class RelationQueryRuntimeEvidence
     // This invocation may reuse runtime rows for exactly these prevalidated acquired source fragments.
     internal ImmutableArray<PreparedRelationQuerySource> PreparedSources { get; init; } = [];
 
+    // A non-default slice attests that all remaining fields belong to the exact, complete prepared sources.
+    internal ImmutableArray<RelationQueryFieldEvidence> SuppliedFieldsForAnalysis { get; init; }
+
+    internal static ImmutableArray<RelationQueryFieldEvidence> OrderFields(
+        ImmutableArray<RelationQueryFieldEvidence> fields) =>
+        CanonicalDocumentCollections.SortIfNeeded(fields, CompareFields);
+
     static ImmutableArray<T> Normalize<T>(
         ImmutableArray<T> values,
         Comparison<T> comparison,

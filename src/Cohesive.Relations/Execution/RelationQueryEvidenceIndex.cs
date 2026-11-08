@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using Cohesive.Model;
@@ -200,7 +201,12 @@ sealed record PreparedRelationQuerySource(
     RelationQuerySourceEvidence Evidence,
     ImmutableArray<RelationQueryFieldEvidence> Fields)
 {
+    int gapFree;
+
     public PreparationSlot<ImmutableArray<RelationQueryRuntimeRow>> RuntimeRows { get; } = new();
+    public ConcurrentDictionary<QueryNodeId, ImmutableArray<RelationQueryRuntimeRow>> GroupedRows { get; } = new();
+    public bool IsGapFree => Volatile.Read(ref gapFree) != 0;
+    public void MarkGapFree() => Volatile.Write(ref gapFree, 1);
 }
 
 /// <summary>
