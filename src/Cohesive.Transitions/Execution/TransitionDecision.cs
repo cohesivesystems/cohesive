@@ -1,3 +1,4 @@
+using Cohesive.Transitions.Machines;
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
@@ -365,7 +366,7 @@ public sealed record TransitionTraceEvent
 /// <summary>Ordered, provenance-pinned evidence for one Transition activation.</summary>
 public sealed class TransitionExecutionEvidence
 {
-    /// <summary>Creates execution evidence from its authoritative ordered trace.</summary>
+    /// <summary>Creates execution evidence from its authoritative ordered trace and lifecycle authority.</summary>
     /// <param name="definition">Exact originating Transition definition.</param>
     /// <param name="activation">Stable activation identity.</param>
     /// <param name="trace">Complete ordered semantic trace.</param>
@@ -374,10 +375,12 @@ public sealed class TransitionExecutionEvidence
     /// entry.
     /// </exception>
     /// <exception cref="ArgumentNullException"><paramref name="definition"/> is <see langword="null"/>.</exception>
+    /// <param name="machineBinding">Lifecycle authority checked by execution; null for unbound entities.</param>
     public TransitionExecutionEvidence(
         ExecutionDefinitionReference definition,
         ActivationId activation,
-        ImmutableArray<TransitionTraceEvent> trace)
+        ImmutableArray<TransitionTraceEvent> trace,
+        EntityMachineBinding? machineBinding = null)
     {
         Definition = Guard.RequireNotNull(definition);
         if (string.IsNullOrWhiteSpace(activation.Value))
@@ -395,7 +398,12 @@ public sealed class TransitionExecutionEvidence
 
         Activation = activation;
         Trace = trace;
+        MachineBinding = machineBinding;
     }
+
+    /// <summary>Lifecycle authority checked during execution and required during entity state preparation.</summary>
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public EntityMachineBinding? MachineBinding { get; }
 
     /// <summary>Exact originating Transition definition.</summary>
     public ExecutionDefinitionReference Definition { get; }

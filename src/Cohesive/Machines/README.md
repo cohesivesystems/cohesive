@@ -166,8 +166,11 @@ arrays are therefore meaningful. A failed target produces InvalidDefinition with
 Existing transition invariants still run. Predicate exhaustiveness and invariant preservation are
 runtime checks unless independently proven; this implementation does not claim a general symbolic
 proof. Binding catalogs are explicit compiler inputs and must be retained with the compilation
-configuration. Predicate field changes outside movement-bearing transitions need application-level
-binding discipline; automatic whole-domain binding registration is not implemented.
+configuration. For complete coupling of existing entities, finish a binding with `.Bind(entity)` instead of only
+building a link catalog. The entity retains one authoritative classification; derived Transitions must
+realize a movement or explicitly preserve state. Compilation, reference execution, registration, and
+state preparation enforce that contract. See the [binding guide](../../Cohesive.Transitions/Machines/README.md)
+for unsupported initialization/composition boundaries and storage enforcement limits.
 
 ## Relationships
 
@@ -228,3 +231,13 @@ evaluator; it still interprets predicates and allocates invocation context and d
 For actor-specific entity operation discovery, use the service runtime
 [inspection API](../../Cohesive.Api.Execution/Services/TRANSITION_DISCOVERY.md). It applies authorization and
 evaluates the whole Transition, not only the machine guard.
+
+
+## Typed authoring models
+
+`MachineModel` owns a `MachineAuthor` exposed to subclasses through `Source`. A typed model exposes its
+state and movement handles, calls `Freeze()` at the end of construction, and inherits `Definition` as
+its frozen derived IR. It is not a running machine or an entity instance. This avoids duplicating the
+source/definition ownership protocol in each declaration while keeping the canonical machine independent
+of Transitions and storage. Accessing `Definition` also freezes authoring; incomplete models fail rather
+than exposing partial IR. See the tender acceptance declaration for a consumer.

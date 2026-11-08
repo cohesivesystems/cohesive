@@ -23,7 +23,8 @@ sealed class CreateIfAbsentEntityApiOperationBinding(ApiEndpoint endpoint,
         var definition = new TransitionDefinition(stateContract, stateContract,
             new(new ScalarTypeRef(ScalarTypeKind.Bool)), [],
             new(new("create/body"), [new OutcomeTransitionNode(new("create/result"), TransitionOutcomeDisposition.Applied, Expr.Const(true))]),
-            subjectCreation: new(new("create/initialize"), Expr.BoundValue(TransitionBindingIds.Input)));
+            subjectCreation: new(new("create/initialize"), Expr.BoundValue(TransitionBindingIds.Input)),
+            machineBinding: options.Entity.Machine);
         var document = TransitionDefinitionDocuments.Create(new(operation.Id.Value + "/create-if-absent"), new("1"), definition,
             new(new("cohesive.api.crud", "1"), new("entity-api/create-if-absent"), DocumentOrigin.Generated));
         var compilation = TransitionStaticCompiler.Compile(document);

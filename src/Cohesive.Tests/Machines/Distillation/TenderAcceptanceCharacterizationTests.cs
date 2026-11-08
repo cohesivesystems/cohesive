@@ -68,7 +68,7 @@ public sealed class TenderAcceptanceCharacterizationTests
     public void D02_linkage_and_acceptance_are_movements_of_one_tender_lifecycle()
     {
         var tender = TenderAcceptanceMachines.Tender();
-        var facts = ObservationValue.FromObject(new AcceptanceFacts(true, false, false));
+        var facts = ObservationValue.FromObject(new TenderState("load-1", false, false, false, ""));
         var input = ObservationValue.FromObject(new SendResult(false));
         Assert.Equal(tender.Unlinked.Id, tender.Definition.Initial);
         Assert.Equal(MachineDecisionKind.Illegal, tender.Definition.Evaluate(
@@ -91,7 +91,7 @@ public sealed class TenderAcceptanceCharacterizationTests
     {
         var machine = TenderAcceptanceMachines.Tender();
         var decision = machine.Definition.Evaluate(machine.Offered.Id, machine.SendPending.Resolve().Edge.Action,
-            ObservationValue.FromObject(new AcceptanceFacts(true, false, false)),
+            ObservationValue.FromObject(new TenderState("load-1", false, false, false, "")),
             ObservationValue.FromObject(new SendResult(autoAck)));
         Assert.Equal(MachineDecisionKind.Accepted, decision.Kind);
         Assert.Equal((autoAck ? machine.Confirmed : machine.Pending).Id, decision.Edge!.To);
@@ -107,8 +107,8 @@ public sealed class TenderAcceptanceCharacterizationTests
     {
         var machine = TenderAcceptanceMachines.Tender();
         var decision = machine.Definition.Evaluate(machine.Offered.Id, machine.SendPending.Resolve().Edge.Action,
-            ObservationValue.FromObject(new AcceptanceFacts(linked, cancelled, duplicate)),
-            ObservationValue.FromObject(new SendResult(false)));
+            ObservationValue.FromObject(new TenderState("load-1", false, false, cancelled, "")),
+            ObservationValue.FromObject(new SendResult(false, LinkedLoadExists: linked, AlreadyAcceptedLink: duplicate)));
         Assert.Equal(MachineDecisionKind.Disabled, decision.Kind);
     }
 
@@ -120,7 +120,7 @@ public sealed class TenderAcceptanceCharacterizationTests
     {
         var machine = TenderAcceptanceMachines.Tender();
         var result = machine.Definition.Evaluate(machine.Pending.Id, machine.ReceiptConfirmed.Resolve().Edge.Action,
-            ObservationValue.FromObject(new AcceptanceFacts(true, false, false)),
+            ObservationValue.FromObject(new TenderState("load-1", false, false, false, "")),
             ObservationValue.FromObject(new Receipt(correlated, positive)));
         Assert.Equal(accepted ? MachineDecisionKind.Accepted : MachineDecisionKind.Disabled, result.Kind);
     }

@@ -83,6 +83,7 @@ public sealed class ProcessTransitionOperationBinding
     /// captured opaque storage token. Supported only for existing-subject transitions. Exact receipt replay
     /// precedes the current-state check; a fresh invocation fails when the subject changed.</param>
     /// <param name="partitionKey">Optional trusted subject-read partition. Inherits fixed receipt placement and rejects an explicit mismatch.</param>
+    /// <exception cref="InvalidOperationException">The plan omits or changes the repository entity machine binding.</exception>
     public ProcessTransitionOperationBinding(
         CompiledTransitionPlan plan,
         IEntityRepository repository,
@@ -95,6 +96,7 @@ public sealed class ProcessTransitionOperationBinding
     {
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         Repository = repository ?? throw new ArgumentNullException(nameof(repository));
+        Cohesive.Transitions.Machines.EntityMachineBinding.RequireSame(repository.EntityDefinition, plan.Definition.MachineBinding);
         InteractionContracts = interactionContracts ?? throw new ArgumentNullException(nameof(interactionContracts));
         this.resolveSubject = resolveSubject;
         this.createRequestTarget = createRequestTarget;

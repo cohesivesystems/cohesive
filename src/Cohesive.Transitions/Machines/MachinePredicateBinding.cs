@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Model.Authoring;
 using Cohesive.Machines;
 using Cohesive.Relations.Authoring;
@@ -45,6 +46,20 @@ public sealed class MachinePredicateBinding<TEntity, TInput> where TEntity : not
         return State(state.Id, Expression.Lambda<Func<TEntity, TInput, bool>>(predicate.Body,
             predicate.Parameters[0], Expression.Parameter(typeof(TInput), "input")));
     }
+    /// <summary>Binds this machine as the entity's sole lifecycle authority.</summary>
+    /// <param name="entity">Unbound entity definition.</param>
+    /// <returns>A new definition carrying the portable binding on its shape.</returns>
+    /// <exception cref="InvalidOperationException">Mapping is incomplete or the entity is already bound.</exception>
+    /// <exception cref="NotSupportedException">The entity already has a published shape graph.</exception>
+    /// <exception cref="ArgumentNullException">Entity is null.</exception>
+    public Cohesive.Transitions.Model.EntityDefinition Bind(Cohesive.Transitions.Model.EntityDefinition entity)
+    {
+        if (predicates.Count != machine.States.Length) throw new InvalidOperationException("Every machine state needs a predicate.");
+        return new EntityMachineBinding(machine.Document,
+            predicates.ToImmutableSortedDictionary(pair => pair.Key,
+                pair => new EntityMachineState(pair.Value, []), StringComparer.Ordinal)).Attach(entity);
+    }
+
     /// <summary>Derives machine links with no edge-owned field assignments.</summary>
     /// <returns>Source admission and final-candidate target obligations.</returns>
     /// <exception cref="InvalidOperationException">State coverage is incomplete.</exception>
