@@ -862,21 +862,7 @@ public sealed class RelationQueryInMemoryInterpreterTests
         JoinKind joinKind,
         int expectedCount)
     {
-        var plan = Compile(
-            CreateOuterSafeJoinQueryDocument(joinKind),
-            RelationQueryCompilationDemand.ForQueryResults(
-            [
-                QueryResultDemand.SelectedFields(
-                    LoadCustomerRelationFixture.RowsResultId,
-                    [
-                        new(
-                            LoadCustomerRelationFixture.LoadSearchShapeId,
-                            LoadCustomerRelationFixture.SearchCustomerTypePath),
-                        new(
-                            LoadCustomerRelationFixture.LoadSearchShapeId,
-                            LoadCustomerRelationFixture.SearchCustomerNamePath)
-                    ])
-            ]));
+        var plan = CompileOuterSafeJoin(joinKind);
         ExplicitJoinEvidence scenario = CreateExplicitJoinEvidence(plan);
 
         var result = Execute(plan, scenario.Evidence);
@@ -908,6 +894,47 @@ public sealed class RelationQueryInMemoryInterpreterTests
             [scenario.Customer2.Id],
             branch.Rows[2].InputOccurrences.Select(static occurrence => occurrence.Id));
     }
+
+    [Fact]
+    public void Execute_IndexedJoinMatchesPairScanForReversedKeysAndDuplicateMatches()
+    {
+        var indexed = CompileOuterSafeJoin(JoinKind.Full, reverseOperands: true);
+        var scan = CompileOuterSafeJoin(JoinKind.Full, reverseOperands: true, forcePairScan: true);
+        var indexedResult = Execute(indexed, CreateExplicitJoinEvidence(indexed, duplicateCustomerKey: true).Evidence);
+        var scanResult = Execute(scan, CreateExplicitJoinEvidence(scan, duplicateCustomerKey: true).Evidence);
+
+        Assert.Equal(RelationQueryExecutionStatus.Succeeded, indexedResult.Status);
+        Assert.Equal(indexedResult.Status, scanResult.Status);
+        var rows = Assert.Single(indexedResult.QueryResults).Rows;
+        var scanRows = Assert.Single(scanResult.QueryResults).Rows;
+        Assert.Equal(3, rows.Length);
+        Assert.Equal(scanRows.Length, rows.Length);
+        for (var index = 0; index < rows.Length; index++)
+        {
+            Assert.Equal(scanRows[index].Value, rows[index].Value);
+            Assert.Equal(
+                scanRows[index].InputOccurrences.Select(occurrence => occurrence.Id),
+                rows[index].InputOccurrences.Select(occurrence => occurrence.Id));
+        }
+    }
+
+    static CompiledRelationQueryPlan CompileOuterSafeJoin(JoinKind joinKind,
+        bool reverseOperands = false, bool forcePairScan = false) =>
+        Compile(
+            CreateOuterSafeJoinQueryDocument(joinKind, reverseOperands, forcePairScan),
+            RelationQueryCompilationDemand.ForQueryResults(
+            [
+                QueryResultDemand.SelectedFields(
+                    LoadCustomerRelationFixture.RowsResultId,
+                    [
+                        new(
+                            LoadCustomerRelationFixture.LoadSearchShapeId,
+                            LoadCustomerRelationFixture.SearchCustomerTypePath),
+                        new(
+                            LoadCustomerRelationFixture.LoadSearchShapeId,
+                            LoadCustomerRelationFixture.SearchCustomerNamePath)
+                    ])
+            ]));
 
     [Fact]
     public void Execute_RootedJoinOnlyCombinesRowsFromTheSameRoot()
@@ -1769,8 +1796,15 @@ public sealed class RelationQueryInMemoryInterpreterTests
                         LoadCustomerRelationFixture.LoadIdPath))
             ]);
 
-    static RelationQueryDocument CreateOuterSafeJoinQueryDocument(JoinKind joinKind)
+    static RelationQueryDocument CreateOuterSafeJoinQueryDocument(JoinKind joinKind,
+        bool reverseOperands, bool forcePairScan)
     {
+        var loadKey = Expr.Field(LoadCustomerRelationFixture.LoadBinding, LoadCustomerRelationFixture.LoadCustomerIdPath);
+        var customerKey = Expr.Field(LoadCustomerRelationFixture.CustomerBinding, LoadCustomerRelationFixture.CustomerIdPath);
+        Expr predicate = reverseOperands ? Expr.Eq(customerKey, loadKey) : Expr.Eq(loadKey, customerKey);
+        if (forcePairScan)
+            predicate = Expr.And(predicate, Expr.Const(true));
+
         IRQueryDefinition definition = new(
             new("outer-safe-join-query"),
             new("OuterSafeJoinQuery"),
@@ -1789,13 +1823,7 @@ public sealed class RelationQueryInMemoryInterpreterTests
                     LoadCustomerRelationFixture.LoadSourceNodeId,
                     LoadCustomerRelationFixture.CustomerSourceNodeId,
                     joinKind,
-                    Expr.Eq(
-                        Expr.Field(
-                            LoadCustomerRelationFixture.LoadBinding,
-                            LoadCustomerRelationFixture.LoadCustomerIdPath),
-                        Expr.Field(
-                            LoadCustomerRelationFixture.CustomerBinding,
-                            LoadCustomerRelationFixture.CustomerIdPath))),
+                    predicate),
                 new ProjectQueryNode(
                     LoadCustomerRelationFixture.ProjectionNodeId,
                     LoadCustomerRelationFixture.ExplicitJoinNodeId,
@@ -2228,7 +2256,7 @@ public sealed class RelationQueryInMemoryInterpreterTests
         return (evidence, load);
     }
 
-    static ExplicitJoinEvidence CreateExplicitJoinEvidence(CompiledRelationQueryPlan plan)
+    static ExplicitJoinEvidence CreateExplicitJoinEvidence(CompiledRelationQueryPlan plan, bool duplicateCustomerKey = false)
     {
         var load1 = new RelationQueryObservationOccurrence(
             new("load/a"),
@@ -2287,7 +2315,7 @@ public sealed class RelationQueryInMemoryInterpreterTests
                 ? ObservationValue.FromString("customer-1")
                 : ObservationValue.FromString("Acme");
             var secondCustomer = input.Field.Path == LoadCustomerRelationFixture.CustomerIdPath
-                ? ObservationValue.FromString("customer-2")
+                ? ObservationValue.FromString(duplicateCustomerKey ? "customer-1" : "customer-2")
                 : ObservationValue.FromString("Beta");
             fields.Add(new(input.Id, customer1.Id, RelationQueryFieldEvidenceState.Value, firstCustomer));
             fields.Add(new(input.Id, customer2.Id, RelationQueryFieldEvidenceState.Value, secondCustomer));

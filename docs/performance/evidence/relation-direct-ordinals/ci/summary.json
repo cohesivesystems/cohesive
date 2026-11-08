@@ -1,0 +1,121 @@
+{
+  "run": "https://github.com/cohesivesystems/cohesive/actions/runs/41927974838",
+  "revision": "fee805862decdf8db40539afbdf53ffb1c95d74d",
+  "environment": {
+    "BenchmarkDotNetCaption": "BenchmarkDotNet",
+    "BenchmarkDotNetVersion": "0.15.8",
+    "OsVersion": "Linux Ubuntu 26.04.1 LTS (Resolute Raccoon)",
+    "ProcessorName": "AMD EPYC 7763",
+    "PhysicalProcessorCount": 1,
+    "PhysicalCoreCount": 2,
+    "LogicalCoreCount": 4,
+    "RuntimeVersion": ".NET 10.0.14 (10.0.14, 10.0.1426.52326)",
+    "Architecture": "X64",
+    "HasAttachedDebugger": false,
+    "HasRyuJit": true,
+    "Configuration": "RELEASE",
+    "DotNetCliVersion": "10.0.403",
+    "ChronometerFrequency": {
+      "Hertz": 1000000000
+    },
+    "HardwareTimerKind": "Unknown"
+  },
+  "cases": [
+    {
+      "method": "DirectPipelineCanonicalJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 53996.876302083336,
+      "stddev_ns": 73.16923197978949,
+      "samples": 3,
+      "bytes": 45062
+    },
+    {
+      "method": "DirectPipelineOrdinalJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 51211.002604166664,
+      "stddev_ns": 375.2261283231316,
+      "samples": 3,
+      "bytes": 44070
+    },
+    {
+      "method": "DirectPipelineCanonicalJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 669855.4462890625,
+      "stddev_ns": 3419.0081805693094,
+      "samples": 3,
+      "bytes": 465351
+    },
+    {
+      "method": "DirectPipelineOrdinalJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 632384.7379557291,
+      "stddev_ns": 904.0327563197401,
+      "samples": 3,
+      "bytes": 433603
+    },
+    {
+      "method": "DirectPipelineCanonicalJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 25691811.395833332,
+      "stddev_ns": 175660.26736037518,
+      "samples": 3,
+      "bytes": 14224850
+    },
+    {
+      "method": "DirectPipelineOrdinalJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 25084836.145833332,
+      "stddev_ns": 79940.39464672265,
+      "samples": 3,
+      "bytes": 13208979
+    },
+    {
+      "method": "DirectPipelineCanonicalSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 18686.97689819336,
+      "stddev_ns": 57.16579666389498,
+      "samples": 3,
+      "bytes": 23803
+    },
+    {
+      "method": "DirectPipelineOrdinalSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 18658.877278645832,
+      "stddev_ns": 43.86965472770649,
+      "samples": 3,
+      "bytes": 23387
+    },
+    {
+      "method": "DirectPipelineCanonicalSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 182945.38216145834,
+      "stddev_ns": 1321.4232191066717,
+      "samples": 3,
+      "bytes": 161310
+    },
+    {
+      "method": "DirectPipelineOrdinalSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 174741.00903320312,
+      "stddev_ns": 219.2788192745589,
+      "samples": 3,
+      "bytes": 147996
+    },
+    {
+      "method": "DirectPipelineCanonicalSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 7434867.848958333,
+      "stddev_ns": 138346.88701736953,
+      "samples": 3,
+      "bytes": 4675771
+    },
+    {
+      "method": "DirectPipelineOrdinalSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 6673395.018229167,
+      "stddev_ns": 38900.23361300759,
+      "samples": 3,
+      "bytes": 4249610
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "command": "dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj -c Release -m:1 -p:UseSharedCompilation=false -warnaserror",
+  "exit_code": 0,
+  "passed": 5316,
+  "failed": 0,
+  "skipped": 68,
+  "warnings": 0,
+  "errors": 0,
+  "fixes": [
+    "Use Expr.Null() instead of passing null to the nonnullable string constant overload.",
+    "Assert diagnostic locations are nonnull strings before sequence comparison.",
+    "Assert entity-type JSON annotations contain nonnull strings."
+  ],
+  "source_hashes": {
+    "src/Cohesive.Tests/ExecutionKernel/EntityFieldSetConventionTests.cs": "823187b34e2f7e099a6dc9a070e3769353d080e2302a87063f85b8fc1c54c5a3",
+    "src/Cohesive.Tests/ExecutionKernel/ExecutionPreparationReuseTests.cs": "58eb198d303975f4583a2eae6cb62d221f55b32bd757ab981406b368c24c6696",
+    "src/Cohesive.Tests/Modeling/DomainRelationshipCompilerTests.cs": "f9f23d3338ae86921a210d09775e9ba0ed0769716e98e38d92a73cf8e26dceec"
+  }
+}

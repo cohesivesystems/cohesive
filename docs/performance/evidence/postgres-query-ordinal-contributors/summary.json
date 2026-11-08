@@ -1,0 +1,46 @@
+{
+  "Inner": {
+    "CanonicalIngestion": {
+      "mean_ns": 13682880.871794872,
+      "mean_bytes": 3138939.3333333335,
+      "repeat_means_ns": [
+        13649622.333333334,
+        13705159.179487178,
+        13693861.102564102
+      ]
+    },
+    "OrdinalIngestion": {
+      "mean_ns": 13462842.606715506,
+      "mean_bytes": 2713162.6666666665,
+      "repeat_means_ns": [
+        13449266.015384614,
+        13473097.614285713,
+        13466164.190476192
+      ]
+    },
+    "ordinal_latency_ratio": 0.9839187180579099,
+    "ordinal_allocation_ratio": 0.8643565161820054
+  },
+  "Left": {
+    "CanonicalIngestion": {
+      "mean_ns": 13785390.45897436,
+      "mean_bytes": 4133665.6666666665,
+      "repeat_means_ns": [
+        13927669.333333334,
+        13717810.26153846,
+        13710691.782051282
+      ]
+    },
+    "OrdinalIngestion": {
+      "mean_ns": 13986918.313492063,
+      "mean_bytes": 3530379.6666666665,
+      "repeat_means_ns": [
+        14249338.285714284,
+        13965318.940476188,
+        13746097.714285716
+      ]
+    },
+    "ordinal_latency_ratio": 1.0146189442451743,
+    "ordinal_allocation_ratio": 0.8540554440905034
+  }
+}

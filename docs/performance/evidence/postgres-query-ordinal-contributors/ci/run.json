@@ -1,0 +1,27 @@
+{
+  "conclusion": "success",
+  "headSha": "de5fe8999686c855e9ed5ba1ec6cb9d64816f15a",
+  "status": "completed",
+  "url": "https://github.com/cohesivesystems/cohesive/actions/runs/41947214718",
+  "host": {
+    "BenchmarkDotNetCaption": "BenchmarkDotNet",
+    "BenchmarkDotNetVersion": "0.15.8",
+    "OsVersion": "Linux Ubuntu 26.04.1 LTS (Resolute Raccoon)",
+    "ProcessorName": "AMD EPYC 7763",
+    "PhysicalProcessorCount": 1,
+    "PhysicalCoreCount": 2,
+    "LogicalCoreCount": 4,
+    "RuntimeVersion": ".NET 10.0.14 (10.0.14, 10.0.1426.52326)",
+    "Architecture": "X64",
+    "HasAttachedDebugger": false,
+    "HasRyuJit": true,
+    "Configuration": "RELEASE",
+    "DotNetCliVersion": "10.0.403",
+    "ChronometerFrequency": {
+      "Hertz": 1000000000
+    },
+    "HardwareTimerKind": "Unknown"
+  },
+  "cases": 12,
+  "job": "Short"
+}

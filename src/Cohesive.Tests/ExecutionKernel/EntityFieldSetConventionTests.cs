@@ -39,7 +39,7 @@ public sealed class EntityFieldSetConventionTests
         var updates = authored.Definition.Body.Steps.OfType<UpdateTransitionNode>().ToArray();
         Assert.Equal(["set/Label", "set/Count"], updates.Select(x => x.Id.Value));
         foreach (var update in updates)
-            Assert.Equal(Expr.Const((string?)null), Assert.IsType<SetTransitionPatch>(update.Operation).Value);
+            Assert.Equal(Expr.Null(), Assert.IsType<SetTransitionPatch>(update.Operation).Value);
     }
 
     [Fact]

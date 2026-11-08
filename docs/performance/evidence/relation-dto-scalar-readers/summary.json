@@ -1,0 +1,222 @@
+[
+  {
+    "count": 1024,
+    "side": "control",
+    "method": "CompiledKernelOnlySimple",
+    "repeats": 3,
+    "median_ns": 27075.30483405483,
+    "min_ns": 26929.28080645161,
+    "max_ns": 27235.04332788671,
+    "bytes": 57368.0
+  },
+  {
+    "count": 1024,
+    "side": "candidate",
+    "method": "CompiledKernelOnlySimple",
+    "repeats": 3,
+    "median_ns": 23845.66694550669,
+    "min_ns": 23640.561104559747,
+    "max_ns": 24152.539142628204,
+    "bytes": 57368.0
+  },
+  {
+    "count": 1024,
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsSimple",
+    "repeats": 3,
+    "median_ns": 24531.905317769135,
+    "min_ns": 24277.233028752435,
+    "max_ns": 24827.52075098814,
+    "bytes": 57368.0
+  },
+  {
+    "count": 1024,
+    "side": "control",
+    "method": "CompiledKernelOnlyJoined",
+    "repeats": 3,
+    "median_ns": 98226.16284179688,
+    "min_ns": 97860.41935221355,
+    "max_ns": 98541.1073404948,
+    "bytes": 106520.0
+  },
+  {
+    "count": 1024,
+    "side": "candidate",
+    "method": "CompiledKernelOnlyJoined",
+    "repeats": 3,
+    "median_ns": 84151.54565156599,
+    "min_ns": 82540.121625,
+    "max_ns": 85939.78610159818,
+    "bytes": 106520.0
+  },
+  {
+    "count": 1024,
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsJoined",
+    "repeats": 3,
+    "median_ns": 82464.8122258772,
+    "min_ns": 81423.50527597402,
+    "max_ns": 86577.84609547461,
+    "bytes": 106520.0
+  },
+  {
+    "count": 1,
+    "side": "control",
+    "method": "CompiledKernelOnlySimple",
+    "repeats": 3,
+    "median_ns": 27.243350848551316,
+    "min_ns": 26.55180849840342,
+    "max_ns": 27.278175898693735,
+    "bytes": 80.0
+  },
+  {
+    "count": 1,
+    "side": "candidate",
+    "method": "CompiledKernelOnlySimple",
+    "repeats": 3,
+    "median_ns": 22.878540969370736,
+    "min_ns": 22.651733940794447,
+    "max_ns": 23.12365688760838,
+    "bytes": 80.0
+  },
+  {
+    "count": 1,
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsSimple",
+    "repeats": 3,
+    "median_ns": 48.89371772741662,
+    "min_ns": 47.74145791882993,
+    "max_ns": 50.187685816925566,
+    "bytes": 80.0
+  },
+  {
+    "count": 1,
+    "side": "control",
+    "method": "CompiledKernelOnlyJoined",
+    "repeats": 3,
+    "median_ns": 94.71679889504522,
+    "min_ns": 93.76599449266823,
+    "max_ns": 94.89747372243245,
+    "bytes": 128.0
+  },
+  {
+    "count": 1,
+    "side": "candidate",
+    "method": "CompiledKernelOnlyJoined",
+    "repeats": 3,
+    "median_ns": 82.7399939174773,
+    "min_ns": 81.84203773547321,
+    "max_ns": 83.59154775112916,
+    "bytes": 128.0
+  },
+  {
+    "count": 1,
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsJoined",
+    "repeats": 3,
+    "median_ns": 105.82681282939133,
+    "min_ns": 105.20502826812874,
+    "max_ns": 108.13888666833115,
+    "bytes": 128.0
+  },
+  {
+    "count": 32,
+    "side": "control",
+    "method": "CompiledKernelOnlySimple",
+    "repeats": 3,
+    "median_ns": 842.0946549650045,
+    "min_ns": 827.5176055867416,
+    "max_ns": 852.6512553401159,
+    "bytes": 1816.0
+  },
+  {
+    "count": 32,
+    "side": "candidate",
+    "method": "CompiledKernelOnlySimple",
+    "repeats": 3,
+    "median_ns": 724.9280771915536,
+    "min_ns": 717.2629164745216,
+    "max_ns": 734.7812586312342,
+    "bytes": 1816.0
+  },
+  {
+    "count": 32,
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsSimple",
+    "repeats": 3,
+    "median_ns": 784.8043970535695,
+    "min_ns": 773.9434485522338,
+    "max_ns": 788.8546440313606,
+    "bytes": 1816.0
+  },
+  {
+    "count": 32,
+    "side": "control",
+    "method": "CompiledKernelOnlyJoined",
+    "repeats": 3,
+    "median_ns": 3001.073790564904,
+    "min_ns": 2998.177829736211,
+    "max_ns": 3048.577133708403,
+    "bytes": 3352.0
+  },
+  {
+    "count": 32,
+    "side": "candidate",
+    "method": "CompiledKernelOnlyJoined",
+    "repeats": 3,
+    "median_ns": 2648.055977792152,
+    "min_ns": 2619.411957552138,
+    "max_ns": 2651.910727532853,
+    "bytes": 3352.0
+  },
+  {
+    "count": 32,
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsJoined",
+    "repeats": 3,
+    "median_ns": 2522.3159981186586,
+    "min_ns": 2498.8800294528755,
+    "max_ns": 2528.4495160481447,
+    "bytes": 3352.0
+  },
+  {
+    "count": 1024,
+    "side": "control",
+    "method": "CompiledCanonicalSimple",
+    "repeats": 3,
+    "median_ns": 30465.729131097563,
+    "min_ns": 30378.126004016067,
+    "max_ns": 32321.887826492533,
+    "bytes": 65898.0
+  },
+  {
+    "count": 1024,
+    "side": "candidate",
+    "method": "CompiledCanonicalSimple",
+    "repeats": 3,
+    "median_ns": 27096.74986530172,
+    "min_ns": 26894.683090352773,
+    "max_ns": 27246.644522776573,
+    "bytes": 65898.0
+  },
+  {
+    "count": 1024,
+    "side": "control",
+    "method": "CompiledCanonicalJoined",
+    "repeats": 3,
+    "median_ns": 101657.13516260163,
+    "min_ns": 100647.31799395161,
+    "max_ns": 101688.83780487806,
+    "bytes": 115052.0
+  },
+  {
+    "count": 1024,
+    "side": "candidate",
+    "method": "CompiledCanonicalJoined",
+    "repeats": 3,
+    "median_ns": 86975.30548321758,
+    "min_ns": 86956.73857060184,
+    "max_ns": 88231.2695129108,
+    "bytes": 115051.0
+  }
+]

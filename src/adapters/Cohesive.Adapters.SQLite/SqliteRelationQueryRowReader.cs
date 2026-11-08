@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Collections.Immutable;
 using Cohesive.Model;
 using Microsoft.Data.Sqlite;
 
@@ -15,6 +16,7 @@ namespace Cohesive.Adapters.SQLite;
 public sealed class SqliteRelationQueryRowMapping<T>
 {
     readonly int fieldCount;
+    internal GraphShapeId Shape { get; }
 
     internal SqliteRelationQueryRowMapping(SqliteRelationQueryCompiledArtifact artifact, GraphShapeId shape,
         Action<ObservationMaterializerBuilder<T>>? configure)
@@ -29,6 +31,7 @@ public sealed class SqliteRelationQueryRowMapping<T>
                 throw new ArgumentException($"Result field '{field.Field}' is absent from the supplied shape or its compiled contract is incompatible.", nameof(shape));
         }
 
+        Shape = shape;
         Artifact = artifact;
         Layout = ObservationLayout.Create(shape, artifact.ResultFields.Select(field => field.Field.Path.Segments[0].Segment!));
         var builder = ObservationMaterializer.For<T>(shape);
@@ -120,17 +123,46 @@ public sealed class SqliteRelationQueryRowReader<T> : IOrdinalObservationFieldRe
     /// <exception cref="ArgumentException">A stored scalar violates its canonical contract.</exception>
     public bool TryReadCurrent([MaybeNullWhen(false)] out T value)
     {
-        if (!SqliteRelationQueryCompiledArtifact.ReadPresence(reader, mapping.Artifact.BindingPresenceOrdinal))
+        if (!HasOutputBinding())
         {
-            foreach (var field in mapping.Artifact.ResultFields)
-                if (SqliteRelationQueryCompiledArtifact.IsFieldPresent(reader, field))
-                    throw new InvalidOperationException("An absent output binding contains a present field.");
             value = default;
             return false;
         }
-
         value = mapping.Materializer.Materialize(this);
         return true;
+    }
+
+    /// <summary>Decodes every result field directly into owned ordinal storage and validates the complete shape.</summary>
+    /// <param name="observation">An immutable validated observation when the binding is present; otherwise null.</param>
+    /// <returns>True when a binding was admitted, including optional missing fields; false for whole-binding absence.</returns>
+    /// <remarks>
+    /// The reader is borrowed and is not advanced. Decoded values survive advancement and disposal. The immutable
+    /// value vector transfers to the observation without a field dictionary. Contributor identities are not decoded;
+    /// use the artifact's canonical row API when provenance is required. Failure never publishes a partial observation.
+    /// </remarks>
+    /// <exception cref="InvalidOperationException">No row is current, presence is malformed, or a required field is absent.</exception>
+    /// <exception cref="ArgumentException">A stored scalar or the complete observation violates its governing contract.</exception>
+    public bool TryReadObservation([NotNullWhen(true)] out Observation? observation)
+    {
+        observation = null;
+        if (!HasOutputBinding()) return false;
+        var values = ImmutableArray.CreateBuilder<ObservationValue>(Layout.Count);
+        for (var ordinal = 0; ordinal < Layout.Count; ordinal++)
+        {
+            TryGetField(ordinal, out var value);
+            values.Add(value);
+        }
+        observation = Observation.Create(mapping.Shape, Layout, values.MoveToImmutable());
+        return true;
+    }
+
+    bool HasOutputBinding()
+    {
+        if (SqliteRelationQueryCompiledArtifact.ReadPresence(reader, mapping.Artifact.BindingPresenceOrdinal)) return true;
+        foreach (var field in mapping.Artifact.ResultFields)
+            if (SqliteRelationQueryCompiledArtifact.IsFieldPresent(reader, field))
+                throw new InvalidOperationException("An absent output binding contains a present field.");
+        return false;
     }
 
     /// <inheritdoc />

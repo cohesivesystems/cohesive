@@ -1,0 +1,75 @@
+[
+  {
+    "side": "candidate",
+    "method": "CompiledCanonicalJoined",
+    "mean_ns": 85981.29676363301,
+    "bytes": [
+      115051,
+      115052
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledCanonicalSimple",
+    "mean_ns": 26776.02703379914,
+    "bytes": [
+      65898
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledKernelOnlyJoined",
+    "mean_ns": 83734.91042716634,
+    "bytes": [
+      106520
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledKernelOnlySimple",
+    "mean_ns": 24073.209987716753,
+    "bytes": [
+      57368
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "control",
+    "method": "CompiledCanonicalJoined",
+    "mean_ns": 85110.50572275081,
+    "bytes": [
+      115051
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "control",
+    "method": "CompiledCanonicalSimple",
+    "mean_ns": 26644.838959657067,
+    "bytes": [
+      65898
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "control",
+    "method": "CompiledKernelOnlyJoined",
+    "mean_ns": 82947.61889126335,
+    "bytes": [
+      106520
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "control",
+    "method": "CompiledKernelOnlySimple",
+    "mean_ns": 23088.23064467502,
+    "bytes": [
+      57368
+    ],
+    "repeats": 3
+  }
+]

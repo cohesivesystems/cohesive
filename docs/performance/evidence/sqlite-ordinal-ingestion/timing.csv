@@ -1,0 +1,7 @@
+repeat,method,ns,bytes
+1,CanonicalIngestion,680597.7472587719,1319946
+1,OrdinalIngestion,600130.9401785715,820266
+2,OrdinalIngestion,599467.55859375,820268
+2,CanonicalIngestion,688817.9417763158,1319946
+3,CanonicalIngestion,679063.9610745615,1319946
+3,OrdinalIngestion,615404.4154761904,820266

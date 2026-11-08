@@ -1,0 +1,461 @@
+{
+  "run": {
+    "conclusion": "",
+    "headSha": "343f2e98424c21ee52e062f1289c81452110368c",
+    "status": "in_progress",
+    "url": "https://github.com/cohesivesystems/cohesive/actions/runs/41876590708"
+  },
+  "environment": {
+    "BenchmarkDotNetCaption": "BenchmarkDotNet",
+    "BenchmarkDotNetVersion": "0.15.8",
+    "OsVersion": "Linux Ubuntu 26.04.1 LTS (Resolute Raccoon)",
+    "ProcessorName": "AMD EPYC 7763",
+    "PhysicalProcessorCount": 1,
+    "PhysicalCoreCount": 2,
+    "LogicalCoreCount": 4,
+    "RuntimeVersion": ".NET 10.0.14 (10.0.14, 10.0.1426.52326)",
+    "Architecture": "X64",
+    "HasAttachedDebugger": false,
+    "HasRyuJit": true,
+    "Configuration": "RELEASE",
+    "DotNetCliVersion": "10.0.403",
+    "ChronometerFrequency": {
+      "Hertz": 1000000000
+    },
+    "HardwareTimerKind": "Unknown"
+  },
+  "cases": [
+    {
+      "method": "OrdinalAdmissionJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 832.8050413131714,
+      "stddev_ns": 1.6239749481254155,
+      "samples": 3,
+      "bytes": 584
+    },
+    {
+      "method": "OrdinalAdmissionAndMapJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 944.6184844970703,
+      "stddev_ns": 2.461149069711016,
+      "samples": 3,
+      "bytes": 712
+    },
+    {
+      "method": "OrdinalAdmissionJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 26385.55446879069,
+      "stddev_ns": 10.602667434364161,
+      "samples": 3,
+      "bytes": 16952
+    },
+    {
+      "method": "OrdinalAdmissionAndMapJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 28690.599985758465,
+      "stddev_ns": 6.52205726078102,
+      "samples": 3,
+      "bytes": 20304
+    },
+    {
+      "method": "OrdinalAdmissionJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 851544.6554361979,
+      "stddev_ns": 3473.236620070239,
+      "samples": 3,
+      "bytes": 540728
+    },
+    {
+      "method": "OrdinalAdmissionAndMapJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 960896.4557291666,
+      "stddev_ns": 5909.482779612476,
+      "samples": 3,
+      "bytes": 647248
+    },
+    {
+      "method": "OrdinalAdmissionSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 402.76205094655353,
+      "stddev_ns": 0.24942520119002307,
+      "samples": 3,
+      "bytes": 392
+    },
+    {
+      "method": "OrdinalAdmissionAndMapSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 458.47371045748395,
+      "stddev_ns": 1.9299410518132039,
+      "samples": 3,
+      "bytes": 472
+    },
+    {
+      "method": "OrdinalAdmissionSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 13385.285034179688,
+      "stddev_ns": 78.80491203379096,
+      "samples": 3,
+      "bytes": 10808
+    },
+    {
+      "method": "OrdinalAdmissionAndMapSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 14139.975474039713,
+      "stddev_ns": 67.06010696072089,
+      "samples": 3,
+      "bytes": 12624
+    },
+    {
+      "method": "OrdinalAdmissionSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 414838.1666666667,
+      "stddev_ns": 3370.2386571768952,
+      "samples": 3,
+      "bytes": 344120
+    },
+    {
+      "method": "OrdinalAdmissionAndMapSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 463945.35489908856,
+      "stddev_ns": 2024.4907181414878,
+      "samples": 3,
+      "bytes": 401488
+    },
+    {
+      "method": "HandwrittenJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 176.42123568058014,
+      "stddev_ns": 0.8499789546195081,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "CompiledKernelOnlyJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 225.87772711118063,
+      "stddev_ns": 0.7279813128599677,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "CompiledCanonicalJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 332.11064863204956,
+      "stddev_ns": 1.4602412641944764,
+      "samples": 3,
+      "bytes": 472
+    },
+    {
+      "method": "SharedCoreSemanticJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 358.9659338792165,
+      "stddev_ns": 2.9512024976321314,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "SharedCoreIndexedJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 261.9610798358917,
+      "stddev_ns": 1.6075994721962683,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "AutoMapperCanonicalRowsJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 278.02346261342365,
+      "stddev_ns": 0.6591323754516697,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "CompiledOrdinalJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 68.59099825223286,
+      "stddev_ns": 0.34293238579191865,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "HandwrittenJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 5366.520520528157,
+      "stddev_ns": 69.36056900424886,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "CompiledKernelOnlyJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 7165.463569641113,
+      "stddev_ns": 4.7444634344114744,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "CompiledCanonicalJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 7556.019892374675,
+      "stddev_ns": 12.032163228168523,
+      "samples": 3,
+      "bytes": 3944
+    },
+    {
+      "method": "SharedCoreSemanticJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 11289.138977050781,
+      "stddev_ns": 41.64987160726288,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "SharedCoreIndexedJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 8417.357406616211,
+      "stddev_ns": 15.722546693608251,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "AutoMapperCanonicalRowsJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 6548.66951751709,
+      "stddev_ns": 22.194877634299157,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "CompiledOrdinalJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 1963.8668479919434,
+      "stddev_ns": 13.761583585303484,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "HandwrittenJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 173812.1433919271,
+      "stddev_ns": 430.4948159291113,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "CompiledKernelOnlyJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 228913.78173828125,
+      "stddev_ns": 2301.585734800942,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "CompiledCanonicalJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 239731.7941080729,
+      "stddev_ns": 3648.389424297779,
+      "samples": 3,
+      "bytes": 115050
+    },
+    {
+      "method": "SharedCoreSemanticJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 363050.5654296875,
+      "stddev_ns": 797.0930446515899,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "SharedCoreIndexedJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 270531.2985026042,
+      "stddev_ns": 1180.1890982992277,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "AutoMapperCanonicalRowsJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 204095.9962565104,
+      "stddev_ns": 1692.6684246305429,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "CompiledOrdinalJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 65383.65486653646,
+      "stddev_ns": 111.58873222393412,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "HandwrittenSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 47.69533439477285,
+      "stddev_ns": 0.13603647959457607,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "CompiledKernelOnlySimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 62.341168681780495,
+      "stddev_ns": 0.4325736203901768,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "CompiledCanonicalSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 161.9733563264211,
+      "stddev_ns": 0.20877223519080304,
+      "samples": 3,
+      "bytes": 424
+    },
+    {
+      "method": "SharedCoreSemanticSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 123.30825126171112,
+      "stddev_ns": 0.12293634343633573,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "SharedCoreIndexedSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 95.90101504325867,
+      "stddev_ns": 0.3014171647930089,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "AutoMapperCanonicalRowsSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 122.55937512715657,
+      "stddev_ns": 0.5583279104354177,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "CompiledOrdinalSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 35.89751970767975,
+      "stddev_ns": 0.1640400706857194,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "HandwrittenSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 1298.2871049245198,
+      "stddev_ns": 4.851587367853829,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "CompiledKernelOnlySimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 1924.1847343444824,
+      "stddev_ns": 12.883447571077221,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "CompiledCanonicalSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 2190.4945805867515,
+      "stddev_ns": 15.686612422431727,
+      "samples": 3,
+      "bytes": 2408
+    },
+    {
+      "method": "SharedCoreSemanticSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 3725.8852450052896,
+      "stddev_ns": 2.4212015432907426,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "SharedCoreIndexedSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 3032.8973999023438,
+      "stddev_ns": 17.441796703681046,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "AutoMapperCanonicalRowsSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 2055.5457127889,
+      "stddev_ns": 5.369425154383599,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "CompiledOrdinalSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 914.699400583903,
+      "stddev_ns": 0.06101276145054786,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "HandwrittenSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 43376.26820882162,
+      "stddev_ns": 98.95942462935116,
+      "samples": 3,
+      "bytes": 57368
+    },
+    {
+      "method": "CompiledKernelOnlySimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 64514.545471191406,
+      "stddev_ns": 758.0598515883695,
+      "samples": 3,
+      "bytes": 57368
+    },
+    {
+      "method": "CompiledCanonicalSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 74987.9901529948,
+      "stddev_ns": 799.892360135393,
+      "samples": 3,
+      "bytes": 65897
+    },
+    {
+      "method": "SharedCoreSemanticSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 121719.39349365234,
+      "stddev_ns": 169.80033728053513,
+      "samples": 3,
+      "bytes": 57368
+    },
+    {
+      "method": "SharedCoreIndexedSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 98182.9644165039,
+      "stddev_ns": 401.3868305205772,
+      "samples": 3,
+      "bytes": 57368
+    },
+    {
+      "method": "AutoMapperCanonicalRowsSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 54995.73027547201,
+      "stddev_ns": 405.98673305231296,
+      "samples": 3,
+      "bytes": 57368
+    },
+    {
+      "method": "CompiledOrdinalSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 31640.54982503255,
+      "stddev_ns": 464.0630034543701,
+      "samples": 3,
+      "bytes": 57368
+    }
+  ]
+}

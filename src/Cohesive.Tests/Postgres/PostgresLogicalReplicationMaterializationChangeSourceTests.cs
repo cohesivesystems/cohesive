@@ -645,6 +645,7 @@ public sealed partial class PostgresRelationQuerySourceReaderTests
             position.FormatVersion,
             position.Scope,
             string.Concat(position.Value.AsSpan(0, position.Value.Length - 1), "x"));
+        Assert.NotEqual(position.Value, tampered.Value);
         var inspectCount = fixture.Protocol.InspectCount;
 
         await Assert.ThrowsAsync<ArgumentException>(() => fixture.Source.ReadChangesAsync(

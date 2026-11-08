@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Collections.ObjectModel;
+using Cohesive.Model;
+using Cohesive.Relations.Acquisition;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.IR;
@@ -191,6 +194,21 @@ readonly record struct RelationQueryMaterializedValue
         new(RelationQueryMaterializedValueState.Defaulted, value, evidenceReference: null);
 }
 
+// Owned by one exact physical executor and used only with the evidence it produced.
+sealed record PreparedRelationQuerySource(
+    CompiledRelationQueryPlan Plan,
+    RelationQuerySourceReadResult Result,
+    RelationQuerySourceEvidence Evidence,
+    ImmutableArray<RelationQueryFieldEvidence> Fields)
+{
+    int gapFree;
+
+    public PreparationSlot<ImmutableArray<RelationQueryRuntimeRow>> RuntimeRows { get; } = new();
+    public ConcurrentDictionary<QueryNodeId, ImmutableArray<RelationQueryRuntimeRow>> GroupedRows { get; } = new();
+    public bool IsGapFree => Volatile.Read(ref gapFree) != 0;
+    public void MarkGapFree() => Volatile.Write(ref gapFree, 1);
+}
+
 /// <summary>
 /// Validated-plan-oriented index over one materialized runtime evidence snapshot. The index never resolves
 /// relationships or invents missing values; it only reconstructs the exact evidence supplied for compiled inputs.
@@ -198,6 +216,7 @@ readonly record struct RelationQueryMaterializedValue
 sealed class RelationQueryEvidenceIndex
 {
     readonly RelationQueryRuntimeEvidence evidence;
+    readonly CompiledRelationQueryPlan plan;
     readonly IReadOnlyDictionary<RelationQueryInputId, RelationQueryRequirementInput> inputs;
     readonly IReadOnlyDictionary<RelationQueryInputId, RelationQuerySourceEvidence> sources;
     readonly IReadOnlyDictionary<(RelationQueryInputId Input, RelationQueryOccurrenceId Owner), RelationQueryFieldEvidence> fields;
@@ -214,7 +233,7 @@ sealed class RelationQueryEvidenceIndex
         CompiledRelationQueryPlan plan,
         RelationQueryRuntimeEvidence evidence)
     {
-        ArgumentNullException.ThrowIfNull(plan);
+        this.plan = Guard.RequireNotNull(plan);
         this.evidence = evidence ?? throw new ArgumentNullException(nameof(evidence));
 
         var planIndex = RelationQueryCompiledPlanIndex.For(plan);
@@ -287,8 +306,24 @@ sealed class RelationQueryEvidenceIndex
             return false;
         }
 
-        ImmutableArray<RelationQueryRuntimeRow>.Builder builder =
-            ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>(source.Occurrences.Length);
+        foreach (var prepared in evidence.PreparedSources)
+        {
+            if (!ReferenceEquals(prepared.Plan, plan) || !ReferenceEquals(prepared.Evidence, source))
+                continue;
+
+            rows = prepared.RuntimeRows.Get((Index: this, Input: input, Source: source),
+                static state => state.Index.CreateSourceRows(state.Input, state.Source));
+            return true;
+        }
+
+        rows = CreateSourceRows(input, source);
+        return true;
+    }
+
+    ImmutableArray<RelationQueryRuntimeRow> CreateSourceRows(RelationQuerySourceSetInput input,
+        RelationQuerySourceEvidence source)
+    {
+        var builder = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>(source.Occurrences.Length);
         foreach (var occurrence in source.Occurrences)
         {
             if (occurrence.Binding != input.Binding || occurrence.Shape != input.Shape)
@@ -304,8 +339,7 @@ sealed class RelationQueryEvidenceIndex
                 input.Role == RelationQuerySourceInputRole.RelationRoot ? occurrence : null));
         }
 
-        rows = builder.MoveToImmutable();
-        return true;
+        return builder.MoveToImmutable();
     }
 
     /// <summary>Tries to get exact traversal evidence for one compiled relationship input and source occurrence.</summary>
