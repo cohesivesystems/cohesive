@@ -1,5 +1,15 @@
 # Cohesive.Storage
 
+## Implicit committed machine occurrences
+
+`EntityMachineOccurrence.FromReceipt(receipt)` projects named movements from an authoritative atomic
+entity transition receipt. No machine Emit declaration is needed. Applied/NoChange receipts retain
+named self-loops; rejected operations and successful preservation produce no occurrences. Use
+`occurrence.Matches(typedMovement)` for exact machine-revision and edge matching. The existing
+receipt reference plus movement node identifies the occurrence across replay. The projection does
+not publish, authorize or dispatch anything; trusted receipt resolution remains the host's boundary.
+See [the tender occurrence example and reaction plan](../../docs/research/tender-acceptance/reactions.md).
+
 `Cohesive.Storage` defines provider-neutral durability, source acquisition, aggregate storage realization, and
 relation-derived materialization contracts for Cohesive systems.
 
