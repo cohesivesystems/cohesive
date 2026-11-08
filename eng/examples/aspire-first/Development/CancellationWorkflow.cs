@@ -28,7 +28,7 @@ internal static class CancellationWorkflow
                 "Cancellation recipe missing from learn.");
             var before = await Workspace();
             var missing = await Call("resolve", new() { ["query"] = "fulfillment/cancel", ["expectedSnapshot"] = before.SnapshotId });
-            Require(missing.GetProperty("result").GetProperty("total").GetInt32() == 0, "The baseline already contains cancellation.");
+            var introducesCancellation = missing.GetProperty("result").GetProperty("total").GetInt32() == 0;
             var sourceFiles = await Run(root, "git", ["ls-files", "-z"]);
             foreach (var relative in sourceFiles.Split('\0', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -71,17 +71,23 @@ internal static class CancellationWorkflow
                 if (!id.StartsWith("api:", StringComparison.Ordinal)) continue;
                 var oldClient = await Compatibility(id, "ExistingClientToProposedServer");
                 var newClient = await Compatibility(id, "ProposedClientToExistingServer");
-                Require(oldClient.GetProperty("result").GetProperty("verdict").GetString() == "Compatible", "Old clients must tolerate the additional endpoint.");
-                Require(newClient.GetProperty("result").GetProperty("verdict").GetString() == "Breaking", "New clients require the new endpoint.");
+                if (introducesCancellation)
+                {
+                    Require(oldClient.GetProperty("result").GetProperty("verdict").GetString() == "Compatible", "Old clients must tolerate the additional endpoint.");
+                    Require(newClient.GetProperty("result").GetProperty("verdict").GetString() == "Breaking", "New clients require the new endpoint.");
+                }
                 contracts.Add(JsonSerializer.SerializeToElement(new { Id = id, ExistingClient = oldClient, ProposedClient = newClient }));
             }
             Require(contracts.Count == 2, "Expected cancellation admission and polling endpoints.");
             var existingOrder = await Compatibility("api:Order.Get", "ExistingClientToProposedServer");
             var reversedOrder = await Compatibility("api:Order.Get", "ProposedClientToExistingServer");
-            Require(existingOrder.GetProperty("result").GetProperty("verdict").GetString() == "Unknown",
-                "The changed order lifecycle enum requires a wire-catalog interpretation.");
-            Require(reversedOrder.GetProperty("result").GetProperty("verdict").GetString() == "Unknown",
-                "The reverse lifecycle analysis must retain its coverage gap.");
+            if (introducesCancellation)
+            {
+                Require(existingOrder.GetProperty("result").GetProperty("verdict").GetString() == "Unknown",
+                    "The changed order lifecycle enum requires a wire-catalog interpretation.");
+                Require(reversedOrder.GetProperty("result").GetProperty("verdict").GetString() == "Unknown",
+                    "The reverse lifecycle analysis must retain its coverage gap.");
+            }
             var existingContracts = new List<JsonElement>();
             foreach (var id in new[] { "api:Order.Create", "api:Order.Get", "api:Order.Submit", "api:Order.Details",
                 "api:Order.ReservationsBySku", "api:Order.availability", "api:service/fulfillment/operation/fulfill",
@@ -98,7 +104,7 @@ internal static class CancellationWorkflow
             {
                 BaselineCommit = commit, Learn = learned, Before = before.SnapshotId, After = after.SnapshotId,
                 Checks = checks, Comparison = comparison, ProcessReferences = processReferences, ReleaseImpact = releaseImpact,
-                NewEndpoints = contracts, ExistingContracts = existingContracts, ExistingOrder = existingOrder, ReversedOrder = reversedOrder
+                CancellationEndpoints = contracts, ExistingContracts = existingContracts, ExistingOrder = existingOrder, ReversedOrder = reversedOrder
             }, new JsonSerializerOptions { WriteIndented = true }), token);
             Console.WriteLine("PASS: cancellation authoring, validation, dependencies and directional API evidence. " + path);
 

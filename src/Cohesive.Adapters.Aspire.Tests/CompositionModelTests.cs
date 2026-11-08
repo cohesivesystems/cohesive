@@ -58,7 +58,7 @@ public sealed class CompositionModelTests
     {
         var model = TestModels.Fulfillment();
         var api = model.Api;
-        Assert.Equal(10, api.Definition.Endpoints.Count);
+        Assert.Equal(8, api.Definition.Endpoints.Count);
         Assert.Equal(api.Fulfill.Service.Build().Reference, api.Fulfill.Declaration.Reference);
         Assert.Equal(ApiResultKind.Accepted, api.Fulfill.Start.Operation.PrimaryResult.Kind);
         Assert.Equal(api.Fulfill.Start.Id, api.Fulfill.Result.Operation.ResultOf);

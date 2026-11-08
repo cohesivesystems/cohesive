@@ -141,41 +141,32 @@ fail when a source-edit recipe no longer matches exactly, so qualification evolv
 
 ## Cancellation authoring qualification
 
-The cancellation recipe is returned by `learn`. The authored command accepts a `ServiceProcessCommand<CancelOrder>` at `POST /fulfillment/cancellations` and returns a protected polling location. Use the same command, instance and attempt identities when retrying. A persisted begin-transition receipt gives the original occurrence exclusive ownership of stock release. A new occurrence gets `InProgress` while cancellation is unfinished and `AlreadyCancelled` after completion.
+The recipe returned by `learn` uses bounded stateful recurrence to cancel up to 1000 reservations, with a 1 MB acquisition limit. The first durable cut retains the entire observed reservation sequence. Database enumeration order is not a portable ordering guarantee; retries consume the captured sequence instead of constructing another plan. Every reservation and inventory subject is checked before the cancellation claim. Each release rechecks its captured facts, persists that evidence at a cut, releases stock through the existing transition receipt, and marks the reservation released. Completion verifies the captured rows and the current reservation count.
 
-This recipe supports the one-item fulfillment flow. It requires exactly one reservation whose identity equals the order identity, and rejects unsupported reservation sets before any write. Read projections expose `Released`. Recovery tests recreate process preparation after injected failures before release, after release and after marking the reservation, and verify the stock total.
+The main Orders worker selects Durable Task and exposes `POST /fulfillment/cancellations` plus its protected result endpoint. Host-only profiles, including the mixed-store demo, omit cancellation because their interpreter does not support durable cuts and recurrence. They retain fulfillment and read endpoints. No weaker host interpretation is substituted.
 
-Apply the explicit reservation migration before starting an existing database:
+Use the original command, instance and attempt identities when retrying this increment. Distinct continuations cannot take over Cancelling work. External reservation insertion, deletion or mutation is not serialized with cancellation: observed discrepancies reject, but the final read is not a cross-entity lock. Fenced takeover belongs to the next increment.
+
+Existing databases still require the reservation migration from the initial cancellation change:
 
 ```sh
 psql "$ORDERS_TEST_DATABASE_URL" -f eng/examples/aspire-first/migrations/002-reservation-cancellation.sql
 ```
 
-With a disposable PostgreSQL test database configured:
+With disposable PostgreSQL configured through `COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING`:
 
 ```sh
 dotnet test src/Cohesive.Adapters.Aspire.Tests --filter FullyQualifiedName~CancellationIntegrationTests
 ```
 
-Set `COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING` for this command and confirm tests execute. To replay source authoring through one MCP session, retain the pre-cancellation Git commit and run:
+These tests retain a checkpoint store across recreated durable runtimes and use real PostgreSQL state/receipt transactions. They verify shared/distinct SKUs, partial failures, invalid later rows, changing evidence, bound overflow, and distinct command identities. They do not equate an in-memory test checkpoint store with durable PostgreSQL checkpoint persistence. Scheduler integration tests separately exercise native Durable Task.
+
+To replay evolution against the single-reservation commit through one MCP session:
 
 ```sh
-dotnet run --project eng/examples/aspire-first/Development -- cancellation-exercise "$PWD" a2461a5098bd337977af8540ff233f7753501d36
+dotnet run --project eng/examples/aspire-first/Development -- cancellation-exercise "$PWD" 744adcf9b6053f31d472bcda4b147a1ca85f4931
 ```
 
-The replay builds an isolated baseline tree, calls `learn`, applies the tracked working source, rebuilds and exports. It saves validation, dependency paths and directional contract findings to `tmp/orders-cancellation-exercise.json`. Both new endpoints must be Compatible for existing clients and Breaking for proposed clients against the old server. Existing Order responses gain lifecycle enum values, for which the current policy reports Unknown in both directions. Clients consuming those states need an explicit enum-evolution review.
+The same command supports the pre-cancellation baseline `a2461a5098bd337977af8540ff233f7753501d36`. It saves validation, exact dependency paths and directional findings for all ten durable-profile endpoints to `tmp/orders-cancellation-exercise.json`. Findings preserve unsupported wire interpretations as Unknown; reachability is not an API compatibility proof. Host-profile endpoint removal must be considered separately from this durable-profile export.
 
-The replay records all eight existing endpoints as well as the two additions. Against the pre-cancellation baseline:
-
-| Contract | Existing client → proposed server | Proposed client → existing server |
-| --- | --- | --- |
-| Order.Create, Order.availability | Compatible | Compatible |
-| Order.Get, Order.Submit | Unknown (enum) | Unknown (enum) |
-| Order.Details | Unknown (enum) | Breaking (required Released field), plus enum uncertainty |
-| Order.ReservationsBySku | Compatible | Breaking (required Released field) |
-| Fulfillment admission and polling | Unknown (structural wire coverage) | Unknown (structural wire coverage) |
-| Cancellation admission and polling | Compatible (addition) | Breaking (missing endpoint) |
-
-A C# optional constructor argument is not a portable promise that an older server emits the new field.
-The impact exercise requires an untruncated exact-reference path from inventory release to cancellation admission;
-it also preserves incomplete-definition coverage in the report. Reachability is not a whole-system compatibility proof.
+Indexed source projections lower to a canonical `elementAt` call with a selected-element scope. Invalid indices fail and only the chosen element is projected. The shared semantic catalog supplies its type and scope rules. A short BenchmarkDotNet run over 1, 32 and 1000 rows with flat, nested and collection payloads measured 46.7–52.8 ns and 72 B per relation-reference projection; these are local warm microbenchmarks, not end-to-end cancellation latency. See `IndexedExpressionBenchmarks` for reproduction.

@@ -156,7 +156,7 @@ public sealed class FulfillmentExplanationTests
         var report = Native(EntityStateAuthority.State);
         Assert.Equal(report.ToJson(), Native(EntityStateAuthority.State).ToJson());
         var queries = report.Storage.Queries;
-        Assert.Equal(4, queries.Length);
+        Assert.Equal(3, queries.Length);
         foreach (var query in queries)
         {
             if (query.Query.DefinitionId.Value == "fulfillment/reservations-by-order")

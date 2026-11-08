@@ -2265,7 +2265,8 @@ public static class ProcessContinuationValidator
                           or PortableValueState.Failed)
                       && PortableExecutionValidator.Validate(currentState, plan.ValidationContext.ShapeGraph).IsValid
                       && (!recurrence.Active
-                          || waitingAtRecurrence
+                          ? retainedStateBinding is null || retainedStateBinding.Value == currentState
+                          : waitingAtRecurrence
                               ? retainedStateBinding is null
                               : retainedStateBinding?.Value == currentState);
                 var activeValid = !recurrence.Active

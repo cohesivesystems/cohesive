@@ -62,7 +62,8 @@ internal static class OrdersWorkspace
             var process = new FulfillmentProcess(domain);
             var queries = new FulfillmentQueries(domain);
             var cancellation = new CancellationProcess(domain, queries);
-            var endpoints = new OrderEndpoints(new OrderApi(domain, process, cancellation: cancellation), domain, queries).Plan;
+            var execution = new FulfillmentExecutionPolicy { Lifetime = ProcessExecutionLifetime.Durable };
+            var endpoints = new OrderEndpoints(new OrderApi(domain, process, execution, cancellation), domain, queries, execution: execution).Plan;
             var executions = new[] { domain.OrderTransitions.Submit.Document, domain.InventoryTransitions.Reserve.Document,
                 domain.InventoryTransitions.Release.Document, domain.ReservationTransitions.Create.Document, process.Definition.Document,
                 domain.OrderTransitions.BeginCancellation.Document, domain.OrderTransitions.CompleteCancellation.Document,

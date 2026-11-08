@@ -132,7 +132,10 @@ public enum ExprFunctionResultRule
     CollectionElement = 6,
 
     /// <summary>Retain the sole argument's type, shape and cardinality with required/non-null outer value guarantees.</summary>
-    PresentArgument = 7
+    PresentArgument = 7,
+
+    /// <summary>Return the contract of the sole scoped selector directly.</summary>
+    ScopedSelector = 8
 }
 
 /// <summary>One function argument evaluated with an explicit current-item scope.</summary>
@@ -263,6 +266,9 @@ public sealed class ExprFunctionDefinition
         if (ResultRule == ExprFunctionResultRule.CollectionElement
             && (Arity.Minimum != 1 || Arity.Maximum != 1 || FixedResult is not null))
             throw new ArgumentException("A collection-element result requires exactly one argument and no fixed result.", nameof(resultRule));
+        if (ResultRule == ExprFunctionResultRule.ScopedSelector
+            && (ScopedArguments.Length != 1 || FixedResult is not null || ResultCategory != ExprResultCategory.Any))
+            throw new ArgumentException("A scoped-selector result requires exactly one selector and no fixed result or category.", nameof(resultRule));
         if (ResultRule == ExprFunctionResultRule.FirstArgument)
         {
             if (Arity.Minimum < 1)
@@ -659,6 +665,7 @@ public sealed class ExprSemanticsCatalog
                 Function(ExprFunctionNames.ParseDecimal, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Numeric, resultRule: ExprFunctionResultRule.Fixed, fixedResult: new(new ScalarTypeRef(ScalarTypeKind.Decimal))),
                 Function(ExprFunctionNames.ParseInt32, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Integer, resultRule: ExprFunctionResultRule.Fixed, fixedResult: new(new ScalarTypeRef(ScalarTypeKind.Int32))),
                 Function(ExprFunctionNames.ParseInt64, 1, 1, [ExprResultCategory.Text], resultCategory: ExprResultCategory.Integer, resultRule: ExprFunctionResultRule.Fixed, fixedResult: new(new ScalarTypeRef(ScalarTypeKind.Int64))),
+                Function(ExprFunctionNames.ElementAt, 3, 3, [ExprResultCategory.Collection, ExprResultCategory.Integer, ExprResultCategory.Any], resultRule: ExprFunctionResultRule.ScopedSelector, scoped: [new(2, 0)]),
                 Function(ExprFunctionNames.Single, 1, 1, [ExprResultCategory.Collection], resultRule: ExprFunctionResultRule.CollectionElement),
                 Function(ExprFunctionNames.Coalesce, 2, 2, [ExprResultCategory.Any, ExprResultCategory.Any], resultRule: ExprFunctionResultRule.FirstNonNullish),
                 Function(ExprFunctionNames.RequireValue, 1, 1, [ExprResultCategory.Any], resultRule: ExprFunctionResultRule.PresentArgument),
