@@ -16,6 +16,14 @@ rejected during admission. Commit retries still reject changed content; complete
 on a commit-ID collision. The small intent digest is prepared before entering the provider. Checkpoint/store wire schemas are intentionally replaced; existing wire
 formats are not admitted. See [the contract and qualification](../../docs/performance/durable-bookkeeping.md).
 
+The activation-host factory overload of `ProcessDurableRuntime` receives the acquired snapshot, so an adapter can
+bind fresh effect commits to the exact physical worker lease. Logical continuation and operation identities stay
+unchanged across replacement workers. The adapter must enforce ownership atomically with each effect; a runtime
+lease alone does not fence external state. `ProcessWorkerFenceException` carries only `StaleFence` or `LeaseExpired`:
+the runtime stops that interpretation without committing a semantic failure checkpoint. Read-only receipt replay
+can still resolve already committed work. Factory hosts are activation-local and must not be reused for another
+acquired snapshot. Atomic prevention of an unstarted child does not acquire a lease or invoke the factory.
+
 ## Install
 
 ```bash

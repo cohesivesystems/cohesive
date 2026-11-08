@@ -77,6 +77,41 @@ public sealed partial class ProcessDurableRuntimeTests
         Assert.Equal(1, recoveredHost.RelationCalls);
     }
 
+    [Theory]
+    [InlineData(ProcessStoreMutationDisposition.StaleFence, ProcessDurableRuntimeDisposition.StaleFence)]
+    [InlineData(ProcessStoreMutationDisposition.LeaseExpired, ProcessDurableRuntimeDisposition.LeaseExpired)]
+    public async Task ActivationHost_ReceivesAcquiredLease_AndFenceRejectionLeavesCheckpointUnchanged(
+        ProcessStoreMutationDisposition rejection, ProcessDurableRuntimeDisposition expected)
+    {
+        var fixture = ProcessDurabilityTestFixture.Create(
+            definitionId: "process/durable-runtime/fenced-host", semanticVariant: "fenced-host");
+        var store = new InMemoryProcessDurableStore();
+        ProcessDurableStoreSnapshot? acquired = null;
+        var host = new AsyncRecordingHost(fixture.OperationResult, () => throw new ProcessWorkerFenceException(rejection));
+        var runtime = new ProcessDurableRuntime(store, activationHostFactory: snapshot =>
+        {
+            acquired = snapshot;
+            Assert.NotNull(snapshot.WorkerLease);
+            return host;
+        }, options: new("worker/fenced", WorkerLease),
+            bindingResolver: new BindingResolver(fixture.DurableOperation.Binding));
+        var initialized = await runtime.InitializeAsync(
+            Context(ProcessDurabilityTestFixture.AcceptedAtUtc), fixture.Plan, fixture.Start);
+        Assert.Null(acquired);
+        var before = Assert.IsType<ProcessDurableStoreSnapshot>(initialized.Snapshot);
+        var result = await runtime.ActivateAsync(Context(ProcessDurabilityTestFixture.CheckpointedAtUtc),
+            fixture.Plan, before.Checkpoint.ContinuationIdentity, fixture.Activation);
+        Assert.Equal(expected, result.Disposition);
+        Assert.NotNull(acquired);
+        Assert.Equal(before.Checkpoint.ContinuationIdentity, acquired.Checkpoint.ContinuationIdentity);
+        var retained = Assert.IsType<ProcessDurableStoreSnapshot>(await store.LoadAsync(
+            Context(ProcessDurabilityTestFixture.CheckpointedAtUtc), before.Checkpoint.ContinuationIdentity.ProcessInstanceId));
+        Assert.Equal(before.Checkpoint, retained.Checkpoint);
+        Assert.Empty(retained.Checkpoint.Operations);
+        Assert.Empty(retained.Checkpoint.Activations);
+        Assert.Equal(0, runtime.RetainedInstanceGateCount);
+    }
+
     static ProcessDurableRuntime AsyncRuntime(
         IProcessDurableStore store, ProcessDurabilityTestFixture fixture, IAsyncProcessReferenceHost host) =>
         new(store, host, new("worker/durable-runtime-tests", WorkerLease),

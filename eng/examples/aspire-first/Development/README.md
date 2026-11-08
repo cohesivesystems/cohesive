@@ -145,7 +145,7 @@ The recipe returned by `learn` uses bounded stateful recurrence to cancel up to 
 
 The main Orders worker selects Durable Task and exposes `POST /fulfillment/cancellations` plus its protected result endpoint. Host-only profiles, including the mixed-store demo, omit cancellation because their interpreter does not support durable cuts and recurrence. They retain fulfillment and read endpoints. No weaker host interpretation is substituted.
 
-Use the original command, instance and attempt identities when retrying this increment. Distinct continuations cannot take over Cancelling work. External reservation insertion, deletion or mutation is not serialized with cancellation: observed discrepancies reject, but the final read is not a cross-entity lock. Fenced takeover belongs to the next increment.
+Use the original command, instance and attempt identities when retrying. Distinct logical continuations cannot take over Cancelling work. A replacement physical worker can restore the retained checkpoint under a new owner/fence in the explicit PostgreSQL durable-store profile described below. External reservation insertion, deletion or mutation is not serialized with cancellation: observed discrepancies reject, but the final read is not a cross-entity lock.
 
 Existing databases still require the reservation migration from the initial cancellation change:
 
@@ -170,3 +170,25 @@ dotnet run --project eng/examples/aspire-first/Development -- cancellation-exerc
 The same command supports the pre-cancellation baseline `a2461a5098bd337977af8540ff233f7753501d36`. It saves validation, exact dependency paths and directional findings for all ten durable-profile endpoints to `tmp/orders-cancellation-exercise.json`. Findings preserve unsupported wire interpretations as Unknown; reachability is not an API compatibility proof. Host-profile endpoint removal must be considered separately from this durable-profile export.
 
 Indexed source projections lower to a canonical `elementAt` call with a selected-element scope. Invalid indices fail and only the chosen element is projected. The shared semantic catalog supplies its type and scope rules. A short BenchmarkDotNet run over 1, 32 and 1000 rows with flat, nested and collection payloads measured 46.7–52.8 ns and 72 B per relation-reference projection; these are local warm microbenchmarks, not end-to-end cancellation latency. See `IndexedExpressionBenchmarks` for reproduction.
+
+
+## Fenced checkpoint takeover
+
+The native PostgreSQL recovery profile retains both process checkpoints and existing transition receipts in the same database. `ProcessDurableRuntime` accepts an activation-host factory receiving the exact acquired snapshot. Bind that snapshot through `PostgresProcessDurableStore.BindWorkerFence`, then use `WithWorkerFence` on each receipted repository in the activation host. The same caller-owned data source is required for checkpoint and entity persistence. Fixed-host constructors and the main Durable Task worker do not acquire this additional native effect fence automatically.
+
+A replacement worker acquires a new physical lease and restores the same logical continuation. The captured reservation sequence, recurrence cursor and operation occurrence identities are unchanged. An inventory release committed before checkpoint persistence is recovered from its existing receipt, without crediting stock again.
+
+For fresh commits, PostgreSQL locks the process root before taking entity/receipt locks, reconstructs the canonical aggregate, and checks the acquired ownership fence and provider-clock expiry. The lock remains held until state and receipt commit together. Thus takeover either precedes the old effect and rejects it, or waits for the old transaction and subsequently replays its receipt. StaleFence and LeaseExpired are physical activation results, never authored cancellation outcomes or failure checkpoints.
+
+The initial guard reconstructs the bounded paged aggregate for every fresh receipt commit. This preserves one lease authority, at the cost of extra reads and per-instance serialization. No duplicate lease table or root-column cache is introduced. This does not fence unrelated external inventory writers, cross-database effects, or newly created logical process instances.
+
+Replay this recovery increment against the multi-reservation commit with:
+
+```sh
+dotnet run --project eng/examples/aspire-first/Development -- cancellation-exercise "$PWD" 06c96dc521f0e8b4e72be168f3cc9caf3f0623d1
+```
+
+The recovery increment retains the same exported semantic fingerprint. Its 396 documents validate, and all ten
+API contracts are compared in both directions: five return Compatible and five retain Unknown wire-coverage
+results. The native runtime guarantee is established separately by `FencedCancellationIntegrationTests`, including
+both lock race orders and release/mark receipt recovery under a new worker owner.

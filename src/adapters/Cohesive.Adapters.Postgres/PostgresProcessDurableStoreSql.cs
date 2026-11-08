@@ -25,6 +25,7 @@ internal sealed class PostgresProcessDurableStoreSql
     const string PageBytesBinding = "page-bytes";
 
     readonly SqlCommandTemplate loadRoot;
+    readonly SqlCommandTemplate lockRoot;
     readonly SqlCommandTemplate loadPages;
     readonly SqlCommandTemplate findPages;
     readonly SqlCommandTemplate insertPage;
@@ -37,7 +38,7 @@ internal sealed class PostgresProcessDurableStoreSql
     {
         ArgumentNullException.ThrowIfNull(options);
         maximumAggregateResultBytes = options.MaximumAggregateBytes ?? long.MaxValue;
-        loadRoot = new SqlSelectBuilder(options.Instances, InstanceAlias)
+        var root = new SqlSelectBuilder(options.Instances, InstanceAlias)
             .Select(SqlExpression.Column(InstanceAlias, "physical_revision"), "physical_revision")
             .Select(SqlExpression.Column(InstanceAlias, "storage_format"), "storage_format")
             .Select(SqlExpression.Column(InstanceAlias, "aggregate_fingerprint"), "aggregate_fingerprint")
@@ -45,8 +46,9 @@ internal sealed class PostgresProcessDurableStoreSql
             .Select(SqlExpression.Column(InstanceAlias, "page_manifest"), "page_manifest")
             .Select(SqlExpression.Column(InstanceAlias, "page_count"), "page_count")
             .Where(Equal(InstanceAlias, "authority_id", AuthorityBinding))
-            .Where(Equal(InstanceAlias, "instance_id", InstanceBinding))
-            .BuildTemplate(PostgresSqlDialect.Instance);
+            .Where(Equal(InstanceAlias, "instance_id", InstanceBinding));
+        loadRoot = root.BuildTemplate(PostgresSqlDialect.Instance);
+        lockRoot = root.ForUpdate().BuildTemplate(PostgresSqlDialect.Instance);
         loadPages = CreatePageLookup(options, includeContent: true);
         findPages = CreatePageLookup(options, includeContent: false);
         insertPage = new SqlInsertBuilder(options.Pages)
@@ -89,8 +91,8 @@ internal sealed class PostgresProcessDurableStoreSql
             .BuildTemplate(PostgresSqlDialect.Instance);
     }
 
-    internal PostgresNpgsqlCommand LoadRoot(string authority, string instance) => Command(
-        template: loadRoot,
+    internal PostgresNpgsqlCommand LoadRoot(string authority, string instance, bool forUpdate = false) => Command(
+        template: forUpdate ? lockRoot : loadRoot,
         parameters: new Dictionary<string, PostgresNpgsqlParameter>(StringComparer.Ordinal)
         {
             [AuthorityBinding] = Text(authority),

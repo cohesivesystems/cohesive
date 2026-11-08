@@ -27,6 +27,7 @@ public sealed partial class ProcessDurableRuntime
     readonly IProcessDurableStore store;
     readonly IProcessReferenceHost? host;
     readonly IAsyncProcessReferenceHost? asyncHost;
+    readonly Func<ProcessDurableStoreSnapshot, IAsyncProcessReferenceHost>? activationHostFactory;
     readonly IDurableRequestBindingResolver bindingResolver;
     readonly IProcessLocalMutationPlanner localMutationPlanner;
     readonly IProcessStoreMutationExceptionClassifier storeMutationExceptionClassifier;
@@ -104,6 +105,39 @@ public sealed partial class ProcessDurableRuntime
             bindingResolver, localMutationPlanner, storeMutationExceptionClassifier,
             operationAdapterResolver, operationExceptionClassifier, null)
     {
+    }
+
+    /// <summary>Creates an activation-local host from the exact acquired worker snapshot.</summary>
+    /// <remarks>
+    /// The factory runs only after successful worker acquisition and receives the existing logical continuation
+    /// and physical lease separately. Bind physical effect fencing to this lease; never add its owner or fence to
+    /// logical operation identities. The host must enforce the fence atomically with effects. A factory alone
+    /// does not provide fencing, and existing fixed-host overloads do not fence external effects automatically.
+    /// The runtime does not dispose returned hosts; the caller owns their shared resources. Each returned host
+    /// must remain bound to its acquired snapshot and must not be reused for another acquisition.
+    /// </remarks>
+    /// <param name="store">Atomic Process durability authority used to acquire the worker lease.</param>
+    /// <param name="activationHostFactory">Creates a non-null host for one interpretation attempt; may be invoked concurrently for different instances.</param>
+    /// <param name="options">Worker identity, lease and exact retry policy.</param>
+    /// <param name="bindingResolver">Optional exact durable Request binding resolver.</param>
+    /// <param name="localMutationPlanner">Optional deterministic local mutation planner.</param>
+    /// <param name="storeMutationExceptionClassifier">Optional ambiguous store-mutation classifier.</param>
+    /// <param name="operationAdapterResolver">Optional exact durable Request adapter resolver.</param>
+    /// <param name="operationExceptionClassifier">Optional adapter exception classifier.</param>
+    /// <exception cref="ArgumentNullException">The store, factory or options is null.</exception>
+    public ProcessDurableRuntime(
+        IProcessDurableStore store,
+        Func<ProcessDurableStoreSnapshot, IAsyncProcessReferenceHost> activationHostFactory,
+        ProcessDurableRuntimeOptions options,
+        IDurableRequestBindingResolver? bindingResolver = null,
+        IProcessLocalMutationPlanner? localMutationPlanner = null,
+        IProcessStoreMutationExceptionClassifier? storeMutationExceptionClassifier = null,
+        IDurableOperationAdapterResolver? operationAdapterResolver = null,
+        IDurableOperationExceptionClassifier? operationExceptionClassifier = null)
+        : this(store, null, null, options, bindingResolver, localMutationPlanner,
+            storeMutationExceptionClassifier, operationAdapterResolver, operationExceptionClassifier, null)
+    {
+        this.activationHostFactory = activationHostFactory ?? throw new ArgumentNullException(nameof(activationHostFactory));
     }
 
     ProcessDurableRuntime(
@@ -360,8 +394,18 @@ public sealed partial class ProcessDurableRuntime
                     diagnostics: begun.Diagnostics);
             }
 
-            var (decision, observations) = await InterpretAsync(
-                context, plan, checkpoint, activation).ConfigureAwait(false);
+            ProcessActivationDecision decision;
+            ImmutableArray<ProcessOperationReplayObservation> observations;
+            try
+            {
+                (decision, observations) = await InterpretAsync(
+                    context, plan, snapshot, checkpoint, activation).ConfigureAwait(false);
+            }
+            catch (ProcessWorkerFenceException exception)
+            {
+                // Physical authority was lost. Do not turn rejection into a semantic failure checkpoint.
+                return new(MapStoreDisposition(exception.Disposition), snapshot);
+            }
             if (decision.Disposition == ProcessActivationDisposition.Rejected)
             {
                 return new(
@@ -881,8 +925,18 @@ public sealed partial class ProcessDurableRuntime
                 }
                 activeControl = begun.State;
             }
-            var (activationDecision, observations) = await InterpretAsync(
-                context, plan, checkpoint, activation).ConfigureAwait(false);
+            ProcessActivationDecision activationDecision;
+            ImmutableArray<ProcessOperationReplayObservation> observations;
+            try
+            {
+                (activationDecision, observations) = await InterpretAsync(
+                    context, plan, snapshot, checkpoint, activation).ConfigureAwait(false);
+            }
+            catch (ProcessWorkerFenceException exception)
+            {
+                // Physical authority was lost. Do not turn rejection into a semantic failure checkpoint.
+                return new(MapStoreDisposition(exception.Disposition), snapshot);
+            }
             if (activationDecision.Disposition is ProcessActivationDisposition.Rejected
                 || cancellationPolicy == ProcessCancellationCompletionPolicy.Immediate
                     && activationDecision.Disposition != ProcessActivationDisposition.Cancelled)
@@ -1338,12 +1392,17 @@ public sealed partial class ProcessDurableRuntime
         InterpretAsync(
             OperationContext context,
             CompiledProcessPlan plan,
+            ProcessDurableStoreSnapshot? acquiredSnapshot,
             ProcessDurableCheckpoint checkpoint,
             ProcessActivation activation)
     {
-        if (asyncHost is not null)
+        var selectedHost = activationHostFactory is null ? asyncHost
+            : acquiredSnapshot is null ? UnacquiredHost.Instance
+            : activationHostFactory(acquiredSnapshot)
+                ?? throw new InvalidOperationException("The activation host factory returned null.");
+        if (selectedHost is not null)
         {
-            var replay = new ProcessOperationReplayHost(asyncHost, checkpoint.Operations, checkpoint.Start.Request.Context);
+            var replay = new ProcessOperationReplayHost(selectedHost, checkpoint.Operations, checkpoint.Start.Request.Context);
             var activity = ExecutionTelemetry.StartActivity(ExecutionTelemetryActivityKind.Activation);
             try
             {
@@ -1373,6 +1432,18 @@ public sealed partial class ProcessDurableRuntime
             : await ActivateWithTransitionOperationsAsync(
                 context, plan, checkpoint.Continuation, activation, replayHost, transitionHost).ConfigureAwait(false);
         return (result, replayHost.Observations);
+    }
+
+    // Atomic prevention of an unstarted child has no acquired lease and must perform no host effects.
+    sealed class UnacquiredHost : IAsyncProcessReferenceHost
+    {
+        internal static readonly UnacquiredHost Instance = new();
+        public ValueTask<ProcessOperationResult> InvokeTransitionAsync(OperationContext context, ProcessTransitionInvocation invocation)
+            => throw new InvalidOperationException("An unacquired process cannot invoke transitions.");
+        public ValueTask<ProcessOperationResult> EvaluateRelationAsync(OperationContext context, ProcessRelationEvaluation evaluation)
+            => throw new InvalidOperationException("An unacquired process cannot evaluate relations.");
+        public ValueTask<ProcessSignalTargetResult> ResolveSignalTargetAsync(OperationContext context, ProcessSignalTargetResolution resolution)
+            => throw new InvalidOperationException("An unacquired process cannot resolve signals.");
     }
 
     static void CompleteActivationActivity(

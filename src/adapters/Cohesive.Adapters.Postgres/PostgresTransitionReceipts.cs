@@ -147,6 +147,7 @@ public sealed partial class PostgresEntityRepository
     /// <exception cref="InvalidOperationException">Retained evidence is corrupt or exceeds its bound.</exception>
     /// <exception cref="NpgsqlException">Native transaction fails; no automatic retry occurs.</exception>
     /// <exception cref="OperationCanceledException">Cancellation is observed.</exception>
+    /// <exception cref="ProcessWorkerFenceException">An attached worker fence is stale, expired, or its retained checkpoint has advanced.</exception>
     public Task<EntityTransitionOperationResult> CommitTransitionOperation(OperationContext context, EntityTransitionOperationCommit commit)
     {
         ArgumentNullException.ThrowIfNull(commit);
@@ -161,6 +162,10 @@ public sealed partial class PostgresEntityRepository
     {
         await using var connection = await runtime.DataSource.OpenConnectionAsync(context.CancellationToken).ConfigureAwait(false);
         await using var transaction = await connection.BeginTransactionAsync(context.CancellationToken).ConfigureAwait(false);
+        // Root ownership precedes all entity/receipt locks, so takeover cannot acknowledge a new owner
+        // until this authorized mutation and its receipt have committed or rolled back.
+        if (workerFence is not null)
+            await workerFence.ValidateAsync(context, connection, transaction, commit.Request).ConfigureAwait(false);
         var operation = OperationKey(commit.Request.Operation);
         // Serialize identical occurrences and subject creation; collisions only reduce concurrency.
         await Lock("operation/" + operation).ConfigureAwait(false);

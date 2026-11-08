@@ -464,7 +464,7 @@ public sealed partial class ProcessDurableRuntime
             activationContext,
             cancellation: cancellation);
         var (activationDecision, observations) = await InterpretAsync(
-            context, plan, checkpoint, activation).ConfigureAwait(false);
+            context, plan, acquiredSnapshot: null, checkpoint, activation).ConfigureAwait(false);
         if (activationDecision.Disposition != ProcessActivationDisposition.Cancelled)
         {
             return new(

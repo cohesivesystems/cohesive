@@ -28,7 +28,9 @@ public enum SqlFeature
     /// <summary>Single-column scalar subqueries bounded to at most one row.</summary>
     ScalarSubquery,
     /// <summary>Ordered row numbering within an optional partition using ROW_NUMBER() OVER.</summary>
-    RowNumber
+    RowNumber,
+    /// <summary>Exclusive row locks retained until the surrounding transaction completes.</summary>
+    SelectForUpdate
 }
 
 /// <summary>Adapter-owned policy for rendering and binding shared SQL construction artifacts.</summary>
