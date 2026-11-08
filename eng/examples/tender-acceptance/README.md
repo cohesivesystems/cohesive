@@ -13,7 +13,7 @@ var tender = TenderAcceptanceMachines.Tender();
 var decision = tender.Definition.Evaluate(
     tender.Offered.Id,
     tender.SendPending.Resolve().Edge.Action,
-    ObservationValue.FromObject(new AcceptanceFacts(true, false, false)),
+    ObservationValue.FromObject(new TenderState("load-1", false, false, false, "")),
     ObservationValue.FromObject(new SendResult(AutoAcknowledged: false)));
 // The selected edge targets tender.Pending.Id.
 ```
@@ -44,8 +44,15 @@ D02 gives the tender a single lifecycle for linkage and acceptance: `AttachLoad`
 to `Offered`, after which acceptance is admitted. The independent linkage machine has been removed.
 `LoadAcknowledgement()` returns an explicitly incomplete view of the related load lifecycle;
 `Coordination()` describes process progress across participants. Neither is a second binding on the tender.
-The tender revision is now `proposal-2` because its graph and initial state changed.
+The tender revision is now `proposal-3` because its graph and initial state changed.
 
-The [entity binding contract](../../../docs/research/tender-acceptance/entity-binding.md) records full
-coupling as the required target semantics. These sketches do not implement entity-wide compiler/runtime
-coverage enforcement, and the legacy trace host intentionally preserves observed partial commits.
+`TenderEntityModel` binds the episode entity to that single authority and authors the concrete link,
+acceptance, receipt, and note-edit operations. `EditNote` explicitly preserves machine state; the other
+operations realize named movements. `TenderDeclaration` now derives from `MachineModel`, which owns
+source and frozen IR without becoming a runtime actor. Existence and duplicate-admission evidence are
+explicit command facts; state classification reads only entity fields.
+
+The [entity binding contract](../../../docs/research/tender-acceptance/entity-binding.md) records the target
+semantics and current operating boundary. Existing-entity enforcement is implemented for canonical
+Transitions; initialization, component composition, and durable reaction execution remain unsupported.
+The legacy trace host intentionally preserves observed partial commits.

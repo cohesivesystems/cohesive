@@ -1,7 +1,6 @@
 # Entity ownership and machine binding contract
 
-Status: accepted design direction from the tender distillation discussion (D02); framework-wide
-enforcement is not implemented by this sketch. This contract governs the proposed replacement,
+Status: accepted design direction from the tender distillation discussion (D02); the existing-entity binding contract is implemented by canonical Transition compilation and reference execution. This contract governs the proposed replacement,
 not the observed legacy traces.
 
 ## Authority
@@ -47,8 +46,7 @@ authoring, serialization, Transition lowering, compilation, registration, and ev
 ## Tender slice
 
 The following predicates describe the intended configurations of the ordinary acceptance episode.
-They are explanatory, not a second executable definition; a future typed binding must author and lower
-them once. Cancellation, bids, changes, and migration snapshots need additional extraction before this
+They explain the predicates authored once in `TenderEntityModel`; that source lowers them into the binding. Cancellation, bids, changes, and migration snapshots need additional extraction before this
 can be called the complete tender lifecycle.
 
 | State | Entity configuration |
@@ -96,7 +94,21 @@ committed target transition. No concrete reaction-policy IR, adapter, or durable
 - Verify creation and explicit migration boundaries before claiming those capabilities.
 - Verify that failed or rejected execution never records a committed movement occurrence.
 
-The current regression suite covers the narrower graph change: linkage and acceptance share a tender
+The graph characterization suite covers: linkage and acceptance share a tender
 definition, acceptance cannot start in Unlinked, linkage cannot repeat in Offered, and independent
 process/load interleavings do not establish completion coherence. Existing golden traces continue to
 characterize the legacy ordering and partial commits without rewriting history.
+
+
+## Implemented realization
+
+`TenderEntityModel` is the first consumer of `.Bind(entity)` and `PreserveMachineState()`. The bound
+shape and each derived Transition retain the same portable authority. Compilation requires one movement
+on every successful path or explicit preservation; runtime checks enforce unique classification and
+final classification/target agreement. Registration and state preparation reject omitted or changed
+binding evidence. Predicate/discriminator bindings and document round trips are covered by regressions.
+
+Creation, multi-movement paths, component composition, and automatic preservation inference remain
+unsupported. Coverage is scoped to registered canonical Transitions and their reference interpreter;
+direct storage writes are not made safe by this contract. Reactions and committed occurrence transport
+remain design requirements rather than implemented delivery guarantees.

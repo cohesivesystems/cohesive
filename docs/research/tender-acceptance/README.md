@@ -96,10 +96,11 @@ is only a view of the load's lifecycle: dispatch, cancellation, and other load b
 the extracted slice. Acceptance coordination belongs to a process spanning the two entities. None of
 these bounded sketches claims to cover the full production entity lifecycle.
 
-Full coupling is the intended binding contract. The existing framework currently checks explicitly
-linked movements; entity-wide registration and coverage enforcement are not yet implemented. A host
-must not claim full coupling from those opt-in checks alone. Direct storage writes are outside that
-enforcement boundary unless an adapter prevents them; after-the-fact detection cannot prevent a write.
+Full coupling is the binding contract implemented for existing-entity canonical Transitions in
+`TenderEntityModel`. Compilation requires movement coverage or explicit preservation; execution checks
+unique classification and final state agreement. Registration and state preparation retain that authority.
+Creation, component composition, and multi-movement paths remain unsupported. Direct storage writes
+remain outside this boundary. See [the binding contract](entity-binding.md) for details.
 
 ## Candidate state models
 

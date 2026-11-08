@@ -140,6 +140,15 @@ public static class TransitionStateProjector
     {
         ArgumentNullException.ThrowIfNull(entity);
         ArgumentNullException.ThrowIfNull(decision);
+        try
+        {
+            Cohesive.Transitions.Machines.EntityMachineBinding.RequireSame(entity, decision.Evidence.MachineBinding);
+        }
+        catch (InvalidOperationException error)
+        {
+            throw new TransitionStatePreparationException("transition.state.machineBindingMismatch", "/decision/evidence/machineBinding", error.Message);
+        }
+
         ArgumentException.ThrowIfNullOrWhiteSpace(entityId);
         if (decision.Kind is not (TransitionDecisionKind.Applied or TransitionDecisionKind.NoChange
             or TransitionDecisionKind.AdmissionRejected or TransitionDecisionKind.DomainRejected))

@@ -159,6 +159,11 @@ public sealed record EntityDefinition
     /// </summary>
     public ImmutableArray<InvariantDefinition> Invariants { get; init; }
 
+    /// <summary>Sole lifecycle authority persisted in the entity shape, or null for an unbound entity.</summary>
+    [JsonIgnore]
+    public Cohesive.Transitions.Machines.EntityMachineBinding? Machine =>
+        Cohesive.Transitions.Machines.EntityMachineBinding.Read(Shape);
+
     /// <summary>Validates this entity's inline or graph-backed state-schema linkage.</summary>
     /// <returns>Structured deterministic shape-graph diagnostics.</returns>
     public DocumentValidationResult ValidateShapeGraph() => EntityShapeGraphValidator.Validate(this);
@@ -285,12 +290,12 @@ public sealed record EntityDefinition
 
     /// <summary>
     /// Validates an existing state against the complete portable entity definition, including field contracts,
-    /// computed fields, declarative constraints, and entity invariants.
+    /// computed fields, declarative constraints, entity invariants, and unique machine classification.
     /// </summary>
     /// <param name="state">Entity state to validate without mutation.</param>
     /// <exception cref="ArgumentNullException"><paramref name="state"/> is <see langword="null"/>.</exception>
     /// <exception cref="SemanticRuleViolationException">
-    /// The state violates its shape, field, computed-field, constraint, or invariant semantics.
+    /// The state violates its shape, field, computed-field, constraint, invariant, or machine classification semantics.
     /// </exception>
     public void ValidateState(EntityState state)
     {

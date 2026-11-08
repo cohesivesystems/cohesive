@@ -5,9 +5,9 @@ namespace Cohesive.Examples.TenderAcceptance;
 
 // Proposed source, compiled by the characterization suite. Not a replacement for the application's model.
 // E02/E03: both acceptance outcomes persist Accepted; acknowledgement is a separate dimension.
-internal sealed record AcceptanceFacts(bool LinkedLoadExists, bool Cancelled, bool AlreadyAcceptedLink);
-internal sealed record SendResult(bool AutoAcknowledged);
-internal sealed record Receipt(bool Correlated, bool Positive);
+internal sealed record TenderState(string LoadId, bool Accepted, bool PendingReceipt, bool Cancelled, string Note);
+internal sealed record SendResult(bool AutoAcknowledged, bool LinkedLoadExists = true, bool AlreadyAcceptedLink = false);
+internal sealed record Receipt(bool Correlated, bool Positive, bool LinkedLoadExists = true);
 
 // Each declaration owns its source and freezes it before exposing handles. Wire identities are declared
 // once here; consumers resolve handles against that same definition rather than maintaining a second catalog.
@@ -19,9 +19,8 @@ internal static class TenderAcceptanceMachines
 
     // One tender lifecycle for this bounded episode: linkage and acceptance share an owner.
     // AttachLoad observes a persisted relationship; the host must establish load existence.
-    internal sealed class TenderDeclaration
+    internal sealed class TenderDeclaration : MachineModel
     {
-        internal MachineDefinition Definition { get; }
         internal MachineState Unlinked { get; }
         internal MachineState Offered { get; }
         internal MachineState Pending { get; }
@@ -31,9 +30,9 @@ internal static class TenderAcceptanceMachines
         internal MachineMovement SendConfirmed { get; }
         internal MachineMovement ReceiptConfirmed { get; }
 
-        internal TenderDeclaration()
+        internal TenderDeclaration() : base("tender.acceptance", "proposal-3")
         {
-            var source = Machine.Define("tender.acceptance", "proposal-2");
+            var source = Source;
             Unlinked = source.State("unlinked").Initial();
             Offered = source.State("unaccepted");
             Pending = source.State("accepted-awaiting-ack");
@@ -41,15 +40,15 @@ internal static class TenderAcceptanceMachines
             AttachLoad = source.Edge("attach-load").From(Unlinked).To(Offered);
             const string sendResult = "send-result";
             SendPending = source.Edge("send-pending").On(sendResult).From(Offered).To(Pending)
-                .When((AcceptanceFacts facts, SendResult result) => facts.LinkedLoadExists && !facts.Cancelled
-                    && !facts.AlreadyAcceptedLink && !result.AutoAcknowledged);
+                .When((TenderState tender, SendResult result) => result.LinkedLoadExists && !tender.Cancelled
+                    && !result.AlreadyAcceptedLink && !result.AutoAcknowledged);
             SendConfirmed = source.Edge("send-confirmed").On(sendResult).From(Offered).To(Confirmed)
-                .When((AcceptanceFacts facts, SendResult result) => facts.LinkedLoadExists && !facts.Cancelled
-                    && !facts.AlreadyAcceptedLink && result.AutoAcknowledged);
+                .When((TenderState tender, SendResult result) => result.LinkedLoadExists && !tender.Cancelled
+                    && !result.AlreadyAcceptedLink && result.AutoAcknowledged);
             // P01: positive-result validation is proposed. The observed handler does not perform it.
             ReceiptConfirmed = source.Edge("receipt-confirmed").From(Pending).To(Confirmed)
-                .When((AcceptanceFacts facts, Receipt receipt) => facts.LinkedLoadExists && receipt.Correlated && receipt.Positive);
-            Definition = source.Build();
+                .When((TenderState tender, Receipt receipt) => receipt.LinkedLoadExists && receipt.Correlated && receipt.Positive);
+            Freeze();
         }
     }
 

@@ -1,3 +1,4 @@
+using Cohesive.Transitions.Machines;
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
@@ -33,6 +34,15 @@ public sealed record TransitionSubjectCreation
     public Expr InitialObservation { get; }
 }
 
+/// <summary>How a transition accounts for its entity's authoritative machine.</summary>
+public enum EntityMachineEffect
+{
+    /// <summary>Successful paths must execute exactly one named movement.</summary>
+    Movement,
+    /// <summary>Successful paths preserve classification and execute no named movement.</summary>
+    Preserve
+}
+
 /// <summary>
 /// Canonical, portable semantic definition of one deterministic aggregate transition.
 /// </summary>
@@ -53,6 +63,8 @@ public sealed record TransitionDefinition : IImmutableExecutionDefinition
     /// <param name="subjectCreation">
     /// Optional explicit absent-subject initialization. Omission requires an existing aggregate observation.
     /// </param>
+    /// <param name="machineBinding">Entity-owned lifecycle classification, retained from the entity shape.</param>
+    /// <param name="machineEffect">Movement coverage or explicit state preservation.</param>
     [JsonConstructor]
     public TransitionDefinition(
         ValueContract input,
@@ -61,7 +73,9 @@ public sealed record TransitionDefinition : IImmutableExecutionDefinition
         ImmutableArray<TransitionAdmissionRule> preconditions,
         SequenceTransitionNode body,
         ImmutableArray<TransitionInvariant> invariants = default,
-        TransitionSubjectCreation? subjectCreation = null)
+        TransitionSubjectCreation? subjectCreation = null,
+        EntityMachineBinding? machineBinding = null,
+        EntityMachineEffect machineEffect = EntityMachineEffect.Movement)
     {
         Input = input;
         Observation = observation;
@@ -70,6 +84,8 @@ public sealed record TransitionDefinition : IImmutableExecutionDefinition
         Body = body;
         Invariants = invariants.IsDefault ? [] : invariants;
         SubjectCreation = subjectCreation;
+        MachineBinding = machineBinding;
+        MachineEffect = machineEffect;
     }
 
     /// <summary>Typed invocation input contract.</summary>
@@ -96,6 +112,14 @@ public sealed record TransitionDefinition : IImmutableExecutionDefinition
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TransitionSubjectCreation? SubjectCreation { get; }
 
+    /// <summary>Exact entity-owned lifecycle; absent only for an unbound entity.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public EntityMachineBinding? MachineBinding { get; }
+
+    /// <summary>Successful-path interpretation in the bound machine.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public EntityMachineEffect MachineEffect { get; }
+
     /// <summary>Compares definitions by complete persisted semantic value.</summary>
     /// <param name="other">Definition to compare with this value.</param>
     /// <returns><see langword="true"/> when every persisted semantic member is equal.</returns>
@@ -108,7 +132,9 @@ public sealed record TransitionDefinition : IImmutableExecutionDefinition
         && Preconditions.SequenceEqual(other.Preconditions)
         && Body == other.Body
         && Invariants.SequenceEqual(other.Invariants)
-        && SubjectCreation == other.SubjectCreation;
+        && SubjectCreation == other.SubjectCreation
+        && Equals(MachineBinding, other.MachineBinding)
+        && MachineEffect == other.MachineEffect;
 
     /// <summary>Returns a structural hash code for persisted semantic value.</summary>
     /// <returns>A hash code derived from all typed contracts, rules, body nodes, and invariants.</returns>
@@ -130,6 +156,8 @@ public sealed record TransitionDefinition : IImmutableExecutionDefinition
         }
 
         hash.Add(SubjectCreation);
+        hash.Add(MachineBinding);
+        hash.Add(MachineEffect);
 
         return hash.ToHashCode();
     }
