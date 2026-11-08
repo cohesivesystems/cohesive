@@ -15,3 +15,7 @@ dotnet test src/Cohesive.Tests --filter FullyQualifiedName~TenderAcceptanceChara
 The fluent source is authoritative for the proposal. Tests verify deterministic canonical Machine documents,
 fingerprints and serialization. The source-derived trace fixtures pin only the documented clean acceptance
 slice; live differential testing against the original application is still required for migration.
+
+Domain clarification D01 assigns customer-ordered stops to the load and actual execution history to trips.
+The proposed machines do not require an original trip. The observed trace still includes the legacy trip
+notification so that characterization does not silently rewrite the behavior being extracted.

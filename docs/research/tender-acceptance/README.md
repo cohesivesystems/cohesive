@@ -13,15 +13,16 @@ not a production migration, a complete tender model, or a proof of behavioral eq
 
 Source root inspected: `/Users/eulerfx/code/Archive/backend/AlvysApi`. No Git revision was available at the supplied Archive root; the manifest pins the inspected bytes instead. Application source and infrastructure dependencies are not copied into Cohesive. Evidence IDs refer to observations, P IDs below to proposals, and Q IDs to unresolved questions. The authored C# is authoritative for the proposal; canonical Machine IR and fingerprints are derived. The evidence manifest records why the source was proposed; it is not an executable rule catalog.
 
-No intent document was supplied. Consequently this dossier recovers implementation behavior and comments;
-it does not certify business intent. Comments and code disagree in one important place: the acceptance
+No external intent document was supplied. The initial extraction recovers implementation behavior and
+comments; it does not certify business intent. Domain clarification D01 below is explicit user-supplied
+intent and takes precedence over the legacy model when designing the replacement. Comments and code disagree in one important place: the acceptance
 comment says the load is created after acknowledgement, but E02 creates and persists a linked load before
 sending acceptance. The executable ordering wins as evidence of current behavior, while desired ordering
 remains a product decision.
 
 ## Scope
 
-Trace fixtures cover an ordinary initially unaccepted tender, a newly created valid load and original trip,
+Trace fixtures cover an ordinary initially unaccepted tender, a newly created valid load and the legacy original-trip record,
 clean acknowledgement fields, no changes/cancellations/bids, and visibility publications disabled. They cover
 legacy and event-sourced acceptance with automatic or deferred acknowledgement, plus the later receipt path
 with `SendAckFor=Accept`. This is an acceptance episode, not the whole tender lifetime. Final states in the
@@ -46,6 +47,35 @@ permissions, load dispatch and trip lifecycle transitions are outside the execut
 | E12 | Repository receipt matching requires sender/receiver and control number; it can match historical control numbers. | Correlation already exists. Current-attempt and duplicate semantics still need investigation. |
 | E13 | Public acceptance takes a tenant/source/shipment lock. | This does not establish that all entry points or receipt handling share that lock or a transaction. |
 
+## D01 — customer order versus execution (accepted domain clarification)
+
+The user identified the "original trip" as a defect in the legacy model. Because the load has no place
+for customer stop information, an artificial trip stores it. Splitting adds two execution trips while
+retaining that artificial trip as a snapshot of what the customer ordered. This is evidence of the old
+representation, not a domain requirement to preserve.
+
+The replacement model has these ownership rules:
+
+- **Load owns the customer-ordered stops.** Tender acceptance and accepted tender amendments establish
+  or revise that order, with attributable revisions.
+- **Trips own actual execution history**, including execution produced by splits. There is no privileged
+  "original trip" required to recover the customer order.
+- A split changes execution structure/history; it does not itself change the load's ordered stops.
+  Execution visits retain explicit correspondence to the ordered stops where applicable. The cardinality
+  and treatment of extra operational stops remain to be designed; no one-to-one mapping is assumed.
+- Acceptance and load linkage can exist before execution trips are created. A missing trip alone is not
+  evidence that the load is orphaned in the replacement model.
+
+Consequently, tender-to-load stop mapping targets the load's ordered-stop identities/revision. A legacy
+adapter may read the artificial original trip to recover that information during migration, but the formal
+model and host contract must not require it. Migrating split loads must preserve both the customer-order
+snapshot and the actual execution history; removing the workaround must not discard either.
+
+The observed trace fixtures remain unchanged: their purpose is to characterize legacy behavior, including
+its trip notification. They are not the target architecture. The proposed fluent machines already depend
+on linked-load evidence, not on an original-trip predicate; D01 corrects the dossier and future host/data
+bindings without inventing an additional state machine.
+
 ## Candidate state models
 
 **Tender acceptance**: `unaccepted -> accepted-awaiting-ack -> accepted-confirmed`, with an automatic-ack
@@ -53,7 +83,7 @@ shortcut. The proposed send-result action requires linked-load evidence and excl
 known already-accepted link. These facts summarize admission checks; they do not reimplement repository
 lookup or assert that the checks can safely be deferred until after a send.
 
-**Linkage**: `unlinked -> linked`. Identity alias updates and stop matching are accompanying domain changes,
+**Linkage**: `unlinked -> linked`. Identity alias updates and matching tender stops to load-owned ordered stops are accompanying domain changes,
 not additional statuses. Unlink/relink is deliberately excluded from this episode.
 
 **Load acknowledgement**: `not-acknowledged -> acknowledged`, with a pending-accept self-transition.

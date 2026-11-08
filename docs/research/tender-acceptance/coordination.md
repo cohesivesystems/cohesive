@@ -6,8 +6,9 @@ host proposed here. Evidence E01–E14 is pinned in [evidence.json](evidence.jso
 
 ## Participants and relationships
 
-One acceptance episode references a tender revision, a selected load revision, an original trip needed for
-stop mapping, a trading partner, and an outbound attempt. In the proposed design each has an explicit
+One acceptance episode references a tender revision, a selected load revision with customer-ordered stops,
+a trading partner, and an outbound attempt. Execution trips are separate participants when execution
+coordination actually requires them; acceptance does not require an artificial original trip (D01). In the proposed design each has an explicit
 identity. The archive's tender-ID rewrite (E06) requires an alias/migration record; it must not silently
 change the identity of a persisted episode. Existing-load reuse and creation are alternative selection
 strategies with different source behavior (E01/E07).
@@ -17,7 +18,7 @@ strategies with different source behavior (E01/E07).
 | Tender references selected load | Identity/reference integrity | Load existence must be evidenced before the send; not a global rule for all unaccepted tenders. |
 | Accepted/pending tender references load with pending acknowledgement | Stable episode checkpoint | Intermediate independent writes can temporarily disagree. |
 | Confirmed tender and acknowledged load | Completion condition | Required to declare the proposed episode complete; not claimed as an invariant of every legacy snapshot. |
-| Original trip supplies stop mapping | Data dependency | Does not imply a trip lifecycle transition. |
+| Tender stops correspond to load-owned ordered stops | Order data dependency | Acceptance/amendments update the customer order. Execution trips and their stop visits reference that order; splitting does not rewrite it. D01 supersedes the original-trip workaround. |
 | Receipt refers to outbound attempt | Protocol correlation | Source has partner/control-number matching, including historical numbers. Proposed current-attempt validation needs an explicit policy. |
 
 The test using `MachineCoherenceBuilder` intentionally fails independent-interleaving analysis: a load
@@ -59,8 +60,8 @@ provider policy. This is a proposal, not the observed E04 behavior.
 
 | Effect | Explicit inputs | Required completion evidence / failure handling |
 |---|---|---|
-| Resolve or create load | Tenant, tender reference, selection policy | Selected identity/revision, original trip and stop mapping. Distinguish created, reused, orphaned and duplicate. E01/E02/E07. |
-| Persist linkage | Expected tender revision, load reference, aliases and stop mapping | Committed revision. A create/link operation must be recoverable by a stable episode key after an uncertain response. |
+| Resolve or create load | Tenant, tender reference, selection policy | Selected identity/revision and customer-ordered stop mapping on the load. Execution trips may not yet exist. Legacy orphan detection based on a missing original trip (E01) must not become a target invariant. D01; E02/E07 supply observed creation/reuse evidence. |
+| Persist linkage | Expected tender revision, load reference, aliases and load-owned ordered-stop mapping | Committed revision. A create/link operation must be recoverable by a stable episode key after an uncertain response. |
 | Send acceptance | Partner, payload contract, attempt/control identifiers | Send receipt with automatic/deferred acknowledgement classification and archived message reference. A transport timeout is not proof of non-delivery. |
 | Persist tender acceptance | Expected revision, auto/deferred result, injected timestamp/deadline | Committed accepted/pending or confirmed observation, including link and protocol flags. Source paths currently differ in ordering. |
 | Mark load acknowledgement | Load identity/revision and acknowledgement value | Committed load revision. E08 only changes acknowledgement/matching/source facts, not load/trip status. |
@@ -107,7 +108,7 @@ an uncertain send could contradict a partner that already accepted the response.
 |---|---|---|
 | Tender `send-pending`, `send-confirmed` | E01/E03/E05/E09/E10 | Captures successful acceptance distinctions; admission summary assumes host-resolved facts. |
 | Tender `receipt-confirmed` | E04/E05/E12 + P01 | Observed confirmation with a deliberately stronger positive-result guard. |
-| Linkage `attach-load` | E02/E06/E07 | Episode-level link transition; alias migration and stop changes remain accompanying domain operations. |
+| Linkage `attach-load` | E02/E06/E07 | Episode-level link transition; alias migration and load-owned order changes remain accompanying domain operations. D01 replaces the original-trip stop dependency. |
 | Load `accept-pending`, `confirm` | E08/E11 | Acknowledgement projection only. |
 | Coordination `link-persisted`, `send-*`, `participants-confirmed` | E02/E03/E04 + P02 | Proposed progress observations over non-atomic effects. |
 | Coordination `uncertain-*` | E03/E04 + P02 | Explicit recovery boundary, without inferred retry semantics. |
@@ -121,3 +122,7 @@ an uncertain send could contradict a partner that already accepted the response.
 4. Map local state changes to canonical Transitions and lower coordination through existing Process authoring.
 5. Demonstrate adapter capability requirements and conformance for crash/restart between each effect.
 6. Review migration from identity rewriting and persisted legacy flag combinations before activation.
+7. Apply D01: migrate customer-ordered stops from the artificial original-trip snapshot onto the load,
+   preserve real execution trips/history and stop correspondence, and remove original-trip prerequisites
+   from acceptance/linkage. Characterize split and unsplit legacy records separately. Do not copy the
+   old missing-original-trip cleanup rule into the new load validity checks.

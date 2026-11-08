@@ -9,6 +9,8 @@ internal enum AcceptanceEffect
 
 // An executable extraction of bounded source ordering, not a new framework IR or live host.
 // E01/E02/E03; only the newly created, ordinary tender branch without visibility publication.
+// D01 rejects the legacy original-trip workaround. This observed trace (including PublishTripUpdated)
+// is retained for characterization, not as a requirement on the proposed host or order data model.
 internal static class AcceptanceCoordination
 {
     internal static AcceptanceEffect[] ObserveAcceptance(PersistencePath path, bool autoAcknowledged)
