@@ -68,9 +68,35 @@ internal static class PostgresNpgsqlExecution
         }
     }
 
-    static async ValueTask<PostgresNpgsqlCommandResult> ExecuteCommandAsync(
-        NpgsqlCommand command,
+    internal static async ValueTask<ImmutableArray<T>> ExecuteRowsAsync<T>(NpgsqlDataSource dataSource,
         PostgresNpgsqlCommand sourceCommand,
+        Func<NpgsqlDataReader, PostgresNpgsqlResultBudget, CancellationToken, ValueTask<T>> decode,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+        await using var command = dataSource.CreateCommand(sourceCommand.Text);
+        return await ExecuteCommandRowsAsync(command, sourceCommand, decode, cancellationToken).ConfigureAwait(false);
+    }
+
+    static async ValueTask<PostgresNpgsqlCommandResult> ExecuteCommandAsync(NpgsqlCommand command,
+        PostgresNpgsqlCommand sourceCommand, CancellationToken cancellationToken)
+    {
+        return new(await ExecuteCommandRowsAsync(command, sourceCommand, DecodeRaw, cancellationToken).ConfigureAwait(false));
+        async ValueTask<ImmutableArray<object?>> DecodeRaw(NpgsqlDataReader reader, PostgresNpgsqlResultBudget budget,
+            CancellationToken token)
+        {
+            var row = ImmutableArray.CreateBuilder<object?>(sourceCommand.ResultTypes.Length);
+            for (var ordinal = 0; ordinal < sourceCommand.ResultTypes.Length; ordinal++)
+                row.Add(await reader.IsDBNullAsync(ordinal, token).ConfigureAwait(false) ? null
+                    : await PostgresRelationQueryScalarCatalog.ReadAsync(reader, ordinal,
+                        sourceCommand.ResultTypes[ordinal], budget, token).ConfigureAwait(false));
+            return row.MoveToImmutable();
+        }
+    }
+
+    static async ValueTask<ImmutableArray<T>> ExecuteCommandRowsAsync<T>(
+        NpgsqlCommand command, PostgresNpgsqlCommand sourceCommand,
+        Func<NpgsqlDataReader, PostgresNpgsqlResultBudget, CancellationToken, ValueTask<T>> decode,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -118,27 +144,14 @@ internal static class PostgresNpgsqlExecution
         }
 
         var budget = new PostgresNpgsqlResultBudget(sourceCommand.MaximumResultBytes);
-        var rows = ImmutableArray.CreateBuilder<ImmutableArray<object?>>();
+        var rows = ImmutableArray.CreateBuilder<T>();
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             if (sourceCommand.MaximumRows is { } maximumRows && rows.Count == maximumRows)
                 throw new InvalidOperationException("Native query exceeded its complete-result row bound.");
-            var row = ImmutableArray.CreateBuilder<object?>(sourceCommand.ResultTypes.Length);
-            for (var ordinal = 0; ordinal < sourceCommand.ResultTypes.Length; ordinal++)
-            {
-                row.Add(await reader.IsDBNullAsync(ordinal, cancellationToken).ConfigureAwait(false)
-                    ? null
-                    : await PostgresRelationQueryScalarCatalog.ReadAsync(
-                        reader,
-                        ordinal,
-                        sourceCommand.ResultTypes[ordinal],
-                        budget,
-                        cancellationToken).ConfigureAwait(false));
-            }
-            rows.Add(row.MoveToImmutable());
+            rows.Add(await decode(reader, budget, cancellationToken).ConfigureAwait(false));
         }
-
-        return new(rows.ToImmutable());
+        return rows.ToImmutable();
     }
 
     static void RequireActiveTransaction(

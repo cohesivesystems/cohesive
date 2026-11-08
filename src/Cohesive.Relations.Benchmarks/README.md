@@ -36,6 +36,9 @@ exercise the same semantic definitions, runtime evidence, and CLR DTO contracts.
   bookkeeping, and the full compiled canonical mapper.
 - **Compilation:** a cold compiler instance, a cached repeat compilation, and fresh AutoMapper
   configuration validation plus eager mapping-plan compilation.
+- **CLR root admission:** `RelationDtoRootAdmissionBenchmarks` runs the in-memory load-summary pipeline
+  against LINQ and prepared-lookup AutoMapper controls and times evaluator setup and first use separately.
+  See [ordinal root admission results](../../docs/performance/relation-dto-root-admission.md).
 - **End to end:** canonical in-memory interpretation followed by typed materialization.
 - **Diagnostics:** missing joined input and incompatible output-value conversion paths, measured
   independently from successful mapping.
@@ -175,3 +178,269 @@ Retain BenchmarkDotNet environment and allocation reports with any reported comp
 
 Realization fingerprint and ordering-key qualification: run filters `*RealizationFingerprintBenchmarks*`
 and `*RealizationSequenceKeyBenchmarks*`. See [workloads, before/after results and boundaries](../../docs/performance/realization-fingerprints.md).
+
+### Warm DTO CPU/JIT attribution
+
+`--relation-dto-profile <route> <seconds>` reuses the exact 1,024-row warm fixture. Routes are
+`kernel-simple`, `kernel-joined`, `auto-simple`, and `auto-joined`; duration is bounded to 1–60 seconds.
+Fixture compilation and correctness checks precede 256 warmups and the explicitly marked `Measure` loop.
+This is a sampling target, not a replacement for BenchmarkDotNet timing or an end-to-end query benchmark.
+
+```sh
+dotnet src/Cohesive.Relations.Benchmarks/bin/Release/net10.0/Cohesive.Relations.Benchmarks.dll \
+  --relation-dto-profile kernel-joined 12
+```
+
+Collect with an already-installed `dotnet-trace` and analyze stacks beneath `RelationDtoWarmProfile.Measure`.
+Unfiltered trace summaries also include setup and GC activity. Do not overlap profiling with timed comparisons.
+The scalar-reader experiment's matched-process measurements, rejected generic-converter experiment and CPU/JIT
+attribution are retained in `docs/performance/evidence/relation-dto-scalar-readers`.
+
+
+### DTO scalar and collection experiments
+
+The guarded scalar-reader candidate emits exact-kind reads into the constructor expression and
+loads binding metadata only for the original conversion/diagnostic fallback. Missing, null, alternate
+scalar kinds and entity-reference checks retain their original behavior. No public API changes.
+
+A compiled collection-loop prototype reused the same row expression and prebuilt canonical row arrays
+as AutoMapper. Local ARM64 repeats favored it (20.073 vs 24.328 us simple; 77.594 vs 79.960 us joined,
+1,024 rows). Linux CI did not establish a consistent benefit: on Intel Xeon 6973P-C, batch took
+45.752 vs AutoMapper's 38.901 us simple and 177.710 vs 155.193 us joined. The scalar kernel was
+50.945 / 172.902 us. All paths allocated the same destination bytes (57,368 / 106,520).
+The batch prototype was therefore removed; ordinary mappers do not retain its expression or lazy slot.
+
+All 42 CI cases completed in run 41763124452 at experimental revision d7fb02a4. The experiment,
+including its extra allocation guard, is preserved as a patch against a62aca11 and raw reports under
+`docs/performance/evidence/relation-dto-scalar-readers/batch`. The prototype was a fail-fast projection,
+not a replacement for canonical mapping's admission, provenance, cancellation or collect-all diagnostics.
+The public canonical mapper retains its behavior.
+
+Earlier guarded scalar-reader CI (41761072832, AMD EPYC 9V45) trailed AutoMapper by 14.6% simple /
+10.9% joined; the new Intel run trailed by 31.0% / 11.4%. Hosted hardware varies: these runs do not
+establish a portable simple-case improvement or a causal before/after Linux speedup. Local matched
+control/candidate evidence is retained under `guarded`. Use stable hardware before accepting a release
+performance claim. The next promising experiment is direct ordinal access over validated relation-row
+layouts, accounting separately for admission and output provenance costs.
+
+
+### Direct ordinal DTO experiment
+
+`CompiledOrdinalSimple` / `CompiledOrdinalJoined` use the existing validated
+`IndexedObservationOccurrence` representation and exact bound-layout identity checks. Constructor and
+member initialization come from the same DTO binding plan; exact-kind fast conversions and all generic
+fallback conversions share their implementation with canonical mapping. No target expression is retained
+by default mappers, and ordinal compilation is internal and opt-in for this experiment.
+
+`OrdinalAdmissionSimple` / `OrdinalAdmissionJoined` allocate new ordinal storage from already-built
+canonical rows using the existing ownership-transferring builder, including field-name binding and shape
+validation. `OrdinalAdmissionAndMap*` includes that preparation plus DTO mapping. Metadata identities and
+layouts are prepared in setup, as are AutoMapper's input row arrays and plans. Acquisition, query execution,
+and original canonical-row construction are excluded from every path. Warm ordinal versus canonical-input
+AutoMapper compares different physical storage; it is not a one-shot conversion speedup claim. The existing
+`SharedCoreIndexed*` cases provide a same-storage comparator. None of the projection kernels claims the
+public mapper's provenance, cancellation, admission, or collect-all diagnostics contract.
+
+
+The ordinal experiment's Linux Short run [41876590708](https://github.com/cohesivesystems/cohesive/actions/runs/41876590708)
+at revision `343f2e98` completed all 54 cases on AMD EPYC 7763 / .NET 10.0.14. Representative
+1,024-row means (microseconds per complete output array):
+
+| Path | Simple | Joined |
+| --- | ---: | ---: |
+| AutoMapper, canonical row input | 54.996 | 204.096 |
+| Existing canonical scalar kernel | 64.514 | 228.914 |
+| Direct bound ordinal kernel | 31.641 | 65.384 |
+| Existing shared-core indexed materializer | 98.183 | 270.531 |
+| Canonical-to-ordinal admission only | 414.838 | 851.545 |
+| Canonical-to-ordinal admission plus DTOs | 463.945 | 960.897 |
+
+Warm ordinal mapping is about 1.74x / 3.12x faster than AutoMapper on these different storage inputs,
+and 3.10x / 4.14x faster than the existing same-storage indexed materializer. Each warm path allocates
+only 57,368 / 106,520 destination bytes. Ordinal preparation plus mapping allocates 401,488 / 647,248
+bytes. These are Short-job observations on a hosted runner, not stable release budgets. The full suite
+also covers 1 and 32 rows; the ordinal kernel beat AutoMapper at both widths in both fixtures.
+
+Three counterbalanced ARM64 repeats agree on the direction: ordinal 12.372 / 26.576 us versus
+AutoMapper 24.934 / 82.612 us. A matched control check using the old identical harness and changing
+only `Cohesive.Relations.dll` found a 4.3% increase in simple scalar-kernel time, 0.9% joined, and
+0.5% / 1.0% for the full canonical mapper after shared conversion factoring. That small canonical-path
+tradeoff is recorded, not claimed as an improvement. An alternate string-check ordering did not
+resolve it and was reverted; its first repeat overlapped a rebuild and is excluded completely.
+
+Keep direct ordinal use opt-in until an ingestion or relation producer already owns validated ordinal
+storage. Repacking an existing canonical result for one mapping is substantially slower. Native ordinal
+ingestion, validation, and complete application execution still need end-to-end comparison before
+production routing changes. This prototype supports the existing top-level scalar DTO contract; it
+introduces no recursive mapping semantics or public compilation API. The binding and conversion rules
+remain those of the relation mapper, not the more general core materializer.
+
+The reproduction commands, source/runtime hashes, matched controls, raw reports, rejected probe, and
+verification record are retained in `docs/performance/evidence/relation-dto-ordinals`. The implementation
+adds no public types or dependencies, and does not retain target expression trees in ordinary mappers.
+
+
+### Native ordinal relation projections
+
+The internal `UseOrdinalProjection` interpreter strategy writes top-level projection assignments directly
+into owned ordinal slots. Per-plan weak caching binds assignment ordinals and stable layouts once.
+Undefined assignments remove a slot; unavailable expressions retain the reference interpreter's gap behavior.
+Nested projections retain the reference path. Terminal field selection preserves ordinal backing, while
+canonical field enumeration and canonical value equality remain unchanged. Projection construction itself
+is not shape admission: partial results and gaps remain representable.
+
+The ordinal DTO kernel now accepts the existing ordinal reader interface, allowing both validated indexed
+occurrences and admitted ordinal-backed observations. This internal interface is trusted: a matching layout
+is not proof of validation. `DirectPipeline*` benchmarks execute the whole query from the same evidence,
+validate every output through `Observation.Create`, then construct DTOs. Tests assert admission retains
+physical storage without repacking, repeated executions share layouts, and missing/invalid evidence retains
+status, values, ordering, gaps and occurrence provenance. The default interpreter strategy is unchanged.
+
+Run `--filter '*DirectPipeline*'` for twelve cases (simple/joined, 1/32/1024 rows, reference/ordinal).
+Compilation caches are warmed in setup. The measured path includes interpreter execution, terminal shaping,
+output validation and DTO construction, excluding external acquisition and serialization. The strategies
+retain execution provenance before the benchmark consumes values; this is not a full public DTO-mapping
+result comparison. Host-dependent local results suggest allocation reduction and modest/noisy latency gains;
+the earlier warm-kernel ratios must not be treated as complete-query speedups.
+
+
+[Linux direct-pipeline run 41927974838](https://github.com/cohesivesystems/cohesive/actions/runs/41927974838)
+at `fee80586` completed all twelve cases on AMD EPYC 7763 / .NET 10.0.14. At 1,024 rows:
+
+| Complete execution + admission + DTO mapping | Simple | Joined |
+| --- | ---: | ---: |
+| Reference, ms | 7.435 | 25.692 |
+| Direct ordinal projection, ms | 6.673 | 25.085 |
+| Reference allocation, bytes | 4,675,771 | 14,224,850 |
+| Direct ordinal allocation, bytes | 4,249,610 | 13,208,979 |
+
+Observed latency is about 10% / 2% lower and allocation about 9% / 7% lower. The joined timing difference
+is small; Short-job hosted-runner results do not establish a portable latency guarantee. Local repeated
+means showed 3% / 12% lower latency, demonstrating timing variability despite consistent allocation direction.
+Retain opt-in execution until representative application workloads and stable-host measurements support
+adoption. Raw environments, reports, source hashes and three local counterbalanced repeats are preserved
+under `docs/performance/evidence/relation-direct-ordinals`. This completes the relation-projection producer
+experiment; native adapter ingestion and serialization fusion are separate follow-ups.
+
+
+### Native SQLite ordinal ingestion
+
+`*SqliteOrdinalIngestionBenchmarks*` compares actual SQLite command execution, reader binding and advancement,
+all-field scalar decoding, complete shape validation, retained observation storage, DTO construction and reader
+disposal. Cases cover 1/32/1024 rows with 256-byte payloads and present/null/missing optional bytes. Artifact,
+layout and materializer compilation, database population and command creation are in setup; execution uses
+an existing connection and command. External network and serialization are excluded.
+
+The canonical reference uses the same adapter's `TryGetField` decoder to populate a dictionary, then
+`Observation.Create` and the same core DTO materializer. It is a benchmark reference for identity-free
+admission, not the provenance-bearing `ReadCurrentRow` API. Both benchmark inputs have present bindings;
+adapter tests separately cover absent bindings and malformed presence/scalar data. Neither path decodes
+contributor identities. The new ordinal method preserves the same validation boundary while transferring
+owned immutable slots directly to the admitted observation. Retained state ingestion is a different workload
+from DTO-only `SqliteTypedRowBenchmarks`; do not compare their timings as equivalent guarantees.
+
+
+[Linux ingestion run 41935696235](https://github.com/cohesivesystems/cohesive/actions/runs/41935696235),
+source `332b15a0`, completed all six cases on AMD EPYC 7763 / .NET 10.0.14. Results include real provider
+execution and the full identity-free admission-to-DTO pipeline described above:
+
+| Rows | Dictionary reference, us | Native ordinal, us | Reference bytes | Ordinal bytes |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 5.983 | 5.681 | 2,384 | 1,928 |
+| 32 | 70.625 | 61.360 | 42,080 | 26,496 |
+| 1,024 | 2,175.550 | 1,848.076 | 1,319,944 | 820,264 |
+
+At 1,024 rows, observed latency is 15% lower and allocation 38% lower. Three counterbalanced local repeats
+also favored ordinal admission (605 vs 683 us, with the same allocation direction). These synthetic local
+SQLite results are not PostgreSQL, network, contributor-provenance or complete-application claims. No existing
+read path is rerouted. Evidence and reproduction details are under
+`docs/performance/evidence/sqlite-ordinal-ingestion`. The SQLite suite passes 235 tests including ownership,
+null/missing/whole-binding absence, malformed presence/scalars and a relative allocation regression guard.
+
+
+### PostgreSQL entity ingestion with provenance
+
+The PostgreSQL entity repository already decodes native columns directly into a shared ordinal layout.
+`*PostgresOrdinalIngestionBenchmarks*` verifies that existing path against a dictionary storage reference,
+sharing the same scalar decoder, shape/entity validation and snapshot construction. The reference mode is
+internal to tests/benchmarks; production reads continue to select ordinal storage by default.
+
+Both timed paths execute a real PostgreSQL query, advance and decode the provider reader, admit complete
+state, reconstruct entity identity, partition, observation version and `xmin` concurrency token, and retain
+both `EntitySnapshot` and an owned DTO. Rows cover nullable 256-byte payloads. Compilation, table population,
+connection opening and command creation are in setup; query execution, wire transfer, decoding, validation,
+metadata and output construction are timed. Serialization and pool-acquisition costs are excluded.
+
+Supply `COHESIVE_POSTGRES_TEST_CONNECTION_STRING` for a disposable PostgreSQL database. Fixtures create and
+drop uniquely named tables only. The manual workflow supplies an ephemeral PostgreSQL 14 service. Run
+`--filter '*PostgresOrdinalIngestionBenchmarks*'` for six cases across 1/32/1024 rows. Native tests use the same
+fixture and assert real metadata values, null fidelity, selected-field provenance, invalid required values,
+provider lifetime and resistance to mutable DTO payload changes.
+
+This entity experiment measures snapshot provenance, separately from the query-row contributor experiment below. No redundant
+native ingestion API was introduced; existing entity decoding and validation remain authoritative. Adding the
+PostgreSQL project to the strict benchmark build also required a nullable-flow correction in that query reader,
+using a captured non-null cell rather than indexing twice; decoding behavior is unchanged.
+
+
+[Linux PostgreSQL run 41937774381](https://github.com/cohesivesystems/cohesive/actions/runs/41937774381),
+source `95009d8c`, completed all six cases against an ephemeral PostgreSQL 14 service on AMD EPYC 9V45:
+
+| Rows | Dictionary reference, us | Existing native ordinal, us | Reference bytes | Ordinal bytes |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 92.786 | 93.390 | 3,184 | 2,304 |
+| 32 | 148.675 | 144.562 | 80,328 | 52,168 |
+| 1,024 | 2,206.130 | 1,943.792 | 2,542,888 | 1,641,768 |
+
+At 1,024 rows, observed latency is 12% lower and allocation 35% lower while retaining all entity snapshot
+metadata and DTOs. One-row latency is effectively unchanged; this does not establish a universal latency win.
+Three alternating local repeats against PostgreSQL 14.23 on Docker favored ordinal storage by 6% latency /
+35% allocation on average, with noticeable timing variation. Source hashes, raw reports and database/boundary
+notes are under `docs/performance/evidence/postgres-ordinal-ingestion`. Sixty-one PostgreSQL tests passed
+against the disposable local database, including native bounds/cancellation and real provenance assertions.
+The local container was removed after validation; CI automatically removes its service.
+
+These measurements verify a pre-existing native ordinal implementation; they are not a newly introduced
+production speedup over the prior repository. The only alternate realization is an internal dictionary reference
+for differential conformance and benchmarking. Query-row contributor support is measured separately below.
+
+
+### PostgreSQL query-row ingestion with join contributors
+
+`*PostgresContributingRowsBenchmarks*` compares direct dictionary and ordinal admission for actual inner
+and left joins at 1/32/1024 left-source rows (12 cases). Right-side fan-out can increase output cardinality;
+unmatched right bindings, explicit nulls and extra matches are included. Setup compares native values and
+contributor sets against the reference interpreter before timing.
+
+The measured operation includes pool checkout, one real parameterized SQL statement, provider reads,
+scalar byte/row bounds, strict complete-shape admission, exact contributor reconstruction and retained
+`RelationQueryOutputRow` plus DTO arrays. Both variants use the same metadata-first wire projection,
+scalar catalog, shared command executor, shape and DTO materializer; only field storage differs. There is
+no whole-result raw object-row buffer. Compilation, fixture creation/population and serialization are
+excluded. This is a complete ingestion-to-DTO pipeline, not an end-to-end application benchmark.
+
+Supply `COHESIVE_POSTGRES_TEST_CONNECTION_STRING` pointing to disposable PostgreSQL; fixtures create/drop
+unique schemas. The existing manual workflow provides PostgreSQL 14:
+
+```sh
+dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- \
+  --filter '*PostgresContributingRowsBenchmarks*' --job Short --buildTimeout 600
+```
+
+Exact contributor admission is bound to the artifact's exact semantic plan revision. Hidden source identity
+and presence columns count toward the provider byte budget. The current public path is unpaged,
+non-temporal and restricted to direct scalar output fields with full required-field admission. Collapsing
+operators need contributor-set merging and fail explicitly. See the PostgreSQL adapter README for the
+full boundary. Evidence is under `docs/performance/evidence/postgres-query-ordinal-contributors`.
+
+At 1024 input rows, three alternating local repeats on PostgreSQL 14.23 measured 13.683 vs 13.463 ms
+(inner) and 13.785 vs 13.987 ms (left), dictionary versus ordinal. Managed allocation fell 13.6% and
+14.6% respectively. The small mixed timing differences do not establish a general latency gain. Exact
+source and raw reports are retained in the evidence directory.
+
+[Linux query-row run 41947214718](https://github.com/cohesivesystems/cohesive/actions/runs/41947214718)
+completed all 12 Short cases on source `de5fe899`, PostgreSQL 14 / AMD EPYC 7763 / .NET 10.0.14.
+At 1024 input rows, dictionary versus ordinal takes 39.272 vs 35.766 ms (inner) and 37.176 vs 36.777 ms
+(left). Allocation falls from 3,139,274 to 2,715,219 bytes and 4,133,739 to 3,530,571 bytes respectively.
+The consistent result across local and Linux runs is lower allocation; latency varies by workload and host.
+See the evidence directory for all small-input cases and raw reports.

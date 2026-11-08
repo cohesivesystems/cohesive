@@ -260,7 +260,7 @@ public sealed class RelationDraftConditionalAcceptanceTests
                 [new(new("value"), sourceType, presence: scenario == "absent" ? FieldPresence.Optional : FieldPresence.Required)])]);
             var accepted = RelationDraftAcceptor.Accept(draft, graphs);
             Assert.False(accepted.IsAccepted);
-            var diagnostic = Assert.Single(accepted.Diagnostics.Where(d => d.Code.StartsWith("relationDraft.", StringComparison.Ordinal)));
+            var diagnostic = Assert.Single(accepted.Diagnostics, d => d.Code.StartsWith("relationDraft.", StringComparison.Ordinal));
             Assert.Equal(code, diagnostic.Code);
             Assert.EndsWith("/value" + (nested ? "/arguments/0" : "") + suffix, diagnostic.Location);
             if (message is not null) Assert.Equal(message, diagnostic.Message);

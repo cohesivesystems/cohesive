@@ -1,0 +1,14 @@
+[
+  {
+    "method": "CanonicalIngestion",
+    "mean_ns": 682826.5500365497,
+    "mean_bytes": 1319946.0,
+    "repeats": 3
+  },
+  {
+    "method": "OrdinalIngestion",
+    "mean_ns": 605000.9714161706,
+    "mean_bytes": 820266.6666666666,
+    "repeats": 3
+  }
+]

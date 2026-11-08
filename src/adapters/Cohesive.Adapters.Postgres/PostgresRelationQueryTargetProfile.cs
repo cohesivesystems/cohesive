@@ -20,15 +20,15 @@ public static class PostgresRelationQueryTargetProfile
     /// <summary>Stable PostgreSQL SQL interpretation-target identity.</summary>
     public static RelationQueryTargetId Target { get; } = new("cohesive.adapters.postgres.sql");
 
-    /// <summary>Stable canonical v2 native-SQL capability-profile identity.</summary>
+    /// <summary>Stable canonical v3 native-SQL capability-profile identity.</summary>
     public static RelationQueryTargetProfileId ProfileId { get; } = new(
-        "cohesive.adapters.postgres.sql/canonical-v2");
+        "cohesive.adapters.postgres.sql/canonical-v3");
 
     /// <summary>Stable convention set used by the default PostgreSQL realization and binding policy.</summary>
     public const string DefaultConventionSetVersion =
         "cohesive.adapters.postgres.sql/semantic-path-conventions/v1";
 
-    /// <summary>Maximum page size accepted by the canonical v2 target profile.</summary>
+    /// <summary>Maximum page size accepted by the canonical v3 target profile.</summary>
     public const int MaximumPageSize = 1_000;
 
     /// <summary>Boundary requiring all participating tables to reside in one PostgreSQL database execution domain.</summary>
@@ -62,6 +62,9 @@ public static class PostgresRelationQueryTargetProfile
     /// <summary>Boundary limiting rooted non-set relation execution to one supplied root per invocation.</summary>
     public static RelationQueryOperatingBoundaryId SuppliedRelationRootBoundary { get; } = new(
         "postgres/boundary/supplied-relation-root");
+
+    /// <summary>Boundary restricting exact contributor columns to row-preserving query topologies.</summary>
+    public static RelationQueryOperatingBoundaryId ContributorRowsBoundary { get; } = new("postgres/boundary/row-preserving-contributors");
 
     /// <summary>Boundary requiring a stable unique final ordering key.</summary>
     public static RelationQueryOperatingBoundaryId StableOrderingBoundary { get; } = new(
@@ -104,6 +107,8 @@ public static class PostgresRelationQueryTargetProfile
     {
         ImmutableArray<RelationQueryOperatingBoundary> boundaries =
         [
+            new(ContributorRowsBoundary, RelationQueryOperatingBoundaryKind.RowPreservingTopology,
+                description: "Exact source identities must survive query-row projection and joins; collapsing operators require a separate contributor-set realization."),
             new(
                 SingleDatabaseBoundary,
                 RelationQueryOperatingBoundaryKind.SingleSource,
@@ -222,7 +227,7 @@ public static class PostgresRelationQueryTargetProfile
             [RelationQueryCompilationProvenance.CurrentCompilerProfile],
             evidence,
             boundaries,
-            "Canonical PostgreSQL SQL v2: exact rows, aggregations, and statement-local source acquisition over co-located tables, including relationship, explicit inner/left, and valid-time joins, within binding-proven boundaries.");
+            "Canonical PostgreSQL SQL v3: exact rows, aggregations, and statement-local source acquisition over co-located tables, including relationship, explicit inner/left, and valid-time joins, within binding-proven boundaries.");
     }
 
     static ImmutableArray<RelationQueryOperatingBoundaryId> LogicalBoundaries(
@@ -432,6 +437,8 @@ public static class PostgresRelationQueryTargetProfile
     static ImmutableArray<RelationQueryOperatingBoundaryId> GuaranteeBoundaries(
         RelationQueryGuaranteeCapabilityKind guarantee) => guarantee switch
         {
+            RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance =>
+                [SingleDatabaseBoundary, CompleteInputEvidenceBoundary, ContributorRowsBoundary],
             RelationQueryGuaranteeCapabilityKind.MissingNullDistinction =>
                 [
                     SingleDatabaseBoundary,
@@ -571,6 +578,8 @@ public static class PostgresRelationQueryTargetProfile
         RelationQueryStructuralCapabilityRole Role,
         RelationQueryStructuralPathKind Path)> StructuralCapabilities =>
     [
+        (RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction, RelationQueryStructuralPathKind.TopLevelField),
+        (RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction, RelationQueryStructuralPathKind.NestedField),
         (RelationQueryStructuralCapabilityRole.BindingRead, RelationQueryStructuralPathKind.TopLevelField),
         (RelationQueryStructuralCapabilityRole.BindingRead, RelationQueryStructuralPathKind.NestedField),
         (RelationQueryStructuralCapabilityRole.ProjectionTarget, RelationQueryStructuralPathKind.TopLevelField),
@@ -586,6 +595,7 @@ public static class PostgresRelationQueryTargetProfile
 
     static ImmutableArray<RelationQueryGuaranteeCapabilityKind> GuaranteeCapabilities =>
     [
+        RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance,
         RelationQueryGuaranteeCapabilityKind.MissingNullDistinction,
         RelationQueryGuaranteeCapabilityKind.AbsenceAvailabilityFailureDistinction,
         RelationQueryGuaranteeCapabilityKind.JoinMembership,

@@ -1,0 +1,38 @@
+{
+  "AutoMapperCanonicalRowsJoined": {
+    "mean_ns": 79959.6078821656,
+    "bytes": [
+      106520
+    ]
+  },
+  "AutoMapperCanonicalRowsSimple": {
+    "mean_ns": 24328.373321113595,
+    "bytes": [
+      57368
+    ]
+  },
+  "CompiledBatchKernelJoined": {
+    "mean_ns": 77593.70645756216,
+    "bytes": [
+      106520
+    ]
+  },
+  "CompiledBatchKernelSimple": {
+    "mean_ns": 20072.98536166845,
+    "bytes": [
+      57368
+    ]
+  },
+  "CompiledKernelOnlyJoined": {
+    "mean_ns": 79535.31549511066,
+    "bytes": [
+      106520
+    ]
+  },
+  "CompiledKernelOnlySimple": {
+    "mean_ns": 22255.414031271866,
+    "bytes": [
+      57368
+    ]
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "relations_passed": 1200,
+  "core_passed": 5306,
+  "core_skipped": 64,
+  "benchmark_build": "Release warnings-as-errors passed",
+  "linux_cases_successful": 12,
+  "semantics": "Complete/missing/invalid evidence checked against reference; exact value and field ordering, root/occurrence provenance and unresolved gap identities preserved. Strict admission retains ordinal backing without repacking. Default remains reference execution."
+}

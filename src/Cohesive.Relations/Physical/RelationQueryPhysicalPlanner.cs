@@ -628,7 +628,7 @@ public static class RelationQueryPhysicalPlanner
                         RelationQueryPhysicalPlanningDiagnosticCodes.LocalWorkUnbounded,
                         $"Collection expansion '{node.Id.Value}' is not backed by one direct array field that the executor can enforce against the explicit fan-out and local-row policy.");
                 }
-                else if (node is JoinQueryNode join && !TryGetEquijoin(join, out _, out _))
+                else if (node is JoinQueryNode join && !join.TryGetEquijoin(out _, out _))
                 {
                     Error(
                         RelationQueryPhysicalPlanningDiagnosticCodes.CrossSourceJoinUnsupported,
@@ -860,7 +860,7 @@ public static class RelationQueryPhysicalPlanner
                          .OfType<JoinQueryNode>()
                          .OrderBy(static join => join.Id.Value, StringComparer.Ordinal))
             {
-                if (!TryGetEquijoin(join, out _, out _))
+                if (!join.TryGetEquijoin(out _, out _))
                     continue;
                 var fieldInputs = plan.RequirementGraph.Edges
                     .Where(edge => edge.Input is RelationQueryFieldInput
@@ -1038,25 +1038,6 @@ public static class RelationQueryPhysicalPlanner
                 placementBinding is { } binding ? [binding] : [],
                 lowering,
                 [new RelationQueryPhysicalPlanningDecisionId($"policy/{policy.Id.Value}/{lowering.Value}")]);
-        }
-
-        static bool TryGetEquijoin(JoinQueryNode join, out FieldExpr left, out FieldExpr right)
-        {
-            if (join.Predicate is BinaryExpr
-                {
-                    Operator: BinaryOperator.Eq,
-                    Left: FieldExpr { Binding: not null } candidateLeft,
-                    Right: FieldExpr { Binding: not null } candidateRight
-                }
-                && candidateLeft.Binding != candidateRight.Binding)
-            {
-                left = candidateLeft;
-                right = candidateRight;
-                return true;
-            }
-            left = null!;
-            right = null!;
-            return false;
         }
 
         static RelationQueryPhysicalStageId StageId(string kind, string semanticIdentity) =>

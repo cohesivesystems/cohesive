@@ -1,0 +1,32 @@
+{
+  "root_cause": "Shared Base64url decoder accepted alternate text with nonzero unused padding bits that decoded to the same authenticated bytes. Canonical payload and tag spellings are now enforced using the shared encoder.",
+  "regression_before_fix": {
+    "passed": 3,
+    "failed": 6,
+    "skipped": 0
+  },
+  "focused_after_fix": {
+    "passed": 35,
+    "failed": 0,
+    "skipped": 0
+  },
+  "full_core_suite": {
+    "passed": 5316,
+    "failed": 0,
+    "skipped": 68,
+    "exit_code": 0,
+    "command": "dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj -c Release -m:1 -p:UseSharedCompilation=false"
+  },
+  "changed_storage_build": {
+    "warnings": 0,
+    "errors": 0,
+    "exit_code": 0,
+    "warnings_as_errors": true
+  },
+  "strict_full_test_note": "All tests passed, but warnings-as-errors exited 1 on existing CS8625, CS8603 and CS8631 in EntityFieldSetConventionTests, DomainRelationshipCompilerTests and ExecutionPreparationReuseTests. Normal full invocation exits 0.",
+  "source_hashes": {
+    "src/Cohesive.Storage/Materialization/MaterializationAuthenticatedValueCodec.cs": "568d974c6afa26478a5d1f1b83e0cc86f363ce465b249e7186f77d8e5ddb2721",
+    "src/Cohesive.Tests/Storage/MaterializationAuthenticatedValueCodecTests.cs": "1fb99c302056d3024668b42811e1fd33ee7c4a807867746a95a3c61b281bd1c4",
+    "src/Cohesive.Tests/Postgres/PostgresLogicalReplicationMaterializationChangeSourceTests.cs": "f0734a39cab9da205329785c3762b3768660afe68d4cc6429367c2be087838cb"
+  }
+}

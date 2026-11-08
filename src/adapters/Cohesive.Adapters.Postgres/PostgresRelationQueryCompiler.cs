@@ -24,7 +24,7 @@ public sealed class PostgresRelationQueryCompiler
     const string CompilerProfileSetting = "compilerProfile";
 
     /// <summary>Versioned identity of this concrete compiler implementation and semantic profile.</summary>
-    public const string CompilerProfile = "cohesive.adapters.postgres.sql/compiler-v2";
+    public const string CompilerProfile = "cohesive.adapters.postgres.sql/compiler-v3";
 
     /// <summary>Creates a canonical PostgreSQL relation/query compiler.</summary>
     public PostgresRelationQueryCompiler()
@@ -719,6 +719,11 @@ public sealed class PostgresRelationQueryCompiler
                 ? traversal.Result
                 : traversal.From)
             .ToHashSet();
+        if (request.ProfileFeasibility.Observability.OccurrenceProvenance == RelationQueryOccurrenceProvenanceMode.ExactContributors)
+        {
+            requiredIdentityBindings.UnionWith(request.SelectedSources.Select(source => source.Binding));
+            requiredIdentityBindings.UnionWith(request.SelectedTraversals.Select(source => source.Result));
+        }
         foreach (var message in PostgresRelationQueryBindingSemanticValidator.ValidateCompilation(
                      request.Plan,
                      selectedTables,
@@ -898,7 +903,7 @@ public sealed class PostgresRelationQueryCompiler
                 prepared.Terminal.RelationKey,
                 prepared.Terminal.Invariants,
                 [.. decisions],
-                provenance);
+                provenance, prepared.Terminal.Contributors);
             return new(
                 PostgresRelationQueryCompiledArtifact.CurrentSchemaVersion,
                 branch,
@@ -914,8 +919,11 @@ public sealed class PostgresRelationQueryCompiler
                 prepared.Terminal.Invariants,
                 [.. decisions],
                 provenance,
-                fingerprint);
+                fingerprint, prepared.Terminal.Contributors);
         }
+
+        bool ExactContributors => request.ProfileFeasibility.Observability.OccurrenceProvenance
+            == RelationQueryOccurrenceProvenanceMode.ExactContributors;
 
         public void Validate() => _ = Prepare();
 
@@ -938,15 +946,13 @@ public sealed class PostgresRelationQueryCompiler
                     "A native PostgreSQL statement cannot cross declared source execution domains.",
                     branch.Node);
             }
-            if (request.ProfileFeasibility.Observability.OccurrenceProvenance
-                != RelationQueryOccurrenceProvenanceMode.NotRequested)
-            {
-                throw Fail(
-                    PostgresRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
-                    "The current PostgreSQL compiler returns values and binding-presence evidence, not contributor-occurrence lineage.",
-                    branch.Node);
-            }
+            if (ExactContributors && branch.Kind != RelationQueryNativeResultKind.QueryRows)
+                throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
+                    "Exact contributor reconstruction currently supports query-row branches only.", branch.Node);
 
+            if (ExactContributors && branch.Fields.Any(field => !field.Path.TryGetDirectFieldName(out _)))
+                throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
+                    "Native attributed query-row admission currently requires direct output fields.", branch.Node);
             ValidateRelationRootCorrelation();
 
             var scope = CompileNode(branch.Node);
@@ -1070,7 +1076,7 @@ public sealed class PostgresRelationQueryCompiler
             foreach (var field in fields)
             {
                 var valueContract = RequireValueContract(field.Input);
-                var alias = ValueAlias(field.Input.Field.Shape, field.Input.Field.Path);
+                var alias = BoundValueAlias(field.Input.Binding, field.Input.Field.Shape, field.Input.Field.Path);
                 ScopedValue value;
                 if (table is null)
                 {
@@ -1206,7 +1212,7 @@ public sealed class PostgresRelationQueryCompiler
                 var physical = ResolveField(table, field.Input.Id, contract.Input.Traversal);
                 var valueContract = RequireValueContract(field.Input);
                 ValidatePhysicalValue(valueContract, physical, contract.Input.Traversal, field.Input.Id);
-                var alias = ValueAlias(field.Input.Field.Shape, field.Input.Field.Path);
+                var alias = BoundValueAlias(field.Input.Binding, field.Input.Field.Shape, field.Input.Field.Path);
                 builder.Select(SqlExpression.Column(tableAlias, physical.ColumnName), alias);
                 values.Add(new(field.Input.Binding, field.Input.Field.Path), new(
                     alias,
@@ -1255,7 +1261,7 @@ public sealed class PostgresRelationQueryCompiler
                     assignment.ValueSite,
                     environment,
                     requireNonNull: false);
-                var resultAlias = ValueAlias(project.ResultShape, assignment.Definition.Target);
+                var resultAlias = BoundValueAlias(project.ResultBinding, project.ResultShape, assignment.Definition.Target);
                 builder.Select(compiled.Expression, resultAlias);
                 values.Add(new(project.ResultBinding, assignment.Definition.Target), compiled.ToScoped(resultAlias,
                     assignment.Definition.Id));
@@ -1278,10 +1284,17 @@ public sealed class PostgresRelationQueryCompiler
                     "Demanded projection retained no assignments.", project.Id);
             }
 
+            if (ExactContributors)
+            {
+                var selectedAliases = values.Values.Select(value => value.Alias).Concat(outerPresence.Values.Select(value => value.Alias))
+                    .Concat(input.Orderings.Select(value => value.Alias)).ToHashSet(StringComparer.Ordinal);
+                foreach (var identity in input.Identities.Values)
+                    if (selectedAliases.Add(identity.Alias)) builder.Select(SqlExpression.Column(alias, identity.Alias), identity.Alias);
+            }
             decisions.Add(Decision(PostgresRelationQueryLoweringDecisionKind.Projection,
                 "postgres/select-projection/v1", execution.Id));
             return new(builder.BuildQuery(), values,
-                new Dictionary<ValueBindingId, ScopedIdentity>(),
+                ExactContributors ? input.Identities : new Dictionary<ValueBindingId, ScopedIdentity>(),
                 new Dictionary<RelationshipKey, ScopedValue>(),
                 outerPresence, input.Orderings);
         }
@@ -1368,6 +1381,8 @@ public sealed class PostgresRelationQueryCompiler
 
         Scope CompileDistinct(RelationQueryExecutionNode execution, DistinctQueryNode distinct)
         {
+            if (ExactContributors) throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
+                "Duplicate elimination requires contributor-set union, which this native target does not yet realize.", distinct.Id);
             var input = CompileUnaryInput(execution);
             if (!distinct.Keys.IsDefaultOrEmpty)
             {
@@ -1407,6 +1422,8 @@ public sealed class PostgresRelationQueryCompiler
 
         Scope CompileAggregate(RelationQueryExecutionNode execution, AggregateQueryNode aggregate)
         {
+            if (ExactContributors) throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
+                "Aggregation requires contributor-set aggregation, which this native target does not yet realize.", aggregate.Id);
             var input = CompileUnaryInput(execution);
             var alias = RelationAlias($"{ShapeAlias(aggregate.ResultShape)}_input");
             var environment = CreateEnvironment(input, alias);
@@ -1651,6 +1668,26 @@ public sealed class PostgresRelationQueryCompiler
                 presence.Add(new(item.Key, resultAlias, item.Value.Placement));
             }
 
+            if (ExactContributors && scope.OuterPresence.ContainsKey(branch.Binding))
+                throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
+                    "Project an outer-optional binding into a present output object before native attributed admission.", branch.Node);
+            var contributors = ImmutableArray.CreateBuilder<PostgresRelationQueryContributorBinding>();
+            if (ExactContributors)
+            {
+                foreach (var item in scope.Identities.OrderBy(pair => pair.Key.Value, StringComparer.Ordinal))
+                {
+                    var table = storageBinding.ResolveTable(item.Value.Placement);
+                    var resultAlias = ResultAlias("__contributor", BindingAlias(item.Key));
+                    builder.Select(SqlExpression.Column(alias, item.Value.Alias), resultAlias);
+                    contributors.Add(new(item.Key, table.Shape, table.PlacementBinding, resultAlias));
+                }
+                decisions.Add(Decision(PostgresRelationQueryLoweringDecisionKind.ContributorProjection,
+                    "postgres/query-contributor-columns/v1", branch.Node, [.. contributors.Select(item => item.PlacementBinding)]));
+                if (contributors.Count != requiredIdentityBindings.Count)
+                    throw Fail(PostgresRelationQueryCompilationDiagnosticCodes.ResultObservabilityUnsupported,
+                        "Not every source occurrence survives this query topology.", branch.Node);
+            }
+
             PostgresRelationQueryRelationKeyBinding? relationKey = null;
             var invariants = ImmutableArray.CreateBuilder<PostgresRelationQueryInvariantBinding>();
             if (branch.Kind == RelationQueryNativeResultKind.RelationRows)
@@ -1687,7 +1724,7 @@ public sealed class PostgresRelationQueryCompiler
 
             ApplyOrder(builder, scope, alias);
             return new(builder.BuildQuery(), resultFields.ToImmutable(), presence.ToImmutable(), relationKey,
-                invariants.ToImmutable());
+                invariants.ToImmutable(), contributors.ToImmutable());
         }
 
         CompiledExpression CompileAggregateAssignment(
@@ -3001,6 +3038,7 @@ public sealed class PostgresRelationQueryCompiler
         {
             var represented = scope.OuterPresence.Keys.ToHashSet();
             var missing = scope.Values.Keys.Select(static key => key.Binding)
+                .Concat(ExactContributors ? scope.Identities.Keys : [])
                 .Distinct()
                 .Where(binding => !represented.Contains(binding))
                 .OrderBy(static binding => binding.Value, StringComparer.Ordinal)
@@ -3024,6 +3062,8 @@ public sealed class PostgresRelationQueryCompiler
                     .Select(static placement => placement!.Value)
                     .Distinct()
                     .ToArray();
+                if (placements.Length == 0 && scope.Identities.TryGetValue(binding, out var contributorIdentity))
+                    placements = [contributorIdentity.Placement];
                 if (placements.Length != 1)
                 {
                     throw Fail(
@@ -3126,7 +3166,7 @@ public sealed class PostgresRelationQueryCompiler
                 var key = new FieldKey(binding, identity.SemanticPath);
                 var alias = values.TryGetValue(key, out var selectedIdentity)
                     ? selectedIdentity.Alias
-                    : ValueAlias(table.Shape, identity.SemanticPath);
+                    : BoundValueAlias(binding, table.Shape, identity.SemanticPath);
                 if (selectedIdentity.Alias is null)
                 {
                     builder.Select(SqlExpression.Column(tableAlias, identity.ColumnName), alias);
@@ -3143,7 +3183,7 @@ public sealed class PostgresRelationQueryCompiler
                 var key = new FieldKey(binding, reference.SemanticPath);
                 var alias = values.TryGetValue(key, out var selectedReference)
                     ? selectedReference.Alias
-                    : ValueAlias(table.Shape, reference.SemanticPath);
+                    : BoundValueAlias(binding, table.Shape, reference.SemanticPath);
                 if (selectedReference.Alias is null)
                 {
                     builder.Select(SqlExpression.Column(tableAlias, reference.ColumnName), alias);
@@ -3319,7 +3359,8 @@ public sealed class PostgresRelationQueryCompiler
         (IReadOnlySet<ValueBindingId> Identities, IReadOnlySet<RelationshipKey> References)
             SelectBranchRelationshipInternals()
         {
-            HashSet<ValueBindingId> identities = [];
+            HashSet<ValueBindingId> identities = ExactContributors
+                ? [.. branchSelection.Sources.Select(source => source.Binding), .. branchSelection.Traversals.Select(source => source.Result)] : [];
             HashSet<RelationshipKey> references = [];
             foreach (var traversal in branchSelection.Traversals)
             {
@@ -3497,6 +3538,9 @@ public sealed class PostgresRelationQueryCompiler
             new(kind, strategy, node, relationship: relationship, placementBindings: placementBindings);
 
         string RelationAlias(string hint) => relationAliases.Allocate(hint, hint, fallback: "rows");
+
+        string BoundValueAlias(ValueBindingId binding, QualifiedShapeId shape, FieldPath path) =>
+            ValueAlias(BindingAlias(binding), ValueAlias(shape, path));
 
         string ValueAlias(QualifiedShapeId shape, FieldPath path)
         {
@@ -3858,7 +3902,8 @@ public sealed class PostgresRelationQueryCompiler
         ImmutableArray<PostgresRelationQueryResultFieldBinding> ResultFields,
         ImmutableArray<PostgresRelationQueryPresenceBinding> Presence,
         PostgresRelationQueryRelationKeyBinding? RelationKey,
-        ImmutableArray<PostgresRelationQueryInvariantBinding> Invariants);
+        ImmutableArray<PostgresRelationQueryInvariantBinding> Invariants,
+        ImmutableArray<PostgresRelationQueryContributorBinding> Contributors);
 
     readonly record struct PreparedBranch(
         SqlCommandTemplate Statement,
@@ -3871,7 +3916,7 @@ public sealed class PostgresRelationQueryCompiler
 static class PostgresRelationQueryArtifactFingerprinter
 {
     const string Algorithm = "sha256";
-    const string Canonicalization = "cohesive.relations.postgres-artifact/v4-c14n/v1";
+    const string Canonicalization = "cohesive.relations.postgres-artifact/v5-c14n/v1";
 
     public static PostgresRelationQueryArtifactFingerprint Compute(
         string schemaVersion,
@@ -3887,7 +3932,8 @@ static class PostgresRelationQueryArtifactFingerprinter
         PostgresRelationQueryRelationKeyBinding? relationKey,
         ImmutableArray<PostgresRelationQueryInvariantBinding> invariants,
         ImmutableArray<PostgresRelationQueryLoweringDecision> decisions,
-        RelationQueryNativeCompilationProvenance provenance)
+        RelationQueryNativeCompilationProvenance provenance,
+        ImmutableArray<PostgresRelationQueryContributorBinding> contributors = default)
     {
         StringBuilder canonical = new();
         var jsonOptions = RelationQueryJsonSerializer.CreateOptions();
@@ -3899,6 +3945,7 @@ static class PostgresRelationQueryArtifactFingerprinter
         Append(canonical, JsonSerializer.Serialize(statement.Parameters, jsonOptions));
         Append(canonical, JsonSerializer.Serialize(selectedFields, jsonOptions));
         Append(canonical, JsonSerializer.Serialize(resultFields, jsonOptions));
+        Append(canonical, JsonSerializer.Serialize(contributors.IsDefault ? [] : contributors, jsonOptions));
         Append(canonical, JsonSerializer.Serialize(presenceBindings, jsonOptions));
         Append(canonical, JsonSerializer.Serialize(suppliedFields, jsonOptions));
         Append(canonical, JsonSerializer.Serialize(parameters, jsonOptions));

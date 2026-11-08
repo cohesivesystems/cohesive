@@ -205,11 +205,18 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 Engine.NormalizeDiagnostics(analysis.Diagnostics.Concat(unsupportedDiagnostics)));
         }
 
-        return new Engine(request, analysis, cancellationToken).Run();
+        return new Engine(request, analysis, cancellationToken, UseOrdinalProjection).Run();
     }
+
+    static readonly ConditionalWeakTable<CompiledRelationQueryPlan,
+        System.Collections.Concurrent.ConcurrentDictionary<QueryNodeId, (ObservationLayout Layout, int[] Slots)>> projectionLayouts = new();
+
+    // Experimental physical realization. The reference default remains unchanged.
+    internal bool UseOrdinalProjection { get; init; }
 
     sealed class Engine : IRelationQueryExpressionRuntimeAvailability
     {
+        readonly bool useOrdinalProjection;
         readonly RelationQueryExecutionRequest request;
         readonly RelationRequirementGapAnalysisResult gapAnalysis;
         readonly CancellationToken cancellationToken;
@@ -241,8 +248,10 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         public Engine(
             RelationQueryExecutionRequest request,
             RelationRequirementGapAnalysisResult gapAnalysis,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            bool useOrdinalProjection)
         {
+            this.useOrdinalProjection = useOrdinalProjection;
             this.request = request;
             this.gapAnalysis = gapAnalysis;
             this.cancellationToken = cancellationToken;
@@ -403,7 +412,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             ProjectQueryNode node => ExecuteProject(execution, node),
             DistinctQueryNode node => ExecuteDistinct(execution, node),
             SelectRepresentativeQueryNode node => ExecuteRepresentative(execution, node),
-            AggregateQueryNode node => ExecuteAggregate(execution, node),
+            AggregateQueryNode node => ExecuteGroupedSourceOrAggregate(execution, node),
             OrderQueryNode node => ExecuteOrder(execution, node),
             PageQueryNode node => ExecutePage(execution, node),
             _ => throw Failure(
@@ -578,14 +587,20 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             var unknownRight = new bool[right.Length];
             var joined = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>();
 
-            foreach (var leftRow in left)
+            var rightByKey = TryBuildJoinIndex(execution, node, left, right, out var leftKeys);
+            for (var leftIndex = 0; leftIndex < left.Length; leftIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var leftRow = left[leftIndex];
                 var matched = false;
                 var unknown = false;
-                for (var rightIndex = 0; rightIndex < right.Length; rightIndex++)
+                IReadOnlyList<int>? candidates = rightByKey is null ? null
+                    : rightByKey.TryGetValue(leftKeys[leftIndex], out var matches) ? matches : [];
+                var candidateCount = candidates?.Count ?? right.Length;
+                for (var index = 0; index < candidateCount; index++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+                    var rightIndex = candidates is null ? index : candidates[index];
                     if (!CanJoinRows(leftRow, right[rightIndex]))
                         continue;
 
@@ -619,6 +634,74 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             }
 
             return joined.ToImmutable();
+        }
+
+        Dictionary<ObservationValue, List<int>>? TryBuildJoinIndex(
+            RelationQueryExecutionNode execution,
+            JoinQueryNode node,
+            ImmutableArray<RelationQueryRuntimeRow> left,
+            ImmutableArray<RelationQueryRuntimeRow> right,
+            out ObservationValue[] leftKeys)
+        {
+            leftKeys = [];
+            // The pair evaluator owns gap activation and diagnostics. Index only when probing a key is
+            // side-effect free, and keep the pair scan for joins too small to benefit from an index.
+            if (left.Length < 2 || right.Length < 2 || directGapsByInput.Count != 0
+                || !node.TryGetEquijoin(out var leftField, out var rightField)
+                || !IsCapabilityAvailable(ExprCapabilities.ForBinary(BinaryOperator.Eq)))
+                return null;
+
+            var leftBindings = nodes[execution.LogicalPlan.EffectiveInputs[0]].OutputBindings;
+            var rightBindings = nodes[execution.LogicalPlan.EffectiveInputs[1]].OutputBindings;
+            if (leftBindings.Any(leftBinding => rightBindings.Any(rightBinding => leftBinding.Binding == rightBinding.Binding)))
+                return null;
+            if (leftBindings.Any(binding => binding.Binding == rightField.Binding))
+                (leftField, rightField) = (rightField, leftField);
+            if (!leftBindings.Any(binding => binding.Binding == leftField.Binding)
+                || !rightBindings.Any(binding => binding.Binding == rightField.Binding))
+                return null;
+
+            leftKeys = new ObservationValue[left.Length];
+            for (var index = 0; index < left.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!TryReadJoinKey(leftField, left[index], out leftKeys[index]))
+                    return null;
+            }
+
+            var rightByKey = new Dictionary<ObservationValue, List<int>>(right.Length, RelationQueryValueSemantics.EqualityComparer);
+            for (var index = 0; index < right.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!TryReadJoinKey(rightField, right[index], out var key))
+                    return null;
+
+                if (!rightByKey.TryGetValue(key, out var matches))
+                {
+                    matches = [];
+                    rightByKey.Add(key, matches);
+                }
+                matches.Add(index);
+            }
+
+            return rightByKey;
+        }
+
+        bool TryReadJoinKey(FieldExpr field, RelationQueryRuntimeRow row, out ObservationValue key)
+        {
+            try
+            {
+                key = evaluator.Evaluate(field, row.CreateExecutionExpressionContext(
+                    implicitBinding: null, parameters, this));
+                return key.Kind is not (ObservationValueKind.Object or ObservationValueKind.Array);
+            }
+            catch (RelationQueryExpressionEvaluationException)
+            {
+                // Re-evaluate in pair order so failures keep their original attribution and only
+                // affect rows that actually reach the predicate.
+                key = default;
+                return false;
+            }
         }
 
         ImmutableArray<RelationQueryRuntimeRow> ExecuteTemporalJoin(
@@ -1029,19 +1112,41 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             var projected = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>();
             var topLevelOnly = execution.ProjectionAssignments.All(static assignment =>
                 assignment.Definition.Target.TryGetDirectFieldName(out _));
+            ObservationLayout? layout = null;
+            int[]? assignmentOrdinals = null;
+            if (useOrdinalProjection && topLevelOnly)
+            {
+                var prepared = projectionLayouts.GetValue(request.Plan, static _ => new()).GetOrAdd(node.Id, _ =>
+                {
+                    var graph = request.Plan.Provenance.ShapeDocuments.Single(document => document.Graph.Id == node.ResultShape.GraphId).Graph;
+                    var boundLayout = ObservationLayout.Create(new(graph, node.ResultShape.ShapeId),
+                        execution.ProjectionAssignments.Select(assignment => assignment.Definition.Target.Segments[0].Segment!)
+                            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+                    return (boundLayout, execution.ProjectionAssignments.Select(assignment =>
+                        boundLayout.GetOrdinal(assignment.Definition.Target.Segments[0].Segment!)).ToArray());
+                });
+                layout = prepared.Layout;
+                assignmentOrdinals = prepared.Slots;
+            }
             foreach (var row in InputRows(execution, inputIndex: 0))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var value = RelationQueryObjectValues.Empty;
-                var topLevelFields = topLevelOnly
+                var ordinalValues = layout is null ? null : new ObservationValue[layout.Count];
+                var topLevelFields = topLevelOnly && layout is null
                     ? ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(StringComparer.Ordinal)
                     : null;
                 List<FieldPath> unavailableFields = [];
+                var assignmentIndex = 0;
                 foreach (var assignment in execution.ProjectionAssignments)
                 {
                     if (TryEvaluate(assignment.ValueSite, row, out var assigned))
                     {
-                        if (topLevelFields is null)
+                        if (ordinalValues is not null)
+                        {
+                            ordinalValues[assignmentOrdinals![assignmentIndex]] = assigned;
+                        }
+                        else if (topLevelFields is null)
                         {
                             value = RelationQueryObjectValues.Set(value, assignment.Definition.Target, assigned);
                         }
@@ -1056,8 +1161,13 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                     }
                     else
                         unavailableFields.Add(assignment.Definition.Target);
+                    assignmentIndex++;
                 }
 
+                if (ordinalValues is not null)
+                    value = ObservationValue.FromOrdinalFields(new(layout!,
+                        System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(ordinalValues),
+                        ordinalValues.Count(field => field.Kind != ObservationValueKind.Undefined)));
                 if (topLevelFields is not null)
                     value = ObservationValue.FromObject(topLevelFields.ToImmutable());
 
@@ -1170,6 +1280,36 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 result.Add(winner.Row);
             }
             return result.MoveToImmutable();
+        }
+
+        ImmutableArray<RelationQueryRuntimeRow> ExecuteGroupedSourceOrAggregate(
+            RelationQueryExecutionNode execution,
+            AggregateQueryNode node)
+        {
+            // A grouped aggregate directly over an immutable source has no supplied-root dependency.
+            // Ungrouped aggregates can create rows for supplied roots, even with no input rows.
+            var input = execution.LogicalPlan.EffectiveInputs[0];
+            if (execution.AggregateGroupings.IsDefaultOrEmpty
+                || !request.Plan.InputContract.Parameters.IsDefaultOrEmpty
+                || request.Evidence.SuppliedFieldsForAnalysis.IsDefault
+                || !gapAnalysis.IsConclusive || !gapAnalysis.Gaps.IsEmpty
+                || incompleteNodes.Contains(input)
+                || !sourceInputs.TryGetValue(input, out var source))
+                return ExecuteAggregate(execution, node);
+
+            var prepared = request.Evidence.PreparedSources.FirstOrDefault(fragment =>
+                ReferenceEquals(fragment.Plan, request.Plan) && fragment.Evidence.Input == source.Id);
+            if (prepared is null || !prepared.IsGapFree)
+                return ExecuteAggregate(execution, node);
+
+            if (prepared.GroupedRows.TryGetValue(node.Id, out var cached))
+                return cached;
+
+            var diagnosticsBefore = executionDiagnostics.Count;
+            var rows = ExecuteAggregate(execution, node);
+            if (!incompleteNodes.Contains(node.Id) && executionDiagnostics.Count == diagnosticsBefore)
+                prepared.GroupedRows.TryAdd(node.Id, rows);
+            return rows;
         }
 
         ImmutableArray<RelationQueryRuntimeRow> ExecuteAggregate(

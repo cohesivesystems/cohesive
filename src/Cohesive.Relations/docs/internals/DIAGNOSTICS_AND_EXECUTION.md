@@ -134,9 +134,13 @@ execution or acquisition consumers of the same compiled contract.
 ### Canonical in-memory reference execution
 
 `RelationQueryInMemoryInterpreter` executes a successful static plan over materialized runtime evidence.
-It consumes the plan's explicit demand-scoped `ExecutionSlice`; it does not rediscover assignments or
-expression sites by scanning the persisted definition, acquire external data, or choose a physical join
-or batching strategy.
+It consumes the plan's demand-scoped `ExecutionSlice` for assignments and expression sites. The physical
+planner owns external acquisition, placement, and batching.
+
+For an equality predicate over fields on opposite inputs, the interpreter can index scalar keys with the
+canonical equality comparer before merging rows. The index retains right-input order and duplicate keys.
+Matched candidates still use the usual root, predicate, and provenance checks. The pair scan handles
+arbitrary predicates, composite keys, and cases where key evaluation could affect gap or failure reporting.
 
 The reference interpreter currently executes every canonical logical node: source, filter, relationship
 traversal, explicit join, valid-time join, collection expansion, projection, distinct, aggregation, ordering,

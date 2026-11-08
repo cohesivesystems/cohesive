@@ -28,6 +28,10 @@ public class RelationDtoWarmBenchmarks
     CompiledRelationDtoMapper<LoadSearchDto> joinedCompiledMapper = null!;
     Func<ObservationValue, LoadSummaryDto> simpleKernel = null!;
     Func<ObservationValue, LoadSearchDto> joinedKernel = null!;
+    Func<IndexedObservationOccurrence, LoadSummaryDto> simpleOrdinal = null!;
+    Func<IndexedObservationOccurrence, LoadSearchDto> joinedOrdinal = null!;
+    GraphShapeId simpleShape;
+    GraphShapeId joinedShape;
     IMapper autoMapper = null!;
     RelationQueryOutputRow[] simpleCanonicalRows = null!;
     RelationQueryOutputRow[] joinedCanonicalRows = null!;
@@ -62,10 +66,28 @@ public class RelationDtoWarmBenchmarks
         joinedCompiledMapper = RelationDtoBenchmarkSupport.CompileMapper<LoadSearchDto>(joined.Plan);
         simpleKernel = simpleCompiledMapper.MaterializationKernel;
         joinedKernel = joinedCompiledMapper.MaterializationKernel;
+        simpleShape = ResolveShape(simple);
+        joinedShape = ResolveShape(joined);
+        simpleOrdinal = RelationDtoMapperBuilder.Compile<LoadSummaryDto>(simple.Plan,
+            RelationDtoMapperProfile.Conventional, RelationDtoMapperCompilationOptions.Conventional,
+            simpleIndexedOccurrences[0].Layout).Mapper!.OrdinalMaterializationKernel!;
+        joinedOrdinal = RelationDtoMapperBuilder.Compile<LoadSearchDto>(joined.Plan,
+            RelationDtoMapperProfile.Conventional, RelationDtoMapperCompilationOptions.Conventional,
+            joinedIndexedOccurrences[0].Layout).Mapper!.OrdinalMaterializationKernel!;
+        ValidateOutput(MapOrdinal(simpleIndexedOccurrences, simpleOrdinal),
+            RelationDtoBenchmarkSupport.MapSimpleHandwritten(simple.Execution), "ordinal simple");
+        ValidateOutput(MapOrdinal(joinedIndexedOccurrences, joinedOrdinal),
+            RelationDtoBenchmarkSupport.MapJoinedHandwritten(joined.Execution), "ordinal joined");
         simpleCanonicalRows = RelationDtoBenchmarkSupport.ToRelationRows(simple.Execution);
         joinedCanonicalRows = RelationDtoBenchmarkSupport.ToRelationRows(joined.Execution);
 
+        ValidateOutput(DirectPipelineOrdinalSimple(), DirectPipelineCanonicalSimple(), "direct pipeline simple");
+        ValidateOutput(DirectPipelineOrdinalJoined(), DirectPipelineCanonicalJoined(), "direct pipeline joined");
         var autoMapperConfiguration = RelationDtoBenchmarkSupport.ConfigureAutoMapper();
+        ValidateOutput(MapOrdinal(Admit(simpleShape, simpleCanonicalRows, simpleIndexedOccurrences), simpleOrdinal),
+            RelationDtoBenchmarkSupport.MapSimpleHandwritten(simple.Execution), "admitted ordinal simple");
+        ValidateOutput(MapOrdinal(Admit(joinedShape, joinedCanonicalRows, joinedIndexedOccurrences), joinedOrdinal),
+            RelationDtoBenchmarkSupport.MapJoinedHandwritten(joined.Execution), "admitted ordinal joined");
         autoMapper = autoMapperConfiguration.CreateMapper();
         ValidateOutput(
             autoMapper.Map<LoadSummaryDto[]>(simpleCanonicalRows),
@@ -164,6 +186,136 @@ public class RelationDtoWarmBenchmarks
     [BenchmarkCategory("Warm", "Joined")]
     public LoadSearchDto[] AutoMapperCanonicalRowsJoined() =>
         autoMapper.Map<LoadSearchDto[]>(joinedCanonicalRows);
+
+    /// <summary>Direct prebound reads from validated ordinal storage; includes exact layout checks.</summary>
+    /// <returns>Fresh simple DTO destinations.</returns>
+    [Benchmark, BenchmarkCategory("Warm", "Simple")]
+    public LoadSummaryDto[] CompiledOrdinalSimple() => MapOrdinal(simpleIndexedOccurrences, simpleOrdinal);
+
+    /// <summary>Direct prebound joined reads from validated ordinal storage.</summary>
+    /// <returns>Fresh joined DTO destinations.</returns>
+    [Benchmark, BenchmarkCategory("Warm", "Joined")]
+    public LoadSearchDto[] CompiledOrdinalJoined() => MapOrdinal(joinedIndexedOccurrences, joinedOrdinal);
+
+    /// <summary>Validated ordinal ingestion from already-built canonical rows.</summary>
+    /// <returns>New owned ordinal occurrences; includes copying and validation.</returns>
+    [Benchmark, BenchmarkCategory("Admission", "Simple")]
+    public ImmutableArray<IndexedObservationOccurrence> OrdinalAdmissionSimple() =>
+        Admit(simpleShape, simpleCanonicalRows, simpleIndexedOccurrences);
+
+    /// <summary>Validated joined ordinal ingestion from canonical rows.</summary>
+    /// <returns>New owned ordinal occurrences; includes copying and validation.</returns>
+    [Benchmark, BenchmarkCategory("Admission", "Joined")]
+    public ImmutableArray<IndexedObservationOccurrence> OrdinalAdmissionJoined() =>
+        Admit(joinedShape, joinedCanonicalRows, joinedIndexedOccurrences);
+
+    /// <summary>One-shot canonical rows to validated ordinal storage to simple DTOs.</summary>
+    /// <returns>Fresh DTOs after allocating, populating and validating ordinal storage.</returns>
+    [Benchmark, BenchmarkCategory("Admission", "Simple")]
+    public LoadSummaryDto[] OrdinalAdmissionAndMapSimple() =>
+        MapOrdinal(OrdinalAdmissionSimple(), simpleOrdinal);
+
+    /// <summary>One-shot canonical rows to validated ordinal storage to joined DTOs.</summary>
+    /// <returns>Fresh DTOs after allocating, populating and validating ordinal storage.</returns>
+    [Benchmark, BenchmarkCategory("Admission", "Joined")]
+    public LoadSearchDto[] OrdinalAdmissionAndMapJoined() =>
+        MapOrdinal(OrdinalAdmissionJoined(), joinedOrdinal);
+
+    static GraphShapeId ResolveShape<T>(RelationDtoFixtureScenario<T> scenario)
+    {
+        var shape = scenario.Execution.Relation!.Shape;
+        return new(scenario.Plan.Provenance.ShapeDocuments.Single(document => document.Graph.Id == shape.GraphId).Graph,
+            shape.ShapeId);
+    }
+
+    static ImmutableArray<IndexedObservationOccurrence> Admit(GraphShapeId shape,
+        RelationQueryOutputRow[] rows, ImmutableArray<IndexedObservationOccurrence> templates)
+    {
+        var result = ImmutableArray.CreateBuilder<IndexedObservationOccurrence>(rows.Length);
+        for (var index = 0; index < rows.Length; index++)
+        {
+            var template = templates[index];
+            var builder = IndexedObservationOccurrence.CreateBuilder(shape, template.Occurrence, template.Layout);
+            foreach (var field in rows[index].Value.Fields!) builder.SetField(field.Key, field.Value);
+            result.Add(builder.Build());
+        }
+        return result.MoveToImmutable();
+    }
+
+    static T[] MapOrdinal<T>(ImmutableArray<IndexedObservationOccurrence> rows,
+        Func<IndexedObservationOccurrence, T> kernel)
+    {
+        var result = new T[rows.Length];
+        for (var index = 0; index < result.Length; index++) result[index] = kernel(rows[index]);
+        return result;
+    }
+
+    static readonly RelationQueryInMemoryInterpreter ordinalInterpreter = new() { UseOrdinalProjection = true };
+
+    /// <summary>Executes the canonical query, validates its output and maps DTOs.</summary>
+    /// <returns>Fresh simple DTOs including execution and admission costs.</returns>
+    [Benchmark, BenchmarkCategory("Pipeline", "Simple")]
+    public LoadSummaryDto[] DirectPipelineCanonicalSimple() => ExecuteCanonical(simple);
+
+    /// <summary>Executes a query directly into ordinal output, validates and maps it.</summary>
+    /// <returns>Fresh simple DTOs including execution and admission costs.</returns>
+    [Benchmark, BenchmarkCategory("Pipeline", "Simple")]
+    public LoadSummaryDto[] DirectPipelineOrdinalSimple() => ExecuteOrdinal(simple);
+
+    /// <summary>Executes the canonical joined query, validates output and maps DTOs.</summary>
+    /// <returns>Fresh joined DTOs including execution and admission costs.</returns>
+    [Benchmark, BenchmarkCategory("Pipeline", "Joined")]
+    public LoadSearchDto[] DirectPipelineCanonicalJoined() => ExecuteCanonical(joined);
+
+    /// <summary>Executes a join directly into ordinal projection output, validates and maps it.</summary>
+    /// <returns>Fresh joined DTOs including execution and admission costs.</returns>
+    [Benchmark, BenchmarkCategory("Pipeline", "Joined")]
+    public LoadSearchDto[] DirectPipelineOrdinalJoined() => ExecuteOrdinal(joined);
+
+    T[] ExecuteCanonical<T>(RelationDtoFixtureScenario<T> scenario)
+    {
+        var execution = RelationQueryInMemoryInterpreter.Default.Execute(new(scenario.Plan, scenario.Evidence));
+        var shape = ResolveShape(scenario);
+        var mapper = RelationDtoBenchmarkSupport.CompileMapper<T>(scenario.Plan);
+        var rows = execution.Relation!.Rows;
+        var output = new T[rows.Length];
+        for (var index = 0; index < rows.Length; index++)
+        {
+            var admitted = Observation.Create(shape, rows[index].Value.Fields!);
+            output[index] = mapper.MaterializationKernel(ObservationValue.FromObject(admitted.Fields));
+        }
+        return output;
+    }
+
+    T[] ExecuteOrdinal<T>(RelationDtoFixtureScenario<T> scenario)
+    {
+        var execution = ordinalInterpreter.Execute(new(scenario.Plan, scenario.Evidence));
+        var shape = ResolveShape(scenario);
+        var rows = execution.Relation!.Rows;
+        var reader = (IOrdinalObservationFieldReader)rows[0].Value.Fields!;
+        var mapper = PreparedOrdinal<T>(scenario.Plan, reader.Layout);
+        var output = new T[rows.Length];
+        for (var index = 0; index < rows.Length; index++)
+        {
+            var admitted = Observation.Create(shape, rows[index].Value.Fields!);
+            output[index] = mapper((IOrdinalObservationFieldReader)admitted.Fields);
+        }
+        return output;
+    }
+
+    readonly Dictionary<(Type, ObservationLayout), object> preparedOrdinals = [];
+
+    Func<IOrdinalObservationFieldReader, T> PreparedOrdinal<T>(Cohesive.Relations.Compilation.CompiledRelationQueryPlan plan, ObservationLayout layout)
+    {
+        var key = (typeof(T), layout);
+        if (!preparedOrdinals.TryGetValue(key, out var prepared))
+        {
+            prepared = RelationDtoMapperBuilder.Compile<T>(plan, RelationDtoMapperProfile.Conventional,
+                RelationDtoMapperCompilationOptions.Conventional, layout).Mapper!.OrdinalMaterializationKernel!;
+            preparedOrdinals.Add(key, prepared);
+        }
+        return (Func<IOrdinalObservationFieldReader, T>)prepared;
+    }
 
     static void ValidateOutput<TOutput>(
         IReadOnlyList<TOutput> actual,

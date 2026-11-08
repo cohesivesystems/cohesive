@@ -298,3 +298,38 @@ a configuration section name, or a default live snapshot guarantee. Applications
 bind the record with ordinary `IConfiguration` and share that selection between
 infrastructure admission, endpoint binding and storage composition. It is neither
 generation-readiness evidence nor automatic fallback policy.
+
+### Reusable local DTO mapping
+
+```csharp
+var mapping = RelationDtoMapping.Create(
+    (Load load) => new LoadSummaryDto(load.Id, load.Status, load.Amount));
+var dto = await mapping.MapAsync(load);
+var batch = await mapping.MapManyAsync(loads);
+```
+
+Import `Cohesive.Relations.Mapping`. This prepares one canonical supplied-only relation and DTO mapper;
+source admission, semantic execution and validation remain the existing authorities. Batches preserve order
+and repeated inputs, with an explicit complete-input bound. DTOs need no identity member. The facade retains
+inspectable compilation artifacts and an explicitly identified `EvaluateAsync` path for detailed outcomes.
+It inherits the scalar DTO mapper boundary and does not execute the projection as a direct CLR delegate.
+See [the complete quickstart](docs/GETTING_STARTED.md#common-local-dto-projection) for the example, provenance,
+ownership, bounds, failures and the expanded authoring path.
+
+### Composed DTO relations
+
+Focused branches support `Aggregate<TDto>(g => g.Group(...).Sum(...))` and
+`Join(right, predicate, projection)` / `LeftJoin(right, predicate, projection)`. These delegate to the existing
+canonical aggregate, join and projection operations. Prepare a composed mapping with
+`RelationDtoMapping.Create(root, output, mode: RelationOutputMode.ZeroOrOnePerRoot)` and pass an explicitly
+configured evaluator and invocation to `MapAsync`. Source acquisition, unique-key evidence, completeness,
+missing values, cardinality, numeric rules and provenance retain their existing authorities.
+See the [three-source example](docs/GETTING_STARTED.md#compact-joins-and-grouped-totals) for the complete
+load/customer/line-item declaration, result, binding requirements and exact equivalence to expanded authoring.
+
+For a composed mapping's common complete-root invocation, use
+`await mapping.MapAsync(evaluator, loadValues, load => load.Id)`. Optional `evaluation:` supplies a caller-owned
+invocation identity; the default is operation-local. `EvaluateAsync` accepts the same inputs for retained phase
+results. These overloads delegate to the existing evaluation builder and Supply admission; parameters, partial
+root evidence and explicit partitions use the full builder. Source identities, evaluator binding and resource
+limits are explicit, with cancellation checked before enumeration and between roots.

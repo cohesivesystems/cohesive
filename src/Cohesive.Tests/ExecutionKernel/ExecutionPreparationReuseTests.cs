@@ -108,7 +108,7 @@ public sealed class ExecutionPreparationReuseTests
         var contract = new ValueContract(new ObjectTypeRef([]));
         var result = PortableExecutionValidator.Validate(PortableValue.Concrete(contract, observation));
         var paths = result.Diagnostics.Where(diagnostic => diagnostic.Code == PortableExecutionDiagnosticCodes.UndefinedObservation)
-            .Select(diagnostic => diagnostic.Location).ToArray();
+            .Select(diagnostic => Assert.IsType<string>(diagnostic.Location)).ToArray();
         Assert.Equal(["/value/a~1b~0c", "/value/second"], paths);
     }
 

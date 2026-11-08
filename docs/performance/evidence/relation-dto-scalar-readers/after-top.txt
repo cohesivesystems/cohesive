@@ -1,0 +1,16 @@
+Top 15 Functions (Exclusive)                                                  Inclusive           Exclusive
+1.  Thread.<PollGC>g__PollGCWorker|67_0()                                     46.44%              46.44%
+2.  ObservationValue].Search(!0,class System.Collections.Generic.IComparer    17.69%              13.61%
+3.  RelationDtoWarmProfile.Measure(class System.Func`1<class System.Object    94.49%              11.63%
+4.  Anonymously Hosted DynamicMethods Assembly!dynamicClass.lambda_method5    35.76%              11.27%
+5.  String.CompareOrdinalHelper(class System.String,class System.String)      6.76%               6.76%
+6.  CastHelpers.IsInstanceOfInterface(void*,class System.Object)              3.08%               3.08%
+7.  RelationDtoWarmProfile+<>c__DisplayClass0_0.<Run>b__1()                   4.8%                0.76%
+8.  String.IsNullOrWhiteSpace(class System.String)                            0.57%               0.57%
+9.  CastHelpers.StelemRef(class System.Object[],int,class System.Object)      0.36%               0.36%
+10. RelationDtoBenchmarkSupport.MapKernel(class Cohesive.Relations.Executi    1.61%               0.28%
+11. ObservationValue].TryGetValue(!0,!1&)                                     20.86%              0.22%
+12. ObservationValue].TryGetValue(!0,class System.Collections.Generic.ICom    0.91%               0.2%
+13. DynamicMethod.CreateDelegate(class System.Type,class System.Object)       0.17%               0.17%
+14. RelationDtoBenchmarkFixture.CreateEvidence(class Cohesive.Relations.Co    0.52%               0.06%
+15. RelationRequirementGapAnalyzer+Analysis.ValidateEvidence()                0.16%               0.06%

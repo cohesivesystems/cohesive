@@ -11,6 +11,7 @@ using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Diagnostics;
 using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
+using Cohesive.Relations.Physical;
 using Cohesive.Relations.Observability;
 
 namespace Cohesive.Relations.Mapping;
@@ -151,6 +152,15 @@ public sealed class CompiledRelationDtoMapper<TOutput>
     public RelationDtoMapperDescriptor Descriptor { get; }
 
     internal Func<ObservationValue, TOutput> MaterializationKernel => kernel;
+
+    internal Func<Func<string, Expression>, Expression>? ComposeMaterializer { get; init; }
+
+    internal static string ConstructionFailureMessage(Exception exception) =>
+        $"The CLR DTO constructor or member initializer failed with '{exception.GetType().Name}'.";
+
+    // Experimental trusted-reader kernel: callers must admit values first. Exact layout identity
+    // is checked before target construction; identity alone does not establish value validity.
+    internal Func<IOrdinalObservationFieldReader, TOutput>? OrdinalMaterializationKernel { get; init; }
 
     /// <summary>Materializes typed rows from an exact canonical relation execution.</summary>
     /// <param name="execution">Canonical execution whose relation terminal will be consumed.</param>
@@ -445,7 +455,7 @@ public sealed class CompiledRelationDtoMapper<TOutput>
                     row,
                     RuntimeDiagnostic(
                         RelationDtoMapperDiagnosticCodes.RuntimeFieldConversionFailed,
-                        $"The CLR DTO constructor or member initializer failed with '{exception.GetType().Name}'.",
+                        ConstructionFailureMessage(exception),
                         evaluation: execution.Evaluation,
                         occurrence: row.Root?.Id,
                         rowIndex: index),
