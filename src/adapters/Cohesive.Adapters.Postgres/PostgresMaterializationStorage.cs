@@ -24,6 +24,10 @@ public sealed record PostgresMaterializationStorageOptions
     public required string Publication { get; init; }
     /// <summary>Stable slot naming recipe, evaluated once per input during declaration.</summary>
     public required Func<RelationQueryInputId, string> Slot { get; init; }
+    /// <summary>Optional retained event feeds keyed by canonical relation input. Each replaces that input's WAL
+    /// slot and borrows the prepared baseline reader. The producer must atomically append every mutation.</summary>
+    public ImmutableDictionary<RelationQueryInputId, Func<PostgresMaterializationSource, IMaterializationRetainedChangeSource>> EventSources { get; init; } =
+        ImmutableDictionary<RelationQueryInputId, Func<PostgresMaterializationSource, IMaterializationRetainedChangeSource>>.Empty;
     /// <summary>Native replication read policy.</summary>
     public required PostgresLogicalReplicationSourcePolicy Replication { get; init; }
     /// <summary>Configured progress authority and native schema.</summary>
@@ -72,10 +76,15 @@ public sealed class PostgresMaterializationStorage
         this.options = options;
         Materialization = materialization;
         relation = new(bindings, materialization, options.PartitionField, options.Planning);
+        ArgumentNullException.ThrowIfNull(options.EventSources);
+        foreach (var entry in options.EventSources)
+            if (entry.Value is null || !materialization.Document.Definition.Sources.Any(source => source.Input == entry.Key))
+                throw new ArgumentException("An event feed must bind a declared relation input.", nameof(options));
         var names = new HashSet<string>(StringComparer.Ordinal);
         var declared = ImmutableDictionary.CreateBuilder<RelationQueryInputId, string>();
         foreach (var input in materialization.Document.Definition.Sources)
         {
+            if (options.EventSources.ContainsKey(input.Input)) continue;
             var name = options.Slot(input.Input);
             if (string.IsNullOrWhiteSpace(name) || name.Length > 63 || name.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_')) || !names.Add(name))
                 throw new ArgumentException("Replication slots must be distinct PostgreSQL lowercase slot identifiers.", nameof(options));
@@ -94,9 +103,12 @@ public sealed class PostgresMaterializationStorage
     public async Task InitializeSourcesAsync(NpgsqlDataSource database, CancellationToken cancellationToken = default)
     {
         var state = new PostgresMaterializationStateStore(database, options.Checkpoints);
-        var tables = relation.Reads.Impact.Placement.Bindings.Select(binding => bindings.Mapping(binding.Shape).Table).Distinct();
-        await PostgresLogicalReplicationPreparation.InitializeAsync(database, tables, options.Publication,
-            slots.Values, state, cancellationToken).ConfigureAwait(false);
+        var tables = relation.Reads.Impact.Placement.Bindings
+            .Where(binding => slots.ContainsKey(binding.Input))
+            .Select(binding => bindings.Mapping(binding.Shape).Table).Distinct();
+        if (slots.Count > 0)
+            await PostgresLogicalReplicationPreparation.InitializeAsync(database, tables, options.Publication,
+                slots.Values, state, cancellationToken).ConfigureAwait(false);
         await state.EnsureCreatedAsync(Cohesive.Prelude.OperationContext.Create(cancellationToken: cancellationToken)).ConfigureAwait(false);
     }
 
@@ -167,7 +179,7 @@ public sealed class PostgresMaterializationStorage
             options.Reads.PartitionScope!.CanonicalValue, authenticationKey, input => new(options.Publication, slots[input], slotGeneration,
                 expectedReplicaIdentity: new(PostgresLogicalReplicationReplicaIdentityKind.Full),
                 beforeImageRequirement: PostgresLogicalReplicationBeforeImageRequirement.Required),
-            options.Replication, cancellationToken).ConfigureAwait(false);
+            options.Replication, options.EventSources, cancellationToken).ConfigureAwait(false);
         var compilation = MaterializationPartitionedRebuildCompiler.Compile(Materialization.Document, relation.Plan,
             options.Rebuild, options.Provider, target.Descriptor, [partition], Materialization.Impact, options.Capacity, options.Provenance);
         var state = new PostgresMaterializationStateStore(native.DataSource, options.Checkpoints);
