@@ -59,5 +59,7 @@ explicit command facts; state classification reads only entity fields.
 
 The [entity binding contract](../../../docs/research/tender-acceptance/entity-binding.md) records the target
 semantics and current operating boundary. Existing-entity enforcement is implemented for canonical
-Transitions; initialization, component composition, and durable reaction execution remain unsupported.
+Transitions; initialization and component composition remain unsupported. The bounded reaction
+profile now supports durable Process execution, native or HTTP targets, and Cosmos receipt
+observation; see [infrastructure hosting](hosting.md).
 The legacy trace host intentionally preserves observed partial commits.

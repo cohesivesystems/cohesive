@@ -151,7 +151,8 @@ public sealed class MachineReactionSource<TSource> where TSource : notnull
         // The target contract owns the top-level constructed command type; Process validation checks
         // every field against that declaration instead of retaining the lowerer's open object type.
         if (inputValue is CallExpr { Function: ExprFunctionNames.Object } construction)
-            inputValue = construction with { ReturnType = target.Definition.Input.Type };
+            inputValue = construction with { ReturnType = target.Definition.Input.Type
+                ?? throw new InvalidOperationException("Reaction command construction requires a structural target contract.") };
         var provenance = new ExecutionProvenance(new("cohesive.machine-reaction", "1"),
             new(id), DocumentOrigin.User);
         var process = ProcessAuthoring.Create<TSource, TResult>(

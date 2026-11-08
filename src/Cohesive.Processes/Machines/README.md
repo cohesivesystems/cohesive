@@ -49,7 +49,9 @@ the exact source binding and remain in the host-authorized authority scope.
 The resulting `Start` is an ordinary `ProcessStartRequest`. Submit it through existing start
 admission and use `policy.Compile()` with the existing `ProcessDurableRuntime` and
 `EntityTransitionProcessOperationAdapter`. Preparation alone does not durably accept or dispatch
-anything. Hosts still own registration, observation, authorization, admission and worker scheduling.
+anything. `MachineReactionHost` now supplies registration, durable admission and dispatch over these
+same facilities; see [infrastructure hosting](../../../eng/examples/tender-acceptance/hosting.md).
+Applications still supply trusted authorization and worker lifetime.
 The source receipt is attribution, not a grant to mutate a load.
 
 The instance/command/idempotency identities derive from the exact policy reference and source
@@ -93,11 +95,13 @@ must retain Pending work, not report a completed native Transition operation.
 ## Current boundary
 
 This profile covers one source occurrence, one target transition, one initial Process attempt,
-and same-authority execution. It does not automatically subscribe to feeds or register background
-workers. Restarting the Process as a new attempt is explicitly rejected by this inspection profile;
+and same-authority execution. `CosmosMachineReactionSource` can observe committed receipt documents,
+and `HttpMachineReactionTarget` realizes exact target dispatch and receipt resolution. Neither is
+part of the semantic policy. Restarting the Process as a new attempt is explicitly rejected by this inspection profile;
 recover the existing attempt instead. Component composition, fan-out, cross-authority dispatch,
-historical policy replay, transport adapters and a durable failure-journal integration need explicit
-additional semantics. No HTTP, Cosmos change-feed or actor behavior is assumed.
+historical policy replay, actor adapters and a durable failure-journal integration need explicit
+additional semantics. Infrastructure hosting is backpressured: an inconclusive delivery prevents
+source checkpointing and requires retry of the same delivery, rather than a new attempt.
 
 Authoring and validation are cold operations. Preparation hashes one bounded origin record and
 materializes the committed source snapshot once per delivered occurrence. Execution uses existing
