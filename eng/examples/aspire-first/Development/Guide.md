@@ -88,3 +88,37 @@ An unqualified runtime rejects the explicit policy before initialization. Durabl
 support but does not claim the native transition fencing guarantee. Never remove a requested guarantee merely to
 make target selection pass. Run the shared cancellation recovery conformance scenarios for a target claiming support,
 and retain target-specific lock/race tests alongside them.
+
+
+## Qualify the authored recovery policy
+
+Use this sequence after authoring cancellation in CancellationProcess.cs and its transition declarations:
+
+1. Call learn and retain workspace.snapshotId before editing. Read the cancellation recipe above, inspect the
+   process and its dependency references, then edit source and rebuild/export. Never edit the exported JSON.
+2. Select CancellationProcess.FencedRecoveryCompilation explicitly when preparing the native cancellation plan.
+   Keep its WorkerTakeover guarantees intact. Resolve recovery: after export, then inspect each assessment's
+   /payload/compilation, /payload/profile, /payload/report/status, /payload/report/decisions, /payload/report/diagnostics and /payload/limitations.
+   Use narrow pointers if inspect returns a null value because the object exceeds its byte limit.
+3. The current PostgreSQL composition is Realizable only within its declared fenced-receipt/same-data-source
+   boundary. Generic Durable Task and finite-host profiles are NotRealizable for this policy. Read the per-requirement
+   diagnostics and resolutions; choose or implement a qualified composition instead of removing guarantees.
+4. Run check on every page, review unavailable domain validation, compare against the retained snapshot, and run
+   compatibility for all exported API contracts in both directions. Unknown is an unresolved coverage gap, never a pass.
+5. Run the reproducible qualification command below with a disposable PostgreSQL connection. It replays tracked
+   source from the baseline to this checkout, uses learn and the inspection tools, runs cancellation conformance
+   against that same isolated source, rejects skipped tests, and records directional compatibility evidence.
+
+    dotnet run --project eng/examples/aspire-first/Development -- recovery-exercise "$PWD"
+
+Set COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING before running. An optional third argument selects an earlier
+commit that already has cancellation API contracts. The default is the fenced-cancellation revision before explicit
+recovery policy selection. Evidence is written to tmp/orders-recovery-exercise.json only after all steps succeed.
+This is a deterministic replay of authored source, not a claim that a new agent independently wrote the implementation.
+
+Checkpoint v8 retains the exact compilation policy. A replacement using a different policy fails with
+storage.processes.checkpoint.compilationPolicyIncompatible at /compilationOptions before acquiring ownership or
+performing effects. Restore the original policy; execution migration is not implemented. A matching policy still
+requires a qualified host. The exercise covers retries, multiple reservations, stale ownership, release/mark receipt
+recovery, and refusal to rewrite the retained policy. Runtime results qualify the tested native composition only;
+MCP integrity checks alone do not establish durability or physical binding correctness.

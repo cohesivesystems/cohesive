@@ -225,3 +225,31 @@ an adapter fixture contract. The PostgreSQL fixture supplies real persistence, e
 lock linearization and data-source admission cases remain native tests. Targets may claim support only with equivalent
 conformance evidence; there is currently one qualified fenced target. No arbitrary-effect or cross-database guarantee
 is added.
+
+
+## End-to-end recovery authoring qualification
+
+Run `recovery-exercise` to connect the `learn` recipe, source replay, target assessments, physical cancellation tests,
+and API compatibility evidence in one command:
+
+```sh
+# Point this at a disposable PostgreSQL database used only for tests.
+export COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING='Host=127.0.0.1;Port=55439;Database=postgres;Username=postgres;Password=cohesive-test-only'
+dotnet run --project eng/examples/aspire-first/Development -- recovery-exercise "$PWD"
+```
+
+The default baseline is `4e7022d57efe349a33cb3630a56eb8c0a7f496f7` (native fenced cancellation before explicit recovery
+policy selection). Pass another baseline as the final argument only if it already has the cancellation API contracts.
+The exercise copies tracked working-tree source into a disposable directory; stage new files before running. It
+builds both baseline and proposed source, inspects all three target assessments through MCP, and runs PostgreSQL
+cancellation plus retained-policy tests on the proposed copy. It requires nonempty test results with no skips or failures.
+The database must be disposable: the existing integration fixtures create schema and test data.
+
+`tmp/orders-recovery-exercise.json` records the exact snapshots, learned recipe, target decisions, test names/outcomes,
+and API comparisons in both directions. Breaking API results fail the recovery exercise; Unknown verdicts remain
+explicit unresolved wire-coverage gaps and do not constitute full API compatibility. The evidence describes replay
+of the current authored implementation, not autonomous generation of new source. No container is started by the host.
+
+Checkpoint v8 pins compilation policy independently of process graph identity. Replacement workers must supply the
+same policy and a qualifying target. Policy changes and older checkpoints require an explicit migration decision;
+there is no automatic migration in this exercise.

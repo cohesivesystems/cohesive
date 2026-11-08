@@ -10,9 +10,9 @@ using AspireFirst.Orders;
 using Cohesive.Adapters.Mcp.Development;
 using Cohesive.Semantics;
 
-if (args.Length is < 2 or > 3 || args[0] is not ("export" or "serve" or "exercise" or "wire-sample" or "cancellation-exercise") || (args.Length == 3 && args[0] is not ("exercise" or "cancellation-exercise")))
+if (args.Length is < 2 or > 3 || args[0] is not ("export" or "serve" or "exercise" or "wire-sample" or "cancellation-exercise" or "recovery-exercise") || (args.Length == 3 && args[0] is not ("exercise" or "cancellation-exercise" or "recovery-exercise")))
 {
-    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise|wire-sample|cancellation-exercise> <repository-root> [authoring-base-commit for exercise]");
+    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise|wire-sample|cancellation-exercise|recovery-exercise> <repository-root> [authoring-base-commit for exercise]");
     return 2;
 }
 var root = Path.GetFullPath(args[1]);
@@ -29,6 +29,9 @@ switch (args[0])
         using (var reader = new StreamReader(typeof(OrdersWorkspace).Assembly.GetManifestResourceStream("Orders.Development.Guide.md")!))
             await DevelopmentMcpServer.RunAsync(DevelopmentMcpServer.CreateDefaultWorkspace(root, OrdersWorkspace.Bundle),
                 new DevelopmentGuide(OrdersWorkspace.ProducerVersion, reader.ReadToEnd()));
+        break;
+    case "recovery-exercise":
+        await CancellationWorkflow.RunAsync(root, args.Length == 3 ? args[2] : "4e7022d57efe349a33cb3630a56eb8c0a7f496f7", CancellationExerciseScope.Recovery);
         break;
     case "cancellation-exercise":
         await CancellationWorkflow.RunAsync(root, args.Length == 3 ? args[2] : "a2461a5098bd337977af8540ff233f7753501d36");

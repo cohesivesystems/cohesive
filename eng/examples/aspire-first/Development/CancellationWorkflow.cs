@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Xml.Linq;
+using Cohesive.Processes.Compilation;
 using Cohesive.Semantics;
 using Cohesive.Model.Serialization;
 using ModelContextProtocol.Client;
@@ -6,8 +8,11 @@ using ModelContextProtocol.Client;
 /// <summary>Replays source authoring against an explicit earlier commit through one MCP session.</summary>
 internal static class CancellationWorkflow
 {
-    internal static async Task RunAsync(string root, string baselineRevision)
+    internal static async Task RunAsync(string root, string baselineRevision, CancellationExerciseScope scope = CancellationExerciseScope.Semantic)
     {
+        if (scope == CancellationExerciseScope.Recovery
+            && string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING")))
+            throw new InvalidOperationException("Recovery qualification requires COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING pointing to a disposable PostgreSQL database; skipped tests are not evidence.");
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(15));
         var token = deadline.Token;
         var scratch = Path.Combine(Path.GetTempPath(), "cohesive-cancellation-" + Guid.NewGuid().ToString("N"));
@@ -26,6 +31,9 @@ internal static class CancellationWorkflow
             var learned = await Call("learn");
             Require(learned.GetProperty("content").GetString()!.Contains("Author cancellation with recovery", StringComparison.Ordinal),
                 "Cancellation recipe missing from learn.");
+            if (scope == CancellationExerciseScope.Recovery)
+                Require(learned.GetProperty("content").GetString()!.Contains("Qualify the authored recovery policy", StringComparison.Ordinal),
+                    "Recovery qualification recipe missing from learn.");
             var before = await Workspace();
             var missing = await Call("resolve", new() { ["query"] = "fulfillment/cancel", ["expectedSnapshot"] = before.SnapshotId });
             var introducesCancellation = missing.GetProperty("result").GetProperty("total").GetInt32() == 0;
@@ -89,24 +97,45 @@ internal static class CancellationWorkflow
                     "The reverse lifecycle analysis must retain its coverage gap.");
             }
             var existingContracts = new List<JsonElement>();
-            foreach (var id in new[] { "api:Order.Create", "api:Order.Get", "api:Order.Submit", "api:Order.Details",
-                "api:Order.ReservationsBySku", "api:Order.availability", "api:service/fulfillment/operation/fulfill",
-                "api:service/fulfillment/operation/result" })
-                existingContracts.Add(JsonSerializer.SerializeToElement(new
+            int? apiOffset = 0;
+            do
+            {
+                var page = (await Call("resolve", new() { ["query"] = "api:", ["expectedSnapshot"] = after.SnapshotId,
+                    ["offset"] = apiOffset.Value, ["limit"] = 100 })).GetProperty("result");
+                foreach (var subject in page.GetProperty("items").EnumerateArray())
                 {
-                    Id = id,
-                    ExistingClient = await Compatibility(id, "ExistingClientToProposedServer"),
-                    ProposedClient = await Compatibility(id, "ProposedClientToExistingServer")
-                }));
-            var path = Path.Combine(root, "tmp", "orders-cancellation-exercise.json");
+                    var id = subject.GetProperty("id").GetString()!;
+                    if (!id.StartsWith("api:", StringComparison.Ordinal) || id.StartsWith("api:service/cancellation/", StringComparison.Ordinal)) continue;
+                    existingContracts.Add(JsonSerializer.SerializeToElement(new
+                    {
+                        Id = id,
+                        ExistingClient = await Compatibility(id, "ExistingClientToProposedServer"),
+                        ProposedClient = await Compatibility(id, "ProposedClientToExistingServer")
+                    }));
+                }
+                apiOffset = page.TryGetProperty("nextOffset", out var nextApi) && nextApi.ValueKind == JsonValueKind.Number ? nextApi.GetInt32() : null;
+            } while (apiOffset is not null);
+            JsonElement? recovery = null;
+            JsonElement? conformance = null;
+            if (scope == CancellationExerciseScope.Recovery)
+            {
+                recovery = await InspectRecovery();
+                Console.WriteLine("Running PostgreSQL cancellation and persisted-policy conformance in the isolated source copy...");
+                conformance = await VerifyRecovery();
+                var verified = await Workspace();
+                Require(verified.SnapshotId == after.SnapshotId && verified.ChangedInputs.IsEmpty,
+                    "Source changed during conformance; rebuild and repeat qualification.");
+            }
+            var path = Path.Combine(root, "tmp", scope == CancellationExerciseScope.Recovery
+                ? "orders-recovery-exercise.json" : "orders-cancellation-exercise.json");
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
             {
-                BaselineCommit = commit, Learn = learned, Before = before.SnapshotId, After = after.SnapshotId,
+                BaselineCommit = commit, Scope = scope.ToString(), Recovery = recovery, Conformance = conformance, Learn = learned, Before = before.SnapshotId, After = after.SnapshotId,
                 Checks = checks, Comparison = comparison, ProcessReferences = processReferences, ReleaseImpact = releaseImpact,
                 CancellationEndpoints = contracts, ExistingContracts = existingContracts, ExistingOrder = existingOrder, ReversedOrder = reversedOrder
             }, new JsonSerializerOptions { WriteIndented = true }), token);
-            Console.WriteLine("PASS: cancellation authoring, validation, dependencies and directional API evidence. " + path);
+            Console.WriteLine("PASS: cancellation source replay, validation, dependencies and directional API evidence. " + path);
 
             Task<string> Run(string directory, string command, string[] arguments) => OrdersWorkflow.RunProcess(directory, command, arguments, token);
             async Task Export()
@@ -123,10 +152,95 @@ internal static class CancellationWorkflow
             }
             async Task<WorkspaceResult<WorkspacePage<WorkspaceSubject>>> Workspace() =>
                 (await Call("workspace")).Deserialize<WorkspaceResult<WorkspacePage<WorkspaceSubject>>>(StrictDocumentJson.CreateOptions())!;
-            Task<JsonElement> Compatibility(string id, string direction) => Call("compatibility", new()
+            async Task<JsonElement> Compatibility(string id, string direction)
             {
-                ["id"] = id, ["baselineSnapshot"] = before.SnapshotId, ["expectedSnapshot"] = after.SnapshotId, ["direction"] = direction
-            });
+                var result = await Call("compatibility", new()
+                {
+                    ["id"] = id, ["baselineSnapshot"] = before.SnapshotId, ["expectedSnapshot"] = after.SnapshotId, ["direction"] = direction
+                });
+                if (scope == CancellationExerciseScope.Recovery)
+                    Require(result.GetProperty("result").GetProperty("verdict").GetString() is "Compatible" or "Unknown",
+                        $"Recovery qualification must not break API {id} in direction {direction}: {result}");
+                return result;
+            }
+
+            async Task<JsonElement> InspectRecovery()
+            {
+                var subjects = await Call("resolve", new() { ["query"] = "recovery:", ["expectedSnapshot"] = after.SnapshotId, ["limit"] = 100 });
+                Require(subjects.GetProperty("result").GetProperty("total").GetInt32() == 3, "Expected exactly three recovery assessments.");
+                var assessments = new List<JsonElement>();
+                foreach (var subject in subjects.GetProperty("result").GetProperty("items").EnumerateArray())
+                {
+                    var id = subject.GetProperty("id").GetString()!;
+                    async Task<JsonElement> InspectValue(string pointer)
+                    {
+                        var response = await Call("inspect", new() { ["id"] = id, ["expectedSnapshot"] = after.SnapshotId,
+                            ["pointer"] = pointer, ["limit"] = 100 });
+                        var result = response.GetProperty("result");
+                        if (result.TryGetProperty("value", out var value) && value.ValueKind != JsonValueKind.Null) return value;
+                        // These two known array contracts may exceed the transport byte bound. Follow every child page.
+                        Require(pointer is "/payload/report/decisions" or "/payload/report/diagnostics",
+                            "Inspection exceeded its bound; narrow the recipe pointer: " + pointer);
+                        var items = new List<JsonElement>();
+                        while (true)
+                        {
+                            var children = result.GetProperty("children");
+                            foreach (var child in children.GetProperty("items").EnumerateArray())
+                                items.Add(await InspectValue(child.GetString()!));
+                            if (!children.TryGetProperty("nextOffset", out var next) || next.ValueKind != JsonValueKind.Number) break;
+                            response = await Call("inspect", new() { ["id"] = id, ["expectedSnapshot"] = after.SnapshotId,
+                                ["pointer"] = pointer, ["offset"] = next.GetInt32(), ["limit"] = 100 });
+                            result = response.GetProperty("result");
+                        }
+                        return JsonSerializer.SerializeToElement(items);
+                    }
+                    var compilation = await InspectValue("/payload/compilation");
+                    var options = compilation.Deserialize<ProcessCompilationOptions>(StrictDocumentJson.CreateOptions())!;
+                    Require(options == AspireFirst.Orders.CancellationProcess.FencedRecoveryCompilation,
+                        "Assessment dropped or changed the source-selected recovery policy.");
+                    var profile = (await InspectValue("/payload/profile")).GetString()!;
+                    var status = (await InspectValue("/payload/report/status")).GetString();
+                    var native = profile == Cohesive.Adapters.Postgres.PostgresProcessRecoveryProfile.Fenced.Id.Value;
+                    Require(status == (native ? "Realizable" : "NotRealizable"), "Unexpected recovery status for " + profile);
+                    var limitations = await InspectValue("/payload/limitations");
+                    Require(!string.IsNullOrWhiteSpace(limitations.GetString()), "Recovery evidence must retain its limitations.");
+                    var decisions = await InspectValue("/payload/report/decisions");
+                    var diagnostics = await InspectValue("/payload/report/diagnostics");
+                    if (!native)
+                        Require(diagnostics.EnumerateArray().Any(d => d.GetProperty("severity").GetString() == "Error"
+                            && !string.IsNullOrWhiteSpace(d.GetProperty("resolution").GetString())),
+                            "An unavailable target must explain how to resolve its recovery gap.");
+                    assessments.Add(JsonSerializer.SerializeToElement(new { Id = id, Profile = profile, Status = status,
+                        Compilation = compilation, Decisions = decisions, Diagnostics = diagnostics, Limitations = limitations }));
+                }
+                return JsonSerializer.SerializeToElement(assessments);
+            }
+
+            async Task<JsonElement> VerifyRecovery()
+            {
+                const string integrationProject = "src/Cohesive.Adapters.Aspire.Tests/Cohesive.Adapters.Aspire.Tests.csproj";
+                const string unitProject = "src/Cohesive.Tests/Cohesive.Tests.csproj";
+                var runs = new List<JsonElement>();
+                foreach (var (project, filter, name) in new[]
+                {
+                    (integrationProject, "FullyQualifiedName~CancellationIntegrationTests", "cancellation"),
+                    (unitProject, "FullyQualifiedName~RetainedCompilationPolicySurvivesCommitAndRejectsReplacementBeforeLeaseOrEffects|FullyQualifiedName~CommitCannotRewriteRetainedCompilationPolicy|FullyQualifiedName~RecoveryRejectsChangedCompilationPolicy", "policy")
+                })
+                {
+                    var results = Path.Combine(scratch, "tmp", "recovery-conformance", name);
+                    await Run(scratch, "dotnet", ["test", project, "-m:1", "-nodeReuse:false", "-p:UseSharedCompilation=false",
+                        "--filter", filter, "--logger", "trx;LogFileName=results.trx", "--results-directory", results]);
+                    var document = XDocument.Load(Path.Combine(results, "results.trx"));
+                    XNamespace ns = "http://microsoft.com/schemas/VisualStudio/TeamTest/2010";
+                    var tests = document.Descendants(ns + "UnitTestResult").ToArray();
+                    Require(tests.Length > 0 && tests.All(test => (string?)test.Attribute("outcome") == "Passed"),
+                        "Conformance must execute tests with zero failures or skips: " + name);
+                    runs.Add(JsonSerializer.SerializeToElement(new { Project = project, Filter = filter,
+                        Tests = tests.Select(test => new { Name = (string?)test.Attribute("testName"), Outcome = (string?)test.Attribute("outcome") }).ToArray() }));
+                }
+                return JsonSerializer.SerializeToElement(new { Snapshot = after.SnapshotId, Runs = runs,
+                    Limitation = "Physical evidence qualifies the tested PostgreSQL composition only. API Unknown verdicts remain unresolved wire-coverage gaps." });
+            }
         }
         finally
         {
@@ -140,3 +254,5 @@ internal static class CancellationWorkflow
         if (!condition) throw new InvalidOperationException(message);
     }
 }
+
+internal enum CancellationExerciseScope { Semantic, Recovery }
