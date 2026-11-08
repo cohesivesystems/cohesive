@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Cohesive.Machines;
 
 namespace Cohesive.Examples.TenderAcceptance;
@@ -8,63 +9,117 @@ internal sealed record AcceptanceFacts(bool LinkedLoadExists, bool Cancelled, bo
 internal sealed record SendResult(bool AutoAcknowledged);
 internal sealed record Receipt(bool Correlated, bool Positive);
 
+// Each declaration owns its source and freezes it before exposing handles. Wire identities are declared
+// once here; consumers resolve handles against that same definition rather than maintaining a second catalog.
 internal static class TenderAcceptanceMachines
 {
-    internal static MachineDefinition Tender()
+    internal static TenderDeclaration Tender() => new();
+    internal static LinkageDeclaration Linkage() => new();
+    internal static LoadAcknowledgementDeclaration LoadAcknowledgement() => new();
+    internal static CoordinationDeclaration Coordination() => new();
+
+    internal sealed class TenderDeclaration
     {
-        var source = Machine.Define("tender.acceptance", "proposal-1");
-        var offered = source.State("unaccepted").Initial();
-        var pending = source.State("accepted-awaiting-ack");
-        var confirmed = source.State("accepted-confirmed").Final();
-        source.Edge("send-pending").On("send-result").From(offered).To(pending)
-            .When((AcceptanceFacts facts, SendResult result) => facts.LinkedLoadExists && !facts.Cancelled
-                && !facts.AlreadyAcceptedLink && !result.AutoAcknowledged);
-        source.Edge("send-confirmed").On("send-result").From(offered).To(confirmed)
-            .When((AcceptanceFacts facts, SendResult result) => facts.LinkedLoadExists && !facts.Cancelled
-                && !facts.AlreadyAcceptedLink && result.AutoAcknowledged);
-        // P01: positive-result validation is proposed. The observed handler does not perform it.
-        source.Edge("receipt-confirmed").From(pending).To(confirmed)
-            .When((AcceptanceFacts facts, Receipt receipt) => facts.LinkedLoadExists && receipt.Correlated && receipt.Positive);
-        return source.Build();
+        internal MachineDefinition Definition { get; }
+        internal MachineState Offered { get; }
+        internal MachineState Pending { get; }
+        internal MachineState Confirmed { get; }
+        internal MachineMovement SendPending { get; }
+        internal MachineMovement SendConfirmed { get; }
+        internal MachineMovement ReceiptConfirmed { get; }
+
+        internal TenderDeclaration()
+        {
+            var source = Machine.Define("tender.acceptance", "proposal-1");
+            Offered = source.State("unaccepted").Initial();
+            Pending = source.State("accepted-awaiting-ack");
+            Confirmed = source.State("accepted-confirmed").Final();
+            const string sendResult = "send-result";
+            SendPending = source.Edge("send-pending").On(sendResult).From(Offered).To(Pending)
+                .When((AcceptanceFacts facts, SendResult result) => facts.LinkedLoadExists && !facts.Cancelled
+                    && !facts.AlreadyAcceptedLink && !result.AutoAcknowledged);
+            SendConfirmed = source.Edge("send-confirmed").On(sendResult).From(Offered).To(Confirmed)
+                .When((AcceptanceFacts facts, SendResult result) => facts.LinkedLoadExists && !facts.Cancelled
+                    && !facts.AlreadyAcceptedLink && result.AutoAcknowledged);
+            // P01: positive-result validation is proposed. The observed handler does not perform it.
+            ReceiptConfirmed = source.Edge("receipt-confirmed").From(Pending).To(Confirmed)
+                .When((AcceptanceFacts facts, Receipt receipt) => facts.LinkedLoadExists && receipt.Correlated && receipt.Positive);
+            Definition = source.Build();
+        }
     }
 
-    internal static MachineDefinition Linkage()
+    internal sealed class LinkageDeclaration
     {
-        var source = Machine.Define("tender.load-linkage", "proposal-1");
-        var unlinked = source.State("unlinked").Initial();
-        var linked = source.State("linked").Final();
-        source.Edge("attach-load").From(unlinked).To(linked);
-        return source.Build();
+        internal MachineDefinition Definition { get; }
+        internal MachineState Unlinked { get; }
+        internal MachineState Linked { get; }
+        internal MachineMovement AttachLoad { get; }
+
+        internal LinkageDeclaration()
+        {
+            var source = Machine.Define("tender.load-linkage", "proposal-1");
+            Unlinked = source.State("unlinked").Initial();
+            Linked = source.State("linked").Final();
+            AttachLoad = source.Edge("attach-load").From(Unlinked).To(Linked);
+            Definition = source.Build();
+        }
     }
 
-    internal static MachineDefinition LoadAcknowledgement()
+    internal sealed class LoadAcknowledgementDeclaration
     {
-        var source = Machine.Define("load.tender-acknowledgement", "proposal-1");
-        var pending = source.State("not-acknowledged").Initial();
-        var confirmed = source.State("acknowledged").Final();
-        source.Edge("accept-pending").From(pending).To(pending);
-        source.Edge("confirm").From(pending).To(confirmed);
-        return source.Build();
+        internal MachineDefinition Definition { get; }
+        internal MachineState Pending { get; }
+        internal MachineState Confirmed { get; }
+        internal MachineMovement AcceptPending { get; }
+        internal MachineMovement Confirm { get; }
+
+        internal LoadAcknowledgementDeclaration()
+        {
+            var source = Machine.Define("load.tender-acknowledgement", "proposal-1");
+            Pending = source.State("not-acknowledged").Initial();
+            Confirmed = source.State("acknowledged").Final();
+            AcceptPending = source.Edge("accept-pending").From(Pending).To(Pending);
+            Confirm = source.Edge("confirm").From(Pending).To(Confirmed);
+            Definition = source.Build();
+        }
     }
 
     // Proposed coordination progress; effect completion, not dispatch, advances the machine.
     // Reconciliation deliberately has no automatic retry edge until idempotency is established.
-    internal static MachineDefinition Coordination()
+    internal sealed class CoordinationDeclaration
     {
-        var source = Machine.Define("tender.acceptance-coordination", "proposal-1");
-        var preparing = source.State("preparing").Initial();
-        var linked = source.State("linked");
-        var awaiting = source.State("awaiting-receipt");
-        var confirming = source.State("confirming");
-        var complete = source.State("complete").Final();
-        var reconcile = source.State("reconciliation-required").Final();
-        source.Edge("link-persisted").From(preparing).To(linked);
-        source.Edge("send-pending").From(linked).To(awaiting);
-        source.Edge("send-confirmed").From(linked).To(confirming);
-        source.Edge("receipt-confirmed").From(awaiting).To(confirming);
-        source.Edge("participants-confirmed").From(confirming).To(complete);
-        foreach (var state in new[] { preparing, linked, awaiting, confirming })
-            source.Edge("uncertain-" + state.Id).On("uncertain").From(state).To(reconcile);
-        return source.Build();
+        internal MachineDefinition Definition { get; }
+        internal MachineState Preparing { get; }
+        internal MachineState Linked { get; }
+        internal MachineState AwaitingReceipt { get; }
+        internal MachineState Confirming { get; }
+        internal MachineState Complete { get; }
+        internal MachineState ReconciliationRequired { get; }
+        internal MachineMovement LinkPersisted { get; }
+        internal MachineMovement SendPending { get; }
+        internal MachineMovement SendConfirmed { get; }
+        internal MachineMovement ReceiptConfirmed { get; }
+        internal MachineMovement ParticipantsConfirmed { get; }
+        internal IReadOnlyDictionary<MachineState, MachineMovement> Uncertain { get; }
+
+        internal CoordinationDeclaration()
+        {
+            var source = Machine.Define("tender.acceptance-coordination", "proposal-1");
+            Preparing = source.State("preparing").Initial();
+            Linked = source.State("linked");
+            AwaitingReceipt = source.State("awaiting-receipt");
+            Confirming = source.State("confirming");
+            Complete = source.State("complete").Final();
+            ReconciliationRequired = source.State("reconciliation-required").Final();
+            LinkPersisted = source.Edge("link-persisted").From(Preparing).To(Linked);
+            SendPending = source.Edge("send-pending").From(Linked).To(AwaitingReceipt);
+            SendConfirmed = source.Edge("send-confirmed").From(Linked).To(Confirming);
+            ReceiptConfirmed = source.Edge("receipt-confirmed").From(AwaitingReceipt).To(Confirming);
+            ParticipantsConfirmed = source.Edge("participants-confirmed").From(Confirming).To(Complete);
+            Uncertain = new[] { Preparing, Linked, AwaitingReceipt, Confirming }.ToFrozenDictionary(
+                state => state,
+                state => source.Edge("uncertain-" + state.Id).On("uncertain").From(state).To(ReconciliationRequired));
+            Definition = source.Build();
+        }
     }
 }

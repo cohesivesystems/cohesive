@@ -65,16 +65,18 @@ public sealed class TenderAcceptanceCharacterizationTests
     }
 
     [Theory]
-    [InlineData(false, "accepted-awaiting-ack")]
-    [InlineData(true, "accepted-confirmed")]
-    public void Proposal_matches_successful_acceptance_outcomes(bool autoAck, string target)
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Proposal_matches_successful_acceptance_outcomes(bool autoAck)
     {
         var machine = TenderAcceptanceMachines.Tender();
-        var decision = machine.Evaluate(machine.Initial, "send-result",
+        var decision = machine.Definition.Evaluate(machine.Offered.Id, machine.SendPending.Resolve().Edge.Action,
             ObservationValue.FromObject(new AcceptanceFacts(true, false, false)),
             ObservationValue.FromObject(new SendResult(autoAck)));
         Assert.Equal(MachineDecisionKind.Accepted, decision.Kind);
-        Assert.Equal(target, decision.Edge!.To);
+        Assert.Equal((autoAck ? machine.Confirmed : machine.Pending).Id, decision.Edge!.To);
+        Assert.Equal((autoAck ? machine.SendConfirmed : machine.SendPending).Id, decision.Edge.Id);
+        Assert.Equal(machine.SendPending.Resolve().Edge.Action, machine.SendConfirmed.Resolve().Edge.Action);
     }
 
     [Theory]
@@ -83,7 +85,8 @@ public sealed class TenderAcceptanceCharacterizationTests
     [InlineData(true, false, true)]
     public void Proposal_rejects_missing_link_cancellation_and_duplicate_admission(bool linked, bool cancelled, bool duplicate)
     {
-        var decision = TenderAcceptanceMachines.Tender().Evaluate("unaccepted", "send-result",
+        var machine = TenderAcceptanceMachines.Tender();
+        var decision = machine.Definition.Evaluate(machine.Offered.Id, machine.SendPending.Resolve().Edge.Action,
             ObservationValue.FromObject(new AcceptanceFacts(linked, cancelled, duplicate)),
             ObservationValue.FromObject(new SendResult(false)));
         Assert.Equal(MachineDecisionKind.Disabled, decision.Kind);
@@ -95,7 +98,8 @@ public sealed class TenderAcceptanceCharacterizationTests
     [InlineData(true, true, true)]
     public void P01_proposed_receipt_requires_positive_correlated_evidence(bool correlated, bool positive, bool accepted)
     {
-        var result = TenderAcceptanceMachines.Tender().Evaluate("accepted-awaiting-ack", "receipt-confirmed",
+        var machine = TenderAcceptanceMachines.Tender();
+        var result = machine.Definition.Evaluate(machine.Pending.Id, machine.ReceiptConfirmed.Resolve().Edge.Action,
             ObservationValue.FromObject(new AcceptanceFacts(true, false, false)),
             ObservationValue.FromObject(new Receipt(correlated, positive)));
         Assert.Equal(accepted ? MachineDecisionKind.Accepted : MachineDecisionKind.Disabled, result.Kind);
@@ -106,8 +110,10 @@ public sealed class TenderAcceptanceCharacterizationTests
     {
         var linkage = TenderAcceptanceMachines.Linkage();
         var load = TenderAcceptanceMachines.LoadAcknowledgement();
-        var relation = new MachineCoherenceBuilder(linkage, load)
-            .Allow("unlinked", "not-acknowledged").Allow("linked", "not-acknowledged").Allow("linked", "acknowledged");
+        var relation = new MachineCoherenceBuilder(linkage.Definition, load.Definition)
+            .Allow(linkage.Unlinked.Id, load.Pending.Id)
+            .Allow(linkage.Linked.Id, load.Pending.Id)
+            .Allow(linkage.Linked.Id, load.Confirmed.Id);
         var claim = relation.Analyze();
         Assert.Equal(MachineProofState.Disproven, claim.State);
         Assert.NotEmpty(claim.Trace);
@@ -117,21 +123,62 @@ public sealed class TenderAcceptanceCharacterizationTests
     public void Proposal_routes_uncertain_completion_to_reconciliation_without_blind_retry()
     {
         var machine = TenderAcceptanceMachines.Coordination();
-        var state = machine.Decide(machine.Initial, "link-persisted")!.To;
-        state = machine.Decide(state, "send-pending")!.To;
-        Assert.Equal("awaiting-receipt", state);
-        var failed = machine.Decide(state, "uncertain")!.To;
-        Assert.Equal("reconciliation-required", failed);
-        Assert.Empty(machine.Enabled(failed));
-        var confirming = machine.Decide(state, "receipt-confirmed")!.To;
-        Assert.Equal("complete", machine.Decide(confirming, "participants-confirmed")!.To);
+        var state = machine.Definition.Decide(machine.Preparing.Id, machine.LinkPersisted.Resolve().Edge.Action)!.To;
+        state = machine.Definition.Decide(state, machine.SendPending.Resolve().Edge.Action)!.To;
+        Assert.Equal(machine.AwaitingReceipt.Id, state);
+        var failed = machine.Definition.Decide(state, machine.Uncertain[machine.AwaitingReceipt].Resolve().Edge.Action)!.To;
+        Assert.Equal(machine.ReconciliationRequired.Id, failed);
+        Assert.Empty(machine.Definition.Enabled(failed));
+        var confirming = machine.Definition.Decide(state, machine.ReceiptConfirmed.Resolve().Edge.Action)!.To;
+        Assert.Equal(machine.Complete.Id,
+            machine.Definition.Decide(confirming, machine.ParticipantsConfirmed.Resolve().Edge.Action)!.To);
+    }
+
+    [Fact]
+    public void Declarations_expose_all_handles_from_their_frozen_definition()
+    {
+        var tender = TenderAcceptanceMachines.Tender();
+        Check(tender.Definition, [tender.Offered, tender.Pending, tender.Confirmed],
+            [tender.SendPending, tender.SendConfirmed, tender.ReceiptConfirmed]);
+        var linkage = TenderAcceptanceMachines.Linkage();
+        Check(linkage.Definition, [linkage.Unlinked, linkage.Linked], [linkage.AttachLoad]);
+        var load = TenderAcceptanceMachines.LoadAcknowledgement();
+        Check(load.Definition, [load.Pending, load.Confirmed], [load.AcceptPending, load.Confirm]);
+        var coordination = TenderAcceptanceMachines.Coordination();
+        Check(coordination.Definition,
+            [coordination.Preparing, coordination.Linked, coordination.AwaitingReceipt, coordination.Confirming,
+                coordination.Complete, coordination.ReconciliationRequired],
+            [coordination.LinkPersisted, coordination.SendPending, coordination.SendConfirmed,
+                coordination.ReceiptConfirmed, coordination.ParticipantsConfirmed, ..coordination.Uncertain.Values]);
+        foreach (var (state, movement) in coordination.Uncertain)
+        {
+            Assert.Equal(state.Id, movement.Resolve().Edge.From);
+            Assert.Equal(coordination.ReconciliationRequired.Id, movement.Resolve().Edge.To);
+        }
+
+        static void Check(MachineDefinition definition, MachineState[] states, MachineMovement[] movements)
+        {
+            Assert.Equal(definition.States.Order(), states.Select(state => state.Id).Order());
+            Assert.Equal(definition.Edges.Select(edge => edge.Id).Order(), movements.Select(movement => movement.Id).Order());
+            foreach (var state in states)
+            {
+                Assert.Same(definition, state.Resolve().Machine);
+                Assert.Throws<InvalidOperationException>(() => state.Initial());
+            }
+            foreach (var movement in movements)
+            {
+                Assert.Same(definition, movement.Resolve().Machine);
+                Assert.Contains(movement.Resolve().Edge, definition.Edges);
+                Assert.Throws<InvalidOperationException>(() => movement.To(states[0]));
+            }
+        }
     }
 
     [Fact]
     public void Fluent_source_lowers_deterministically_and_round_trips()
     {
-        Func<MachineDefinition>[] sources = [TenderAcceptanceMachines.Tender, TenderAcceptanceMachines.Linkage,
-            TenderAcceptanceMachines.LoadAcknowledgement, TenderAcceptanceMachines.Coordination];
+        Func<MachineDefinition>[] sources = [() => TenderAcceptanceMachines.Tender().Definition, () => TenderAcceptanceMachines.Linkage().Definition,
+            () => TenderAcceptanceMachines.LoadAcknowledgement().Definition, () => TenderAcceptanceMachines.Coordination().Definition];
         foreach (var source in sources)
         {
             var machine = source();
