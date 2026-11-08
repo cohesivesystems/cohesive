@@ -494,6 +494,11 @@ static class RelationDtoMapperBuilder
 
     static Expression ReadProjected(Expression input, RelationDtoCompiledBinding binding, Type destinationType)
     {
+        // Prepared joins may project the exact CLR conversion once for their immutable rows.
+        if (input.Type == destinationType && (binding.Conversion == RelationDtoValueConversion.String && destinationType == typeof(string)
+            || binding.Conversion == RelationDtoValueConversion.Decimal && destinationType == typeof(decimal)))
+            return input;
+
         var value = Expression.Variable(typeof(ObservationValue), "field");
         return ConvertProjected(value, Expression.Assign(value, input), binding, destinationType);
     }
