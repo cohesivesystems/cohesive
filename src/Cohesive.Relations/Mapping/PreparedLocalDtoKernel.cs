@@ -15,8 +15,8 @@ namespace Cohesive.Relations.Mapping;
 // Value-only realization of a restricted canonical slice. Static input rows and grouped totals are
 // obtained from the canonical interpreter; field aliases become expressions rather than new rows.
 sealed class PreparedLocalDtoKernel<TOutput>(
-    GraphShapeId rootShape, ObservationLayout rootLayout, string identityField, int identityOrdinal,
-    ulong[] allPresent, long maximumRoots, PreparedLocalDtoKernel<TOutput>.MapRow map) where TOutput : notnull
+    GraphShapeId rootShape, Observation.CompleteProjectionAdmission rootAdmission, string identityField,
+    int identityOrdinal, long maximumRoots, PreparedLocalDtoKernel<TOutput>.MapRow map) where TOutput : notnull
 {
     // Keep the optional rental bounded even when an evaluator has a much larger row limit.
     const int MaximumPooledRootSlots = 64 * 1024;
@@ -72,12 +72,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
         }
         maximumRoots = Math.Min(maximumRoots, rowLimit - acquiredRows);
 
-        var allPresent = new ulong[(rootLayout.Count + 63) / 64];
-        Array.Fill(allPresent, ulong.MaxValue);
-        var remainder = rootLayout.Count % 64;
-        if (remainder != 0)
-            allPresent[^1] = (1UL << remainder) - 1;
-        return new(rootShape, rootLayout, rootIdentityField, identityOrdinal, allPresent, maximumRoots,
+        return new(rootShape, new(rootLayout), rootIdentityField, identityOrdinal, maximumRoots,
             compiler.Compile(plan.ExecutionSlice.RelationOutput.Binding, mapper.Descriptor.Members, materialize));
     }
 
@@ -87,14 +82,14 @@ sealed class PreparedLocalDtoKernel<TOutput>(
         cancellationToken.ThrowIfCancellationRequested();
         var type = typeof(TRoot);
         if (!rootProjections.TryGet(type, out var project))
-            project = rootProjections.Get(type, owner => ObservationValue.CompileCompleteScalarProjection(owner, rootLayout));
+            project = rootProjections.Get(type, owner => ObservationValue.CompileCompleteScalarProjection(owner, rootAdmission.Layout));
 
         // Arrays provide an exact extent without consulting caller-defined enumeration or count logic.
         // A batch that may need canonical budget handling retains the ordinary owned observations.
         var capacity = roots is TRoot[] array && array.Length <= maximumRoots && array.Length <= MaximumPooledRootSlots
             ? array.Length
             : 0;
-        var width = rootLayout.Count;
+        var width = rootAdmission.Layout.Count;
         var slots = project is not null && capacity > 0 && capacity <= MaximumPooledRootSlots / width
             ? ArrayPool<ObservationValue>.Shared.Rent(capacity * width)
             : null;
@@ -124,10 +119,9 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                     var rowValues = projected.AsSpan(offset, width);
                     Observation? observation = null;
                     if (slots is null)
-                        observation = Observation.AdmitCompleteProjection(rootShape, rootLayout,
-                            ImmutableCollectionsMarshal.AsImmutableArray(projected), allPresent);
+                        observation = rootAdmission.Admit(ImmutableCollectionsMarshal.AsImmutableArray(projected));
                     else
-                        Observation.ValidateCompleteProjection(rootShape, rootLayout, rowValues, allPresent);
+                        rootAdmission.Validate(rowValues);
                     var id = RelationQueryEvaluationBuilder.RequireRootIdentity(rowValues[identityOrdinal], identityField);
                     admitted = new(id, Uri.EscapeDataString(id), observation, offset);
                 }

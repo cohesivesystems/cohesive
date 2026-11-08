@@ -152,22 +152,44 @@ public sealed class Observation : IEquatable<Observation>, IObservationFieldRead
     public static Observation Create(GraphShapeId shape, ObservationLayout layout, ReadOnlySpan<ObservationValue> valuesByOrdinal) =>
         Create(shape, layout, ImmutableArray.Create(valuesByOrdinal));
 
-    // The compiled property projection produces exactly one concrete value (possibly Null) per slot.
-    internal static Observation AdmitCompleteProjection(GraphShapeId shape, ObservationLayout layout,
-        ImmutableArray<ObservationValue> values, ReadOnlySpan<ulong> allPresent)
+    // Compiled property projections supply a concrete value (possibly Null) for every slot.
+    // Bind the complete root layout once and retain the exact graph snapshot for diagnostics.
+    internal sealed class CompleteProjectionAdmission
     {
-        ValidateCompleteProjection(shape, layout, values.AsSpan(), allPresent);
-        return new(layout.ShapeId, ObservationValue.FromOrdinalFields(new(layout, values, values.Length)));
-    }
+        internal CompleteProjectionAdmission(ObservationLayout layout)
+        {
+            var fields = layout.Graph.GetShape(layout.ShapeId).Fields;
+            var ordinals = layout.OrdinalsByShapeFieldIndex;
+            if (layout.Count != fields.Length || ordinals.Length != fields.Length)
+                throw new ArgumentException("A complete projection requires the exact root field layout.", nameof(layout));
 
-    // Only the failure path needs to snapshot borrowed slots for the canonical diagnostic.
-    internal static void ValidateCompleteProjection(GraphShapeId shape, ObservationLayout layout,
-        ReadOnlySpan<ObservationValue> values, ReadOnlySpan<ulong> allPresent)
-    {
-        if (ObservationValidator.TryValidateAgainstShape(shape, layout, values, allPresent, out _))
-            return;
+            for (var index = 0; index < fields.Length; index++)
+            {
+                var ordinal = ordinals[index];
+                if (ordinal < 0 || !ReferenceEquals(layout.GetFieldDefinition(ordinal), fields[index]))
+                    throw new ArgumentException("A complete projection requires the exact root field layout.", nameof(layout));
+            }
 
-        _ = Create(shape, ObservationValue.FromOrdinalFields(new(layout, ImmutableArray.Create(values), values.Length)));
+            Layout = layout;
+        }
+
+        internal ObservationLayout Layout { get; }
+
+        internal Observation Admit(ImmutableArray<ObservationValue> values)
+        {
+            Validate(values.AsSpan());
+            return new(Layout.ShapeId, ObservationValue.FromOrdinalFields(new(Layout, values, values.Length)));
+        }
+
+        internal void Validate(ReadOnlySpan<ObservationValue> values)
+        {
+            if (ObservationValidator.TryValidateCompleteProjection(this, values))
+                return;
+
+            // The detailed validator owns diagnostic text and precedence.
+            _ = Create(Layout.Graph, Layout.ShapeId,
+                ObservationValue.FromOrdinalFields(new(Layout, ImmutableArray.Create(values), values.Length)));
+        }
     }
 
     /// <summary>Creates and validates an observation from canonical field values.</summary>

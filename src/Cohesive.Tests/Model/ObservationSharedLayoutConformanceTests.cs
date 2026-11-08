@@ -119,6 +119,39 @@ public sealed class ObservationSharedLayoutConformanceTests
         Assert.Throws<ArgumentException>(() => Read(otherShape, ObservationLayout.Create(shape), Json(4)));
     }
 
+    [Fact]
+    public void CompleteProjectionBindsExactRootFieldsAndReportsCanonicalFailures()
+    {
+        const int width = 65;
+        var shape = CreateShape(width);
+        var definition = shape.Graph.GetShape(shape.ShapeId);
+        var layout = ObservationLayout.Create(shape, definition.Fields.Reverse().Select(field => field.Name.Value));
+        var admission = new Observation.CompleteProjectionAdmission(layout);
+        var values = Enumerable.Range(0, width).Reverse().Select(index => ObservationValue.FromInt64(index)).ToArray();
+        values[0] = ObservationValue.Null;
+
+        admission.Validate(values);
+        Assert.Equal(Observation.Create(shape, AsObject()), admission.Admit([.. values]));
+
+        values[layout.GetOrdinal("field0")] = ObservationValue.FromBool(true);
+        values[layout.GetOrdinal("field1")] = ObservationValue.Null;
+        var canonical = Assert.Throws<ArgumentException>(() => Observation.Create(shape, AsObject()));
+        var prepared = Assert.Throws<ArgumentException>(() => admission.Validate(values));
+        Assert.Equal(canonical.Message, prepared.Message);
+
+        Assert.Throws<ArgumentException>(() => admission.Validate(values.AsSpan(1)));
+        Assert.Throws<ArgumentException>(() => new Observation.CompleteProjectionAdmission(
+            ObservationLayout.Create(shape, ["field0"])));
+        var nestedFields = definition.Fields.SetItem(0,
+            new FieldDefinition(new("field0"), new ScalarTypeRef(ScalarTypeKind.Bool)));
+        Assert.Throws<ArgumentException>(() => new Observation.CompleteProjectionAdmission(
+            ObservationLayout.CreateNested(shape, nestedFields)));
+
+        ObservationValue AsObject() => ObservationValue.FromObject(layout.FieldIdentities
+            .Select((name, index) => (name, value: values[index])).ToDictionary(
+                static item => item.name, static item => item.value, StringComparer.Ordinal));
+    }
+
     sealed class Segment : ReadOnlySequenceSegment<byte>
     {
         public Segment(ReadOnlyMemory<byte> memory) => Memory = memory;
