@@ -15,6 +15,22 @@ public sealed class InMemoryProcessDurableStoreSuccessorRegressionTests
     static OperationContext Context { get; } = OperationContext.Create();
 
     [Fact]
+    public async Task CommitCannotRewriteRetainedCompilationPolicy()
+    {
+        var checkpoint = ProcessDurabilityTestFixture.Create().Checkpoint;
+        var store = new InMemoryProcessDurableStore();
+        var snapshot = await InitializeAndAcquireAsync(store, checkpoint, checkpoint.UpdatedAtUtc);
+        var changed = new ProcessDurableCheckpoint(checkpoint.SchemaVersion, checkpoint.Start,
+            checkpoint.Continuation, checkpoint.Control, checkpoint.Activations, checkpoint.Operations,
+            checkpoint.Inbox, checkpoint.Emissions, checkpoint.DurableOperations, checkpoint.CreatedAtUtc,
+            checkpoint.UpdatedAtUtc, new(requiredGuarantees: Cohesive.Processes.Compilation.ProcessRecoveryRequirements.WorkerTakeover));
+        Assert.NotEqual(ProcessStorageContentFingerprints.Value(checkpoint), ProcessStorageContentFingerprints.Value(changed));
+        var result = await CommitCheckpointAsync(store, snapshot, "commit/rewrite-policy", changed, checkpoint.UpdatedAtUtc);
+        Assert.Equal(ProcessStoreMutationDisposition.IdentityConflict, result.Disposition);
+        Assert.Equal(snapshot, await store.LoadAsync(Context, checkpoint.ContinuationIdentity.ProcessInstanceId));
+    }
+
+    [Fact]
     public async Task Commit_AcceptsRenewalDispatchAndAcknowledgementOfExistingAttempt()
     {
         var fixture = ProcessDurabilityTestFixture.Create(

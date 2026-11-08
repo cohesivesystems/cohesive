@@ -339,3 +339,17 @@ activation-host composition before creating or advancing checkpoints. Missing gu
 realization diagnostics used by tooling. Native PostgreSQL supplies this evidence through `CreateFencedRuntime`.
 Keep the selected policy consistent across restoration; it is explicit compilation configuration, not a new process
 wire identity. Hosts without an explicit policy retain their existing reference/runtime behavior.
+
+Durable checkpoint schema `cohesive-process-durable-checkpoint/v8` retains the complete
+`ProcessCompilationOptions` selected at initialization, including atomic scope and explicit guarantees.
+Every checkpoint mutation preserves this policy; aggregate commits cannot replace it. Recovery compares
+it structurally with the supplied plan before acquiring ownership or invoking a host, including activation
+replays. A mismatch reports `storage.processes.checkpoint.compilationPolicyIncompatible` at
+`/compilationOptions`. Restore the original policy; changing it requires an explicit execution migration,
+which is not implemented. Even adding guarantees requires that explicit decision.
+
+This policy is immutable execution metadata, separate from process-definition identity and logical receipt
+identities. It uses the existing canonical checkpoint serialization and content fingerprints. Older schemas
+are rejected; missing or null policy fields are not canonical v8 checkpoints. No implicit upgrade is provided.
+Target capability admission still runs independently: matching the retained policy does not make an
+unqualified host capable of satisfying it.
