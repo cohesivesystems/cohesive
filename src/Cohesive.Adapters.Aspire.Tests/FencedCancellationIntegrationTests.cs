@@ -19,6 +19,24 @@ namespace Cohesive.Adapters.Aspire.Tests;
 public sealed class FencedCancellationIntegrationTests
 {
     [OrderStorageIntegrationTests.PostgresFact]
+    public async Task Persisted_policy_rejects_unqualified_replacement_before_lease_or_inventory_changes()
+    {
+        await using var fixture = await Fixture.Create();
+        var before = (await fixture.Store.LoadAsync(fixture.Context, fixture.Continuation.ProcessInstanceId))!;
+        Assert.Equal(CancellationProcess.FencedRecoveryCompilation, before.Checkpoint.CompilationOptions);
+        var result = await fixture.Advance(fixture.Runtime("weaker"), omitRecoveryPolicy: true);
+        Assert.Equal(ProcessDurableRuntimeDisposition.Incompatible, result.Disposition);
+        Assert.Contains(result.Diagnostics, d => d.Code == ProcessCheckpointDiagnosticCodes.CompilationPolicyIncompatible);
+        var after = (await fixture.Store.LoadAsync(fixture.Context, fixture.Continuation.ProcessInstanceId))!;
+        Assert.Equal(before.Revision, after.Revision);
+        Assert.Null(after.WorkerLease);
+        Assert.Equal(ProcessDurableCheckpointJsonSerializer.Serialize(before.Checkpoint),
+            ProcessDurableCheckpointJsonSerializer.Serialize(after.Checkpoint));
+        Assert.Equal(3, await fixture.Stock());
+        await fixture.AssertCompleted(await fixture.Advance(fixture.Runtime("qualified")));
+    }
+
+    [OrderStorageIntegrationTests.PostgresFact]
     public async Task Fence_binding_requires_acquired_ownership_receipts_and_the_same_data_source()
     {
         await using var fixture = await Fixture.Create();
@@ -174,7 +192,8 @@ public sealed class FencedCancellationIntegrationTests
                 return hook is null ? host : new HookHost(host, hook);
             }, new(owner, owner == "old" ? Lease : TimeSpan.FromSeconds(20)));
         }
-        internal Task<ProcessDurableActivationResult> Advance(ProcessDurableRuntime runtime) => runtime.AdvanceAsync(Context, recoveryPlan, Continuation,
+        internal Task<ProcessDurableActivationResult> Advance(ProcessDurableRuntime runtime, bool omitRecoveryPolicy = false) => runtime.AdvanceAsync(Context,
+            omitRecoveryPolicy ? prepared.Plan : recoveryPlan, Continuation,
             new(new("aspire-first", FulfillmentStoragePolicy.LocalPartition), new(OrderId),
                 new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), prepared.Plan.Document.Metadata.Provenance));
         internal async Task WaitForExpiry()
@@ -205,6 +224,8 @@ public sealed class FencedCancellationIntegrationTests
         {
             Assert.Equal(ExecutionTerminalOutcomeKind.Completed, result.Snapshot!.Checkpoint.Continuation.Terminal.Kind);
             Assert.Equal(Continuation, result.Snapshot.Checkpoint.ContinuationIdentity);
+            Assert.Equal(CancellationProcess.FencedRecoveryCompilation,
+                (await Store.LoadAsync(Context, Continuation.ProcessInstanceId))!.Checkpoint.CompilationOptions);
             Assert.Equal(6, await Stock());
             Assert.Equal(OrderStatus.Cancelled, (await persistence.Repository(Model.Domain.Orders).TryGetEntity(Context, OrderId, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))!.Status);
             await using var count = Database.CreateCommand("SELECT count(*) FROM public.cohesive_process_receipts WHERE subject_id=$1");

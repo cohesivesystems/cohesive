@@ -200,7 +200,8 @@ public sealed partial class ProcessDurableRuntime
             continuation,
             start.CreateInitialState(),
             createdAtUtc: start.AcceptedAtUtc,
-            updatedAtUtc: start.AcceptedAtUtc);
+            updatedAtUtc: start.AcceptedAtUtc,
+            compilationOptions: plan.Options);
         var compatibility = ProcessCheckpointCompatibilityValidator.Validate(plan, checkpoint);
         if (!compatibility.IsValid)
         {
