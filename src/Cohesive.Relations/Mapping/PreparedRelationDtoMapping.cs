@@ -35,6 +35,31 @@ public sealed class RelationDtoMapping<TOutput> where TOutput : notnull
     /// <summary>Original expression-lowering decisions and source references.</summary>
     public RelationQueryAuthoringManifest AuthoringProvenance { get; }
 
+    /// <summary>Creates an in-memory evaluator with two acquired collections and default identity bindings.</summary>
+    /// <typeparam name="TFirst">Exact authored CLR row type of one acquired input.</typeparam>
+    /// <typeparam name="TSecond">Exact authored CLR row type of the other acquired input.</typeparam>
+    /// <param name="first">Complete finite collection, snapshotted at evaluator creation.</param>
+    /// <param name="second">Complete finite collection, snapshotted at evaluator creation.</param>
+    /// <param name="maximumRows">Positive row limit applied to each snapshot and to local execution.</param>
+    /// <returns>A reusable evaluator for this prepared request using owned source snapshots.</returns>
+    /// <exception cref="ArgumentNullException">A collection or row is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The row limit is not positive.</exception>
+    /// <exception cref="ArgumentException">A row type does not select exactly one acquired input, or rows violate their input contract or limit.</exception>
+    /// <exception cref="InvalidOperationException">A binding is missing, repeated, lacks a default identity, or requires unsupported placement.</exception>
+    /// <exception cref="NotSupportedException">A row cannot be represented as observation data.</exception>
+    /// <remarks>Collections are matched by row type. Uses the sole string identity field on each input shape,
+    /// including the root, or a string field named Id when the shape declares no identity.
+    /// Use the configuration overload for custom keys or a different number of collections.</remarks>
+    public IRelationQueryEvaluator CreateInMemoryEvaluator<TFirst, TSecond>(
+        IEnumerable<TFirst> first, IEnumerable<TSecond> second,
+        int maximumRows = (int)RelationQueryEvaluator.DefaultMaximumRootRows)
+        where TFirst : notnull where TSecond : notnull
+    {
+        ArgumentNullException.ThrowIfNull(first);
+        ArgumentNullException.ThrowIfNull(second);
+        return CreateInMemoryEvaluator(sources => sources.Bind(first).Bind(second), maximumRows);
+    }
+
     /// <summary>Creates an evaluator for supplied roots and complete in-memory source sets.</summary>
     /// <param name="configure">Binds each acquired input to a finite collection and optionally overrides the root identity.</param>
     /// <param name="maximumRows">Positive row limit applied to each snapshot and to local execution.</param>

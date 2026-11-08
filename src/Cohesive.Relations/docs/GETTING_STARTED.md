@@ -77,9 +77,7 @@ LineItem[] lineItemValues = [
     new("item-2", "load-42", 1m, 25m)
 ];
 
-var evaluator = mapping.CreateInMemoryEvaluator(sources => sources
-    .Bind(customerValues)
-    .Bind(lineItemValues));
+var evaluator = mapping.CreateInMemoryEvaluator(customerValues, lineItemValues);
 var dtos = await mapping.MapAsync(evaluator, loadValues);
 foreach (var dto in dtos)
     Console.WriteLine(dto);
@@ -93,9 +91,10 @@ public record LoadSummaryDto(string Id, string CustomerName, decimal Total);
 The evaluator matches each collection's exact CLR element type to one acquired input in the prepared relation
 and snapshots its rows. For roots and acquired inputs, it uses the shape's sole string identity field, or a
 string field named `Id` when no identity field is declared. Every identity must be unique and nonempty within
-its input. Use `Root(shape, identity)` or `Bind(shape, rows, identity)` to select another field, and explicit
-placement for relationship lookups or multiple acquired inputs sharing a shape. The optional `maximumRows`
-argument limits each snapshot and local execution.
+its input. The two-collection overload accepts either collection order. Use the configuration callback for
+a different number of collections or to choose identity fields with `Root(shape, identity)` and
+`Bind(shape, rows, identity)`. Use explicit placement for relationship lookups or multiple acquired inputs
+sharing a shape. The optional `maximumRows` argument limits each snapshot and local execution.
 
 The two-argument mapping call reads identities from the admitted observations. It supplies a complete root
 collection using the existing whole-source partition default and observes cancellation between inputs.

@@ -44,7 +44,7 @@ public sealed class RelationDtoJoinFacadeTests
         var mapping = RelationDtoMapping.Create(loads, summaries, RelationOutputMode.ZeroOrOnePerRoot);
         Customer[] customers = [new("customer-7", "Acme")];
         LineItem[] items = [new("item-1", "load-42", 2m, 50m), new("item-2", "load-42", 1m, 25m)];
-        var evaluator = mapping.CreateInMemoryEvaluator(sources => sources.Bind(customers).Bind(items));
+        var evaluator = mapping.CreateInMemoryEvaluator(customers, items);
 
         var outcome = await mapping.EvaluateAsync(evaluator, Loads(), load => load.Id);
         Assert.True(outcome.IsSuccessful, Explain(outcome));
@@ -55,8 +55,10 @@ public sealed class RelationDtoJoinFacadeTests
         Assert.Equal(row.Value, Assert.Single(await mapping.MapAsync(evaluator, Loads())));
         Assert.Empty(await mapping.MapAsync(evaluator, [new Load("no-items", "customer-7")]));
 
-        Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(sources => sources.Bind(Loads())));
-        Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(sources => sources.Bind(customers.Concat(customers))));
+        Assert.Equal(row.Value, Assert.Single(await mapping.MapAsync(mapping.CreateInMemoryEvaluator(items, customers), Loads())));
+        Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(Loads(), items));
+        Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(customers.Concat(customers), items));
+        Assert.Throws<ArgumentException>(() => mapping.CreateInMemoryEvaluator(customers, items, maximumRows: 1));
     }
 
     [Fact]
