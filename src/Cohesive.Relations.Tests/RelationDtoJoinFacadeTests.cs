@@ -314,6 +314,39 @@ public sealed class RelationDtoJoinFacadeTests
     }
 
     [Fact]
+    public async Task FusedMappingKeepsOneCanonicalOrderAndDuplicateCheckAcrossPooledBlocks()
+    {
+        const int loadCount = 32_771;
+        var q = RelationQuery.Expression();
+        var loads = q.Source<Load>();
+        var output = loads.Join(q.Source<Customer>(), (load, customer) => load.CustomerId == customer.Id,
+            (load, customer) => new LoadCustomer(load.Id, customer.Name));
+        var mapping = RelationDtoMapping.Create(loads, output, RelationOutputMode.ZeroOrOnePerRoot);
+        Customer[] customers = [new("customer-0", "First"), new("customer-1", "Second")];
+        var evaluator = mapping.CreateInMemoryEvaluator(
+            sources => sources.Bind(customers), maximumRows: loadCount + customers.Length);
+        var roots = Enumerable.Range(0, loadCount).Reverse()
+            .Select(index => new Load($"load-{index}", $"customer-{index % 3}")).ToArray();
+
+        var canonical = await mapping.MapAsync(evaluator, roots, static load => load.Id);
+        Assert.NotEmpty(canonical);
+        Assert.Equal(canonical, await mapping.MapAsync(evaluator, roots));
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var warm = mapping.MapAsync(evaluator, roots);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(warm.IsCompletedSuccessfully);
+        Assert.Equal(canonical, await warm);
+        Assert.InRange(allocated, 0, loadCount * 160);
+
+        roots[^1] = roots[0];
+        var expected = await Assert.ThrowsAsync<ArgumentException>(
+            () => mapping.MapAsync(evaluator, roots, static load => load.Id));
+        var actual = await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, roots));
+        Assert.Equal(expected.Message, actual.Message);
+    }
+
+    [Fact]
     public async Task PreparedJoinCanFeedAScalarKeyIntoAnotherJoinAndFallsBackForDuplicateKeys()
     {
         var q = RelationQuery.Expression();

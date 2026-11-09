@@ -18,8 +18,8 @@ sealed class PreparedLocalDtoKernel<TOutput>(
     GraphShapeId rootShape, Observation.CompleteProjectionAdmission rootAdmission, string identityField,
     int identityOrdinal, long maximumRoots, PreparedLocalDtoKernel<TOutput>.MapRow map) where TOutput : notnull
 {
-    // Keep the optional rental bounded even when an evaluator has a much larger row limit.
-    const int MaximumPooledRootSlots = 64 * 1024;
+    // Bound each slot rental. The evaluator's row limit bounds the complete batch.
+    const int MaximumRootSlotsPerBlock = 64 * 1024;
     const int MinimumPackedSortRoots = 128;
 
     readonly WeakPreparationCache<Type, ObservationValue.ScalarProjection?> rootProjections = new();
@@ -87,19 +87,24 @@ sealed class PreparedLocalDtoKernel<TOutput>(
 
         // Arrays provide an exact extent without consulting caller-defined enumeration or count logic.
         // A batch that may need canonical budget handling retains the ordinary owned observations.
-        var capacity = roots is TRoot[] array && array.Length <= maximumRoots && array.Length <= MaximumPooledRootSlots
-            ? array.Length
-            : 0;
+        var capacity = roots is TRoot[] array && array.Length <= maximumRoots ? array.Length : 0;
         var width = rootAdmission.Layout.Count;
-        var slots = project is not null && capacity > 0 && capacity <= MaximumPooledRootSlots / width
-            ? ArrayPool<ObservationValue>.Shared.Rent(capacity * width)
+        var rootsPerBlock = MaximumRootSlotsPerBlock / width;
+        var slots = project is not null && capacity > 0 && rootsPerBlock > 0
+            ? ArrayPool<ObservationValue>.Shared.Rent(Math.Min(capacity, rootsPerBlock) * width)
             : null;
+        ObservationValue[][]? blocks = null;
         AdmittedRoot[]? rootBuffer = null;
         string[]? orderKeys = null;
         int[]? orderBuffer = null;
         budgetFallback = [];
         try
         {
+            if (slots is not null && capacity > rootsPerBlock)
+            {
+                blocks = new ObservationValue[(capacity - 1) / rootsPerBlock + 1][];
+                blocks[0] = slots;
+            }
             if (slots is not null && capacity > 1)
             {
                 rootBuffer = ArrayPool<AdmittedRoot>.Shared.Rent(capacity);
@@ -108,23 +113,36 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             }
             var ownedRoots = rootBuffer is null ? new List<AdmittedRoot>(capacity) : null;
             var count = 0;
+            var currentSlots = slots;
+            var blockStart = 0;
+            var nextBlock = rootsPerBlock;
+            var blockIndex = 0;
             foreach (var value in roots)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (blocks is not null && count == nextBlock)
+                {
+                    currentSlots = ArrayPool<ObservationValue>.Shared.Rent(Math.Min(capacity - count, rootsPerBlock) * width);
+                    blocks[++blockIndex] = currentSlots;
+                    blockStart = count;
+                    nextBlock = count + Math.Min(capacity - count, rootsPerBlock);
+                }
+
                 AdmittedRoot admitted;
                 if (project is not null && value?.GetType() == type)
                 {
-                    var offset = slots is null ? 0 : count * width;
-                    var projected = slots ?? new ObservationValue[width];
+                    var offset = currentSlots is null ? 0 : (count - blockStart) * width;
+                    var projected = currentSlots ?? new ObservationValue[width];
                     project(value, projected, offset);
                     var rowValues = projected.AsSpan(offset, width);
                     Observation? observation = null;
-                    if (slots is null)
+                    if (currentSlots is null)
                         observation = rootAdmission.Admit(ImmutableCollectionsMarshal.AsImmutableArray(projected));
                     else
                         rootAdmission.Validate(rowValues);
                     var id = RelationQueryEvaluationBuilder.RequireRootIdentity(rowValues[identityOrdinal], identityField);
-                    admitted = new(id, Uri.EscapeDataString(id), observation, offset);
+                    // Whole-entry sorting on the collision path may move the row away from its admission index.
+                    admitted = new(id, Uri.EscapeDataString(id), observation, blocks is null ? offset : count);
                 }
                 else
                 {
@@ -146,7 +164,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             var rows = rootBuffer is null ? CollectionsMarshal.AsSpan(ownedRoots) : rootBuffer.AsSpan(0, count);
             var order = orderBuffer is null ? Span<int>.Empty : orderBuffer.AsSpan(0, count);
             var keys = orderKeys is null ? Span<string>.Empty : orderKeys.AsSpan(0, count);
-            if (count > 1 && SortAndFindDuplicate(rows, keys, order))
+            if (count > 1 && SortAndFindDuplicate(rows, keys, ref order, preserveWholeRowTies: blocks is not null))
                 throw new ArgumentException("Supplied roots cannot repeat an observation identity.", "observations");
 
             if (rows.Length > maximumRoots)
@@ -156,7 +174,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                 return false;
             }
 
-            result = MapAdmitted(rows, order, slots, cancellationToken);
+            result = MapAdmitted(rows, order, slots, blocks, rootsPerBlock, width, cancellationToken);
             return true;
         }
         finally
@@ -167,12 +185,17 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                 ArrayPool<string>.Shared.Return(orderKeys, clearArray: true);
             if (rootBuffer is not null)
                 ArrayPool<AdmittedRoot>.Shared.Return(rootBuffer, clearArray: true);
+            if (blocks is not null)
+                for (var block = 1; block < blocks.Length; block++)
+                    if (blocks[block] is { } rental)
+                        ArrayPool<ObservationValue>.Shared.Return(rental, clearArray: true);
             if (slots is not null)
                 ArrayPool<ObservationValue>.Shared.Return(slots, clearArray: true);
         }
     }
 
-    static bool SortAndFindDuplicate(Span<AdmittedRoot> rows, Span<string> keys, Span<int> order)
+    static bool SortAndFindDuplicate(Span<AdmittedRoot> rows, Span<string> keys, ref Span<int> order,
+        bool preserveWholeRowTies)
     {
         // Physical source occurrence IDs share an input prefix and escape the observation identity.
         if (order.IsEmpty)
@@ -184,6 +207,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             keys.Sort(order, StringComparer.Ordinal);
         }
 
+        var repeated = false;
         for (var index = 1; index < rows.Length; index++)
         {
             if (!keys.IsEmpty && keys[index - 1] != keys[index])
@@ -191,9 +215,19 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             var left = order.IsEmpty ? index - 1 : order[index - 1];
             var right = order.IsEmpty ? index : order[index];
             if (rows[left].Id == rows[right].Id)
-                return true;
+            {
+                if (!preserveWholeRowTies)
+                    return true;
+                repeated = true;
+            }
+            else if (preserveWholeRowTies)
+            {
+                // Distinct identities can escape to the same text. Keep the previous large-batch tie behavior.
+                order = default;
+                return SortAndFindDuplicate(rows, default, ref order, preserveWholeRowTies: false);
+            }
         }
-        return false;
+        return repeated;
     }
 
     static bool TrySortPackedKeys(ReadOnlySpan<AdmittedRoot> rows, ReadOnlySpan<string> keys,
@@ -256,7 +290,8 @@ sealed class PreparedLocalDtoKernel<TOutput>(
     }
 
     TOutput[] MapAdmitted(ReadOnlySpan<AdmittedRoot> admitted, ReadOnlySpan<int> order,
-        ObservationValue[]? slots, CancellationToken cancellationToken)
+        ObservationValue[]? slots, ObservationValue[][]? blocks, int rootsPerBlock, int width,
+        CancellationToken cancellationToken)
     {
         var result = admitted.IsEmpty ? [] : new TOutput[admitted.Length];
         List<string>? failures = null;
@@ -267,7 +302,15 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             ref readonly var row = ref admitted[order.IsEmpty ? index : order[index]];
             try
             {
-                if (map(row.Value?.Value ?? default, row.Value is null ? slots : null, row.Offset, out var dto))
+                var projected = row.Value is null ? slots : null;
+                var offset = row.Offset;
+                if (projected is not null && blocks is not null)
+                {
+                    var block = offset / rootsPerBlock;
+                    projected = blocks[block];
+                    offset = (offset - block * rootsPerBlock) * width;
+                }
+                if (map(row.Value?.Value ?? default, projected, offset, out var dto))
                     result[count++] = dto;
             }
             catch (RelationDtoRowMappingException exception)
@@ -404,9 +447,10 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                 if (field is not { Cardinality: FieldCardinality.Single, Type: ScalarTypeRef { Format: PrimitiveFormat.None, Kind: ScalarTypeKind.String or ScalarTypeKind.Decimal } scalar })
                     continue;
                 var name = field.Name.Value;
+                var contract = ValueContract.FromField(field);
                 if (lookup.Values.All(row => row.TryGetProperty(name, out var value)
                     && value.Kind is not (ObservationValueKind.Null or ObservationValueKind.Undefined)
-                    && ValueContract.FromField(field).IsSatisfiedByConstant(value)))
+                    && contract.IsSatisfiedByConstant(value)))
                 {
                     fields.Add((binding.Binding, name), (Read(matched, name), scalar.Kind));
                 }

@@ -1317,13 +1317,17 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             AggregateQueryNode node)
         {
             List<AggregateGroup> groups = [];
-            Dictionary<RelationQueryValueVector, AggregateGroup> byKey = [];
+            var byKey = new Dictionary<RelationQueryValueVector, AggregateGroup>(RelationQueryValueVector.SpanComparer.Instance)
+                .GetAlternateLookup<ReadOnlySpan<ObservationValue>>();
+            var groupingOffset = rootPartitioned ? 2 : 0;
+            var keyParts = new ObservationValue[groupingOffset + execution.AggregateGroupings.Length];
+            if (rootPartitioned)
+                keyParts[0] = ObservationValue.FromString(RootPartitionMarker);
             foreach (var row in InputRows(execution, inputIndex: 0))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                List<ObservationValue> keyParts = [];
-                AddRootPartition(keyParts, row);
-                var groupingValues = new ObservationValue[execution.AggregateGroupings.Length];
+                if (rootPartitioned)
+                    keyParts[1] = RootPartitionIdentity(row.Root);
                 var complete = true;
                 for (var index = 0; index < execution.AggregateGroupings.Length; index++)
                 {
@@ -1332,17 +1336,16 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                         complete = false;
                         break;
                     }
-                    groupingValues[index] = key;
-                    keyParts.Add(key);
+                    keyParts[groupingOffset + index] = key;
                 }
                 if (!complete)
                     continue;
 
-                var vector = new RelationQueryValueVector(keyParts);
-                if (!byKey.TryGetValue(vector, out var group))
+                if (!byKey.TryGetValue(keyParts, out var group))
                 {
-                    group = new(groupingValues, row.Root);
-                    byKey.Add(vector, group);
+                    var key = RelationQueryValueVector.Copy(keyParts);
+                    group = new(key, row.Root);
+                    byKey.Dictionary.Add(key, group);
                     groups.Add(group);
                 }
                 group.Rows.Add(row);
@@ -1354,42 +1357,40 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                 {
                     foreach (var root in RelationRoots())
                     {
-                        var key = new RelationQueryValueVector(
-                        [
-                            ObservationValue.FromString("$relationRoot"),
-                            ObservationValue.FromString(root.Id.Value)
-                        ]);
-                        if (!byKey.ContainsKey(key))
+                        keyParts[1] = RootPartitionIdentity(root);
+                        if (!byKey.ContainsKey(keyParts))
                         {
-                            var group = new AggregateGroup([], root);
-                            byKey.Add(key, group);
+                            var key = RelationQueryValueVector.Copy(keyParts);
+                            var group = new AggregateGroup(key, root);
+                            byKey.Dictionary.Add(key, group);
                             groups.Add(group);
                         }
                     }
                 }
                 else if (groups.Count == 0)
                 {
-                    groups.Add(new([], root: null));
+                    groups.Add(new(RelationQueryValueVector.Copy([]), root: null));
                 }
             }
 
-            var aggregated = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>();
+            var aggregated = ImmutableArray.CreateBuilder<RelationQueryRuntimeRow>(groups.Count);
+            List<ObservationValue> values = [];
             foreach (var group in groups)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var output = RelationQueryObjectValues.Empty;
-                List<FieldPath> unavailableFields = [];
+                List<FieldPath>? unavailableFields = null;
                 for (var index = 0; index < execution.AggregateGroupings.Length; index++)
                 {
                     output = RelationQueryObjectValues.Set(
                         output,
                         execution.AggregateGroupings[index].Definition.Target,
-                        group.GroupingValues[index]);
+                        group.Key[groupingOffset + index]);
                 }
 
                 foreach (var assignment in execution.AggregateAssignments)
                 {
-                    List<ObservationValue> values = [];
+                    values.Clear();
                     long rowCount = 0;
                     var assignmentUnavailable = !TryUseAggregateCapability(execution, assignment);
                     foreach (var row in group.Rows)
@@ -1434,7 +1435,7 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                         assignment.Definition.Target,
                         aggregate);
                     if (assignmentUnavailable)
-                        unavailableFields.Add(assignment.Definition.Target);
+                        (unavailableFields ??= []).Add(assignment.Definition.Target);
                 }
 
                 var aggregateRow = group.Rows.Count == 0
@@ -1447,10 +1448,10 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
                     RelationQueryRuntimeBinding.FromComputed(
                         node.ResultShape,
                         output,
-                        [.. unavailableFields])));
+                        unavailableFields is null ? [] : [.. unavailableFields])));
             }
 
-            return aggregated.ToImmutable();
+            return aggregated.MoveToImmutable();
         }
 
         bool TryUseAggregateCapability(
@@ -2343,16 +2344,20 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             ValueBindingId binding) =>
             execution.OutputBindings.Single(candidate => candidate.Binding == binding).Shape;
 
+        const string RootPartitionMarker = "$relationRoot";
+
+        static ObservationValue RootPartitionIdentity(RelationQueryObservationOccurrence? root) => root is null
+            ? ObservationValue.Undefined
+            : ObservationValue.FromString(root.Id.Value);
+
         void AddRootPartition(
             ICollection<ObservationValue> parts,
             RelationQueryRuntimeRow row)
         {
             if (!rootPartitioned)
                 return;
-            parts.Add(ObservationValue.FromString("$relationRoot"));
-            parts.Add(row.Root is null
-                ? ObservationValue.Undefined
-                : ObservationValue.FromString(row.Root.Id.Value));
+            parts.Add(ObservationValue.FromString(RootPartitionMarker));
+            parts.Add(RootPartitionIdentity(row.Root));
         }
 
         ImmutableArray<RelationQueryRuntimeRow> ApplyPerRootPartition(
@@ -2770,10 +2775,10 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         ];
 
         sealed class AggregateGroup(
-            ObservationValue[] groupingValues,
+            RelationQueryValueVector key,
             RelationQueryObservationOccurrence? root)
         {
-            public ObservationValue[] GroupingValues { get; } = groupingValues;
+            public RelationQueryValueVector Key { get; } = key;
 
             public RelationQueryObservationOccurrence? Root { get; } = root;
 
@@ -2804,15 +2809,27 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
             this.values = [.. values];
         }
 
+        RelationQueryValueVector(ImmutableArray<ObservationValue> values) => this.values = values;
+
+        internal static RelationQueryValueVector Copy(ReadOnlySpan<ObservationValue> values) =>
+            new(ImmutableArray.Create(values));
+
+        internal ObservationValue this[int index] => values[index];
+
         public bool Equals(RelationQueryValueVector? other)
         {
             if (ReferenceEquals(this, other))
                 return true;
-            if (other is null || values.Length != other.values.Length)
+            return other is not null && Equals(values.AsSpan(), other.values.AsSpan());
+        }
+
+        static bool Equals(ReadOnlySpan<ObservationValue> left, ReadOnlySpan<ObservationValue> right)
+        {
+            if (left.Length != right.Length)
                 return false;
-            for (var index = 0; index < values.Length; index++)
+            for (var index = 0; index < left.Length; index++)
             {
-                if (!RelationQueryValueSemantics.Equals(values[index], other.values[index]))
+                if (!RelationQueryValueSemantics.Equals(left[index], right[index]))
                     return false;
             }
             return true;
@@ -2821,12 +2838,32 @@ public sealed class RelationQueryInMemoryInterpreter : IRelationQueryInterpreter
         public override bool Equals(object? obj) =>
             obj is RelationQueryValueVector other && Equals(other);
 
-        public override int GetHashCode()
+        public override int GetHashCode() => GetHashCode(values.AsSpan());
+
+        static int GetHashCode(ReadOnlySpan<ObservationValue> values)
         {
             HashCode hash = new();
             foreach (var value in values)
                 hash.Add(RelationQueryValueSemantics.GetHashCode(value));
             return hash.ToHashCode();
+        }
+
+        internal sealed class SpanComparer : IEqualityComparer<RelationQueryValueVector>,
+            IAlternateEqualityComparer<ReadOnlySpan<ObservationValue>, RelationQueryValueVector>
+        {
+            internal static readonly SpanComparer Instance = new();
+
+            public bool Equals(RelationQueryValueVector? left, RelationQueryValueVector? right) =>
+                ReferenceEquals(left, right) || left is not null && left.Equals(right);
+
+            public bool Equals(ReadOnlySpan<ObservationValue> left, RelationQueryValueVector right) =>
+                RelationQueryValueVector.Equals(left, right.values.AsSpan());
+
+            public int GetHashCode(RelationQueryValueVector value) => value.GetHashCode();
+
+            public int GetHashCode(ReadOnlySpan<ObservationValue> value) => RelationQueryValueVector.GetHashCode(value);
+
+            public RelationQueryValueVector Create(ReadOnlySpan<ObservationValue> value) => Copy(value);
         }
     }
 

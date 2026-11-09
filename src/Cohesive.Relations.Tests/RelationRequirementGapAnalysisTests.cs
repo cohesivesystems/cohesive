@@ -1265,24 +1265,25 @@ public sealed class RelationRequirementGapAnalysisTests
     {
         var plan = Compile();
         var inputs = Inputs.For(plan);
-        var load = LoadOccurrence("load-1");
+        var first = LoadOccurrence("load-1");
+        var second = LoadOccurrence("load-2");
 
         var result = RelationRequirementGapAnalyzer.Analyze(
             plan,
             Evidence(
                 plan,
-                sources: [ProvidedSource(inputs, load)],
+                sources: [ProvidedSource(inputs, first, second)],
                 fields:
                 [
-                    ValueField(inputs.Source, load, "not-source-evidence")
+                    ValueField(inputs.Source, second, "not-source-evidence"),
+                    ValueField(inputs.Source, first, "not-source-evidence")
                 ]));
 
         Assert.Empty(result.Gaps);
-        Assert.Contains(
-            result.Diagnostics,
-            diagnostic => diagnostic.Code == RelationRuntimeDiagnosticCodes.InputKindMismatch
-                && diagnostic.Input == inputs.Source
-                && diagnostic.Occurrence == load.Id);
+        Assert.Equal([first.Id, second.Id], result.Diagnostics
+            .Where(diagnostic => diagnostic.Code == RelationRuntimeDiagnosticCodes.InputKindMismatch
+                && diagnostic.Input == inputs.Source)
+            .Select(diagnostic => diagnostic.Occurrence));
     }
 
     [Fact]
