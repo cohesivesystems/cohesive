@@ -9,8 +9,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Cohesive.Relations.Benchmarks;
 
 /// <summary>Measures a load summary that joins customers and sums line items, including CLR root admission.</summary>
+/// <remarks>Leaves garbage collection to the runtime so pooled root buffers age as they do in repeated mapping.</remarks>
 [Config(typeof(RelationBenchmarkConfig))]
 [MemoryDiagnoser]
+[GcForce(false)]
 public class RelationDtoRootAdmissionBenchmarks
 {
     Load[] loads = null!;
