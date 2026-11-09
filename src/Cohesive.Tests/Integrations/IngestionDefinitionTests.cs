@@ -9,7 +9,7 @@ using Cohesive.Processes.IR;
 
 namespace Cohesive.Tests.Integrations;
 
-public sealed class IngestionDefinitionTests
+public sealed partial class IngestionDefinitionTests
 {
     static readonly ValueContract TextContract = new(new ScalarTypeRef(ScalarTypeKind.String));
     static readonly DateTimeOffset Now = new(2026, 9, 7, 12, 0, 0, TimeSpan.Zero);

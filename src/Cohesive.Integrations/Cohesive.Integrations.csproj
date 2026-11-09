@@ -6,5 +6,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Cohesive.Processes/Cohesive.Processes.csproj" />
+    <ProjectReference Include="../Cohesive.Configuration/Cohesive.Configuration.csproj" />
   </ItemGroup>
 </Project>
