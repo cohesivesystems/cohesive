@@ -167,7 +167,7 @@ To replay evolution against the single-reservation commit through one MCP sessio
 dotnet run --project eng/examples/aspire-first/Development -- cancellation-exercise "$PWD" 744adcf9b6053f31d472bcda4b147a1ca85f4931
 ```
 
-The same command supports the pre-cancellation baseline `a2461a5098bd337977af8540ff233f7753501d36`. It saves validation, exact dependency paths and directional findings for all ten durable-profile endpoints to `tmp/orders-cancellation-exercise.json`. Findings preserve unsupported wire interpretations as Unknown; reachability is not an API compatibility proof. Host-profile endpoint removal must be considered separately from this durable-profile export.
+The default baseline is the single-reservation cancellation revision `744adcf9b6053f31d472bcda4b147a1ca85f4931`. It saves validation, exact dependency paths and directional findings for all ten durable-profile endpoints to `tmp/orders-cancellation-exercise.json`. The pre-cancellation baseline `a2461a5098bd337977af8540ff233f7753501d36` is intentionally rejected by the stricter gate: a new Order.Details client requires the added Released response field from an old server that cannot supply it. This genuine incompatibility was previously recorded without failing the exercise. Findings preserve unsupported wire interpretations as Unknown; reachability is not an API compatibility proof. Host-profile endpoint removal must be considered separately from this durable-profile export.
 
 Indexed source projections lower to a canonical `elementAt` call with a selected-element scope. Invalid indices fail and only the chosen element is projected. The shared semantic catalog supplies its type and scope rules. A short BenchmarkDotNet run over 1, 32 and 1000 rows with flat, nested and collection payloads measured 46.7–52.8 ns and 72 B per relation-reference projection; these are local warm microbenchmarks, not end-to-end cancellation latency. See `IndexedExpressionBenchmarks` for reproduction.
 
@@ -253,3 +253,16 @@ of the current authored implementation, not autonomous generation of new source.
 Checkpoint v8 pins compilation policy independently of process graph identity. Replacement workers must supply the
 same policy and a qualifying target. Policy changes and older checkpoints require an explicit migration decision;
 there is no automatic migration in this exercise.
+
+The shared source replay owns export, document checks, dependency analysis, and comparison. Recovery qualification
+is a separate completion step over the still-live isolated replay. Both commands reject unexpected Breaking API
+verdicts. The initial cancellation-authoring scenario explicitly expects Breaking only for a proposed client calling
+its newly added cancellation endpoints on the old server. API discovery uses the union of baseline and proposed
+identities, so deleted endpoints are checked too. Recovery assessments are paged dynamically; any exported target
+is recorded, while the PostgreSQL composition selected for physical testing must be present and Realizable.
+
+`RecoveryConformance.tests.json` is the reviewed required-case manifest, including each theory argument combination.
+A rename, removal, filtered-out case, failure, or skip fails qualification even when other tests pass. New passing
+cases are allowed; update the manifest deliberately when changing required scenarios. `WorkspaceInspectionReader`
+reconstructs complete values from the inspector's JSON kind and truncation evidence, with request, byte and traversal
+bounds. It handles objects, arrays, escaped property names and actual JSON null without target-specific pointers.

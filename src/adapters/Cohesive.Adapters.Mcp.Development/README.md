@@ -116,3 +116,9 @@ For Orders, resolve `AvailableStock`, call `impact` on the returned field identi
 ```
 
 Legacy application endpoint documents remain readable as route/binding projections. They do not carry portable wire types.
+
+Inspection responses include `valueKind` and `isTruncated`, so clients can distinguish selected JSON null from omitted
+oversized content and reconstruct objects with numeric property names without mistaking them for arrays.
+`Cohesive.Semantics.WorkspaceInspectionReader.ReadAsync` provides bounded complete-value retrieval over an inspection
+callback. Pin the same document and `expectedSnapshot` in that callback; the reader follows all child pages and
+preserves JSON shape. It requires the updated inspection contract rather than guessing the shape of older responses.

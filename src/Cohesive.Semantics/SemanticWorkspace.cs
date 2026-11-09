@@ -144,7 +144,7 @@ public sealed class SemanticWorkspace
             return new WorkspaceInspection(Subject(document), pointer,
                 fits ? selected : null,
                 Page(children, offset, limit),
-                Page(references, sourceOffset, sourceLimit), Page(mappings, sourceOffset, sourceLimit));
+                Page(references, sourceOffset, sourceLimit), Page(mappings, sourceOffset, sourceLimit), selected.ValueKind);
         });
 
     /// <summary>Finds direct consumers by target identity, preserving exact authored revision evidence.</summary>

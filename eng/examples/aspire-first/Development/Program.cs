@@ -31,10 +31,10 @@ switch (args[0])
                 new DevelopmentGuide(OrdersWorkspace.ProducerVersion, reader.ReadToEnd()));
         break;
     case "recovery-exercise":
-        await CancellationWorkflow.RunAsync(root, args.Length == 3 ? args[2] : "4e7022d57efe349a33cb3630a56eb8c0a7f496f7", CancellationExerciseScope.Recovery);
+        await RecoveryWorkflow.RunAsync(root, args.Length == 3 ? args[2] : "4e7022d57efe349a33cb3630a56eb8c0a7f496f7");
         break;
     case "cancellation-exercise":
-        await CancellationWorkflow.RunAsync(root, args.Length == 3 ? args[2] : "a2461a5098bd337977af8540ff233f7753501d36");
+        await CancellationWorkflow.RunAsync(root, args.Length == 3 ? args[2] : "744adcf9b6053f31d472bcda4b147a1ca85f4931");
         break;
     case "exercise":
         await OrdersWorkflow.RunAsync(root, args.Length == 3 ? args[2] : null);
