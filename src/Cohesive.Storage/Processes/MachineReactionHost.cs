@@ -43,10 +43,13 @@ public sealed class MachineReactionHost
     /// <summary>Registered semantic policy; infrastructure cannot change its projections or guards.</summary>
     public MachineReaction Policy { get; }
 
+    /// <summary>Exact authority and tenant routed to this host; other scopes are unrelated deliveries.</summary>
+    public InteractionAuthorityScope Authority => target.Authority;
+
     /// <summary>Durably admits and realizes matching movements from one trusted committed source receipt.</summary>
     /// <param name="context">Trusted identity, physical clock and cancellation.</param>
     /// <param name="receipt">Validated source receipt from the declared observation authority.</param>
-    /// <returns>Conclusive Completed/Rejected results, or empty for an unrelated receipt.</returns>
+    /// <returns>Conclusive Completed/Rejected results, or empty for another authority, tenant or policy occurrence.</returns>
     /// <exception cref="UnauthorizedAccessException">Source, reaction start, target or receipt access is denied.</exception>
     /// <exception cref="InvalidOperationException">Admission conflicts, execution is blocked, or conclusive target evidence is unavailable.</exception>
     /// <exception cref="OperationCanceledException">Delivery is cancelled; the source must not checkpoint it.</exception>
@@ -54,16 +57,16 @@ public sealed class MachineReactionHost
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(receipt);
+        if (receipt.Request.AuthorityScope != Authority) return [];
         var results = ImmutableArray.CreateBuilder<MachineReactionProgress>();
         foreach (var occurrence in EntityMachineOccurrence.FromReceipt(receipt))
         {
-            if (occurrence.Movement.Edge != Policy.Payload.Movement
-                || occurrence.Movement.Contract != Cohesive.Transitions.Machines.EntityMachineBinding.Read(Policy.Payload.Source)!.Machine.Reference
-                || receipt.Entity.Entity.Observation.ShapeId.ShapeId != Policy.Payload.Source.Id) continue;
+            if (!MachineReactionInvocation.Matches(Policy, occurrence)) continue;
             var authorization = await authorize(context, receipt).ConfigureAwait(false)
                 ?? throw new UnauthorizedAccessException("Reaction source/start access is denied.");
             if (authorization.AuthorityScope != target.Authority) throw new UnauthorizedAccessException("Target and source authorities differ.");
-            var prepared = MachineReactionInvocation.Prepare(Policy, occurrence, authorization, context.TimeProvider.GetUtcNow())!;
+            var prepared = MachineReactionInvocation.Prepare(Policy, occurrence, authorization, context.TimeProvider.GetUtcNow());
+            if (prepared is null) continue;
             var snapshot = await store.LoadAsync(context, prepared.Start.InitialContinuation.ProcessInstanceId).ConfigureAwait(false);
             if (snapshot is null)
             {

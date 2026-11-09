@@ -25,6 +25,7 @@ public abstract class MachineReactionTarget : IProcessTransitionOperationAdapter
     /// <param name="invocation">Canonical operation intent.</param>
     /// <returns>Domain result with an exact receipt locator, or explicit operation failure.</returns>
     /// <exception cref="UnauthorizedAccessException">The caller or scope is denied.</exception>
+    /// <exception cref="MachineReactionProtocolException">The invocation conflicts with the target revision.</exception>
     public abstract ValueTask<ProcessOperationResult> ExecuteAsync(OperationContext context, ProcessTransitionInvocation invocation);
 
     /// <summary>Resolves retained commitment evidence without consulting later entity state.</summary>
@@ -32,6 +33,7 @@ public abstract class MachineReactionTarget : IProcessTransitionOperationAdapter
     /// <param name="reference">Exact locator, not an authorization grant.</param>
     /// <returns>The exact receipt, or null when no receipt is available; absence is not non-commit evidence.</returns>
     /// <exception cref="UnauthorizedAccessException">The caller or scope is denied.</exception>
+    /// <exception cref="MachineReactionProtocolException">The resolved receipt belongs to another operation or revision.</exception>
     public abstract ValueTask<EntityTransitionOperationReceipt?> ResolveAsync(OperationContext context, EntityTransitionOperationReference reference);
 
     /// <summary>Binds the existing native entity adapter and atomic receipt repository.</summary>
@@ -63,7 +65,8 @@ public abstract class MachineReactionTarget : IProcessTransitionOperationAdapter
         {
             ArgumentNullException.ThrowIfNull(context);
             ArgumentNullException.ThrowIfNull(invocation);
-            if (invocation.Definition != Transition) throw new InvalidOperationException("Target revision does not match this binding.");
+            if (invocation.Definition != Transition) throw new MachineReactionProtocolException(
+                MachineReactionProtocolException.RevisionMismatch, "Target revision does not match this binding.");
             await Authorize(context, invocation.Context.AuthorityScope, binding.ResolveSubject(invocation)).ConfigureAwait(false);
             return await adapter.ExecuteAsync(context, invocation).ConfigureAwait(false);
         }
@@ -75,7 +78,8 @@ public abstract class MachineReactionTarget : IProcessTransitionOperationAdapter
             await Authorize(context, reference.AuthorityScope, reference.Subject).ConfigureAwait(false);
             var result = await binding.Repository.ResolveTransitionOperation(context, reference).ConfigureAwait(false);
             if (result.Receipt is { } receipt && (receipt.Request.Reference != reference || receipt.Request.Transition != Transition))
-                throw new InvalidOperationException("Resolved receipt belongs to another operation or transition.");
+                throw new MachineReactionProtocolException(MachineReactionProtocolException.ReceiptMismatch,
+                    "Resolved receipt belongs to another operation or transition.");
             return result.Receipt;
         }
 

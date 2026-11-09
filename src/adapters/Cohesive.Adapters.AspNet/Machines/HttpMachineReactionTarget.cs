@@ -45,8 +45,11 @@ public sealed class HttpMachineReactionTarget : MachineReactionTarget
     /// <exception cref="JsonException">The response is not a valid canonical receipt.</exception>
     public override async ValueTask<ProcessOperationResult> ExecuteAsync(OperationContext context, ProcessTransitionInvocation invocation)
     {
-        if (invocation.Definition != Transition || invocation.Context.AuthorityScope != Authority)
-            throw new InvalidOperationException("Invocation differs from the remote target binding.");
+        if (invocation.Definition != Transition)
+            throw new MachineReactionProtocolException(MachineReactionProtocolException.RevisionMismatch,
+                "Invocation differs from the remote target revision.");
+        if (invocation.Context.AuthorityScope != Authority)
+            throw new UnauthorizedAccessException("Invocation scope differs from target authority.");
         var subject = invocation.Subject.Value?.GetString();
         if (string.IsNullOrWhiteSpace(subject)) throw new InvalidOperationException("HTTP target requires a string entity identity.");
         using var response = await client.PostAsJsonAsync(endpoint, invocation, Json, context.CancellationToken).ConfigureAwait(false);
@@ -56,7 +59,8 @@ public sealed class HttpMachineReactionTarget : MachineReactionTarget
             || request.Input != invocation.Input || request.Subject.EntityId.Value != subject
             || request.Operation != new ProcessOperationOccurrence(invocation.Continuation, invocation.Activation,
                 invocation.Token, invocation.Node, invocation.Occurrence))
-            throw new InvalidOperationException("HTTP response does not prove the requested operation.");
+            throw new MachineReactionProtocolException(MachineReactionProtocolException.ReceiptMismatch,
+                "HTTP response does not prove the requested operation.");
         return receipt.Commit.Result.WithReceiptReference(EntityTransitionReceiptReferences.Project(request.Reference));
     }
 
@@ -71,7 +75,8 @@ public sealed class HttpMachineReactionTarget : MachineReactionTarget
         if (response.StatusCode == HttpStatusCode.NotFound) return null;
         var receipt = await ReadReceipt(response, context).ConfigureAwait(false);
         if (receipt.Request.Reference != reference || receipt.Request.Transition != Transition)
-            throw new InvalidOperationException("HTTP receipt differs from the requested locator.");
+            throw new MachineReactionProtocolException(MachineReactionProtocolException.ReceiptMismatch,
+                "HTTP receipt differs from the requested locator.");
         return receipt;
     }
 

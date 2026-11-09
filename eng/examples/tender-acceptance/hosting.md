@@ -32,6 +32,8 @@ var progress = await host.DeliverAsync(context, committedTenderReceipt);
 The native target validates the repository's atomic operation-receipt capability at registration.
 The host checks the exact target revision against the policy. Each delivery freshly authorizes the
 source/start and target evidence; the original admitted start identity and attribution remain retained.
+The host routes only receipts in its exact target authority and tenant. Other scopes return an empty
+result before authorization or Process admission; denial within the selected scope still fails delivery.
 Duplicate deliveries and worker restarts reuse the same instance, initial attempt, activation and
 target operation identity, even when the physical clock has advanced. A concurrent worker may hold
 the existing Process lease; the source then retries rather than acknowledging the delivery.
@@ -63,7 +65,10 @@ invocation; POST to `/receipt` resolves an exact receipt locator. Both paths aut
 access. The wire uses existing strict Process/storage JSON contracts, with no parallel receipt model.
 Execution must return HTTP 200 and a matching full entity receipt: a 202, malformed response,
 another operation's receipt or a missing receipt cannot complete a reaction. A target guard rejection
-has its own conclusive receipt and appears as Rejected. A lost response leaves the source unacknowledged;
+has its own conclusive receipt and appears as Rejected. Known revision and receipt conflicts return
+HTTP 409 Problem Details with stable `machine.reaction.protocol.revisionMismatch` or
+`machine.reaction.protocol.receiptMismatch` codes. Unexpected infrastructure exceptions remain server
+failures; a protocol conflict is not proof that the target did not commit. A lost response leaves the source unacknowledged;
 replay consults the atomic target receipt and does not repeat the entity mutation.
 
 ## Cosmos source
@@ -92,8 +97,12 @@ The worker lifetime fails on callback error; an application supervisor must rest
 configuration. Already completed receipts in a partially processed batch replay safely.
 
 `ProcessorName` exposes the effective lease namespace, derived deterministically from the deployment
-seed, exact policy revision, source and lease placement, and initial observation boundary. Worker
+seed, exact policy revision, authority/tenant, source and lease placement, and initial observation boundary. Worker
 identity does not affect it. The initial time is explicit and used by Cosmos only before leases exist.
+Tenant-specific hosts can therefore observe one shared container using independent checkpoints;
+each skips receipts outside its scope. Adding authority to the lease identity changes namespaces
+from the first hosting sketch: deploy with an explicit historical boundary and retain Process/target
+receipts so replay remains idempotent.
 Changing the policy or boundary creates another subscription identity; operators must explicitly
 decide whether historical movements should run under a new policy. Receipt retention must cover
 the observation/recovery window. No full entity-state scan is substituted for missing history.

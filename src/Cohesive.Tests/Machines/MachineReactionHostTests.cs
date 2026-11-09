@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Cohesive.Adapters.AspNet.Machines;
 using Cohesive.Adapters.Cosmos;
 using Cohesive.Examples.TenderAcceptance;
@@ -84,7 +85,8 @@ public sealed class MachineReactionHostTests
         var f = await Fixture.Create();
         using var client = new HttpClient(new WrongReceiptHandler(f.Receipt));
         var remote = new HttpMachineReactionTarget(f.Target.Transition, f.Target.Authority, client, new("https://example.invalid/reaction"));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => f.Host(remote).DeliverAsync(f.Context, f.Receipt));
+        var error = await Assert.ThrowsAsync<MachineReactionProtocolException>(() => f.Host(remote).DeliverAsync(f.Context, f.Receipt));
+        Assert.Equal(MachineReactionProtocolException.ReceiptMismatch, error.Code);
         Assert.Equal(MachineReactionStatus.Completed, Assert.Single(await f.Host().DeliverAsync(f.Context, f.Receipt)).Status);
     }
 
@@ -111,6 +113,90 @@ public sealed class MachineReactionHostTests
         var wrong = MachineReactionTarget.Local(new(f.Model.Confirm.Compile().Plan!, f.Repository, contracts!),
             f.Target.Authority, (_, _) => ValueTask.FromResult(true));
         Assert.Throws<ArgumentException>(() => f.Host(wrong));
+    }
+
+    [Fact]
+    public async Task Nonmatching_movement_is_ignored_by_preparation_and_host_before_authorization()
+    {
+        var f = await Fixture.Create();
+        var occurrence = Assert.Single(EntityMachineOccurrence.FromReceipt(f.Receipt));
+        Assert.Null(MachineReactionInvocation.Prepare(f.Model.ReceiptConfirmation, occurrence,
+            new("worker", f.Target.Authority, "test"), DateTimeOffset.UtcNow));
+        Assert.True(InteractionContractCatalog.TryCreate([], out var contracts).IsValid);
+        var target = MachineReactionTarget.Local(new(f.Model.Confirm.Compile().Plan!, f.Repository, contracts!),
+            f.Target.Authority, (_, _) => throw new InvalidOperationException("Unrelated target must not authorize"));
+        var host = new MachineReactionHost(f.Model.ReceiptConfirmation, f.Store, target,
+            (_, _) => throw new InvalidOperationException("Unrelated source must not authorize"), new("worker", TimeSpan.FromMinutes(5)));
+        Assert.Empty(await host.DeliverAsync(f.Context, f.Receipt));
+    }
+
+    [Fact]
+    public async Task Http_protocol_conflicts_are_structured_but_unexpected_failures_remain_server_errors()
+    {
+        var f = await Fixture.Create();
+        var recording = new RecordingTarget(f.Target);
+        var progress = Assert.Single(await f.Host(recording).DeliverAsync(f.Context, f.Receipt));
+        Assert.True(InteractionContractCatalog.TryCreate([], out var contracts).IsValid);
+        var other = MachineReactionTarget.Local(new(f.Model.Confirm.Compile().Plan!, f.Repository, contracts!),
+            f.Target.Authority, (_, _) => ValueTask.FromResult(true));
+        await using var app = WebApplication.CreateBuilder().Build();
+        app.Urls.Add("http://127.0.0.1:0");
+        app.MapMachineReactionTarget("/target", other, _ => f.Context);
+        app.MapMachineReactionTarget("/broken", new UnexpectedFailureTarget(f.Target), _ => f.Context);
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
+        var json = ProcessDurableCheckpointJsonSerializer.CreateOptions();
+        using var revision = await client.PostAsJsonAsync("/target", recording.Invocation, json);
+        Assert.Equal(HttpStatusCode.Conflict, revision.StatusCode);
+        var body = await revision.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(MachineReactionProtocolException.RevisionMismatch, body.GetProperty("code").GetString());
+        using var receipt = await client.PostAsJsonAsync("/target/receipt", progress.Receipt!.Request.Reference, json);
+        Assert.Equal(HttpStatusCode.Conflict, receipt.StatusCode);
+        body = await receipt.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(MachineReactionProtocolException.ReceiptMismatch, body.GetProperty("code").GetString());
+        using var broken = await client.PostAsJsonAsync("/broken", recording.Invocation, json);
+        Assert.Equal(HttpStatusCode.InternalServerError, broken.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("tests", "another-tenant")]
+    [InlineData("another-authority", "test")]
+    public async Task Cosmos_mixed_authorities_route_without_authorizing_or_admitting_unrelated_receipts(string authority, string tenant)
+    {
+        var f = await Fixture.Create();
+        var original = f.Receipt.Commit;
+        var request = original.Request;
+        var foreignScope = new InteractionAuthorityScope(authority, tenant);
+        var foreignRequest = new EntityTransitionOperationRequest(request.Operation, foreignScope, request.Transition, request.Subject, request.Input);
+        var foreignCommit = new EntityTransitionOperationCommit(foreignRequest, original.Write, original.DecisionKind,
+            original.Result, original.GuaranteeDemands, original.Evidence);
+        var foreignReceipt = new EntityTransitionOperationReceipt(foreignCommit, f.Receipt.Entity, f.Receipt.CommittedAtUtc);
+        using var client = new CosmosClient("https://localhost:8081", Convert.ToBase64String(new byte[64]));
+        var repository = new CosmosEntityOutboxRepository(f.Model.Tender.Entity, client.GetContainer("test", "source"),
+            partitionKeyPolicy: EntityPartitionKeyPolicy.Fixed("test"));
+        var entity = new CosmosObservationContainerDocument("entity", "test", "entity", f.Model.Tender.Entity.Shape.Id.Value,
+            f.Receipt.Entity.Entity.EntityId.Value, f.Receipt.Entity.Entity.Version, EntityConcurrencyToken: "retained-token");
+        var checkpoints = 0;
+        var batch = new CosmosManagedMaterializationProviderBatch("range", "cursor",
+            [repository.CreateTransitionReceiptDocument(f.Context, foreignCommit, entity, "test"),
+             repository.CreateTransitionReceiptDocument(f.Context, original, entity, "test")],
+            () => { checkpoints++; return Task.CompletedTask; });
+        await CosmosMachineReactionSource.DeliverBatchAsync(repository, f.Host(), f.Context, batch);
+        Assert.Equal(1, checkpoints);
+        Assert.Equal(1, f.SourceAuthorizations);
+        var foreign = MachineReactionInvocation.Prepare(f.Model.PendingAcceptance,
+            Assert.Single(EntityMachineOccurrence.FromReceipt(foreignReceipt)), new("worker", foreignScope, "test"), DateTimeOffset.UtcNow)!;
+        Assert.Null(await f.Store.LoadAsync(f.Context, foreign.Start.InitialContinuation.ProcessInstanceId));
+        f.SourceAllowed = false;
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => CosmosMachineReactionSource.DeliverBatchAsync(repository, f.Host(), f.Context, batch));
+        Assert.Equal(1, checkpoints);
+        Assert.True(InteractionContractCatalog.TryCreate([], out var contracts).IsValid);
+        var foreignTarget = MachineReactionTarget.Local(new(f.Model.MarkPending.Compile().Plan!, f.Repository, contracts!),
+            foreignScope, (_, _) => ValueTask.FromResult(true));
+        var leases = client.GetContainer("test", "leases");
+        var localSource = new CosmosMachineReactionSource(repository, leases, f.Host(), "same-seed", "worker", DateTimeOffset.UnixEpoch);
+        var foreignSource = new CosmosMachineReactionSource(repository, leases, f.Host(foreignTarget), "same-seed", "worker", DateTimeOffset.UnixEpoch);
+        Assert.NotEqual(localSource.ProcessorName, foreignSource.ProcessorName);
     }
 
     [Fact]
@@ -152,9 +238,10 @@ public sealed class MachineReactionHostTests
         internal readonly InMemoryProcessDurableStore Store = new();
         internal bool SourceAllowed = true;
         internal bool TargetAllowed = true;
+        internal int SourceAuthorizations;
         internal MachineReactionHost Host(MachineReactionTarget? target = null) => new(Model.PendingAcceptance, Store, target ?? Target,
-            (_, receipt) => ValueTask.FromResult<ProcessControlAuthorizationContext?>(SourceAllowed
-                ? new("worker", receipt.Request.AuthorityScope, "policy/test") : null), new("worker", TimeSpan.FromMinutes(5)));
+            (_, receipt) => { SourceAuthorizations++; return ValueTask.FromResult<ProcessControlAuthorizationContext?>(SourceAllowed
+                ? new("worker", receipt.Request.AuthorityScope, "policy/test") : null); }, new("worker", TimeSpan.FromMinutes(5)));
 
         internal static async Task<Fixture> Create(bool allowed = true)
         {
@@ -178,6 +265,23 @@ public sealed class MachineReactionHostTests
         { await inner.ExecuteAsync(context, invocation); throw new TimeoutException("Lost acknowledgement after commit"); }
         public override ValueTask<EntityTransitionOperationReceipt?> ResolveAsync(OperationContext context, EntityTransitionOperationReference reference)
             => inner.ResolveAsync(context, reference);
+    }
+
+    sealed class RecordingTarget(MachineReactionTarget inner) : MachineReactionTarget(inner.Transition, inner.Authority)
+    {
+        internal ProcessTransitionInvocation? Invocation;
+        public override ValueTask<ProcessOperationResult> ExecuteAsync(OperationContext context, ProcessTransitionInvocation invocation)
+        { Invocation = invocation; return inner.ExecuteAsync(context, invocation); }
+        public override ValueTask<EntityTransitionOperationReceipt?> ResolveAsync(OperationContext context, EntityTransitionOperationReference reference)
+            => inner.ResolveAsync(context, reference);
+    }
+
+    sealed class UnexpectedFailureTarget(MachineReactionTarget inner) : MachineReactionTarget(inner.Transition, inner.Authority)
+    {
+        public override ValueTask<ProcessOperationResult> ExecuteAsync(OperationContext context, ProcessTransitionInvocation invocation)
+            => throw new InvalidOperationException("Unexpected infrastructure failure");
+        public override ValueTask<EntityTransitionOperationReceipt?> ResolveAsync(OperationContext context, EntityTransitionOperationReference reference)
+            => throw new InvalidOperationException("Unexpected infrastructure failure");
     }
 
     sealed class AcceptedHandler : HttpMessageHandler

@@ -40,6 +40,7 @@ public static class MachineReactionEndpoints
                     : Results.Json(receipt, HttpMachineReactionTarget.Json);
             }
             catch (UnauthorizedAccessException) { return Results.StatusCode(StatusCodes.Status403Forbidden); }
+            catch (MachineReactionProtocolException exception) { return ProtocolConflict(exception); }
             catch (JsonException) { return Results.BadRequest(); }
         });
         group.MapPost("/" + HttpMachineReactionTarget.ReceiptPath, async (HttpContext http) =>
@@ -52,8 +53,13 @@ public static class MachineReactionEndpoints
                 return receipt is null ? Results.NotFound() : Results.Json(receipt, HttpMachineReactionTarget.Json);
             }
             catch (UnauthorizedAccessException) { return Results.StatusCode(StatusCodes.Status403Forbidden); }
+            catch (MachineReactionProtocolException exception) { return ProtocolConflict(exception); }
             catch (JsonException) { return Results.BadRequest(); }
         });
         return group;
     }
+
+    static IResult ProtocolConflict(MachineReactionProtocolException exception) => Results.Problem(
+        statusCode: StatusCodes.Status409Conflict, title: "Reaction protocol conflict", detail: exception.Message,
+        extensions: new Dictionary<string, object?> { ["code"] = exception.Code });
 }

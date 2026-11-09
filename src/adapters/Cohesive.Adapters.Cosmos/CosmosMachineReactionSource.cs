@@ -37,7 +37,7 @@ public sealed class CosmosMachineReactionSource
         var policy = new CosmosManagedMaterializationChangeSourcePolicy(processorName, instanceName,
             CosmosManagedMaterializationInitialPosition.AtTime, fromUtc);
         var source = repository.TransitionReceiptContainer;
-        var identity = new Scope(processorName, host.Policy.Document.Reference,
+        var identity = new Scope(processorName, host.Policy.Document.Reference, host.Authority,
             CosmosPhysicalAffinity.CanonicalAccountEndpointText(source.Database.Client.Endpoint), source.Database.Id, source.Id,
             CosmosPhysicalAffinity.CanonicalAccountEndpointText(leaseContainer.Database.Client.Endpoint), leaseContainer.Database.Id,
             leaseContainer.Id, fromUtc);
@@ -45,7 +45,7 @@ public sealed class CosmosMachineReactionSource
         processor = new CosmosManagedMaterializationChangeFeedProcessor(source, leaseContainer, policy, ProcessorName);
     }
 
-    /// <summary>Effective processor namespace, derived from policy revision, physical placement and initial boundary.</summary>
+    /// <summary>Effective processor namespace, derived from policy revision, authority, physical placement and initial boundary.</summary>
     public string ProcessorName { get; }
 
     /// <summary>Runs until cancellation or failed delivery; failed callbacks are never acknowledged.</summary>
@@ -77,6 +77,6 @@ public sealed class CosmosMachineReactionSource
         await batch.CheckpointAsync().ConfigureAwait(false);
     }
 
-    sealed record Scope(string Seed, ExecutionDefinitionReference Policy, string SourceAccount, string SourceDatabase,
+    sealed record Scope(string Seed, ExecutionDefinitionReference Policy, InteractionAuthorityScope Authority, string SourceAccount, string SourceDatabase,
         string SourceContainer, string LeaseAccount, string LeaseDatabase, string LeaseContainer, DateTimeOffset FromUtc);
 }
