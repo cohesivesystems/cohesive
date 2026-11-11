@@ -167,7 +167,7 @@ To replay evolution against the single-reservation commit through one MCP sessio
 dotnet run --project eng/examples/aspire-first/Development -- cancellation-exercise "$PWD" 744adcf9b6053f31d472bcda4b147a1ca85f4931
 ```
 
-The default baseline is the single-reservation cancellation revision `744adcf9b6053f31d472bcda4b147a1ca85f4931`. It saves validation, exact dependency paths and directional findings for all ten durable-profile endpoints to `tmp/orders-cancellation-exercise.json`. The pre-cancellation baseline `a2461a5098bd337977af8540ff233f7753501d36` is intentionally rejected by the stricter gate: a new Order.Details client requires the added Released response field from an old server that cannot supply it. This genuine incompatibility was previously recorded without failing the exercise. Findings preserve unsupported wire interpretations as Unknown; reachability is not an API compatibility proof. Host-profile endpoint removal must be considered separately from this durable-profile export.
+The default baseline is the single-reservation cancellation revision `744adcf9b6053f31d472bcda4b147a1ca85f4931`. It saves validation, exact dependency paths and directional findings for all ten durable-profile endpoints to `tmp/orders-cancellation-exercise.json`. The pre-cancellation baseline `a2461a5098bd337977af8540ff233f7753501d36` previously triggered a Released-field break. Actual reflection and generated serializer tests establish that the defaulted bool accepts omission and old readers ignore the added field. Compatibility policy v2 now retains reader-required metadata separately from the writer/semantic shape; the earlier claim of a confirmed wire incompatibility was incorrect. Findings preserve unsupported wire interpretations as Unknown; reachability is not an API compatibility proof. Host-profile endpoint removal must be considered separately from this durable-profile export.
 
 Indexed source projections lower to a canonical `elementAt` call with a selected-element scope. Invalid indices fail and only the chosen element is projected. The shared semantic catalog supplies its type and scope rules. A short BenchmarkDotNet run over 1, 32 and 1000 rows with flat, nested and collection payloads measured 46.7–52.8 ns and 72 B per relation-reference projection; these are local warm microbenchmarks, not end-to-end cancellation latency. See `IndexedExpressionBenchmarks` for reproduction.
 
@@ -266,3 +266,24 @@ A rename, removal, filtered-out case, failure, or skip fails qualification even 
 cases are allowed; update the manifest deliberately when changing required scenarios. `WorkspaceInspectionReader`
 reconstructs complete values from the inspector's JSON kind and truncation evidence, with request, byte and traversal
 bounds. It handles objects, arrays, escaped property names and actual JSON null without target-specific pointers.
+
+
+## Qualified HTTP/JSON compatibility
+
+The exporter now uses the ASP.NET-owned ProblemDetails interpretation and the
+`aspnet-web-defaults/problem-details-v1` profile. Current Orders contracts cover all ten endpoints, including
+scalar execution identifiers, admission results, string-keyed error extension dictionaries, and standard
+ProblemDetails bodies. Compatibility policy `http-json-tolerant-readers/v2` consumes reader-required evidence
+from the effective serializer metadata, including required constructor parameters and optional defaults.
+
+Run `dotnet test src/Cohesive.Semantics.Tests --filter FullyQualifiedName~ApiWireCompatibilityTests` for the
+wire conformance cases. They use actual Orders response types, retained legacy response fixtures, reflection
+and generated serializers, required-member negative cases, accepted/conflict admission results, extension
+maps, ProblemDetails and all ten current API declarations. The Released default is false; compatibility of
+acceptance does not prove arbitrary default-value changes behaviorally equivalent.
+
+Historical exports retain their original coverage gaps and serializer-profile identity. The checker must not
+retroactively erase that missing evidence. Regenerate both source revisions with the qualified producer when
+claiming full wire compatibility; a comparison against an old exported artifact can still legitimately return
+Unknown. Arbitrary custom converters, custom metadata, unknown enum evolution, extension-specific application
+semantics and runtime authorization remain outside the qualified interpretation.

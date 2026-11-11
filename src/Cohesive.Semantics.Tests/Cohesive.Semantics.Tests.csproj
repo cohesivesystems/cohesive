@@ -12,6 +12,8 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <Using Include="Xunit" />
     <Compile Include="../../eng/examples/aspire-first/Development/ExerciseAssertions.cs" Link="ExerciseAssertions.cs" />
+    <ProjectReference Include="../adapters/Cohesive.Adapters.AspNet/Cohesive.Adapters.AspNet.csproj" />
+    <ProjectReference Include="../../eng/examples/aspire-first/Orders.Model/Orders.Model.csproj" />
     <ProjectReference Include="../adapters/Cohesive.Adapters.Mcp.Development/Cohesive.Adapters.Mcp.Development.csproj" />
     <ProjectReference Include="../../eng/examples/development-mcp/DevelopmentMcp.Example.csproj" />
   </ItemGroup>
