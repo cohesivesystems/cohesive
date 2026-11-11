@@ -167,7 +167,7 @@ To replay evolution against the single-reservation commit through one MCP sessio
 dotnet run --project eng/examples/aspire-first/Development -- cancellation-exercise "$PWD" 744adcf9b6053f31d472bcda4b147a1ca85f4931
 ```
 
-The same command supports the pre-cancellation baseline `a2461a5098bd337977af8540ff233f7753501d36`. It saves validation, exact dependency paths and directional findings for all ten durable-profile endpoints to `tmp/orders-cancellation-exercise.json`. Findings preserve unsupported wire interpretations as Unknown; reachability is not an API compatibility proof. Host-profile endpoint removal must be considered separately from this durable-profile export.
+The default baseline is the single-reservation cancellation revision `744adcf9b6053f31d472bcda4b147a1ca85f4931`. It saves validation, exact dependency paths and directional findings for all ten durable-profile endpoints to `tmp/orders-cancellation-exercise.json`. The pre-cancellation baseline `a2461a5098bd337977af8540ff233f7753501d36` previously triggered a Released-field break. Actual reflection and generated serializer tests establish that the defaulted bool accepts omission and old readers ignore the added field. Compatibility policy v2 now retains reader-required metadata separately from the writer/semantic shape; the earlier claim of a confirmed wire incompatibility was incorrect. Findings preserve unsupported wire interpretations as Unknown; reachability is not an API compatibility proof. Host-profile endpoint removal must be considered separately from this durable-profile export.
 
 Indexed source projections lower to a canonical `elementAt` call with a selected-element scope. Invalid indices fail and only the chosen element is projected. The shared semantic catalog supplies its type and scope rules. A short BenchmarkDotNet run over 1, 32 and 1000 rows with flat, nested and collection payloads measured 46.7–52.8 ns and 72 B per relation-reference projection; these are local warm microbenchmarks, not end-to-end cancellation latency. See `IndexedExpressionBenchmarks` for reproduction.
 
@@ -225,3 +225,65 @@ an adapter fixture contract. The PostgreSQL fixture supplies real persistence, e
 lock linearization and data-source admission cases remain native tests. Targets may claim support only with equivalent
 conformance evidence; there is currently one qualified fenced target. No arbitrary-effect or cross-database guarantee
 is added.
+
+
+## End-to-end recovery authoring qualification
+
+Run `recovery-exercise` to connect the `learn` recipe, source replay, target assessments, physical cancellation tests,
+and API compatibility evidence in one command:
+
+```sh
+# Point this at a disposable PostgreSQL database used only for tests.
+export COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING='Host=127.0.0.1;Port=55439;Database=postgres;Username=postgres;Password=cohesive-test-only'
+dotnet run --project eng/examples/aspire-first/Development -- recovery-exercise "$PWD"
+```
+
+The default baseline is `4e7022d57efe349a33cb3630a56eb8c0a7f496f7` (native fenced cancellation before explicit recovery
+policy selection). Pass another baseline as the final argument only if it already has the cancellation API contracts.
+The exercise copies tracked working-tree source into a disposable directory; stage new files before running. It
+builds both baseline and proposed source, inspects all three target assessments through MCP, and runs PostgreSQL
+cancellation plus retained-policy tests on the proposed copy. It requires nonempty test results with no skips or failures.
+The database must be disposable: the existing integration fixtures create schema and test data.
+
+`tmp/orders-recovery-exercise.json` records the exact snapshots, learned recipe, target decisions, test names/outcomes,
+and API comparisons in both directions. Breaking API results fail the recovery exercise; Unknown verdicts remain
+explicit unresolved wire-coverage gaps and do not constitute full API compatibility. The evidence describes replay
+of the current authored implementation, not autonomous generation of new source. No container is started by the host.
+
+Checkpoint v8 pins compilation policy independently of process graph identity. Replacement workers must supply the
+same policy and a qualifying target. Policy changes and older checkpoints require an explicit migration decision;
+there is no automatic migration in this exercise.
+
+The shared source replay owns export, document checks, dependency analysis, and comparison. Recovery qualification
+is a separate completion step over the still-live isolated replay. Both commands reject unexpected Breaking API
+verdicts. The initial cancellation-authoring scenario explicitly expects Breaking only for a proposed client calling
+its newly added cancellation endpoints on the old server. API discovery uses the union of baseline and proposed
+identities, so deleted endpoints are checked too. Recovery assessments are paged dynamically; any exported target
+is recorded, while the PostgreSQL composition selected for physical testing must be present and Realizable.
+
+`RecoveryConformance.tests.json` is the reviewed required-case manifest, including each theory argument combination.
+A rename, removal, filtered-out case, failure, or skip fails qualification even when other tests pass. New passing
+cases are allowed; update the manifest deliberately when changing required scenarios. `WorkspaceInspectionReader`
+reconstructs complete values from the inspector's JSON kind and truncation evidence, with request, byte and traversal
+bounds. It handles objects, arrays, escaped property names and actual JSON null without target-specific pointers.
+
+
+## Qualified HTTP/JSON compatibility
+
+The exporter now uses the ASP.NET-owned ProblemDetails interpretation and the
+`aspnet-web-defaults/problem-details-v1` profile. Current Orders contracts cover all ten endpoints, including
+scalar execution identifiers, admission results, string-keyed error extension dictionaries, and standard
+ProblemDetails bodies. Compatibility policy `http-json-tolerant-readers/v2` consumes reader-required evidence
+from the effective serializer metadata, including required constructor parameters and optional defaults.
+
+Run `dotnet test src/Cohesive.Semantics.Tests --filter FullyQualifiedName~ApiWireCompatibilityTests` for the
+wire conformance cases. They use actual Orders response types, retained legacy response fixtures, reflection
+and generated serializers, required-member negative cases, accepted/conflict admission results, extension
+maps, ProblemDetails and all ten current API declarations. The Released default is false; compatibility of
+acceptance does not prove arbitrary default-value changes behaviorally equivalent.
+
+Historical exports retain their original coverage gaps and serializer-profile identity. The checker must not
+retroactively erase that missing evidence. Regenerate both source revisions with the qualified producer when
+claiming full wire compatibility; a comparison against an old exported artifact can still legitimately return
+Unknown. Arbitrary custom converters, custom metadata, unknown enum evolution, extension-specific application
+semantics and runtime authorization remain outside the qualified interpretation.

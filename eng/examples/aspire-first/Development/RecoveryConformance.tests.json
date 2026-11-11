@@ -1,0 +1,34 @@
+{
+  "cancellation": [
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Cancellation_receipts_resume_after_partial_failure_and_fence_other_occurrences(failureStage: \"after-mark\")",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Cancellation_receipts_resume_after_partial_failure_and_fence_other_occurrences(failureStage: \"after-release\")",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Cancellation_receipts_resume_after_partial_failure_and_fence_other_occurrences(failureStage: \"before-release\")",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Cancellation_receipts_resume_after_partial_failure_and_fence_other_occurrences(failureStage: \"none\")",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Changed_reservation_after_preflight_is_rejected_without_releasing_stock",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Concurrent_distinct_cancellations_release_inventory_once",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Host_profile_omits_cancellation_rather_than_weakening_durable_cuts",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Invalid_later_reservation_rejects_entire_set_before_claim",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Missing_cancellation_evidence_rejects_without_inventory_mutation(missingOrder: False, expected: ReservationConflict)",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Missing_cancellation_evidence_rejects_without_inventory_mutation(missingOrder: True, expected: OrderMissing)",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Multiple_inventory_items_each_receive_their_recorded_quantity",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Multiple_reservations_sharing_inventory_resume_without_releasing_twice(failAfterSecondRelease: False)",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Multiple_reservations_sharing_inventory_resume_without_releasing_twice(failAfterSecondRelease: True)",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Oversized_reservation_set_fails_before_claim_instead_of_truncating",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Reservation_added_after_release_begins_prevents_completed_cancellation",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Unsupported_cancellation_keeps_order_and_inventory_unchanged(status: Draft, extraReservation: False, alreadyReleased: False, expected: NotSubmitted)",
+    "Cohesive.Adapters.Aspire.Tests.CancellationIntegrationTests.Unsupported_cancellation_keeps_order_and_inventory_unchanged(status: Submitted, extraReservation: False, alreadyReleased: True, expected: ReservationConflict)",
+    "Cohesive.Adapters.Aspire.Tests.FencedCancellationIntegrationTests.Already_authorized_entity_transaction_blocks_takeover_until_receipt_commit",
+    "Cohesive.Adapters.Aspire.Tests.FencedCancellationIntegrationTests.Expired_or_replaced_worker_cannot_commit_and_replacement_restores_same_continuation(replaceBeforeResume: False)",
+    "Cohesive.Adapters.Aspire.Tests.FencedCancellationIntegrationTests.Expired_or_replaced_worker_cannot_commit_and_replacement_restores_same_continuation(replaceBeforeResume: True)",
+    "Cohesive.Adapters.Aspire.Tests.FencedCancellationIntegrationTests.Fence_binding_requires_acquired_ownership_receipts_and_the_same_data_source",
+    "Cohesive.Adapters.Aspire.Tests.FencedCancellationIntegrationTests.New_owner_replays_committed_release_and_mark_receipts_after_worker_crash(crashAfterMark: False)",
+    "Cohesive.Adapters.Aspire.Tests.FencedCancellationIntegrationTests.New_owner_replays_committed_release_and_mark_receipts_after_worker_crash(crashAfterMark: True)",
+    "Cohesive.Adapters.Aspire.Tests.FencedCancellationIntegrationTests.Persisted_policy_rejects_unqualified_replacement_before_lease_or_inventory_changes"
+  ],
+  "policy": [
+    "Cohesive.Tests.ExecutionKernel.InMemoryProcessDurableStoreSuccessorRegressionTests.CommitCannotRewriteRetainedCompilationPolicy",
+    "Cohesive.Tests.ExecutionKernel.ProcessDurableCheckpointContractTests.RecoveryRejectsChangedCompilationPolicy(atomicScope: None)",
+    "Cohesive.Tests.ExecutionKernel.ProcessDurableCheckpointContractTests.RecoveryRejectsChangedCompilationPolicy(atomicScope: WholeDefinition)",
+    "Cohesive.Tests.ExecutionKernel.ProcessDurableRuntimeTests.RetainedCompilationPolicySurvivesCommitAndRejectsReplacementBeforeLeaseOrEffects"
+  ]
+}

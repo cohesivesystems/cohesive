@@ -123,3 +123,25 @@ an arbitrary ASP.NET `Delegate` handler's signature or select request parsing im
 `ApiContractCompatibility.Compare(baseline, proposed, direction)` asks whether the selected client's requests can be accepted by the selected server and whether that client's reader can consume the server's results. The default direction keeps the existing client. The versioned HTTP/JSON policy assumes readers tolerate additional object fields and requires exact scalar formats. A missing required field is a break with a wire path; an unsupported converter, query DTO binding convention or changed authorization requirement is unknown. The analysis checks declared wire semantics, not endpoint behavior, deployed routing, or compatibility of every generated client. Root nullability that the authoring operation does not declare is outside this guarantee.
 
 The Orders development example qualifies both an additive nested field and a required field rename against generated JSON readers and writers.
+
+
+### JSON reader presence and target-owned wire interpretation
+
+`ApiContractDocument.Lower` retains `api.json.readerRequired/v1` on fields using frozen serializer metadata.
+This describes whether a consumer requires the member; it does not replace semantic field presence or what a
+producer guarantees to emit. Optional constructor defaults and optional init properties accept omission, while
+JsonRequired and non-defaulted constructor parameters (when the option is enabled) remain required.
+`ApiContractCompatibility.Policy` v2 uses that evidence for directional omission checks and keeps the legacy
+presence check when older documents lack the evidence. It is declaration compatibility, not behavioral equivalence
+of constructors, defaults or domain validation.
+
+The existing single-value wrapper representation catalog and dictionary annotations drive known scalar/map
+interpretation. Unknown annotations and unsupported serializer policies remain coverage gaps. The optional
+`wireMetadata` lowering input is an explicit adapter-owned metadata provider: converter-backed root types can
+supply a portable TypeRef before CLR discovery walks their implementation details. No provider or converter
+survives in the exported contract; the selected serializer profile must identify the interpretation version.
+The ASP.NET adapter supplies the standard ProblemDetails root interpretation. Extensions are open extra JSON
+members under the tolerant-reader policy; their application-specific meaning is not inferred.
+
+Changing the producer does not upgrade old evidence. Re-export both source versions under one qualified profile
+for full wire analysis. Comparing against an old profile or document with retained gaps remains Unknown.

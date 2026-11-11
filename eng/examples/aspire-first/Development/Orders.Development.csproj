@@ -11,6 +11,7 @@
     <ProjectReference Include="../Orders.Model/Orders.Model.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.Mcp.Development/Cohesive.Adapters.Mcp.Development.csproj" />
     <ProjectReference Include="../../../../src/adapters/Cohesive.Adapters.DurableTask/Cohesive.Adapters.DurableTask.csproj" />
+    <EmbeddedResource Include="RecoveryConformance.tests.json" LogicalName="Orders.Development.RecoveryConformance.tests.json" />
     <EmbeddedResource Include="Guide.md" LogicalName="Orders.Development.Guide.md" />
   </ItemGroup>
 </Project>
