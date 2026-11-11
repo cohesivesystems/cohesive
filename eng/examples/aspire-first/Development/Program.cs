@@ -84,8 +84,8 @@ internal static class OrdersWorkspace
             return [.. RecoveryAssessment.Export(cancellation), .. entities.Select(EntityStateDocument.Export), .. shapes, .. catalogs, .. executions.Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d))),
                 .. endpoints.QueryDependencies.Queries.Select(q => q.Request.DefinitionDocument)
                     .Select(d => JsonSerializer.Deserialize<JsonElement>(RelationQueryJsonSerializer.Serialize(d))),
-                .. endpoints.Implementations.Select(e => ApiContractDocument.Lower(e.Endpoint,
-                    new JsonSerializerOptions(JsonSerializerDefaults.Web), "aspnet-web-defaults/v1",
+                .. endpoints.Implementations.Select(e => Cohesive.Adapters.AspNet.AspNetApiContract.Lower(e.Endpoint,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web), "aspnet-web-defaults/problem-details-v1",
                     e.Execution, e.Service?.Declaration.Reference, e.Service?.Operation.Id).ToJson())];
         });
     }
