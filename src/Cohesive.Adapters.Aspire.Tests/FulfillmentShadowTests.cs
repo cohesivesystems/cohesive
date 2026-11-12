@@ -164,6 +164,7 @@ public sealed class FulfillmentShadowTests
     [ShadowFact]
     public async Task Native_shadow_resumes_then_tracks_updates_reparenting_and_deletes_without_changing_live_reads()
     {
+        const int MaximumQuiescentComparisons = 5;
         using var timeout = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var ct = timeout.Token;
         var application = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy())
@@ -206,8 +207,7 @@ public sealed class FulfillmentShadowTests
             Assert.Equal(MaterializationRebuildShardDisposition.BaselineCompleteCatchUpRequired,
                 (await rebuild.RunShardAsync(context, attempt, Assert.Single(runtime.Compilation.Plan.Shards).Id)).Disposition);
             await CatchUp("baseline");
-            await AssertMatchesLive(first, second);
-            var approvedComparison = await Compare();
+            var approvedComparison = await AssertMatchesLive(first, second);
             // CLI JSON is the operator artifact consumed by worker admission.
             approvedComparison = JsonSerializer.Deserialize<MaterializationShadowComparison>(JsonSerializer.Serialize(approvedComparison))!;
             var native = new ServicePersistenceBuilder().Query(model.Queries.OrderDetails, (_, _) => live).Build();
@@ -250,6 +250,18 @@ public sealed class FulfillmentShadowTests
             Assert.False(moving.Matches);
             await CatchUp("after-movement");
             await AssertMatchesLive(first, second);
+            // A WAL cut is cluster-wide: unrelated WAL can invalidate an otherwise equal read.
+            // Force that race once and require a new, fully stable comparison before accepting parity.
+            var comparisonReads = 0;
+            var quiescent = await CompareQuiescent(async (generation, limit, token) =>
+            {
+                var values = await target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit);
+                if (++comparisonReads == 1)
+                    await Execute("SELECT pg_logical_emit_message(false, 'shadow-test', 'unrelated-wal')");
+                return values;
+            });
+            Assert.True(quiescent.Matches, JsonSerializer.Serialize(quiescent));
+            Assert.InRange(comparisonReads, 2, MaximumQuiescentComparisons);
             await Assert.ThrowsAsync<InvalidOperationException>(() => MaterializationShadowVerification.CompareAsync(runtime, context, convergence!,
                 (generation, limit, token) => target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit), maximumItems: 1));
             var beforeReplay = await Snapshot();
@@ -265,7 +277,7 @@ public sealed class FulfillmentShadowTests
                 && row.GetProperty("_source").GetProperty("value").GetProperty("Id").GetString() == first);
             await Execute("DELETE FROM cohesive_orders WHERE order_id=$1", second);
             await CatchUp("empty");
-            var empty = await Compare();
+            var empty = await CompareQuiescent();
             Assert.True(empty.Matches);
             Assert.Equal(0, empty.LiveCount);
             Assert.Equal(0, empty.ShadowCount);
@@ -352,9 +364,24 @@ public sealed class FulfillmentShadowTests
         }
         Task<MaterializationShadowComparison> Compare() => MaterializationShadowVerification.CompareAsync(runtime, context, convergence!,
             (generation, limit, token) => target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit));
-        async Task AssertMatchesLive(params string[] orders)
+        async Task<MaterializationShadowComparison> CompareQuiescent(
+            Func<MaterializationGenerationId, int, CancellationToken, Task<IReadOnlyDictionary<string, Cohesive.Model.ObservationValue>>>? readCandidate = null)
         {
-            var comparison = await Compare();
+            // Keep the production verifier conservative. Retry only an otherwise equal, fresh read
+            // invalidated by WAL movement, and never carry evidence between comparison attempts.
+            for (var attempt = 1; ; attempt++)
+            {
+                var comparison = await MaterializationShadowVerification.CompareAsync(runtime, context, convergence!,
+                    readCandidate ?? ((generation, limit, token) => target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit)));
+                if (comparison.SourceStable || !comparison.Fresh || !comparison.Missing.IsEmpty
+                    || !comparison.Extra.IsEmpty || !comparison.Changed.IsEmpty || attempt == MaximumQuiescentComparisons)
+                    return comparison;
+                await Task.Delay(TimeSpan.FromMilliseconds(50), ct);
+            }
+        }
+        async Task<MaterializationShadowComparison> AssertMatchesLive(params string[] orders)
+        {
+            var comparison = await CompareQuiescent();
             Assert.True(comparison.Matches, JsonSerializer.Serialize(comparison));
             var rows = await Snapshot();
             foreach (var order in orders)
@@ -365,6 +392,7 @@ public sealed class FulfillmentShadowTests
                     .Select(row => row.GetProperty("value")).Single(value => value.GetProperty("Id").GetString() == order);
                 Assert.True(JsonElement.DeepEquals(expected, actual), $"Live: {expected}; shadow: {actual}");
             }
+            return comparison;
         }
     }
 
