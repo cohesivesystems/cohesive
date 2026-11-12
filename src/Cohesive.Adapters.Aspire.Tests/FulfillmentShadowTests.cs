@@ -257,7 +257,8 @@ public sealed class FulfillmentShadowTests
             {
                 var values = await target.ReadValuesAsync(OperationContext.Create(cancellationToken: token), generation, limit);
                 if (++comparisonReads == 1)
-                    await Execute("SELECT pg_logical_emit_message(false, 'shadow-test', 'unrelated-wal')");
+                    // Transactional emission commits (and flushes) before the verifier captures its after-cut.
+                    await Execute("SELECT pg_logical_emit_message(true, 'shadow-test', 'unrelated-wal')");
                 return values;
             });
             Assert.True(quiescent.Matches, JsonSerializer.Serialize(quiescent));
