@@ -53,13 +53,16 @@ public sealed record ProcessStartRequest
     /// <param name="input">
     /// Optional typed initial Process input, or <see langword="null"/> when the Process has no input boundary.
     /// </param>
+    /// <param name="causation">Optional concrete portable origin evidence retained independently of domain input.
+    /// It is attribution, not an authorization grant. Null preserves the original wire representation.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="definition"/>, <paramref name="context"/>, or <paramref name="initialContinuation"/> is
     /// <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">
     /// The schema version is unsupported; context and continuation address different instances; or
-    /// <paramref name="input"/> is unknown or failed rather than materialized start input.
+    /// <paramref name="input"/> is unknown or failed rather than materialized start input; or causation is
+    /// not concrete, valid portable evidence.
     /// </exception>
     [JsonConstructor]
     public ProcessStartRequest(
@@ -67,7 +70,8 @@ public sealed record ProcessStartRequest
         ExecutionDefinitionReference definition,
         ProcessControlCommandContext context,
         ProcessContinuationIdentity initialContinuation,
-        PortableValue? input = null)
+        PortableValue? input = null,
+        PortableValue? causation = null)
     {
         if (schemaVersion != CurrentSchemaVersion)
         {
@@ -93,6 +97,10 @@ public sealed record ProcessStartRequest
 
         SchemaVersion = schemaVersion;
         Input = input;
+        if (causation is not null && (causation.State != PortableValueState.Concrete
+            || !PortableExecutionValidator.Validate(causation).IsValid))
+            throw new ArgumentException("Process start causation must be concrete portable evidence.", nameof(causation));
+        Causation = causation;
     }
 
     /// <summary>Exact Process-start request schema version.</summary>
@@ -109,6 +117,10 @@ public sealed record ProcessStartRequest
 
     /// <summary>Optional typed initial Process input.</summary>
     public PortableValue? Input { get; }
+
+    /// <summary>Immutable portable origin evidence; part of the exact idempotent start intent.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public PortableValue? Causation { get; }
 
     /// <summary>Determines whether another request expresses the same logical idempotent start intent.</summary>
     /// <param name="candidate">Candidate retry carrying the same logical idempotency identity.</param>
@@ -130,7 +142,8 @@ public sealed record ProcessStartRequest
             && Context.Authorization == candidate.Context.Authorization
             && Context.Provenance == candidate.Context.Provenance
             && InitialContinuation == candidate.InitialContinuation
-            && Input == candidate.Input;
+            && Input == candidate.Input
+            && Causation == candidate.Causation;
     }
 }
 

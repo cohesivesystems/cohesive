@@ -3,6 +3,10 @@
 `Cohesive.Processes` describes typed workflows that coordinate Relations, Transitions, requests, events, signals,
 waits, parallel work, recurrence, and terminal outcomes without binding the workflow to one runtime.
 
+[Declarative machine reactions](Machines/README.md) select committed entity movements and lower typed
+target-command projections into ordinary Processes. The tender example demonstrates receipt-backed
+completion, target guard rejection and exact-operation recovery.
+
 Canonical execution IR declares `IImmutableExecutionDefinition`, so repeated typed reads share
 document-owned immutable decoding. Integrity, canonical-wire, contextual semantics, and deployment
 admission remain independently validated. See [immutable execution preparation](../../docs/performance/immutable-execution-preparation.md).

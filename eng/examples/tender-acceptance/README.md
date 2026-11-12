@@ -4,6 +4,11 @@ These internal source files are compiled directly by `Cohesive.Tests`; they intr
 framework API. They author candidate machines using `Machine.Define`, plus a bounded effect-order extraction
 and an in-memory failure-injection interpretation. They do not reference or execute the archived application.
 
+`TenderReactionModel` adds declarative tender-to-load acknowledgement policies using
+`MachineReaction.On(...).Request(...)`. The policies lower to portable Process IR; tests realize them
+through the existing durable Process and atomic entity adapters. The load model remains a bounded
+acknowledgement episode. See [reaction semantics and runtime boundaries](../../../src/Cohesive.Processes/Machines/README.md).
+
 Each factory returns a declaration with its frozen `Definition` and named `MachineState` and
 `MachineMovement` handles. Stable identifiers are declared once in the fluent source; consumers do not
 maintain matching string constants or enums:

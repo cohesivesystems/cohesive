@@ -82,6 +82,38 @@ public sealed record RelationQueryExpressionProjection
 /// </remarks>
 public sealed class RelationQueryExpressionLowerer
 {
+    /// <summary>Lowers a standalone value lambda against explicit portable binding identities.</summary>
+    /// <param name="expression">Pure lambda; parameter CLR types supply member-path conventions.</param>
+    /// <param name="bindings">One nonempty identity per required, non-null parameter, in parameter order.</param>
+    /// <param name="sourceReference">Stable source attribution.</param>
+    /// <returns>Portable expression or structured lowering diagnostics. The consumer must validate contracts.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="ArgumentException">Binding count, identities or source reference are invalid.</exception>
+    public RelationQueryExpressionLoweringResult<RelationQueryExpressionLowering> LowerBoundValue(
+        LambdaExpression expression, IReadOnlyList<ValueBindingId> bindings, string sourceReference)
+    {
+        ArgumentNullException.ThrowIfNull(expression);
+        ArgumentNullException.ThrowIfNull(bindings);
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceReference);
+        if (bindings.Count != expression.Parameters.Count || bindings.Any(id => string.IsNullOrWhiteSpace(id.Value))
+            || bindings.Distinct().Count() != bindings.Count)
+            throw new ArgumentException("Supply one distinct nonempty binding per lambda parameter.", nameof(bindings));
+        try
+        {
+            var parameters = new Dictionary<ParameterExpression, ParameterTarget>();
+            for (var i = 0; i < bindings.Count; i++)
+                parameters.Add(expression.Parameters[i], ParameterTarget.ForBinding(bindings[i],
+                    expression.Parameters[i].Type, memberPathResolver, usesImportedMapping: false));
+            var value = Translate(expression.Body, new(parameters, activeCurrentItem: null), sourceReference, "body");
+            return Success(new RelationQueryExpressionLowering(value,
+                Source(sourceReference + "/body", "Standalone bound value expression.")));
+        }
+        catch (LoweringFailure failure)
+        {
+            return Failure<RelationQueryExpressionLowering>(failure.Diagnostic);
+        }
+    }
+
     /// <summary>Stable producer identity used for source attribution emitted by this translator.</summary>
     public const string Producer = "cohesive.relations.csharp-expression/v1";
 

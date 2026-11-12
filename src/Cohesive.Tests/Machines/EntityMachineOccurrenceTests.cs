@@ -133,7 +133,7 @@ public sealed class EntityMachineOccurrenceTests
         Assert.Equal(expected, EntityMachineOccurrence.FromReceipt(receipt).Length);
     }
 
-    static async Task<(InMemoryEntityOutboxRepository Repository, OperationContext Context, EntityTransitionOperationCommit Commit)>
+    internal static async Task<(InMemoryEntityOutboxRepository Repository, OperationContext Context, EntityTransitionOperationCommit Commit)>
         Prepare<TInput>(EntityDefinition entity, Transition<TenderState, TInput, string> transition, TenderState state, TInput input)
     {
         var context = OperationContext.Create();

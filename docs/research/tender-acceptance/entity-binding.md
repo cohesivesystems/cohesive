@@ -81,7 +81,7 @@ means a commit may have occurred; it must not be treated as a known non-completi
 Runtime bindings select observation, transport, execution, and persistence independently. Cosmos
 change-feed evidence, HTTP requests, actors, and Cohesive execution are possible realizations, subject
 to explicit capability checks. Delivery acceptance does not satisfy a completion requirement for a
-committed target transition. No concrete reaction-policy IR, adapter, or durable runtime is introduced here.
+committed target transition. The bounded reaction-policy and Process interpretation are described in [reaction realization](reactions.md).
 
 ## Verification needed for framework enforcement
 
@@ -112,5 +112,5 @@ Creation, multi-movement paths, component composition, and automatic preservatio
 unsupported. Coverage is scoped to registered canonical Transitions and their reference interpreter;
 direct storage writes are not made safe by this contract. Committed occurrences can now be projected
 from atomic entity receipts without an explicit Emit declaration. [Reaction realization](reactions.md)
-documents that boundary and the next policy/runtime slice. Reaction execution and occurrence transport
-remain design requirements rather than implemented delivery guarantees.
+documents that boundary and the implemented declarative policy/Process slice. Automatic feed observation,
+transport adapters and durable failure-history integration remain follow-up work.

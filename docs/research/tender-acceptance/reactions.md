@@ -47,59 +47,39 @@ storage. It performs no serialization, storage reads, or writes. The wrappers re
 persist the existing receipt locator and node identity for long-lived references rather than retaining
 whole receipts in an unbounded in-memory subscription.
 
-## Next: one declarative policy, existing execution machinery
+## Implemented: declarative policy and Process interpretation
 
-The next implementation should lower typed policy source into a portable declaration containing:
+`TenderReactionModel` now declares pending acceptance and receipt confirmation policies:
 
-- Exact source machine and movement reference.
-- Typed projection from the committed source snapshot into target identity and action input.
-- Exact target action/transition contract. The target decides which movement, if any, is enabled.
-- Stable policy identity, revision, fingerprint and source attribution.
-- Explicit completion evidence requirement: target commit, not delivery acceptance.
+```csharp
+PendingAcceptance = MachineReaction.On<TenderState>(Tender.Entity, Tender.Machine.SendPending,
+        id: "tender-to-load.pending", revision: "1")
+    .Request(MarkPending,
+        subject: tender => tender.LoadId,
+        input: tender => new AcknowledgeLoad(false));
+```
 
-Do not retain executable callbacks or closures in that declaration. Lower expression source through
-the existing Relations expression language, using the same contract context as the participant
-entities and transitions. Validate projections and references at registration. Policy revision and
-source occurrence together identify a reaction instance; changed policy revisions require explicit
-replay/evolution policy rather than silently repeating past reactions.
+The expressions lower to portable Process IR. Target guards still decide admission. The existing
+atomic entity adapter provides exact receipt replay, and the existing Process runtime owns execution
+and checkpointing. Canonical start causation retains the exact policy and source occurrence through
+recovery. Inspection distinguishes Pending, Completed, Rejected, Failed and Indeterminate from
+retained receipts or explicitly scoped host failure evidence.
 
-For the tender episode, pending acceptance requests the related load's pending-acknowledgement
-action. Confirmation requests its confirm-acknowledgement action. Correlation comes from the exact
-committed tender's LoadId. Neither request declares that the load already changed. The complete load
-lifecycle is still unextracted, so this must remain an explicitly bounded consumer until that model
-exists. Customer-ordered stops belong to the load; no original-trip proxy is introduced.
+See [the policy contract and runtime boundary](../../../src/Cohesive.Processes/Machines/README.md)
+and [the executable consumer](../../../eng/examples/tender-acceptance/TenderReactionModel.cs).
+Tests cover deterministic lowering, persistence, source/target affinity, duplicate delivery,
+guard rejection, explicit failure inspection, and recovery after a lost target-commit acknowledgement.
 
-Use a Process invocation and its existing durable operation/receipt facilities for the first
-interpretation. A second scheduler, journal, retry loop or independently mutable reaction status
-would duplicate authority. A reaction-specific inspection view should derive the following meanings:
+## Remaining realization work
 
-| View | Required underlying evidence |
-|---|---|
-| Pending | Durable reaction intent exists; target commitment/rejection has not been established. Dispatch acceptance alone stays pending. |
-| Completed | Exact target receipt proves successful completion under the policy's requirement. |
-| Rejected | Exact target admission/domain result rejects the action; source commit remains valid. |
-| Failed | Terminal failure with explicit non-commit evidence and diagnostics. |
-| Indeterminate | Failure evidence says target effects may have committed; reconciliation is required. |
-
-The existing `DurableOperationStatus`, `DurableOperationFailurePhase`, and
-`DurableOperationEffectEvidence` already distinguish dispatch, acknowledgement and ambiguous
-effects. Preserve their attempt history and evidence instead of maintaining a parallel enum-driven
-execution machine. Acknowledgement by itself is not enough: inspect the policy-required target
-receipt/result before presenting Completed. Reconciliation must preserve exact operation identity;
-never turn receipt absence into proof of non-commit or blindly execute a new request.
-
-## Acceptance tests for that next layer
-
-1. Lower equivalent typed policies deterministically and round-trip their canonical declaration.
-2. Reject wrong source revision, incompatible projection contracts and unresolved target contracts.
-3. Duplicate source delivery produces one reaction identity and one durable start intent.
-4. Delayed or merely accepted dispatch remains Pending.
-5. Target guard rejection reports Rejected without undoing the source movement.
-6. Target commit produces Completed only with exact matching receipt evidence.
-7. Timeout after possible target commit produces Indeterminate; reconciliation does not resend blindly.
-8. Recovery retains policy revision, source causation, target identity and attempt diagnostics.
-9. Compare the reference interpretation and existing Process-backed interpretation on the same traces.
+The current profile supports one target invocation, one initial Process attempt and one authority
+scope. Hosts own feed observation, start admission and scheduling. Failure inspection accepts the
+existing portable failure evidence, but the native Transition-operation path does not automatically
+persist transport exceptions as a durable reaction attempt history. That integration remains explicit
+follow-up work; no separate reaction journal or retry scheduler is introduced.
 
 Cosmos change-feed observation, HTTP dispatch and actor runtimes remain later adapters. Each must
-declare its observation, deduplication, ordering, durability and reconciliation guarantees; none may
-silently replace the commit-evidence requirement with transport acknowledgement.
+declare observation, deduplication, ordering, durability and reconciliation guarantees. Delivery
+acceptance is Pending work and must never substitute for a target commit receipt. Cross-authority
+reactions, policy evolution over historical sources, and Process restart-as-new-attempt require
+explicit semantics before support is claimed.

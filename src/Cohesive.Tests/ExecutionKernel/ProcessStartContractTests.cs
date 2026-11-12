@@ -6,6 +6,22 @@ namespace Cohesive.Tests.ExecutionKernel;
 public sealed class ProcessStartContractTests
 {
     [Fact]
+    public void Portable_causation_is_retained_and_part_of_idempotent_start_intent()
+    {
+        var request = Request();
+        var caused = new ProcessStartRequest(request.SchemaVersion, request.Definition, request.Context,
+            request.InitialContinuation, request.Input, ProcessDurabilityTestFixture.StringValue("source/receipt"));
+        Assert.False(request.HasSameIdempotentIntent(caused));
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var restored = JsonSerializer.Deserialize<ProcessStartRequest>(JsonSerializer.Serialize(caused, options), options)!;
+        Assert.True(caused.HasSameIdempotentIntent(restored));
+        Assert.DoesNotContain("causation", JsonSerializer.Serialize(request, options), StringComparison.OrdinalIgnoreCase);
+        Assert.Throws<ArgumentException>(() => new ProcessStartRequest(request.SchemaVersion, request.Definition,
+            request.Context, request.InitialContinuation, request.Input,
+            PortableValue.Unknown(ProcessDurabilityTestFixture.StringContract)));
+    }
+
+    [Fact]
     public void Start_IsDistinctFromPostAdmissionControlAndCreatesExactInitialState()
     {
         var request = Request();
