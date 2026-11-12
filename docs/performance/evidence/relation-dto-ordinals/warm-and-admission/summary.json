@@ -1,0 +1,92 @@
+[
+  {
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsJoined",
+    "mean_ns": 82611.95786105377,
+    "bytes": [
+      106520
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsSimple",
+    "mean_ns": 24934.435805121528,
+    "bytes": [
+      57368
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledKernelOnlyJoined",
+    "mean_ns": 86827.86085677055,
+    "bytes": [
+      106520
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledKernelOnlySimple",
+    "mean_ns": 24108.647871851434,
+    "bytes": [
+      57368
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledOrdinalJoined",
+    "mean_ns": 26576.103819754186,
+    "bytes": [
+      106520
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledOrdinalSimple",
+    "mean_ns": 12371.571800274594,
+    "bytes": [
+      57368
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "OrdinalAdmissionAndMapJoined",
+    "mean_ns": 423404.73969907407,
+    "bytes": [
+      647248
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "OrdinalAdmissionAndMapSimple",
+    "mean_ns": 168880.84711316795,
+    "bytes": [
+      401488
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "SharedCoreIndexedJoined",
+    "mean_ns": 75510.06431990588,
+    "bytes": [
+      106520
+    ],
+    "repeats": 3
+  },
+  {
+    "side": "candidate",
+    "method": "SharedCoreIndexedSimple",
+    "mean_ns": 34090.98793219337,
+    "bytes": [
+      57368
+    ],
+    "repeats": 3
+  }
+]

@@ -110,11 +110,13 @@ public sealed class ServiceTransitionBinding : ServiceBinding
     /// <summary>Associates an operation with its prepared plan and invocation-scoped repository resolver.</summary>
     /// <exception cref="ArgumentNullException">A dependency is null.</exception>
     /// <exception cref="ArgumentException">The operation identity is empty.</exception>
+    /// <exception cref="InvalidOperationException">The plan omits or changes the entity machine binding.</exception>
     public ServiceTransitionBinding(string operationId, CompiledTransitionPlan plan, EntityDefinition entity,
         Func<OperationContext, IEntityRepository> repository) : base(operationId)
     {
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         EntityBinding = new(entity, repository);
+        Cohesive.Transitions.Machines.EntityMachineBinding.RequireSame(entity, plan.Definition.MachineBinding);
         if (plan.Definition.Observation != ValueContract.FromShape(entity.Shape))
             throw ServiceBindingValidationException.Error(ServiceBindingDiagnosticCodes.ObservationMismatch,
                 "The plan observation contract must match the bound entity state contract.", "/binding/entity");

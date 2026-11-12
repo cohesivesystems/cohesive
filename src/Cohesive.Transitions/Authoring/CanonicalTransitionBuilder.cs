@@ -973,6 +973,16 @@ public sealed class TransitionBuilder<TEntity, TInput, TOutcome>
     readonly List<TransitionAdmissionRule> preconditions = [];
     readonly List<TransitionInvariant> invariants = [];
     TransitionSubjectCreation? subjectCreation;
+    EntityMachineEffect machineEffect;
+
+    /// <summary>Declares that every successful path preserves the entity's machine classification.</summary>
+    /// <returns>This builder. Runtime checks verify preservation; named movements cannot be combined with it.</returns>
+    public TransitionBuilder<TEntity, TInput, TOutcome> PreserveMachineState()
+    {
+        machineEffect = EntityMachineEffect.Preserve;
+        return this;
+    }
+
 
     internal TransitionBuilder(TransitionAuthoringContext<TEntity, TInput, TOutcome> context)
         : base(context, new(parent: null))
@@ -1103,7 +1113,7 @@ public sealed class TransitionBuilder<TEntity, TInput, TOutcome>
         [.. preconditions],
         BuildSequence(bodyId, rootSource),
         [.. invariants],
-        subjectCreation);
+        subjectCreation, Context.MachineBinding, machineEffect);
 }
 
 /// <summary>Authors ordered predicate cases and explicit completeness for one canonical Choice.</summary>
@@ -1409,6 +1419,9 @@ internal sealed class TransitionAuthoringContext<TEntity, TInput, TOutcome>
             typeRefMapper: typeRefMapper,
             memberPathResolver: memberPathResolver);
     }
+
+    public Cohesive.Transitions.Machines.EntityMachineBinding? MachineBinding =>
+        Cohesive.Transitions.Machines.EntityMachineBinding.Read(entityShape);
 
     public object Owner => this;
 

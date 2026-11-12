@@ -66,8 +66,22 @@ public sealed class TypedEntityApiBindings<TEntity> where TEntity : notnull
     public TypedEntityApiBindings<TEntity> Get<TResponse>(ApiEndpoint endpoint, Func<TEntity, Ok<TResponse>> respond)
     {
         ArgumentNullException.ThrowIfNull(respond);
+        return Get(endpoint, (_, state) => respond(state));
+    }
+
+    /// <summary>Binds a read endpoint with the loaded identity and materialized state.</summary>
+    /// <typeparam name="TResponse">Declared success body type.</typeparam>
+    /// <param name="endpoint">Separately authored bodyless query endpoint for this entity.</param>
+    /// <param name="respond">Pure response projection of the loaded identity and typed state.</param>
+    /// <returns>This registration session.</returns>
+    /// <exception cref="ArgumentNullException">The endpoint or projection is null.</exception>
+    /// <exception cref="ArgumentException">The declaration does not match the entity or response contract.</exception>
+    /// <exception cref="InvalidOperationException">The session is mapped or the endpoint is already bound.</exception>
+    public TypedEntityApiBindings<TEntity> Get<TResponse>(ApiEndpoint endpoint, Func<string, TEntity, Ok<TResponse>> respond)
+    {
+        ArgumentNullException.ThrowIfNull(respond);
         Validate<TResponse>(endpoint, ApiOperationKind.Query);
-        Add(endpoint, EntityApiOperationBinding.Get(endpoint, (_, snapshot) => respond(Read(snapshot))));
+        Add(endpoint, EntityApiOperationBinding.Get(endpoint, (context, snapshot) => respond(context.EntityId, Read(snapshot))));
         return this;
     }
 

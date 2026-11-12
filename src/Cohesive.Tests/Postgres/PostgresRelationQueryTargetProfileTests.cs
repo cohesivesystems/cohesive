@@ -55,7 +55,9 @@ public sealed class PostgresRelationQueryTargetProfileTests
     {
         HashSet<(RelationQueryStructuralCapabilityRole Role, RelationQueryStructuralPathKind Path)> expected =
         [
-            (RelationQueryStructuralCapabilityRole.BindingRead, RelationQueryStructuralPathKind.TopLevelField),
+            (RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction, RelationQueryStructuralPathKind.TopLevelField),
+        (RelationQueryStructuralCapabilityRole.OccurrenceEvidenceReconstruction, RelationQueryStructuralPathKind.NestedField),
+        (RelationQueryStructuralCapabilityRole.BindingRead, RelationQueryStructuralPathKind.TopLevelField),
             (RelationQueryStructuralCapabilityRole.BindingRead, RelationQueryStructuralPathKind.NestedField),
             (RelationQueryStructuralCapabilityRole.ProjectionTarget, RelationQueryStructuralPathKind.TopLevelField),
             (RelationQueryStructuralCapabilityRole.ProjectionTarget, RelationQueryStructuralPathKind.NestedField),
@@ -84,8 +86,7 @@ public sealed class PostgresRelationQueryTargetProfileTests
             PostgresRelationQueryTargetProfile.Default.Capabilities,
             static evidence => evidence.Capability is GuaranteeRelationQueryCapability
             {
-                Kind: RelationQueryGuaranteeCapabilityKind.OccurrenceProvenance
-                    or RelationQueryGuaranteeCapabilityKind.InvariantEnforcement
+                Kind: RelationQueryGuaranteeCapabilityKind.InvariantEnforcement
             });
     }
 

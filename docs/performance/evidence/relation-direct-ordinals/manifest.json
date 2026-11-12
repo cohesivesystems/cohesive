@@ -1,0 +1,12 @@
+{
+  "source_revision": "fee805862decdf8db40539afbdf53ffb1c95d74d",
+  "local_source_note": "Timing predates commit; execution source matches fee80586, with a later non-executable comment clarifying the trusted-reader contract.",
+  "measurement": "Three counterbalanced repeats, fresh process per case, 4 warmups and six 200ms iterations, 1024 rows. No tests/builds/profiling overlap timing.",
+  "boundary": "Full relation execution from existing evidence, terminal shaping, shape validation and DTO allocation. External acquisition and serialization excluded. Includes warm cache lookups; cold compilation/layout setup excluded.",
+  "constraints": "Internal opt-in interpreter strategy; top-level projections only. Nested assignments retain reference behavior. Strict validation remains at the consuming boundary; partial intermediate rows remain representable.",
+  "source_hashes": {
+    "src/Cohesive.Relations/Execution/RelationQueryInMemoryInterpreter.cs": "87f45c5da0b5a2dfbd71c388e726c0928492af2086dd9bce024d6f856bd64201",
+    "src/Cohesive.Relations/Execution/RelationQueryObjectValues.cs": "778eec93ced357587dc6d4189ecb1cb83833782d9f77e8fffa23c80755eaf71c",
+    "src/Cohesive.Relations.Benchmarks/RelationDtoWarmBenchmarks.cs": "83716ad0a5ef4844d1247f0e947540bda6974e30d146656cde24f2e3a8d90f54"
+  }
+}

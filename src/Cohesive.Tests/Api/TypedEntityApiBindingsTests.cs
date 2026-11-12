@@ -1,3 +1,4 @@
+using Cohesive.Model;
 using System.Net;
 using System.Net.Http.Json;
 using Cohesive.Adapters.AspNet;
@@ -32,6 +33,33 @@ public sealed class TypedEntityApiBindingsTests
         TransitionAuthoring.Create<Order, ClosedOutcome>(Entity.Shape, new("typed/no-input"), new("1"), transition => transition
             .Requires(state => state.Status == "Draft", state => new ClosedOutcome(SubmitCode.NotDraft))
             .Set(state => state.Status, "Submitted").Return(new ClosedOutcome(SubmitCode.Applied)));
+
+    public sealed record PointState(string Partition, SubmitCode Status);
+    public sealed record PointResponse(string Id, SubmitCode Status);
+
+    [Fact]
+    public async Task Typed_point_read_supplies_identity_and_enum_without_manual_observation_access()
+    {
+        var entity = ObjectEntityDefinition.For<PointState>(new("point"));
+        var repository = new InMemoryEntityOutboxRepository(entity, partitionKeyFieldName: "Partition");
+        await repository.Upsert(OperationContext.Create(),
+            new(entity.CreateState("one", new PointState("local", SubmitCode.Applied)).Snapshot));
+        var endpoint = Cohesive.Api.Api.Define().Entity<PointState>().Query("Details").Route("GET", "/points/{id}")
+            .RouteParameter<string>("id").Returns<PointResponse>().Result(ApiResultKind.NotFound).Build();
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddRequestOperationContext();
+        await using var app = builder.Build();
+        app.UseRequestOperationContext();
+        app.MapEntityApi<PointState>(entity, repository, "local", bindings =>
+            bindings.Get(endpoint, (id, state) => TypedResults.Ok(new PointResponse(id, state.Status))));
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+        var result = await client.GetFromJsonAsync<PointResponse>("/points/one");
+        Assert.Equal(new PointResponse("one", SubmitCode.Applied), result);
+        Assert.Equal(HttpStatusCode.NotFound, (await client.GetAsync("/points/missing")).StatusCode);
+        await app.StopAsync();
+    }
 
     [Fact]
     public async Task Non_rejection_outcome_rejected_by_transition_returns_safe_problem_over_http()

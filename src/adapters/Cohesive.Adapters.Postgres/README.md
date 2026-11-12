@@ -468,6 +468,58 @@ configuration is not read until the selection is used by the host.
 and `SlotGenerationConfigurationKey` (required nonempty slot incarnation). Both are validated before native
 client resolution; the returned `PreparedMaterializationReadSource` admits the source when invoked.
 
+### Query rows with exact join contributors and ordinal admission
+
+Compile a query-row branch with `RelationQueryResultObservability.ExactContributors`.
+The PostgreSQL compiler retains hidden source identities and outer-join presence columns through
+projections and joins. Contributor metadata names the canonical binding, qualified shape and physical
+placement; artifact serialization and fingerprints include it. Binding-qualified SQL aliases distinguish
+self-joins even when both sources have the same shape.
+
+Bind the resulting artifact to its exact compiled plan, including retained shape revisions:
+
+```csharp
+var reader = new PostgresQueryRowsReader(
+    artifact, runtime, plan, maximumRows: 10_000, maximumBytes: 32_000_000);
+var rows = await reader.ReadRowsAsync(parameters, cancellationToken);
+```
+
+`ReadRowsAsync` reads provider columns directly into owned ordinal storage and returns
+`RelationQueryOutputRow` values with all contributing source occurrences. `reader.Layout` can prebind
+hot reads or the core DTO materializer. No provider buffers escape. A left join's absent right binding
+contributes no occurrence; a present right row with a null or missing optional field still contributes its
+identity. Fan-out retains the exact contributor combination for each result row. Occurrence IDs are
+deterministically scoped by physical placement, source binding and canonical source identity.
+
+The semantic plan and core `Observation` admission remain authoritative. Decoded scalars are checked
+against compiled contracts, then the complete output shape is admitted. Every required output field must
+be demanded. SQL null becomes missing only for optional nonnullable fields; outer absence is tracked
+separately. The shared scalar catalog supplies all provider decoding and identity formatting.
+
+This reader supports unpaged, non-temporal scalar outputs with direct top-level fields. Exact contributor
+compilation currently supports row-preserving query-row topologies. Aggregation, duplicate elimination,
+relation/aggregate terminals and nested output paths fail with explicit diagnostics; projecting an entire
+optionally absent terminal binding also requires an explicit present output object. Physical source
+bindings must supply nonnull unique identity evidence. Temporal identities require a future explicit
+policy. These are declared limitations, not silent fallbacks. The value-only `ReadAsync` API refuses
+contributor-bearing artifacts so provenance cannot be discarded accidentally.
+
+One parameterized statement provides statement-local snapshot consistency. There are no retries,
+ambient transaction enlistment, partial result publication or implicit paging. Row bounds apply to the
+complete result; cumulative scalar byte bounds include hidden identity and presence columns. Provider
+failure, cancellation, inconsistent hidden metadata or validation failure aborts the operation. Byte
+bounds exclude managed object overhead and do not constrain server CPU.
+
+This changes native artifact schema to v5, fingerprint canonicalization to v5-c14n/v1, and compiler/target
+profiles to v3. Recompile older artifacts. The generated capability reference and TypeScript contracts
+project the new row-preserving contributor boundary from the canonical profile.
+
+`PostgresContributingRowsBenchmarks` measures native inner/left SQL execution, pool checkout, bounded
+provider reads, strict admission, contributor reconstruction and retained DTO output for 1, 32 and 1024
+left source rows. Both variants share all behavior and return the same owned rows; only dictionary versus
+ordinal storage differs. Compilation, fixture setup, population and serialization are excluded. These
+results concern attributed query rows, separately from entity snapshot metadata and value-only ingestion.
+
 
 ## Fenced process effect commits
 

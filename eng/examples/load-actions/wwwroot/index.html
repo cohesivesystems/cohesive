@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Load operations · Cohesive</title><link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/js/app.js"></script>
+</head>
+<body>
+  <aside><a class="brand" href="/">c<span>◆</span>hesive</a><div class="workspace">OPERATIONS WORKSPACE</div>
+    <div class="nav active">▤ &nbsp; Loads <span id="load-count">—</span></div><div class="aside-note">LOGISTICS EXAMPLE<br><strong>One load. Clear next steps.</strong><p>Available actions reflect the current load and your permissions.</p></div>
+    <div class="demo">LOCAL DEMO <span>●</span></div>
+  </aside>
+  <main>
+    <header><div class="breadcrumb">Operations <span>/</span> Loads</div><label class="role">View as <select id="role" aria-label="Operator role" disabled></select></label></header>
+    <section class="heading"><div><div class="eyebrow">DISPATCH DESK</div><h1>Load operations</h1><p>Review the load, then choose its next step.</p></div><button id="refresh" class="secondary" disabled>↻ &nbsp; Refresh</button></section>
+    <div id="message" role="status" aria-live="polite" class="message" hidden></div>
+    <div class="columns">
+      <section class="card details"><div class="card-top"><h2>Load overview</h2><span class="tag">LIVE STATE</span></div>
+        <label for="load">Load reference</label><select id="load" disabled></select>
+        <div class="status-line"><h3 id="reference">Loading…</h3><span id="status" class="status">—</span></div>
+        <dl><div><dt>Release documents</dt><dd id="documents">—</dd></div><div><dt>Last action reason</dt><dd id="last-reason">—</dd></div></dl>
+        <div class="info"><span>i</span><p>Actions are checked against the latest saved load. Refresh to see changes from other operators.</p></div>
+      </section>
+      <section class="card actions"><div class="card-top"><h2>Available actions</h2><span id="action-count" class="count">0</span></div>
+        <p class="muted">Choose an action to check before submitting.</p><div id="actions" class="action-list"></div>
+        <form id="action-form" hidden><label for="reason">Reason</label><textarea id="reason" rows="3" placeholder="Add context for this action"></textarea>
+          <p id="availability" class="availability" aria-live="polite">Check this action with your proposed input.</p>
+          <div class="buttons"><button id="check" type="button" class="secondary">Check availability</button><button id="submit" type="submit" disabled>Submit action</button></div>
+        </form>
+        <p id="empty" class="empty" hidden>No actions are available to this operator.</p>
+      </section>
+    </div>
+    <footer><span class="dot"></span> Local demonstration <span class="divider">/</span> Changes are held in memory and reset when the server restarts.</footer>
+  </main>
+</body>
+</html>

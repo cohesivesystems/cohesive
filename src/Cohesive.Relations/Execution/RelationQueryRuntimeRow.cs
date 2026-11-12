@@ -84,20 +84,13 @@ sealed record RelationQueryRuntimeBinding
         Shape = shape;
         Value = value;
         Occurrence = occurrence;
-        UnavailableFields =
-        [
-            .. normalizedUnavailableFields
-                .Distinct()
-                .OrderBy(static path => path.ToString(), StringComparer.Ordinal)
-        ];
-        AuthoritativeFields =
-        [
-            .. normalizedAuthoritativeFields
-                .Distinct()
-                .OrderBy(static path => path.ToString(), StringComparer.Ordinal)
-        ];
+        UnavailableFields = NormalizePaths(normalizedUnavailableFields);
+        AuthoritativeFields = NormalizePaths(normalizedAuthoritativeFields);
         IsAuthoritativeValue = isAuthoritativeValue;
     }
+
+    static ImmutableArray<FieldPath> NormalizePaths(ImmutableArray<FieldPath> paths) =>
+        paths.IsEmpty ? [] : [.. paths.Distinct().OrderBy(static path => path.ToString(), StringComparer.Ordinal)];
 
     /// <summary>Creates a binding reconstructed from an observation occurrence.</summary>
     public static RelationQueryRuntimeBinding FromObservation(

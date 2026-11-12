@@ -1499,6 +1499,30 @@ public sealed class RelationQueryExpressionLowerer
         }
     }
 
+    internal (Expression<Func<TResult, TKey>> Key, Expression<Func<TResult, TNumber>> Sum) ResolveGroupedSumTargets<TKey, TNumber, TResult>(
+        Expression<Func<TKey, TNumber, TResult>> result)
+    {
+        if (result.Body is not NewExpression { Arguments.Count: 2 } created)
+            throw new ArgumentException("A grouped sum must construct a result with one key and one sum property.", nameof(result));
+
+        var keyIndex = created.Arguments.IndexOf(result.Parameters[0]);
+        var sumIndex = created.Arguments.IndexOf(result.Parameters[1]);
+        if (keyIndex < 0 || sumIndex < 0)
+            throw new ArgumentException("A grouped sum result must assign the key and sum parameters directly.", nameof(result));
+
+        try
+        {
+            var members = ResolveConstructorMembers(created, "sum-by/result", "body");
+            var row = Expression.Parameter(typeof(TResult), "row");
+            return (Expression.Lambda<Func<TResult, TKey>>(Expression.Property(row, members[keyIndex]), row),
+                Expression.Lambda<Func<TResult, TNumber>>(Expression.Property(row, members[sumIndex]), row));
+        }
+        catch (LoweringFailure failure)
+        {
+            throw new RelationQueryExpressionAuthoringException([failure.Diagnostic]);
+        }
+    }
+
     ImmutableArray<PropertyInfo> ResolveConstructorMembers(
         NewExpression created,
         string sourceReference,

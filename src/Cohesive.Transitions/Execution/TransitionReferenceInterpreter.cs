@@ -31,6 +31,11 @@ public static class TransitionExecutionDiagnosticCodes
     /// <summary>An authored NoChange path changed candidate aggregate state.</summary>
     public const string NoChangeModifiedState = "transitions.execution.noChange.modifiedState";
 
+    /// <summary>The entity matches zero or multiple machine states.</summary>
+    public const string MachineClassificationInvalid = "transitions.execution.machine.classificationInvalid";
+    /// <summary>An operation declared preservation but changed its machine state.</summary>
+    public const string MachinePreservationViolated = "transitions.execution.machine.preservationViolated";
+
     /// <summary>Multiple sibling edges are enabled for the requested Machine action.</summary>
     public const string MachineAdmissionAmbiguous = "transitions.execution.machine.admissionAmbiguous";
 
@@ -196,6 +201,8 @@ public static class TransitionReferenceInterpreter
                 if (subjectAbsent)
                     InitializeSubject();
 
+                var initialMachineState = ClassifyMachine(candidateState: false);
+
                 foreach (var precondition in plan.Definition.Preconditions)
                 {
                     var admitted = EvaluateBoolean(
@@ -259,6 +266,10 @@ public static class TransitionReferenceInterpreter
                 RecomputeAffectedDerivedFields();
                 ValidateInvariants();
                 ValidateMachineTargets();
+                var finalMachineState = ClassifyMachine(candidateState: true);
+                if (plan.Definition.MachineEffect == EntityMachineEffect.Preserve && initialMachineState != finalMachineState)
+                    throw Invalid(TransitionExecutionDiagnosticCodes.MachinePreservationViolated,
+                        "The operation declared preservation but changed the entity machine classification.", plan.Definition.Body.Id);
 
                 var changed = executedPatches.Where(static patch => patch.Changed).ToImmutableArray();
                 var kind = terminal.Kind;
@@ -851,6 +862,19 @@ public static class TransitionReferenceInterpreter
             }
         }
 
+        string? ClassifyMachine(bool candidateState)
+        {
+            if (plan.Definition.MachineBinding is not { } binding) return null;
+            try
+            {
+                return binding.Classify(evaluator, CreateEvaluationContext(plan.Definition.Body.Id, candidateState, scope: null));
+            }
+            catch (InvalidOperationException error) when (error is not TransitionRuntimeDecisionException)
+            {
+                throw Invalid(TransitionExecutionDiagnosticCodes.MachineClassificationInvalid, error.Message, plan.Definition.Body.Id);
+            }
+        }
+
         void ValidateMachineTargets()
         {
             foreach (var target in machineTargets)
@@ -1218,7 +1242,7 @@ public static class TransitionReferenceInterpreter
         TransitionExecutionEvidence Evidence() => new(
             plan.DefinitionReference,
             activation.Id,
-            [.. trace]);
+            [.. trace], plan.Definition.MachineBinding);
 
         DocumentValidationDiagnostic? ValidateActivation()
         {

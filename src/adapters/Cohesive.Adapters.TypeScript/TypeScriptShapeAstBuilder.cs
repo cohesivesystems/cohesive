@@ -789,56 +789,7 @@ public sealed class TypeScriptShapeAstBuilder
         return false;
     }
 
-    static string IdentifierFromId(string id)
-    {
-        var value = id;
-        var isClrId = value.StartsWith("clr:", StringComparison.Ordinal);
-        var lastColon = value.LastIndexOf(':');
-        if (lastColon >= 0 && lastColon + 1 < value.Length)
-            value = value[(lastColon + 1)..];
-
-        if (isClrId)
-        {
-            var lastDot = value.LastIndexOf('.');
-            var lastNested = value.LastIndexOf('+');
-            var lastSeparator = Math.Max(lastDot, lastNested);
-            if (lastSeparator >= 0 && lastSeparator + 1 < value.Length)
-                value = value[(lastSeparator + 1)..];
-
-            var tickIndex = value.IndexOf('`', StringComparison.Ordinal);
-            if (tickIndex >= 0)
-                value = value[..tickIndex];
-
-            return ToIdentifierPart(value);
-        }
-
-        var parts = value
-            .Split(['.', ':', '/', '\\', '+', '-', '_', '`', '<', '>', ','], StringSplitOptions.RemoveEmptyEntries)
-            .Where(x => !string.Equals(x, "shape", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(x, "type", StringComparison.OrdinalIgnoreCase)
-                        && !string.Equals(x, "clr", StringComparison.OrdinalIgnoreCase))
-            .ToArray();
-
-        if (parts.Length == 0)
-            return "_";
-
-        return string.Concat(parts.Select(ToIdentifierPart));
-    }
-
-    static string ToIdentifierPart(string value)
-    {
-        if (value.Length == 0)
-            return string.Empty;
-
-        var chars = value.Where(char.IsLetterOrDigit).ToArray();
-        if (chars.Length == 0)
-            return string.Empty;
-
-        var text = new string(chars);
-        return char.IsDigit(text[0])
-            ? $"_{text}"
-            : char.ToUpperInvariant(text[0]) + text[1..];
-    }
+    static string IdentifierFromId(string id) => TypeScriptTypeNames.FromId(id);
 
     static string ToCamelCase(string value)
     {

@@ -55,6 +55,25 @@ internal sealed class EntityStateInterpreter
         EnsureRequiredFieldPresence(entityId: entityId, stateByFieldName: mutableState);
         EnsureFieldConstraints(entityId: entityId, context: context);
         EnsureEntityInvariants(entityId: entityId, context: context);
+        if (entityDefinition.Machine is { } machine)
+        {
+            var observation = PortableExpressionValue.FromObservation(ObservationValue.FromObject(state.Fields));
+            try
+            {
+                _ = machine.Classify(expressionEvaluator, new()
+                {
+                    ResolveBinding = binding => binding == Cohesive.Transitions.IR.TransitionBindingIds.Observation
+                        ? observation : throw new InvalidOperationException("Classification cannot read a command binding."),
+                    ResolveField = (binding, path) => binding is null || binding == Cohesive.Transitions.IR.TransitionBindingIds.Observation
+                        ? observation.Project(path) : throw new InvalidOperationException("Classification cannot read a command binding."),
+                    ResolveParameter = _ => throw new InvalidOperationException("Classification cannot read invocation parameters.")
+                });
+            }
+            catch (InvalidOperationException error)
+            {
+                throw new SemanticRuleViolationException(error.Message);
+            }
+        }
     }
 
     internal EntityState NormalizeState(string entityId, EntityState state)

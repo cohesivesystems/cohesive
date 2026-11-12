@@ -438,26 +438,28 @@ public sealed partial class PostgresEntityRepository : IEntityTransitionOperatio
         }
     }
 
-    EntitySnapshot ReadSnapshot(NpgsqlDataReader reader, IReadOnlySet<string>? selectedFields)
+    // Canonical storage is retained only as a differential benchmark/reference realization.
+    internal EntitySnapshot ReadSnapshot(NpgsqlDataReader reader, IReadOnlySet<string>? selectedFields,
+        bool ordinalStorage = true)
     {
-        var fields = ImmutableArray.CreateBuilder<ObservationValue>(mapping.Fields.Length);
+        var fields = ordinalStorage ? ImmutableArray.CreateBuilder<ObservationValue>(mapping.Fields.Length) : null;
+        var canonical = ordinalStorage ? null : new Dictionary<string, ObservationValue>(mapping.Fields.Length, StringComparer.Ordinal);
         for (var index = 0; index < mapping.Fields.Length; index++)
         {
-            if (reader.IsDBNull(index))
-            {
-                fields.Add(ObservationValue.Null);
-                continue;
-            }
-            var value = ReadPostgresValue(reader, index, mapping.Fields[index].ScalarType);
-            fields.Add(value);
+            var value = reader.IsDBNull(index) ? ObservationValue.Null
+                : ReadPostgresValue(reader, index, mapping.Fields[index].ScalarType);
+            if (fields is not null) fields.Add(value);
+            else canonical!.Add(mapping.Fields[index].FieldName, value);
         }
 
         var version = reader.GetInt64(mapping.Fields.Length);
         var token = reader.GetFieldValue<uint>(mapping.Fields.Length + 1)
             .ToString(CultureInfo.InvariantCulture);
-        var identity = fields[identityOrdinal].GetRequiredString();
-        var partition = fields[partitionOrdinal].GetRequiredString();
-        var observation = Observation.Create(EntityDefinition.StateShape, layout, fields.MoveToImmutable());
+        var identity = (fields is not null ? fields[identityOrdinal] : canonical![mapping.IdentityField]).GetRequiredString();
+        var partition = (fields is not null ? fields[partitionOrdinal] : canonical![mapping.PartitionField]).GetRequiredString();
+        var observation = fields is not null
+            ? Observation.Create(EntityDefinition.StateShape, layout, fields.MoveToImmutable())
+            : Observation.Create(EntityDefinition.StateShape, canonical!);
         EntityObservationSnapshot complete = new(new(identity), version, observation);
         return CreateValidatedReadSnapshot(
             complete: complete,

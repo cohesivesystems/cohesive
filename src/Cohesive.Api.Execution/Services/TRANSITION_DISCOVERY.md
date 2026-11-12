@@ -89,3 +89,34 @@ A runnable [load-actions consumer](../../../../eng/examples/load-actions/README.
 role-filtered release/cancel choices, command refinement and conditional execution. Discovery benchmarks
 cover 1/8/32 operations both with and without complete commands; see
 [performance evidence](../../../../docs/performance/transition-discovery/README.md).
+
+## Typed HTTP projection
+
+Hosts can explicitly expose discovery for an entity whose direct transitions share an exact input contract:
+
+```csharp
+var endpoint = runtime.ProjectTransitionInspection<Command>(loadEntity.StateShape.QualifiedId,
+    new HttpBinding("POST", "/loads/{id}/actions",
+        [new("id", HttpParameterSource.Route, typeof(string))],
+        new(typeof(ServiceTransitionInspection<Command>))));
+
+// ASP.NET mapping performs the same projection and preserves the execution document as metadata.
+app.MapServiceTransitionInspection<Command>(runtime, loadEntity.StateShape.QualifiedId,
+    "/loads/{id}/actions");
+```
+
+`ServiceTransitionInspection<TInput>.Inputs` contains complete commands keyed by service operation ID.
+An omitted entry retains the runtime's `RequiresInput` behavior. The adapter rejects unknown operation
+keys. The host selects the entity at registration; callers cannot select another entity or override
+visibility or authorization. Normal request identity enrichment applies before inspection.
+
+`ServiceTransitionAction` is a payload-free transport projection: operation ID, generated invocation API ID,
+native availability kind, opaque concurrency token, and sanitized diagnostics. It intentionally omits
+runtime contracts, candidate state and authored outcomes. The API ID uses the same identity projection as
+`ServiceRuntime.Project<TInput, TOutcome>`, allowing generated clients to match actions to invocation
+functions without maintaining another operation table. The declared request/response CLR contracts feed
+the existing shape and TypeScript API generators; unsupported or mixed input contracts fail registration.
+
+The [logistics browser example](../../../../eng/examples/load-actions/README.md) uses this endpoint and
+committed generated clients, validates complete input before enabling submission, and refreshes after
+conflicts. Discovery remains advisory: invocation always reauthorizes and checks concurrency.

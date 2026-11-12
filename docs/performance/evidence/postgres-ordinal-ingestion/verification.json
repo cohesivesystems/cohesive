@@ -1,0 +1,20 @@
+{
+  "live_postgres_tests": {
+    "passed": 61,
+    "failed": 0,
+    "skipped": 0
+  },
+  "benchmark_build": "Release warnings-as-errors passed",
+  "dry_cases": 6,
+  "invariants": [
+    "Real entity identity/version/partition/xmin retained",
+    "Selected-field provenance retained",
+    "Null payload remains null",
+    "Invalid required values rejected by both realizations",
+    "DTO mutation does not mutate retained observation",
+    "Owned values survive provider reader disposal",
+    "Existing native query bounds, cancellation and scalar decoding tests pass"
+  ],
+  "linux_successful_cases": 6,
+  "run": 41937774381
+}

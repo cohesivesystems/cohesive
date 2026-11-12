@@ -1,0 +1,13 @@
+repeat,method,ns,bytes
+1,DirectPipelineCanonicalSimple,3711433.075,4680830
+1,DirectPipelineOrdinalSimple,3671903.521875,4253952
+1,DirectPipelineCanonicalJoined,19310217,14172674
+1,DirectPipelineOrdinalJoined,19756918.416666668,13941402
+2,DirectPipelineOrdinalJoined,16140013.875,13220276
+2,DirectPipelineCanonicalJoined,19444302.083333332,14236250
+2,DirectPipelineOrdinalSimple,3768209.9,4253454
+2,DirectPipelineCanonicalSimple,3597841.5833333335,4680830
+3,DirectPipelineCanonicalSimple,3920877.73125,4680575
+3,DirectPipelineOrdinalSimple,3409149.4875,4253952
+3,DirectPipelineCanonicalJoined,21163338.583333332,14236250
+3,DirectPipelineOrdinalJoined,16902125.041666668,13285812

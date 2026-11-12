@@ -1,0 +1,56 @@
+[
+  {
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsJoined",
+    "mean_ns": 82427.84963990231,
+    "bytes": [
+      106520
+    ],
+    "repeats": 2
+  },
+  {
+    "side": "candidate",
+    "method": "AutoMapperCanonicalRowsSimple",
+    "mean_ns": 25425.794392291114,
+    "bytes": [
+      57368
+    ],
+    "repeats": 2
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledKernelOnlyJoined",
+    "mean_ns": 84574.8742559524,
+    "bytes": [
+      106520
+    ],
+    "repeats": 2
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledKernelOnlySimple",
+    "mean_ns": 24556.268170799514,
+    "bytes": [
+      57368
+    ],
+    "repeats": 2
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledOrdinalJoined",
+    "mean_ns": 25846.806944471246,
+    "bytes": [
+      106520
+    ],
+    "repeats": 2
+  },
+  {
+    "side": "candidate",
+    "method": "CompiledOrdinalSimple",
+    "mean_ns": 12309.267617374084,
+    "bytes": [
+      57368
+    ],
+    "repeats": 2
+  }
+]

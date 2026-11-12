@@ -6,12 +6,16 @@ using Cohesive.Execution;
 using Cohesive.Model.Expressions;
 using Cohesive.Model.Serialization;
 using Cohesive.Transitions.IR;
+using Cohesive.Transitions.Machines;
 
 namespace Cohesive.Transitions.Compilation;
 
 /// <summary>Stable diagnostic codes emitted by target-independent Transition compilation.</summary>
 public static class TransitionCompilationDiagnosticCodes
 {
+    /// <summary>An entity lifecycle interpretation is missing or inconsistent.</summary>
+    public const string EntityMachineCoverage = "transitions.compilation.machine.coverage";
+
     /// <summary>A lexical binding identity is redeclared within one definition.</summary>
     public const string BindingDuplicate = "transitions.compilation.binding.duplicate";
 
@@ -100,7 +104,16 @@ public static class TransitionStaticCompiler
         }
 
         var definition = document.GetDefinition<TransitionDefinition>();
-        Context context = new(document, definition, graph, machineLinks ?? TransitionMachineLinkCatalog.Empty);
+        if (definition.Observation.Shape is { } shapeId && graph is not null
+            && graph.TryGetShape(shapeId, out var shape)
+            && !Equals(EntityMachineBinding.Read(shape), definition.MachineBinding))
+        {
+            return new(document, definition, analysis: null, plan: null,
+                Normalize([new DocumentValidationDiagnostic(TransitionCompilationDiagnosticCodes.EntityMachineCoverage,
+                    DiagnosticSeverity.Error, "Transition must retain the exact machine binding of its observation shape.",
+                    "/definition/machineBinding")]));
+        }
+        Context context = new(document, definition, graph, definition.MachineBinding?.Link() ?? machineLinks ?? TransitionMachineLinkCatalog.Empty);
         return context.Compile();
     }
 
@@ -172,6 +185,7 @@ public static class TransitionStaticCompiler
             var stateScope = CreateStateScope();
             AnalyzeSubjectCreation();
             AnalyzeComputedFields(stateScope);
+            AnalyzeEntityMachine(stateScope);
 
             var live = CompileAdmission(rootScope, conditions.True);
             admittedCondition = live;
@@ -197,6 +211,7 @@ public static class TransitionStaticCompiler
             AddDerivedRecomputationFacts();
             AnalyzeInvariants(stateScope);
             ValidateOverlappingWrites();
+            ValidateMachineCoverage();
 
             var analysis = BuildAnalysis();
             var validation = Normalize(diagnostics);
@@ -217,6 +232,58 @@ public static class TransitionStaticCompiler
                 : null;
 
             return new(document, definition, analysis, plan, validation);
+        }
+
+        void MachineCoverageError(string message) => AddDiagnostic(
+            TransitionCompilationDiagnosticCodes.EntityMachineCoverage, message,
+            "/definition/machineBinding", definition.Body.Id, stage: "machineBinding");
+
+        void AnalyzeEntityMachine(ScopeState stateScope)
+        {
+            if (!Enum.IsDefined(definition.MachineEffect)) MachineCoverageError("Unknown machine interpretation.");
+            if (definition.MachineBinding is not { } binding)
+            {
+                if (definition.MachineEffect != EntityMachineEffect.Movement)
+                    MachineCoverageError("State preservation requires an entity machine binding.");
+                return;
+            }
+            if (definition.SubjectCreation is not null)
+                MachineCoverageError("Bound entity creation is not supported yet; author an explicit initialization contract first.");
+            foreach (var (state, configuration) in binding.States)
+            {
+                var location = "/definition/machineBinding/states/" + Encode(state);
+                _ = AnalyzeSite(definition.Body.Id, TransitionExpressionSiteKind.MachineSourceConfiguration,
+                    configuration.Predicate, stateScope, ExprExpectation.Boolean, location,
+                    conditions.True, TransitionObservationInfluence.Admission, implicitBinding: TransitionBindingIds.Observation);
+                _ = AnalyzeSite(definition.Body.Id, TransitionExpressionSiteKind.MachineTargetConfiguration,
+                    configuration.Predicate, stateScope, ExprExpectation.Boolean, location + "/candidate",
+                    conditions.True, TransitionObservationInfluence.Invariant, candidateStateReads: true,
+                    implicitBinding: TransitionBindingIds.Observation);
+            }
+        }
+
+        void ValidateMachineCoverage()
+        {
+            if (definition.MachineBinding is not { } binding) return;
+            var movements = facts.Where(fact => fact.Kind == FactKind.MachineMovement).ToArray();
+            var covered = conditions.False;
+            for (var index = 0; index < movements.Length; index++)
+            {
+                var movement = movements[index];
+                if (movement.Contract != binding.Machine.Reference)
+                    MachineCoverageError("A movement references a different entity lifecycle authority.");
+                covered = conditions.Or(covered, movement.Condition);
+                for (var prior = 0; prior < index; prior++)
+                    if (conditions.IsSatisfiable(conditions.And(acceptedCondition,
+                        conditions.And(movement.Condition, movements[prior].Condition))))
+                        MachineCoverageError("A successful path must realize exactly one movement; multi-movement composition is unsupported.");
+            }
+            if (definition.MachineEffect == EntityMachineEffect.Preserve)
+            {
+                if (movements.Length != 0) MachineCoverageError("Preservation cannot bypass or accompany a named movement.");
+            }
+            else if (!conditions.Implies(acceptedCondition, covered))
+                MachineCoverageError("Every successful path must realize a movement or explicitly declare PreserveMachineState().");
         }
 
         ScopeState CreateRootScope() => new(
@@ -769,6 +836,8 @@ public static class TransitionStaticCompiler
             TransitionCondition input,
             ScopeState scope)
         {
+            if (definition.MachineBinding is { } authority && movement.Machine != authority.Machine.Reference)
+                MachineCoverageError("A movement references a different entity lifecycle authority.");
             if (!machineLinks.TryGet(movement.Machine, movement.Edge, out var link))
             {
                 AddDiagnostic(

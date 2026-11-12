@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Compilation;
+using Cohesive.Relations.Execution;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Serialization;
 
@@ -801,6 +802,16 @@ public sealed class RelationQueryRuntimeEvidence
     /// Duplicate occurrence identities remain counted so consumers can safely use this as an initial capacity.
     /// </summary>
     internal int OccurrenceEntryCount { get; }
+
+    // This invocation may reuse runtime rows for exactly these prevalidated acquired source fragments.
+    internal ImmutableArray<PreparedRelationQuerySource> PreparedSources { get; init; } = [];
+
+    // A non-default slice attests that all remaining fields belong to the exact, complete prepared sources.
+    internal ImmutableArray<RelationQueryFieldEvidence> SuppliedFieldsForAnalysis { get; init; }
+
+    internal static ImmutableArray<RelationQueryFieldEvidence> OrderFields(
+        ImmutableArray<RelationQueryFieldEvidence> fields) =>
+        CanonicalDocumentCollections.SortIfNeeded(fields, CompareFields);
 
     static ImmutableArray<T> Normalize<T>(
         ImmutableArray<T> values,

@@ -63,6 +63,22 @@ static class RelationQueryObjectValues
 
         if (topLevelOnly)
         {
+            if (value.Fields is IOrdinalObservationStorage ordinal)
+            {
+                var values = new ObservationValue[ordinal.Layout.Count];
+                var count = 0;
+                foreach (var field in fields)
+                {
+                    _ = field.Path.TryGetDirectFieldName(out var name);
+                    if (ordinal.Layout.TryGetOrdinal(name, out var slot) && ordinal.TryGetField(slot, out var selected))
+                    {
+                        values[slot] = selected;
+                        count++;
+                    }
+                }
+                return ObservationValue.FromOrdinalFields(new(ordinal.Layout,
+                    System.Runtime.InteropServices.ImmutableCollectionsMarshal.AsImmutableArray(values), count));
+            }
             var selectedFields = ImmutableSortedDictionary.CreateBuilder<string, ObservationValue>(
                 StringComparer.Ordinal);
             foreach (var field in fields)

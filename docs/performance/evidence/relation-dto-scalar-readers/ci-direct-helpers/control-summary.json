@@ -1,0 +1,275 @@
+{
+  "environment": {
+    "BenchmarkDotNetCaption": "BenchmarkDotNet",
+    "BenchmarkDotNetVersion": "0.15.8",
+    "OsVersion": "Linux Ubuntu 26.04.1 LTS (Resolute Raccoon)",
+    "ProcessorName": "AMD EPYC 7763",
+    "PhysicalProcessorCount": 1,
+    "PhysicalCoreCount": 2,
+    "LogicalCoreCount": 4,
+    "RuntimeVersion": ".NET 10.0.14 (10.0.14, 10.0.1426.52326)",
+    "Architecture": "X64",
+    "HasAttachedDebugger": false,
+    "HasRyuJit": true,
+    "Configuration": "RELEASE",
+    "DotNetCliVersion": "10.0.403",
+    "ChronometerFrequency": {
+      "Hertz": 1000000000
+    },
+    "HardwareTimerKind": "Unknown"
+  },
+  "cases": [
+    {
+      "method": "HandwrittenJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 163.4782942533493,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "CompiledKernelOnlyJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 247.78635025024414,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "CompiledCanonicalJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 345.556476354599,
+      "samples": 3,
+      "bytes": 472
+    },
+    {
+      "method": "SharedCoreSemanticJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 351.29898468653363,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "SharedCoreIndexedJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 318.15952587127686,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "AutoMapperCanonicalRowsJoined",
+      "parameters": "RowCount=1",
+      "mean_ns": 264.09482820828754,
+      "samples": 3,
+      "bytes": 128
+    },
+    {
+      "method": "HandwrittenJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 5233.039334615071,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "CompiledKernelOnlyJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 8158.853678385417,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "CompiledCanonicalJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 8419.076456705729,
+      "samples": 3,
+      "bytes": 3944
+    },
+    {
+      "method": "SharedCoreSemanticJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 11231.215535481771,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "SharedCoreIndexedJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 8574.792887369791,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "AutoMapperCanonicalRowsJoined",
+      "parameters": "RowCount=32",
+      "mean_ns": 6248.73757425944,
+      "samples": 3,
+      "bytes": 3352
+    },
+    {
+      "method": "HandwrittenJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 170319.06062825522,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "CompiledKernelOnlyJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 257999.66284179688,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "CompiledCanonicalJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 272629.46761067706,
+      "samples": 3,
+      "bytes": 115050
+    },
+    {
+      "method": "SharedCoreSemanticJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 365916.0442708333,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "SharedCoreIndexedJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 267768.86018880206,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "AutoMapperCanonicalRowsJoined",
+      "parameters": "RowCount=1024",
+      "mean_ns": 199812.19571940103,
+      "samples": 3,
+      "bytes": 106520
+    },
+    {
+      "method": "HandwrittenSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 46.93280569712321,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "CompiledKernelOnlySimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 72.08310131231944,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "CompiledCanonicalSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 164.12716269493103,
+      "samples": 3,
+      "bytes": 424
+    },
+    {
+      "method": "SharedCoreSemanticSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 117.19865588347118,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "SharedCoreIndexedSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 98.69091765085857,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "AutoMapperCanonicalRowsSimple",
+      "parameters": "RowCount=1",
+      "mean_ns": 122.34142510096233,
+      "samples": 3,
+      "bytes": 80
+    },
+    {
+      "method": "HandwrittenSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 1288.0167814890544,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "CompiledKernelOnlySimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 1958.357354482015,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "CompiledCanonicalSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 2542.2065455118814,
+      "samples": 3,
+      "bytes": 2408
+    },
+    {
+      "method": "SharedCoreSemanticSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 4772.761586507161,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "SharedCoreIndexedSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 3072.8092562357583,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "AutoMapperCanonicalRowsSimple",
+      "parameters": "RowCount=32",
+      "mean_ns": 1666.633508046468,
+      "samples": 3,
+      "bytes": 1816
+    },
+    {
+      "method": "HandwrittenSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 42397.31064860026,
+      "samples": 3,
+      "bytes": 57368
+    },
+    {
+      "method": "CompiledKernelOnlySimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 68025.70227050781,
+      "samples": 3,
+      "bytes": 57368
+    },
+    {
+      "method": "CompiledCanonicalSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 79755.18416341145,
+      "samples": 3,
+      "bytes": 65897
+    },
+    {
+      "method": "SharedCoreSemanticSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 122576.57861328125,
+      "samples": 3,
+      "bytes": 57368
+    },
+    {
+      "method": "SharedCoreIndexedSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 125614.83414713542,
+      "samples": 3,
+      "bytes": 57368
+    },
+    {
+      "method": "AutoMapperCanonicalRowsSimple",
+      "parameters": "RowCount=1024",
+      "mean_ns": 52628.94801839193,
+      "samples": 3,
+      "bytes": 57368
+    }
+  ]
+}

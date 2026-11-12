@@ -1,0 +1,354 @@
+:root {
+  font-family:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  color:#23352e;
+  background:#f4f6f3;
+  font-synthesis:none}
+* {
+  box-sizing:border-box}
+body {
+  margin:0;
+  display:flex;
+  min-height:100vh}
+aside {
+  width:242px;
+  background:#173e32;
+  color:#d7e7df;
+  padding:35px 26px;
+  display:flex;
+  flex-direction:column;
+  position:fixed;
+  height:100vh}
+.brand {
+  font-size:27px;
+  font-weight:650;
+  letter-spacing:-1px;
+  text-decoration:none;
+  color:#fff}
+.brand span {
+  font-size:19px;
+  color:#9fce9c}
+.workspace {
+  font-size:10px;
+  letter-spacing:1.8px;
+  margin:58px 0 19px;
+  color:#9cb5a8}
+.nav {
+  padding:13px 14px;
+  border-radius:7px;
+  font-size:14px;
+  background:#305548;
+  color:#fff}
+.nav span {
+  float:right;
+  font-size:11px;
+  color:#b6d1c2}
+.aside-note {
+  margin-top:auto;
+  border-top:1px solid #486758;
+  padding-top:25px;
+  font-size:10px;
+  letter-spacing:1.4px;
+  color:#aec9ba}
+.aside-note strong {
+  display:block;
+  margin-top:15px;
+  font-size:16px;
+  line-height:1.6;
+  letter-spacing:0;
+  color:white}
+.aside-note p {
+  font-size:12px;
+  line-height:1.8;
+  letter-spacing:0}
+.demo {
+  margin-top:30px;
+  font-size:10px;
+  letter-spacing:1.2px}
+.demo span {
+  color:#b9db84;
+  float:right}
+main {
+  margin-left:242px;
+  padding:0 52px;
+  width:calc(100% - 242px);
+  max-width:1600px}
+header {
+  height:90px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  border-bottom:1px solid #dce3db}
+.breadcrumb {
+  font-size:12px;
+  color:#67756d}
+.breadcrumb span {
+  padding:0 12px;
+  color:#a1aaa3}
+.role {
+  display:flex;
+  gap:12px;
+  align-items:center;
+  font-size:12px;
+  color:#6c796f}
+.role select {
+  width:135px}
+.heading {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin:46px 0 30px}
+.eyebrow {
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:1.6px;
+  color:#627667}
+h1 {
+  font-size:34px;
+  letter-spacing:-1.3px;
+  margin:10px 0 12px;
+  font-weight:600}
+.heading p,.muted {
+  color:#718077;
+  font-size:13px;
+  line-height:1.7;
+  margin:0}
+.columns {
+  display:grid;
+  grid-template-columns:1fr 1.12fr;
+  gap:24px;
+  align-items:start}
+.card {
+  background:#fff;
+  border:1px solid #dfe5dc;
+  border-radius:12px;
+  padding:27px;
+  box-shadow:0 3px 5px #1f3a2903}
+.card-top {
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:24px}
+h2 {
+  font-size:16px;
+  font-weight:600;
+  margin:0}
+.tag {
+  font-size:9px;
+  color:#819080;
+  letter-spacing:1px}
+.count {
+  border-radius:5px;
+  background:#edf3ea;
+  padding:4px 8px;
+  font-size:11px;
+  color:#5d765b}
+label {
+  display:block;
+  font-size:12px;
+  font-weight:500;
+  margin-bottom:9px}
+select,textarea {
+  font:inherit;
+  font-size:13px;
+  width:100%;
+  background:#fbfcfa;
+  border:1px solid #d6dfd3;
+  color:#243e30;
+  border-radius:6px;
+  padding:11px}
+select {
+  cursor:pointer}
+textarea {
+  resize:vertical;
+  line-height:1.5}
+button {
+  font:inherit;
+  font-size:12px;
+  font-weight:600;
+  border:1px solid #22513d;
+  background:#22513d;
+  color:white;
+  border-radius:6px;
+  padding:12px 16px;
+  cursor:pointer}
+button.secondary {
+  background:white;
+  border-color:#d6dfd3;
+  color:#3b5042}
+button:disabled {
+  opacity:.42;
+  cursor:not-allowed}
+button:hover:enabled {
+  filter:brightness(.95)}
+:focus-visible {
+  outline:3px solid #9bba6c;
+  outline-offset:3px}
+.status-line {
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin:28px 0}
+h3 {
+  font-size:24px;
+  font-weight:550;
+  margin:0;
+  letter-spacing:-.6px}
+.status {
+  font-size:11px;
+  font-weight:600;
+  border-radius:5px;
+  padding:6px 10px;
+  background:#eaf1e1;
+  color:#577138}
+dl {
+  margin:0}
+dl div {
+  padding:18px 0;
+  border-top:1px solid #edf0e9;
+  display:flex;
+  justify-content:space-between;
+  gap:20px;
+  font-size:12px}
+dt {
+  color:#778379}
+dd {
+  margin:0;
+  text-align:right;
+  max-width:60%;
+  overflow-wrap:anywhere}
+.info {
+  margin-top:25px;
+  background:#f6f8f2;
+  border-radius:7px;
+  padding:15px;
+  display:flex;
+  gap:12px;
+  color:#7a8870}
+.info span {
+  font-size:15px}
+.info p {
+  font-size:11px;
+  line-height:1.8;
+  margin:0}
+.actions .card-top {
+  margin-bottom:12px}
+.action-list {
+  display:flex;
+  gap:12px;
+  margin:23px 0;
+  flex-wrap:wrap}
+.action-choice {
+  background:#fff;
+  border:1px solid #d8e0d4;
+  color:#4c604e;
+  flex:1;
+  text-align:left;
+  min-width:120px;
+  padding:15px}
+.action-choice[aria-pressed=true] {
+  background:#f0f5e9;
+  border-color:#7e9e69;
+  color:#315232}
+.action-choice small {
+  display:block;
+  font-size:10px;
+  font-weight:400;
+  margin-top:7px}
+.availability {
+  font-size:12px;
+  color:#607151;
+  line-height:1.6;
+  min-height:38px;
+  margin:17px 0}
+.buttons {
+  display:flex;
+  gap:10px;
+  justify-content:flex-end;
+  border-top:1px solid #edf0e9;
+  padding-top:20px}
+.empty {
+  padding:30px 10px;
+  color:#7b8679;
+  font-size:13px;
+  text-align:center}
+.message {
+  background:#edf2df;
+  border:1px solid #cdd9b3;
+  padding:14px 18px;
+  font-size:13px;
+  line-height:1.6;
+  border-radius:7px;
+  margin-bottom:20px}
+.message.error {
+  background:#fcf0e6;
+  border-color:#e9ccb5;
+  color:#895c37}
+footer {
+  display:flex;
+  align-items:center;
+  gap:8px;
+  font-size:10px;
+  color:#8b9589;
+  margin:28px 0;
+  line-height:1.8}
+.dot {
+  width:5px;
+  height:5px;
+  border-radius:50%;
+  background:#85a06e}
+.divider {
+  margin:0 6px;
+  color:#bbc1b5}
+[hidden] {
+  display:none!important}
+@media(max-width:1100px) {
+  main {
+  padding:0 28px}
+aside {
+  width:190px;
+  padding:30px 20px}
+main {
+  margin-left:190px;
+  width:calc(100% - 190px)}
+.columns {
+  grid-template-columns:1fr}
+.buttons {
+  justify-content:start}
+}
+@media(max-width:620px) {
+  body {
+  display:block}
+aside {
+  position:static;
+  width:100%;
+  height:auto;
+  padding:18px 24px}
+.brand {
+  font-size:22px}
+.workspace,.nav,.aside-note,.demo {
+  display:none}
+main {
+  margin:0;
+  width:100%;
+  padding:0 20px}
+header {
+  height:75px}
+.heading {
+  margin-top:27px}
+h1 {
+  font-size:27px}
+.heading p {
+  max-width:215px}
+.card {
+  padding:22px}
+.breadcrumb {
+  font-size:10px}
+.role {
+  gap:6px}
+.role select {
+  width:110px}
+.buttons {
+  flex-wrap:wrap}
+footer {
+  flex-wrap:wrap}
+}

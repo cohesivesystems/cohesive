@@ -1,0 +1,19 @@
+{
+  "sqlite_adapter_tests": {
+    "passed": 235,
+    "failed": 0,
+    "skipped": 0
+  },
+  "benchmark_build": "Release warnings-as-errors passed",
+  "smoke_cases": 6,
+  "invariants": [
+    "Whole-binding absence distinct from missing optional field and null",
+    "Native presence and refined scalar contract validation unchanged",
+    "All-field shape validation before observation publication",
+    "Immutable payloads survive reader disposal and resist DTO byte mutation",
+    "Ordinal admission allocates less than equivalent dictionary admission after warmup"
+  ],
+  "public_api": "Additive TryReadObservation method on borrowed row reader; defaults and existing DTO/provenance APIs unchanged.",
+  "linux_cases_successful": 6,
+  "run": 41935696235
+}

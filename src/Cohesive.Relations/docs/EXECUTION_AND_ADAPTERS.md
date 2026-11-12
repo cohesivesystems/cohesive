@@ -78,6 +78,24 @@ Limits for rows, keys per batch, buffering, fan-out, and concurrency are part of
 planning policy. Exceeding a proven bound fails or chunks according to the explicit plan; it does not silently switch
 to unbounded or per-row acquisition.
 
+Prepared DTO mappings with in-memory collections project the owned snapshots to their exact acquired field
+sets once. With source-set acquisition alone, the executor reuses successfully admitted evidence fragments
+and the interpreter reuses their reconstructed source rows. Once a complete set of local fragments passes
+canonical analysis without gaps, later calls can reuse that proof for the unchanged acquired fields while
+analyzing supplied roots and other invocation inputs. The interpreter can also reuse grouped results that
+read one such source directly and have no invocation parameters. The grouped rows retain their source
+contributors. Each invocation still checks read and row limits and produces its own result and read traces.
+Plans with collection expansion use ordinary per-invocation acquisition.
+
+For eligible in-memory relations, the value-only `MapAsync(evaluator, roots)` overload lazily compiles a
+fused kernel on its first call. This realization covers zero-or-one-per-root inner string equality joins
+from supplied roots into uniquely keyed acquired rows or their prepared grouped results, followed by
+direct scalar projections. The kernel reuses the DTO mapper's constructor and conversion plan. It
+validates and orders the roots before running one loop for joins, projection, and DTO construction.
+Exact shapes, complete static evidence, and bounded cardinality are required. Other slices, explicit
+evaluation requests, and observed execution use the canonical interpreter. Use `EvaluateAsync` to
+retain full diagnostics, read traces, and contributor provenance.
+
 ## Closed native subplans within composed execution
 
 A complete native row reader can implement a **closed projection** inside a larger query.
