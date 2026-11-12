@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Cohesive.Semantics;
 using Cohesive.Model.Serialization;
 using ModelContextProtocol.Client;
@@ -6,7 +7,10 @@ using ModelContextProtocol.Client;
 /// <summary>Replays source authoring against an explicit earlier commit through one MCP session.</summary>
 internal static class CancellationWorkflow
 {
-    internal static async Task RunAsync(string root, string baselineRevision)
+    internal static Task RunAsync(string root, string baselineRevision) =>
+        ReplayAsync(root, baselineRevision, replay => replay.SaveAsync("orders-cancellation-exercise.json"));
+
+    internal static async Task ReplayAsync(string root, string baselineRevision, Func<CancellationReplay, Task> complete)
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(15));
         var token = deadline.Token;
@@ -27,8 +31,9 @@ internal static class CancellationWorkflow
             Require(learned.GetProperty("content").GetString()!.Contains("Author cancellation with recovery", StringComparison.Ordinal),
                 "Cancellation recipe missing from learn.");
             var before = await Workspace();
+            var baselineApis = await ApiIds(before.SnapshotId);
             var missing = await Call("resolve", new() { ["query"] = "fulfillment/cancel", ["expectedSnapshot"] = before.SnapshotId });
-            Require(missing.GetProperty("result").GetProperty("total").GetInt32() == 0, "The baseline already contains cancellation.");
+            var introducesCancellation = missing.GetProperty("result").GetProperty("total").GetInt32() == 0;
             var sourceFiles = await Run(root, "git", ["ls-files", "-z"]);
             foreach (var relative in sourceFiles.Split('\0', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -63,44 +68,32 @@ internal static class CancellationWorkflow
                 item.GetProperty("consumer").GetProperty("definitionId").GetString() == "api:service/cancellation/operation/cancel"
                 && item.GetProperty("path").EnumerateArray().All(edge => edge.GetProperty("isExactMatch").GetBoolean())),
                 "Release must reach cancellation admission through exact dependency references.");
-            var endpoints = await Call("resolve", new() { ["query"] = "cancellation", ["expectedSnapshot"] = after.SnapshotId, ["limit"] = 100 });
             var contracts = new List<JsonElement>();
-            foreach (var subject in endpoints.GetProperty("result").GetProperty("items").EnumerateArray())
+            var existingContracts = new List<JsonElement>();
+            foreach (var id in baselineApis.Union(await ApiIds(after.SnapshotId), StringComparer.Ordinal).Order(StringComparer.Ordinal))
             {
-                var id = subject.GetProperty("id").GetString()!;
-                if (!id.StartsWith("api:", StringComparison.Ordinal)) continue;
-                var oldClient = await Compatibility(id, "ExistingClientToProposedServer");
-                var newClient = await Compatibility(id, "ProposedClientToExistingServer");
-                Require(oldClient.GetProperty("result").GetProperty("verdict").GetString() == "Compatible", "Old clients must tolerate the additional endpoint.");
-                Require(newClient.GetProperty("result").GetProperty("verdict").GetString() == "Breaking", "New clients require the new endpoint.");
-                contracts.Add(JsonSerializer.SerializeToElement(new { Id = id, ExistingClient = oldClient, ProposedClient = newClient }));
+                var contractEvidence = JsonSerializer.SerializeToElement(new { Id = id,
+                    ExistingClient = await Compatibility(id, "ExistingClientToProposedServer"),
+                    ProposedClient = await Compatibility(id, "ProposedClientToExistingServer") });
+                (id.StartsWith("api:service/cancellation/", StringComparison.Ordinal) ? contracts : existingContracts).Add(contractEvidence);
             }
             Require(contracts.Count == 2, "Expected cancellation admission and polling endpoints.");
             var existingOrder = await Compatibility("api:Order.Get", "ExistingClientToProposedServer");
             var reversedOrder = await Compatibility("api:Order.Get", "ProposedClientToExistingServer");
-            Require(existingOrder.GetProperty("result").GetProperty("verdict").GetString() == "Unknown",
-                "The changed order lifecycle enum requires a wire-catalog interpretation.");
-            Require(reversedOrder.GetProperty("result").GetProperty("verdict").GetString() == "Unknown",
-                "The reverse lifecycle analysis must retain its coverage gap.");
-            var existingContracts = new List<JsonElement>();
-            foreach (var id in new[] { "api:Order.Create", "api:Order.Get", "api:Order.Submit", "api:Order.Details",
-                "api:Order.ReservationsBySku", "api:Order.availability", "api:service/fulfillment/operation/fulfill",
-                "api:service/fulfillment/operation/result" })
-                existingContracts.Add(JsonSerializer.SerializeToElement(new
-                {
-                    Id = id,
-                    ExistingClient = await Compatibility(id, "ExistingClientToProposedServer"),
-                    ProposedClient = await Compatibility(id, "ProposedClientToExistingServer")
-                }));
-            var path = Path.Combine(root, "tmp", "orders-cancellation-exercise.json");
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            await File.WriteAllTextAsync(path, JsonSerializer.Serialize(new
+            if (introducesCancellation)
+            {
+                Require(existingOrder.GetProperty("result").GetProperty("verdict").GetString() == "Unknown",
+                    "The changed order lifecycle enum requires a wire-catalog interpretation.");
+                Require(reversedOrder.GetProperty("result").GetProperty("verdict").GetString() == "Unknown",
+                    "The reverse lifecycle analysis must retain its coverage gap.");
+            }
+            var evidence = JsonSerializer.SerializeToNode(new
             {
                 BaselineCommit = commit, Learn = learned, Before = before.SnapshotId, After = after.SnapshotId,
                 Checks = checks, Comparison = comparison, ProcessReferences = processReferences, ReleaseImpact = releaseImpact,
-                NewEndpoints = contracts, ExistingContracts = existingContracts, ExistingOrder = existingOrder, ReversedOrder = reversedOrder
-            }, new JsonSerializerOptions { WriteIndented = true }), token);
-            Console.WriteLine("PASS: cancellation authoring, validation, dependencies and directional API evidence. " + path);
+                CancellationEndpoints = contracts, ExistingContracts = existingContracts, ExistingOrder = existingOrder, ReversedOrder = reversedOrder
+            })!.AsObject();
+            await complete(new(root, scratch, after.SnapshotId, evidence, client, token));
 
             Task<string> Run(string directory, string command, string[] arguments) => OrdersWorkflow.RunProcess(directory, command, arguments, token);
             async Task Export()
@@ -117,10 +110,36 @@ internal static class CancellationWorkflow
             }
             async Task<WorkspaceResult<WorkspacePage<WorkspaceSubject>>> Workspace() =>
                 (await Call("workspace")).Deserialize<WorkspaceResult<WorkspacePage<WorkspaceSubject>>>(StrictDocumentJson.CreateOptions())!;
-            Task<JsonElement> Compatibility(string id, string direction) => Call("compatibility", new()
+            async Task<JsonElement> Compatibility(string id, string direction)
             {
-                ["id"] = id, ["baselineSnapshot"] = before.SnapshotId, ["expectedSnapshot"] = after.SnapshotId, ["direction"] = direction
-            });
+                var result = await Call("compatibility", new()
+                {
+                    ["id"] = id, ["baselineSnapshot"] = before.SnapshotId, ["expectedSnapshot"] = after.SnapshotId, ["direction"] = direction
+                });
+                if (introducesCancellation && id.StartsWith("api:service/cancellation/", StringComparison.Ordinal)
+                    && direction == "ExistingClientToProposedServer")
+                    Require(result.GetProperty("result").GetProperty("verdict").GetString() == "Compatible", "Old clients must tolerate added cancellation endpoints.");
+                ExerciseAssertions.RequireCompatibility(result.GetProperty("result").GetProperty("verdict").GetString(),
+                    introducesCancellation && id.StartsWith("api:service/cancellation/", StringComparison.Ordinal)
+                        && direction == "ProposedClientToExistingServer", id + " " + direction);
+                return result;
+            }
+
+            async Task<string[]> ApiIds(string snapshot)
+            {
+                var ids = new List<string>();
+                int? offset = 0;
+                do
+                {
+                    var page = (await Call("resolve", new() { ["query"] = "api:", ["expectedSnapshot"] = snapshot,
+                        ["offset"] = offset.Value, ["limit"] = 100 })).GetProperty("result");
+                    ids.AddRange(page.GetProperty("items").EnumerateArray().Select(item => item.GetProperty("id").GetString()!)
+                        .Where(id => id.StartsWith("api:", StringComparison.Ordinal)));
+                    offset = page.TryGetProperty("nextOffset", out var next) && next.ValueKind == JsonValueKind.Number ? next.GetInt32() : null;
+                } while (offset is not null);
+                return [.. ids];
+            }
+
         }
         finally
         {

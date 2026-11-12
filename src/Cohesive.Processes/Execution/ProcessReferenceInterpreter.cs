@@ -1723,7 +1723,7 @@ public static partial class ProcessReferenceInterpreter
                 node.Id,
                 token.Step,
                 activation.ObservedAtUtc,
-                activation.Context, Policy: node.Policy));
+                activation.Context, Policy: node.Policy, Process: plan.DefinitionReference));
             CompleteOperation(token, node.Id, node.Continuation, link.Result, result);
         }
 

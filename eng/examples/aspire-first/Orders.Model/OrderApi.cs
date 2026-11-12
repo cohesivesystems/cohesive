@@ -19,8 +19,9 @@ public sealed class OrderApi : ApiModel
     public OrderApi(FulfillmentDomain domain, FulfillmentProcess process, FulfillmentExecutionPolicy? execution = null, CancellationProcess? cancellation = null)
     {
         cancellation ??= new CancellationProcess(domain, new FulfillmentQueries(domain));
-        Cancellation = Endpoints.Process(cancellation).Accepted<ServiceProcessCommand<CancelOrder>>(
-            id: new("cancellation"), revision: new("1"),
+        if (execution?.Lifetime == ProcessExecutionLifetime.Durable)
+            Cancellation = Endpoints.Process(cancellation).Accepted<ServiceProcessCommand<CancelOrder>>(
+            id: new("cancellation"), revision: new("2"),
             configure: service => service
                 .Operation("cancel").Require(new("fulfillment.write")).Run(cancellation.Definition)
                 .ReturnAfterAdmission(execution?.Lifetime ?? ProcessExecutionLifetime.Host)
@@ -53,8 +54,8 @@ public sealed class OrderApi : ApiModel
             .RouteParameter<string>("sku").Build<ReservationBySku[]>();
     }
 
-    /// <summary>Admits cancellation and exposes its independently authorized result.</summary>
-    public ColocatedProcessApi<ServiceProcessCommand<CancelOrder>, CancelOrder, CancellationResult> Cancellation { get; }
+    /// <summary>Admits durable cancellation and exposes its authorized result; null in the host-only profile.</summary>
+    public ColocatedProcessApi<ServiceProcessCommand<CancelOrder>, CancelOrder, CancellationResult>? Cancellation { get; }
 
     /// <summary>Acknowledges fulfillment and exposes its independently authorized result.</summary>
     public ColocatedProcessApi<ServiceProcessCommand<FulfillOrder>, FulfillOrder, FulfillmentResult> Fulfill { get; }
@@ -110,13 +111,11 @@ public sealed class OrderEndpoints : ApiBindingModel
             if (execution?.Lifetime == ProcessExecutionLifetime.Durable)
             {
                 bindings.BindDurable(endpoint => endpoint.Fulfill, authority: "aspire-first", authorization, logPrivateFailures: true);
-                bindings.BindDurable(endpoint => endpoint.Cancellation, authority: "aspire-first", authorization, logPrivateFailures: true);
+                bindings.BindDurable(endpoint => endpoint.Cancellation!, authority: "aspire-first", authorization, logPrivateFailures: true);
             }
             else
             {
                 bindings.BindHosted(endpoint => endpoint.Fulfill, authority: "aspire-first", authorization,
-                    maximumExecutions: 1000, logPrivateFailures: true);
-                bindings.BindHosted(endpoint => endpoint.Cancellation, authority: "aspire-first", authorization,
                     maximumExecutions: 1000, logPrivateFailures: true);
             }
         });

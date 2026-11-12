@@ -14,6 +14,35 @@ public sealed class ProcessInterpreterRealizationTests
     static readonly ValueContract StringContract = new(new ScalarTypeRef(ScalarTypeKind.String));
 
     [Fact]
+    public void RecoveryPolicyUsesCanonicalRequirementsAndRejectsMissingGuarantees()
+    {
+        var original = ReturnPlan();
+        var options = new ProcessCompilationOptions(requiredGuarantees: ProcessRecoveryRequirements.WorkerTakeover);
+        Assert.Equal(options, new ProcessCompilationOptions(requiredGuarantees: [.. ProcessRecoveryRequirements.WorkerTakeover.Reverse(), ProcessRecoveryRequirements.WorkerTakeover[0]]));
+        Assert.Throws<ArgumentException>(() => new ProcessCompilationOptions(requiredGuarantees: [ProcessInterpreterRequirementKey.ForGuarantee("unknown")]));
+        var plan = ProcessStaticCompiler.Compile(original.Document, original.ValidationContext, options).Plan!;
+        var profile = Cohesive.Adapters.Postgres.PostgresProcessRecoveryProfile.Fenced;
+        var report = ProcessRecoveryRequirements.Assess(plan, profile);
+        Assert.True(report.IsRealizable);
+        Assert.Equal(4, report.Decisions.Length);
+        Assert.All(report.Inventory.Requirements, r => Assert.Contains(new ExecutionNodeId("return"), r.Nodes));
+        foreach (var missing in ProcessRecoveryRequirements.WorkerTakeover)
+        {
+            var incomplete = new ProcessInterpreterCapabilityProfile(new("test/incomplete/v1"), profile.Target,
+                [.. profile.Evidence.Where(e => e.Requirement != missing)]);
+            var rejected = ProcessRecoveryRequirements.Assess(plan, incomplete);
+            Assert.False(rejected.IsRealizable);
+            Assert.Contains(rejected.Diagnostics, d => d.Requirement == missing
+                && d.Code == ProcessInterpreterRealizationDiagnosticCodes.RequirementMissing);
+        }
+        var scheduler = ProcessRecoveryRequirements.Assess(plan, Cohesive.Adapters.DurableTask.DurableTaskProcessTargetProfile.Executable);
+        Assert.False(scheduler.IsRealizable);
+        Assert.Contains(scheduler.Decisions, d => d.Requirement == ProcessInterpreterGuarantees.TransitionEffectFencing
+            && d.Realization == CapabilityRealizationKind.Unavailable);
+        Assert.False(ProcessRecoveryRequirements.Assess(plan, ProcessRecoveryRequirements.Unavailable).IsRealizable);
+    }
+
+    [Fact]
     public void EphemeralInventoryOmitsPersistentLifecycleButRetainsExplicitRecoveryDemands()
     {
         var plan = RequestPlan(out _);
@@ -21,7 +50,7 @@ public sealed class ProcessInterpreterRealizationTests
         var ephemeral = ProcessInterpreterRequirementCollector.Collect(plan, ProcessExecutionLifetime.Ephemeral);
         Assert.Equal(ProcessExecutionLifetime.Ephemeral, ephemeral.Lifetime);
         Assert.Equal(ProcessExecutionLifetime.Durable, durable.Lifetime);
-        Assert.Equal(new[] { ProcessInterpreterGuarantees.LifecycleControl, ProcessInterpreterGuarantees.DefinitionAndWorkerEvolution }.OrderBy(k => k.Name),
+        Assert.Equal(new[] { ProcessInterpreterGuarantees.CheckpointPersistence, ProcessInterpreterGuarantees.ContinuationRestoration, ProcessInterpreterGuarantees.LifecycleControl, ProcessInterpreterGuarantees.DefinitionAndWorkerEvolution }.OrderBy(k => k.Name),
             durable.Requirements.Select(r => r.Key).Except(ephemeral.Requirements.Select(r => r.Key)).OrderBy(k => k.Name));
         Assert.Contains(ephemeral.Requirements, r => r.Key == ProcessInterpreterGuarantees.DurableRequestRecovery);
         Assert.Contains(ephemeral.Requirements, r => r.Key == ProcessInterpreterGuarantees.DeterministicReplay);
@@ -139,7 +168,7 @@ public sealed class ProcessInterpreterRealizationTests
                     [new ReturnProcessNode(new("return"), Expr.Const("done"))],
                     ProcessRecoveryPolicy.ContinueAttempt),
                 contracts: null,
-                new(ProcessAtomicScopeDemand.WholeDefinition))
+                new(ProcessAtomicScopeDemand.WholeDefinition, ProcessRecoveryRequirements.WorkerTakeover))
         };
 
         var observed = plans

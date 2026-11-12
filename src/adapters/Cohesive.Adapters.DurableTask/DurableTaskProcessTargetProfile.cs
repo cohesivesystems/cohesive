@@ -18,11 +18,11 @@ public static class DurableTaskProcessTargetProfile
 
     /// <summary>Stable identity of the current realization-planning profile.</summary>
     public static ProcessInterpreterCapabilityProfileId PlanningProfileId { get; } = new(
-        "cohesive.adapters.durable-task.scheduler/realization-planning-v3");
+        "cohesive.adapters.durable-task.scheduler/realization-planning-v4");
 
     /// <summary>Stable identity of the bounded, conformance-tested executable profile.</summary>
     public static ProcessInterpreterCapabilityProfileId ExecutableProfileId { get; } = new(
-        "cohesive.adapters.durable-task.scheduler/executable-v4");
+        "cohesive.adapters.durable-task.scheduler/executable-v5");
 
     /// <summary>
     /// Boundary requiring every externally visible effect to supply stable idempotency or authored reconciliation.
@@ -192,6 +192,12 @@ public static class DurableTaskProcessTargetProfile
                 "history-backed-read-attempts",
                 ["orchestration-history", "durable-timers"],
                 [ReadProgressBoundary]),
+            ComposedGuarantee(ProcessInterpreterGuarantees.CheckpointPersistence,
+                "recovery-CheckpointPersistence", ["orchestration-history", "canonical-continuation"]),
+            ComposedGuarantee(ProcessInterpreterGuarantees.ContinuationRestoration,
+                "recovery-ContinuationRestoration", ["orchestration-history", "canonical-continuation"]),
+            UnavailableGuarantee(ProcessInterpreterGuarantees.TransitionReceiptReplay, "external-transition-TransitionReceiptReplay"),
+            UnavailableGuarantee(ProcessInterpreterGuarantees.TransitionEffectFencing, "external-transition-TransitionEffectFencing"),
             UnavailableGuarantee(
                 ProcessInterpreterGuarantees.WholeDefinitionAtomicity,
                 "multi-resource-atomicity")
@@ -320,6 +326,12 @@ public static class DurableTaskProcessTargetProfile
                 "history-backed-read-attempts",
                 ["orchestration-history", "durable-timers"],
                 [ReadProgressBoundary]),
+            ExecutableComposedGuarantee(ProcessInterpreterGuarantees.CheckpointPersistence,
+                "recovery-CheckpointPersistence", ["orchestration-history", "canonical-continuation"]),
+            ExecutableComposedGuarantee(ProcessInterpreterGuarantees.ContinuationRestoration,
+                "recovery-ContinuationRestoration", ["orchestration-history", "canonical-continuation"]),
+            ExecutableUnavailableGuarantee(ProcessInterpreterGuarantees.TransitionReceiptReplay, "external-transition-TransitionReceiptReplay"),
+            ExecutableUnavailableGuarantee(ProcessInterpreterGuarantees.TransitionEffectFencing, "external-transition-TransitionEffectFencing"),
             ExecutableUnavailableGuarantee(
                 ProcessInterpreterGuarantees.WholeDefinitionAtomicity,
                 "multi-resource-atomicity")

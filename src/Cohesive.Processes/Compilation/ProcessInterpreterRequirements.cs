@@ -116,6 +116,18 @@ public static class ProcessInterpreterGuarantees
     /// <summary>Retain observational read attempts, deadlines and final evidence across restart.</summary>
     public static ProcessInterpreterRequirementKey DurableReadProgress { get; } = Guarantee("durableReadProgress");
 
+    /// <summary>Persist a checkpoint before allowing execution past its durable boundary.</summary>
+    public static ProcessInterpreterRequirementKey CheckpointPersistence { get; } = Guarantee("checkpointPersistence");
+
+    /// <summary>Restore the exact retained continuation, values and occurrence identities after worker loss.</summary>
+    public static ProcessInterpreterRequirementKey ContinuationRestoration { get; } = Guarantee("continuationRestoration");
+
+    /// <summary>Resolve an entity mutation committed before checkpointing through its atomic transition receipt.</summary>
+    public static ProcessInterpreterRequirementKey TransitionReceiptReplay { get; } = Guarantee("transitionReceiptReplay");
+
+    /// <summary>Serialize fresh transition effects with ownership takeover so stale workers cannot commit them.</summary>
+    public static ProcessInterpreterRequirementKey TransitionEffectFencing { get; } = Guarantee("transitionEffectFencing");
+
     /// <summary>Every guarantee that a compiled Process inventory can currently demand.</summary>
     public static ImmutableArray<ProcessInterpreterRequirementKey> All { get; } =
     [
@@ -132,7 +144,11 @@ public static class ProcessInterpreterGuarantees
         DefinitionAndWorkerEvolution,
         StatusTraceAndExplain,
         SensitiveAndOversizedPayloads,
-        WholeDefinitionAtomicity
+        WholeDefinitionAtomicity,
+        CheckpointPersistence,
+        ContinuationRestoration,
+        TransitionReceiptReplay,
+        TransitionEffectFencing
     ];
 
     /// <summary>Whether a key names one guarantee in the current compiler-owned catalog.</summary>
@@ -333,11 +349,18 @@ public static class ProcessInterpreterRequirementCollector
             plan.Definition.Nodes.Where(static node => node is EvaluateRelationProcessNode { Policy.Progress: ProcessReadProgress.Durable }));
 
         var allNodes = plan.Definition.Nodes.Select(static node => node.Id).ToImmutableArray();
+        foreach (var guarantee in plan.Options.RequiredGuarantees) Add(guarantee, allNodes);
+        AddWhen(ProcessInterpreterGuarantees.CheckpointPersistence,
+            plan.Definition.Nodes.Where(static node => node is DurableCutProcessNode or RepeatAcrossActivationProcessNode));
+        AddWhen(ProcessInterpreterGuarantees.ContinuationRestoration,
+            plan.Definition.Nodes.Where(static node => node is DurableCutProcessNode or RepeatAcrossActivationProcessNode));
         Add(ProcessInterpreterGuarantees.ExactDefinitionPinning, allNodes);
         Add(ProcessInterpreterGuarantees.StableExecutionIdentity, allNodes);
         Add(ProcessInterpreterGuarantees.DeterministicReplay, allNodes);
         if (lifetime == ProcessExecutionLifetime.Durable)
         {
+            Add(ProcessInterpreterGuarantees.CheckpointPersistence, allNodes);
+            Add(ProcessInterpreterGuarantees.ContinuationRestoration, allNodes);
             Add(ProcessInterpreterGuarantees.LifecycleControl, allNodes);
             Add(ProcessInterpreterGuarantees.DefinitionAndWorkerEvolution, allNodes);
         }

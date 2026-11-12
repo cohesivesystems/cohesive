@@ -19,6 +19,7 @@ public static class TransitionExpressionLanguage
             ExprFunctionNames.TextContains,
             ExprFunctionNames.Object,
             ExprFunctionNames.Select,
+            ExprFunctionNames.ElementAt,
             ExprFunctionNames.Append,
             ExprFunctionNames.AppendRange,
             ExprFunctionNames.InsertAt,

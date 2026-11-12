@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
+using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 
 namespace Cohesive.Storage.Processes;
@@ -503,7 +504,7 @@ public sealed class ProcessDurableCheckpoint
 {
     /// <summary>Current exact physical checkpoint schema.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
-        new("cohesive-process-durable-checkpoint/v7");
+        new("cohesive-process-durable-checkpoint/v8");
 
     /// <summary>Creates a complete validated physical Process checkpoint.</summary>
     /// <param name="schemaVersion">Exact physical checkpoint schema.</param>
@@ -517,6 +518,7 @@ public sealed class ProcessDurableCheckpoint
     /// <param name="durableOperations">Durable Request-operation state keyed by Request emission identity.</param>
     /// <param name="createdAtUtc">UTC checkpoint creation time.</param>
     /// <param name="updatedAtUtc">UTC latest atomic update time.</param>
+    /// <param name="compilationOptions">Source-selected compilation policy pinned at initialization; defaults to the framework policy.</param>
     /// <exception cref="ArgumentNullException">
     /// <paramref name="start"/>, <paramref name="continuation"/>, or <paramref name="control"/> is
     /// <see langword="null"/>.
@@ -537,7 +539,8 @@ public sealed class ProcessDurableCheckpoint
         ImmutableArray<ProcessEmissionRecord> emissions = default,
         ImmutableArray<DurableOperationState> durableOperations = default,
         DateTimeOffset createdAtUtc = default,
-        DateTimeOffset updatedAtUtc = default)
+        DateTimeOffset updatedAtUtc = default,
+        ProcessCompilationOptions? compilationOptions = null)
     {
         ProcessCheckpointRequirements.RequireIdentity(schemaVersion.Value, nameof(schemaVersion));
 
@@ -553,6 +556,7 @@ public sealed class ProcessDurableCheckpoint
             throw new ArgumentException("Checkpoint chronology is invalid.", nameof(updatedAtUtc));
         }
 
+        CompilationOptions = compilationOptions ?? ProcessCompilationOptions.Default;
         SchemaVersion = schemaVersion;
         CreatedAtUtc = createdAtUtc;
         UpdatedAtUtc = updatedAtUtc;
@@ -563,6 +567,9 @@ public sealed class ProcessDurableCheckpoint
         DurableOperations = NormalizeDurableOperations(durableOperations, Emissions);
         ValidateEvidenceChronology();
     }
+
+    /// <summary>Source-selected compilation policy retained across all mutations and required exactly on recovery.</summary>
+    public ProcessCompilationOptions CompilationOptions { get; }
 
     /// <summary>Exact physical checkpoint schema.</summary>
     public ExecutionIrSchemaVersion SchemaVersion { get; }
@@ -619,7 +626,8 @@ public sealed class ProcessDurableCheckpoint
             Emissions,
             DurableOperations,
             CreatedAtUtc,
-            updatedAtUtc);
+            updatedAtUtc,
+            CompilationOptions);
 
     void ValidateEvidenceChronology()
     {

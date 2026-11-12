@@ -68,8 +68,57 @@ Author cancellation through typed transitions and ProcessModel. Declare which or
 
 Expose the command through the existing accepted-process API and result route, including explicit authorization and lifetime. Reuse native storage and receipt composition. After building, export the new transitions/process/service/endpoints and use check, compare, references and compatibility in both directions. Review existing response contracts when extending lifecycle enums. Execute real repository tests with failures injected before and after inventory release, recreate runtime preparation, and retry. Verify final order state, reservation progress, inventory totals, and results for same and distinct command identities.
 
-The cancellation recipe supports the example's one-item fulfillment: exactly one reservation with identity equal to the order identity. It queries the complete reservation set and rejects multiple, missing or inconsistent reservations before claiming work. Orders move Submitted -> Cancelling -> Cancelled. The original continuation must resume Cancelling work. Separate continuations receive InProgress, or AlreadyCancelled after completion. Released remains visible on reservation reads.
+The cancellation recipe supports a bounded set of reservations. Query the complete set, including released facts, and persist its observed sequence with an initial DurableCut before preflight or claim. Retain that sequence in portable recurrence state; never reconstruct release positions from a later query. Different new executions may observe different row order, while recovery uses the exact captured sequence. Validate every row and its inventory before claiming work. Use existing stateful RepeatAcrossActivation for sequential releases; each reservation gets a distinct receipt occurrence even when rows share a SKU. Persist validated release evidence with DurableCut before mutating inventory, so a crash after marking a reservation released replays that observation and the original receipts. Reject changed reservation facts instead of releasing a different quantity. Orders move Submitted -> Cancelling -> Cancelled. The original durable continuation must resume Cancelling work. Separate logical continuations receive InProgress, or AlreadyCancelled after completion. A replacement physical worker may restore the retained checkpoint under a newly acquired owner/fence, preserving the logical continuation and all receipt occurrences. For the explicit PostgreSQL durable-store profile, construct an activation-local host from the acquired snapshot and attach its worker fence to every receipted repository. The process root lease check and state/receipt commit must share one native transaction; a pre-read lease check is insufficient. Expired or stale workers stop without committing a semantic failure checkpoint. Do not interpret this profile as automatic fencing for fixed hosts or external Durable Task workers. Released remains visible on reservation reads. This process requires durable execution; finite host execution must reject it explicitly.
 
-Use ProcessQuery to attach a canonical bounded native query to ProcessContext.Query. The original query, row/byte bounds, consistency requirement and observational contract are exported. Use an explicit typed evidence projection with an existence flag when guards need nonnullable operands from an optional point read. Bind awaited results to locals before returning them. The supported loop authoring surface uses partitioned child processes; the current single-item recipe rejects multiple reservations.
+Use ProcessQuery to attach a canonical bounded native query to ProcessContext.Query. The original query, row/byte bounds, consistency requirement and observational contract are exported. Use an explicit typed evidence projection with an existence flag when guards need nonnullable operands from an optional point read. Bind awaited results to locals before returning them. Use stateful bounded recurrence for sequential processing, with a portable captured sequence and cursor. Verify the final reservation count and every captured row before declaring cancellation complete; this detects observed additions or mutations but does not promise cross-entity atomicity against concurrent external writers.
 
 For an existing Orders database apply eng/examples/aspire-first/migrations/002-reservation-cancellation.sql before host startup. The new Released column defaults to false. Run the PostgreSQL-backed CancellationIntegrationTests with COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING set. A skipped test requires a configured test database before behavior is qualified.
+
+
+## Inspect recovery requirements before choosing an engine
+
+Resolve `recovery:` and inspect its `process-recovery-assessment` subjects. The Orders producer exports the same
+`CancellationProcess.FencedRecoveryCompilation` policy against native PostgreSQL, Durable Task and a finite host.
+Each report retains the exact process reference, required guarantees, source nodes, capability evidence, operating
+boundaries and actionable gaps. These are recovery-only inspection artifacts; integrity validation does not prove
+physical wiring or runtime behavior. A constrained report requires its named boundaries to hold.
+
+The native PostgreSQL fixture uses `CreateFencedRuntime` and attaches its supplied fence to every receipted repository.
+An unqualified runtime rejects the explicit policy before initialization. Durable Task has checkpoint/restoration
+support but does not claim the native transition fencing guarantee. Never remove a requested guarantee merely to
+make target selection pass. Run the shared cancellation recovery conformance scenarios for a target claiming support,
+and retain target-specific lock/race tests alongside them.
+
+
+## Qualify the authored recovery policy
+
+Use this sequence after authoring cancellation in CancellationProcess.cs and its transition declarations:
+
+1. Call learn and retain workspace.snapshotId before editing. Read the cancellation recipe above, inspect the
+   process and its dependency references, then edit source and rebuild/export. Never edit the exported JSON.
+2. Select CancellationProcess.FencedRecoveryCompilation explicitly when preparing the native cancellation plan.
+   Keep its WorkerTakeover guarantees intact. Resolve recovery: after export, then inspect each assessment's
+   /payload/compilation, /payload/profile, /payload/report/status, /payload/report/decisions, /payload/report/diagnostics and /payload/limitations.
+   Use narrow pointers if inspect returns a null value because the object exceeds its byte limit.
+3. The current PostgreSQL composition is Realizable only within its declared fenced-receipt/same-data-source
+   boundary. Generic Durable Task and finite-host profiles are NotRealizable for this policy. Read the per-requirement
+   diagnostics and resolutions; choose or implement a qualified composition instead of removing guarantees.
+4. Run check on every page, review unavailable domain validation, compare against the retained snapshot, and run
+   compatibility for all exported API contracts in both directions. Unknown is an unresolved coverage gap, never a pass.
+5. Run the reproducible qualification command below with a disposable PostgreSQL connection. It replays tracked
+   source from the baseline to this checkout, uses learn and the inspection tools, runs cancellation conformance
+   against that same isolated source, rejects skipped tests, and records directional compatibility evidence.
+
+    dotnet run --project eng/examples/aspire-first/Development -- recovery-exercise "$PWD"
+
+Set COHESIVE_ORDER_EXAMPLE_TEST_CONNECTION_STRING before running. An optional third argument selects an earlier
+commit that already has cancellation API contracts. The default is the fenced-cancellation revision before explicit
+recovery policy selection. Evidence is written to tmp/orders-recovery-exercise.json only after all steps succeed.
+This is a deterministic replay of authored source, not a claim that a new agent independently wrote the implementation.
+
+Checkpoint v8 retains the exact compilation policy. A replacement using a different policy fails with
+storage.processes.checkpoint.compilationPolicyIncompatible at /compilationOptions before acquiring ownership or
+performing effects. Restore the original policy; execution migration is not implemented. A matching policy still
+requires a qualified host. The exercise covers retries, multiple reservations, stale ownership, release/mark receipt
+recovery, and refusal to rewrite the retained policy. Runtime results qualify the tested native composition only;
+MCP integrity checks alone do not establish durability or physical binding correctness.

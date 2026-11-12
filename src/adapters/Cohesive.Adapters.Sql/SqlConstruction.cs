@@ -1353,6 +1353,7 @@ public sealed class SqlSelectQuery
     readonly ImmutableArray<SqlExpression> groupings;
     readonly ImmutableArray<SqlOrdering> orderings;
     readonly bool distinct;
+    readonly bool forUpdate;
     readonly int? limit;
     readonly int? offset;
 
@@ -1371,8 +1372,10 @@ public sealed class SqlSelectQuery
         ImmutableArray<SqlOrdering> orderings,
         bool distinct,
         int? limit,
-        int? offset)
+        int? offset,
+        bool forUpdate)
     {
+        this.forUpdate = forUpdate;
         this.from = from;
         this.selections = selections;
         this.joins = joins;
@@ -1473,6 +1476,11 @@ public sealed class SqlSelectQuery
             if (limit is null) context.Dialect.Require(SqlFeature.OffsetWithoutLimit);
             context.Separator(builder).Append("OFFSET ").Append(pageOffset.ToString(CultureInfo.InvariantCulture));
         }
+        if (forUpdate)
+        {
+            context.Dialect.Require(SqlFeature.SelectForUpdate);
+            context.Separator(builder).Append("FOR UPDATE");
+        }
     }
 
     static void WriteExpressionList(
@@ -1505,6 +1513,7 @@ public sealed class SqlSelectBuilder
     readonly HashSet<SqlIdentifier> aliases = [];
     readonly HashSet<SqlIdentifier> selectionAliases = [];
     bool distinct;
+    bool forUpdate;
     int? limit;
     int? offset;
 
@@ -1734,9 +1743,17 @@ public sealed class SqlSelectBuilder
     public SqlSelectBuilder OffsetLimit(int offset, int limit) =>
         Offset(offset).Limit(limit);
 
+    /// <summary>Locks selected rows for update until the caller's transaction completes.</summary>
+    /// <returns>This builder; supported only for a single base table without joins, grouping, or DISTINCT.</returns>
+    public SqlSelectBuilder ForUpdate()
+    {
+        forUpdate = true;
+        return this;
+    }
+
     /// <summary>Builds an immutable SELECT tree suitable for direct rendering or derived-table composition.</summary>
     /// <returns>An immutable snapshot of the builder.</returns>
-    /// <exception cref="InvalidOperationException">No projection has been configured.</exception>
+    /// <exception cref="InvalidOperationException">No projection is configured, or row locking is combined with an unsupported source, join, grouping, or DISTINCT.</exception>
     public SqlSelectQuery BuildQuery()
     {
         if (selections.Count == 0)
@@ -1744,6 +1761,8 @@ public sealed class SqlSelectBuilder
             throw new InvalidOperationException("A SQL SELECT query requires at least one projected expression.");
         }
 
+        if (forUpdate && (from is not SqlTableFromItem || joins.Count != 0 || groupings.Count != 0 || distinct))
+            throw new InvalidOperationException("FOR UPDATE requires a single base table without joins, grouping, or DISTINCT.");
         return new(
             from,
             [.. selections],
@@ -1753,7 +1772,8 @@ public sealed class SqlSelectBuilder
             [.. orderings],
             distinct,
             limit,
-            offset);
+            offset,
+            forUpdate);
     }
 
     /// <summary>Builds an immutable reusable SQL command template.</summary>

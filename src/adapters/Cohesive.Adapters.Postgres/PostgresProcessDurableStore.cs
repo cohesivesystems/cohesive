@@ -29,7 +29,7 @@ namespace Cohesive.Adapters.Postgres;
 /// during bootstrap; ordinary store operations do not perform schema DDL or migration.
 /// </para>
 /// </remarks>
-public sealed class PostgresProcessDurableStore : IProcessDurableStore
+public sealed partial class PostgresProcessDurableStore : IProcessDurableStore
 {
     const int MaximumCompareAndSwapAttempts = 32;
     readonly NpgsqlDataSource dataSource;
@@ -380,10 +380,11 @@ public sealed class PostgresProcessDurableStore : IProcessDurableStore
     async ValueTask<PostgresProcessDurableStoreRoot?> LoadRootAsync(
         PostgresNpgsqlCommandExecutor execute,
         ProcessInstanceId instanceId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool forUpdate = false)
     {
         var result = await execute(
-                sql.LoadRoot(options.AuthorityId, instanceId.Value),
+                sql.LoadRoot(options.AuthorityId, instanceId.Value, forUpdate),
                 cancellationToken)
             .ConfigureAwait(false);
         if (result.Rows.IsEmpty)
