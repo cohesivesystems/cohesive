@@ -33,7 +33,7 @@ public sealed record ApiCompatibilityResult(string Policy, ApiCompatibilityDirec
 public static class ApiContractCompatibility
 {
     /// <summary>Policy assumes JSON consumers ignore extra fields, exact scalar formats and declaration-level authorization.</summary>
-    public const string Policy = "http-json-tolerant-readers/v1";
+    public const string Policy = "http-json-tolerant-readers/v2";
 
     /// <summary>Checks input acceptance contravariantly and output acceptance covariantly.</summary>
     /// <param name="baseline">Existing verified contract.</param><param name="proposed">Proposed verified contract.</param>
@@ -130,6 +130,11 @@ public static class ApiContractCompatibility
                 if (produced != accepted) Finding("api.compatibility.body", path, "Body presence differs.");
                 return;
             }
+            if (WrappedScalar(produced, producerGraph) is { } pw && WrappedScalar(accepted, consumerGraph) is { } aw)
+            {
+                if (pw.Id != aw.Id || !Same(pw, aw)) Unknown(path, "Scalar wrapper contract differs; conversion acceptance requires review.");
+                return;
+            }
             var pf = Fields(produced, producerGraph, path);
             var af = Fields(accepted, consumerGraph, path);
             if (pf is { } source && af is { } target)
@@ -140,18 +145,24 @@ public static class ApiContractCompatibility
                     if (work >= 4096) { Unknown(path, "Type traversal budget exhausted."); break; }
                     var location = path + "/" + Escape(field.Name);
                     var supplied = sourceByName.GetValueOrDefault(field.Name);
+                    if (field.Annotations.Any(annotation => !SupportedAnnotation(annotation))
+                        || (supplied is not null && supplied.Annotations.Any(annotation => !SupportedAnnotation(annotation))))
+                        Unknown(location, "Field serialization annotations require an additional interpretation.");
                     if (supplied is null)
                     {
-                        if (field.Presence == FieldPresence.Required) Finding("api.compatibility.requiredField", location, "Producer does not guarantee a required field.");
+                        if (RequiresField(field)) Finding("api.compatibility.requiredField", location, "Producer does not guarantee a required field.");
                         continue;
                     }
-                    if (supplied.Presence == FieldPresence.Optional && field.Presence == FieldPresence.Required)
+                    if (supplied.Presence == FieldPresence.Optional && RequiresField(field))
                         Finding("api.compatibility.presence", location, "Producer may omit a required field.");
                     if (supplied.Nullability == FieldNullability.Nullable && field.Nullability == FieldNullability.NonNullable)
                         Finding("api.compatibility.nullability", location, "Producer may emit null where the consumer forbids it.");
                     if (supplied.Cardinality != field.Cardinality) Finding("api.compatibility.cardinality", location, "Field cardinality differs.");
-                    if (supplied.Annotations.Count > 0 || field.Annotations.Count > 0)
-                        Unknown(location, "Field serialization annotations require an additional interpretation.");
+                    var producedDictionary = IsDictionary(supplied);
+                    var acceptedDictionary = IsDictionary(field);
+                    if (producedDictionary != acceptedDictionary)
+                        Finding("api.compatibility.representation", location, "JSON object dictionary and sequence representations differ.");
+
                     Accept(supplied.Type, producerGraph, field.Type, consumerGraph, location, depth + 1);
                 }
             }
@@ -173,6 +184,27 @@ public static class ApiContractCompatibility
             }
             else Unknown(path, "Type family is opaque, unresolved or unsupported by this policy.");
         }
+        static bool RequiresField(ObjectFieldTypeDef field) =>
+            field.Annotations.TryGetValue(new(ApiJsonWireMetadata.ReaderRequired), out var required)
+                && required.Value.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? required.Value.GetBoolean() : field.Presence == FieldPresence.Required;
+        static bool SupportedAnnotation(KeyValuePair<AnnotationKey, AnnotationValue> annotation) =>
+            annotation.Key.Value switch
+            {
+                ApiJsonWireMetadata.ReaderRequired => annotation.Value.Value.ValueKind is JsonValueKind.True or JsonValueKind.False,
+                SystemTextJsonShapeAnnotations.Dictionary => annotation.Value.Value.ValueKind == JsonValueKind.True,
+                _ => false
+            };
+        static bool IsDictionary(ObjectFieldTypeDef field) =>
+            field.Annotations.TryGetValue(new(SystemTextJsonShapeAnnotations.Dictionary), out var dictionary)
+            && dictionary.Value.ValueKind == JsonValueKind.True;
+        static TypeDefinition.Structural? WrappedScalar(TypeRef type, ShapeGraph? graph) =>
+            type is NamedTypeRef named && graph is not null && graph.TryGetType(named.TypeId, out var definition)
+            && definition is TypeDefinition.Structural structural
+            && structural.Annotations.TryGetValue(new(SystemTextJsonShapeAnnotations.Representation), out var representation)
+            && representation.Value.ValueKind == JsonValueKind.String
+            && representation.Value.GetString() is SystemTextJsonShapeAnnotations.String or SystemTextJsonShapeAnnotations.Number or SystemTextJsonShapeAnnotations.Boolean
+                ? structural : null;
         static TypeDefinition.Enum? NamedEnum(TypeRef type, ShapeGraph? graph) => type is NamedTypeRef named && graph is not null
             && graph.TryGetType(named.TypeId, out var definition) ? definition as TypeDefinition.Enum : null;
         ImmutableArray<ObjectFieldTypeDef>? Fields(TypeRef type, ShapeGraph? graph, string path)

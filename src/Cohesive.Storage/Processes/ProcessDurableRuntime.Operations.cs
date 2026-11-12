@@ -49,7 +49,7 @@ public sealed partial class ProcessDurableRuntime
         }
         context.ThrowIfCancellationRequested();
 
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);

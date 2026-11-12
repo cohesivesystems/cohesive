@@ -53,6 +53,10 @@ public sealed record CancellationResult(CancellationOutcome Outcome);
 public sealed partial class CancellationProcess(FulfillmentDomain domain, FulfillmentQueries queries)
     : Cohesive.Processes.Authoring.ProcessModel<CancelOrder, CancellationResult>
 {
+    /// <summary>Explicit native takeover policy; ordinary cancellation may select a weaker recovery profile separately.</summary>
+    public static Cohesive.Processes.Compilation.ProcessCompilationOptions FencedRecoveryCompilation { get; } = new(
+        requiredGuarantees: Cohesive.Processes.Compilation.ProcessRecoveryRequirements.WorkerTakeover);
+
     /// <summary>Maximum reservation facts admitted into one cancellation.</summary>
     public const int MaximumReservations = 1000;
 

@@ -28,6 +28,7 @@ public sealed partial class ProcessDurableRuntime
     readonly IProcessReferenceHost? host;
     readonly IAsyncProcessReferenceHost? asyncHost;
     readonly Func<ProcessDurableStoreSnapshot, IAsyncProcessReferenceHost>? activationHostFactory;
+    readonly ProcessInterpreterCapabilityProfile? recoveryProfile;
     readonly IDurableRequestBindingResolver bindingResolver;
     readonly IProcessLocalMutationPlanner localMutationPlanner;
     readonly IProcessStoreMutationExceptionClassifier storeMutationExceptionClassifier;
@@ -124,6 +125,7 @@ public sealed partial class ProcessDurableRuntime
     /// <param name="storeMutationExceptionClassifier">Optional ambiguous store-mutation classifier.</param>
     /// <param name="operationAdapterResolver">Optional exact durable Request adapter resolver.</param>
     /// <param name="operationExceptionClassifier">Optional adapter exception classifier.</param>
+    /// <param name="recoveryProfile">Explicit recovery evidence for this host/store composition; null cannot satisfy explicitly requested recovery guarantees.</param>
     /// <exception cref="ArgumentNullException">The store, factory or options is null.</exception>
     public ProcessDurableRuntime(
         IProcessDurableStore store,
@@ -133,10 +135,12 @@ public sealed partial class ProcessDurableRuntime
         IProcessLocalMutationPlanner? localMutationPlanner = null,
         IProcessStoreMutationExceptionClassifier? storeMutationExceptionClassifier = null,
         IDurableOperationAdapterResolver? operationAdapterResolver = null,
-        IDurableOperationExceptionClassifier? operationExceptionClassifier = null)
+        IDurableOperationExceptionClassifier? operationExceptionClassifier = null,
+        ProcessInterpreterCapabilityProfile? recoveryProfile = null)
         : this(store, null, null, options, bindingResolver, localMutationPlanner,
             storeMutationExceptionClassifier, operationAdapterResolver, operationExceptionClassifier, null)
     {
+        this.recoveryProfile = recoveryProfile;
         this.activationHostFactory = activationHostFactory ?? throw new ArgumentNullException(nameof(activationHostFactory));
     }
 
@@ -183,7 +187,7 @@ public sealed partial class ProcessDurableRuntime
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(start);
         context.ThrowIfCancellationRequested();
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
@@ -196,7 +200,8 @@ public sealed partial class ProcessDurableRuntime
             continuation,
             start.CreateInitialState(),
             createdAtUtc: start.AcceptedAtUtc,
-            updatedAtUtc: start.AcceptedAtUtc);
+            updatedAtUtc: start.AcceptedAtUtc,
+            compilationOptions: plan.Options);
         var compatibility = ProcessCheckpointCompatibilityValidator.Validate(plan, checkpoint);
         if (!compatibility.IsValid)
         {
@@ -276,7 +281,7 @@ public sealed partial class ProcessDurableRuntime
         RequireInstance(instanceId);
         context.ThrowIfCancellationRequested();
 
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
@@ -546,7 +551,7 @@ public sealed partial class ProcessDurableRuntime
                     "/command")]);
         }
 
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
@@ -745,7 +750,7 @@ public sealed partial class ProcessDurableRuntime
         context.ThrowIfCancellationRequested();
         var instanceId = command.Context.ProcessInstanceId;
         RequireInstance(instanceId);
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
@@ -1070,7 +1075,7 @@ public sealed partial class ProcessDurableRuntime
         context.ThrowIfCancellationRequested();
         var instanceId = observation.Expectation.Continuation.ProcessInstanceId;
         RequireInstance(instanceId);
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
@@ -1339,14 +1344,17 @@ public sealed partial class ProcessDurableRuntime
     DocumentValidationResult Validate(CompiledProcessPlan plan, ProcessDurableStoreSnapshot snapshot) =>
         ProcessCheckpointCompatibilityValidator.Validate(plan, snapshot.Checkpoint);
 
-    ImmutableArray<DocumentValidationDiagnostic> ValidateCapabilities()
+    ImmutableArray<DocumentValidationDiagnostic> ValidateCapabilities(CompiledProcessPlan plan)
     {
         var capabilities = store.Capabilities;
         if (capabilities.SupportsAtomicAggregateCommit
             && capabilities.SupportsCompareAndSwap
             && capabilities.SupportsWorkerFencing)
         {
-            return [];
+            if (!plan.Options.RequiredGuarantees.Any(ProcessRecoveryRequirements.WorkerTakeover.Contains)) return [];
+            var report = ProcessRecoveryRequirements.Assess(plan, recoveryProfile ?? ProcessRecoveryRequirements.Unavailable);
+            return [.. report.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error).Select(d =>
+                Error(d.Code, d.Message + " " + d.Resolution, "/recovery/" + d.Requirement?.Name))];
         }
         return [Error(
             ProcessDurableRuntimeDiagnosticCodes.StoreCapabilityInsufficient,
