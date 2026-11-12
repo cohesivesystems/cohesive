@@ -68,9 +68,8 @@ public sealed class MachineReactionInvocation
         ArgumentNullException.ThrowIfNull(occurrence);
         ArgumentNullException.ThrowIfNull(authorization);
         var payload = policy.Payload;
+        if (!Matches(policy, occurrence)) return null;
         var binding = EntityMachineBinding.Read(payload.Source)!;
-        if (occurrence.Movement.Contract != binding.Machine.Reference || occurrence.Movement.Edge != payload.Movement
-            || occurrence.Receipt.Entity.Entity.Observation.ShapeId.ShapeId != payload.Source.Id) return null;
         if (occurrence.Source.AuthorityScope != authorization.AuthorityScope)
             throw new InvalidOperationException("Cross-authority reactions require an explicit supported realization.");
         if (!binding.Equals(occurrence.Receipt.Commit.Evidence.MachineBinding))
@@ -90,6 +89,11 @@ public sealed class MachineReactionInvocation
             PortableValue.Concrete(OriginContract.Value, ObservationValue.FromObject(identity)));
         return new(policy, occurrence.Source, occurrence.Movement.Node, start);
     }
+
+    internal static bool Matches(MachineReaction policy, EntityMachineOccurrence occurrence) =>
+        occurrence.Movement.Contract == EntityMachineBinding.Read(policy.Payload.Source)!.Machine.Reference
+        && occurrence.Movement.Edge == policy.Payload.Movement
+        && occurrence.Receipt.Entity.Entity.Observation.ShapeId.ShapeId == policy.Payload.Source.Id;
 
     /// <summary>Restores inspection context from retained canonical start causation without rereading source state.</summary>
     /// <param name="policy">Exact registered reaction revision.</param>

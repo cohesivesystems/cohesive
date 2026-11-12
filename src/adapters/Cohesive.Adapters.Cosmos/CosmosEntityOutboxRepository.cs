@@ -732,7 +732,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         return envelope;
     }
 
-    CosmosObservationContainerDocument CreateTransitionReceiptDocument(
+    internal CosmosObservationContainerDocument CreateTransitionReceiptDocument(
         OperationContext context,
         EntityTransitionOperationCommit commit,
         CosmosObservationContainerDocument entityDocument,
@@ -792,9 +792,31 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
         var document = await TryReadDocument(context, id, partitionKey).ConfigureAwait(false);
         if (document is null)
             return null;
+        return ReadTransitionReceiptDocument(document);
+    }
+
+    internal Container TransitionReceiptContainer => container;
+
+    internal EntityTransitionOperationReceipt? ReadTransitionFeedReceipt(CosmosObservationContainerDocument document)
+    {
+        if (document.DocumentKind != options.TransitionOperationReceiptDocumentKind || document.ObservationType != observationType)
+            return null;
+        if (document.TransitionOperationReceiptId is not null)
+        {
+            ValidateTransitionReceiptDocument(document, requireCommit: false);
+            if (document.TransitionCommitPayload is not null || document.TransitionCommit is not null)
+                throw new InvalidOperationException("Creation receipt indexes cannot carry independent commit content.");
+            return null;
+        }
+        return ReadTransitionReceiptDocument(document);
+    }
+
+    EntityTransitionOperationReceipt ReadTransitionReceiptDocument(CosmosObservationContainerDocument document)
+    {
         ValidateTransitionReceiptDocument(document, requireCommit: true);
         var commit = DeserializeTransitionCommit(document);
-        if (!string.Equals(commit.Request.Fingerprint.Value, document.TransitionRequestFingerprint, StringComparison.Ordinal)
+        if (document.Id != CreateTransitionOperationReceiptId(commit.Request) || document.ObservationType != observationType
+            || !string.Equals(commit.Request.Fingerprint.Value, document.TransitionRequestFingerprint, StringComparison.Ordinal)
             || !string.Equals(commit.Request.IntentFingerprint.Value, document.TransitionIntentFingerprint, StringComparison.Ordinal)
             || !string.Equals(commit.Fingerprint.Value, document.TransitionCommitFingerprint, StringComparison.Ordinal)
             || !string.Equals(commit.Request.Subject.EntityType.Value, document.SubjectType, StringComparison.Ordinal)
@@ -925,7 +947,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     static string CreateTransitionCreationReceiptIndexId(InteractionEntityReference subject) =>
         $"entity-transition-creation:v1:{HashIdentity(new { EntityType = subject.EntityType.Value, EntityId = subject.EntityId.Value })}";
 
-    static string HashIdentity<T>(T value) where T : class
+    internal static string HashIdentity<T>(T value) where T : class
     {
         var canonical = StrictDocumentJson.GetCanonicalBytes(value, TransitionReceiptJsonOptions);
         return Convert.ToHexString(SHA256.HashData(canonical)).ToLowerInvariant();
