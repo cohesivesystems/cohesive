@@ -233,7 +233,7 @@ public sealed partial class ProcessDurableRuntime
         RequireInstance(expectedContinuation.ProcessInstanceId);
         context.ThrowIfCancellationRequested();
 
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
@@ -428,7 +428,7 @@ public sealed partial class ProcessDurableRuntime
         ProcessActivationContext activationContext,
         DateTimeOffset preventedAtUtc)
     {
-        var capabilityDiagnostics = ValidateCapabilities();
+        var capabilityDiagnostics = ValidateCapabilities(plan);
         if (!capabilityDiagnostics.IsEmpty)
         {
             return new(ProcessDurableRuntimeDisposition.Incompatible, diagnostics: capabilityDiagnostics);
@@ -441,7 +441,8 @@ public sealed partial class ProcessDurableRuntime
             continuation,
             start.CreateInitialState(),
             createdAtUtc: start.AcceptedAtUtc,
-            updatedAtUtc: start.AcceptedAtUtc);
+            updatedAtUtc: start.AcceptedAtUtc,
+            compilationOptions: plan.Options);
         var controller = ControlExecutor(plan);
         var controlDecision = controller.Apply(
             checkpoint.Control,
@@ -464,7 +465,7 @@ public sealed partial class ProcessDurableRuntime
             activationContext,
             cancellation: cancellation);
         var (activationDecision, observations) = await InterpretAsync(
-            context, plan, checkpoint, activation).ConfigureAwait(false);
+            context, plan, acquiredSnapshot: null, checkpoint, activation).ConfigureAwait(false);
         if (activationDecision.Disposition != ProcessActivationDisposition.Cancelled)
         {
             return new(

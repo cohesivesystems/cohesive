@@ -91,7 +91,10 @@ public sealed class EphemeralProcessExecutorTests
     public void UnsupportedDemandsAreRejectedBeforeAnyExecution()
     {
         var waiting = Plan(cut: true);
-        Assert.Equal("processes.ephemeral.constructUnsupported", Assert.Single(EphemeralProcessExecutor.Validate(waiting).Diagnostics).Code);
+        var diagnostics = EphemeralProcessExecutor.Validate(waiting).Diagnostics;
+        Assert.Contains(diagnostics, d => d.Code == "processes.ephemeral.constructUnsupported");
+        Assert.Contains(diagnostics, d => d.Message.Contains("checkpointPersistence", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, d => d.Message.Contains("continuationRestoration", StringComparison.Ordinal));
         Assert.Throws<ArgumentException>(() => new EphemeralProcessExecutor(waiting));
         var atomic = Plan(atomic: true);
         Assert.Equal("processes.ephemeral.atomicScopeUnsupported", Assert.Single(EphemeralProcessExecutor.Validate(atomic).Diagnostics).Code);

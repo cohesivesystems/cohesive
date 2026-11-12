@@ -53,12 +53,15 @@ public sealed record ApiContractDocument(string SchemaVersion, ApiContractDefini
     /// <param name="serializerProfile">Exact producer-owned serialization convention version.</param>
     /// <param name="execution">Optional admitted execution binding.</param><param name="service">Optional admitted service binding.</param>
     /// <param name="serviceOperation">Selected operation identity when a service is supplied.</param>
+    /// <param name="wireMetadata">Optional adapter-owned interpretation of known wire types; retained only as lowered metadata. Include its version in the serializer profile.</param>
     /// <returns>A deterministic portable contract retaining all supported source declarations.</returns>
     /// <exception cref="ArgumentException">The profile is empty or source declarations conflict.</exception>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="NotSupportedException">Serializer metadata cannot be lowered safely.</exception>
+    /// <exception cref="InvalidOperationException">Lowered wire types declare conflicting identities.</exception>
     public static ApiContractDocument Lower(ApiOperation operation, JsonSerializerOptions jsonOptions, string serializerProfile,
-        ExecutionDefinitionReference? execution = null, ExecutionDefinitionReference? service = null, string? serviceOperation = null)
+        ExecutionDefinitionReference? execution = null, ExecutionDefinitionReference? service = null, string? serviceOperation = null,
+        IClrShapeMetadataProvider? wireMetadata = null)
     {
         ArgumentNullException.ThrowIfNull(operation);
         ArgumentNullException.ThrowIfNull(jsonOptions);
@@ -85,9 +88,27 @@ public sealed record ApiContractDocument(string SchemaVersion, ApiContractDefini
         var mappings = new Dictionary<Type, TypeRef>();
         foreach (var type in types)
         {
+            // A target-owned wire root must be lowered before CLR discovery walks converter internals.
+            if (wireMetadata?.GetMetadata(ClrShapeMetadataContext.ForType(type)) is { TypeRef: { } wireType } metadata)
+            {
+                mappings[type] = wireType;
+                foreach (var named in metadata.NamedTypes)
+                {
+                    if (namedTypes.TryGetValue(named.Id, out var prior) && prior != named)
+                        throw new InvalidOperationException("Conflicting lowered wire type identity.");
+                    namedTypes[named.Id] = named;
+                }
+                continue;
+            }
             var envelope = typeof(ContractValue<>).MakeGenericType(type);
             ClrShapeGraphBuildResult lowered;
-            try { lowered = new ClrShapeGraphBuilder().UsePublicJsonContracts(effective).AddShape(envelope).BuildResult(graphId); }
+            try
+            {
+                var builder = new ClrShapeGraphBuilder().UsePublicJsonContracts(effective)
+                    .AddMetadataProvider(new ApiJsonWireMetadata(effective));
+                if (wireMetadata is not null) builder.AddMetadataProvider(wireMetadata);
+                lowered = builder.AddShape(envelope).BuildResult(graphId);
+            }
             catch (Exception error) when (error is InvalidOperationException or NotSupportedException)
             {
                 mappings[type] = new OpaqueRuntimeTypeRef(type.FullName ?? type.Name,
@@ -99,8 +120,9 @@ public sealed record ApiContractDocument(string SchemaVersion, ApiContractDefini
                 if (lowered.Graph.TryGetType(id, out var named) && named is TypeDefinition.Structural)
                 {
                     var info = effective.GetTypeInfo(clr);
-                    if (info.Kind != System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object
-                        || info.Properties.Any(p => p.ShouldSerialize is not null || p.CustomConverter is not null || p.IsExtensionData))
+                    if ((info.Kind != System.Text.Json.Serialization.Metadata.JsonTypeInfoKind.Object
+                            && !SingleValueWrapperJsonConverter.ScalarOnly.CanConvert(clr))
+                        || info.Properties.Any(p => p.Get is not null && (p.ShouldSerialize is not null || p.CustomConverter is not null || p.IsExtensionData)))
                         gaps.Add("Conditional or custom JSON representation of " + id.Value + " is not proven by the structural graph.");
                 }
             }
@@ -116,7 +138,7 @@ public sealed record ApiContractDocument(string SchemaVersion, ApiContractDefini
             }
             mappings[type] = ValueContract.FromField(lowered.Graph.GetShape(lowered.ShapeIds[envelope]).Fields.Single()).GetEffectiveType()!;
         }
-        var graph = shapes.Count == 0 ? null : new ShapeGraph(graphId, [.. shapes.Values.OrderBy(s => s.Id.Value, StringComparer.Ordinal)],
+        var graph = shapes.Count == 0 && namedTypes.Count == 0 ? null : new ShapeGraph(graphId, [.. shapes.Values.OrderBy(s => s.Id.Value, StringComparer.Ordinal)],
             [.. namedTypes.Values.OrderBy(t => t.Id.Value, StringComparer.Ordinal)]);
         TypeRef? Map(Type? type) => type is null || type == typeof(void) ? null : mappings[type];
         var http = operation.Http is { } h ? new ApiContractHttp(h.Method, h.Route,
