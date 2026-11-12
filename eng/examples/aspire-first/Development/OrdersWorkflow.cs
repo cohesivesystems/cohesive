@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Cohesive.Model.Serialization;
 using Cohesive.Semantics;
+using Cohesive.Adapters.Mcp.Development;
 using ModelContextProtocol.Client;
 
 // An opt-in integration exercise, not an MCP tool. All edits/builds run in an isolated source copy.
@@ -41,6 +42,14 @@ internal static class OrdersWorkflow
                 foreach (var relative in authoringFiles)
                     await File.WriteAllTextAsync(Path.Combine(scratch, relative), await RunProcess(root, "git", ["show", commit + ":" + relative], token), token);
             }
+            // Match the retained generated reader in OrdersWireContext. This policy is local to the
+            // exercise copy; the application exporter keeps its normal ASP.NET web defaults.
+            var exporterPath = Path.Combine(scratch, OrdersWorkspace.Project, "Program.cs");
+            var exporter = await File.ReadAllTextAsync(exporterPath, token);
+            exporter = ReplaceOnce(exporter, "new JsonSerializerOptions(JsonSerializerDefaults.Web),",
+                "new JsonSerializerOptions(JsonSerializerDefaults.Web) { RespectRequiredConstructorParameters = true },");
+            exporter = ReplaceOnce(exporter, "aspnet-web-defaults/problem-details-v1", "exercise/strict-constructors/problem-details-v1");
+            await File.WriteAllTextAsync(exporterPath, exporter, token);
             await Export();
             await using var client = await McpClient.CreateAsync(new StdioClientTransport(new()
             {
@@ -279,7 +288,18 @@ internal static class OrdersWorkflow
                 {
                     result = await Call("check", new() { ["expectedSnapshot"] = snapshot, ["offset"] = offset, ["limit"] = 100 });
                     foreach (var check in result.GetProperty("result").GetProperty("items").EnumerateArray())
-                        Require(check.GetProperty("isValid").GetBoolean() && check.GetProperty("domainValidationAvailable").GetBoolean(), check.GetRawText());
+                    {
+                        Require(check.GetProperty("isValid").GetBoolean(), check.GetRawText());
+                        if (!check.GetProperty("domainValidationAvailable").GetBoolean())
+                        {
+                            // Recovery assessments have checked integrity, not an executable domain validator.
+                            // Keep requiring domain validation for every other exported document kind.
+                            var schema = await Call("inspect", new() { ["id"] = check.GetProperty("id").GetString(),
+                                ["expectedSnapshot"] = snapshot, ["pointer"] = "/schemaVersion" });
+                            Require(schema.GetProperty("result").GetProperty("value").GetString() == ProcessRecoveryWorkspaceProjection.Schema,
+                                check.GetRawText());
+                        }
+                    }
                     offset = result.GetProperty("result").TryGetProperty("nextOffset", out var next) && next.ValueKind == JsonValueKind.Number
                         ? next.GetInt32() : -1;
                 } while (offset >= 0);

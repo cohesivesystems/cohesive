@@ -115,6 +115,8 @@ at re-export, not during freshness checks.
 
 The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v1`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.
 
+The isolated response exercise explicitly exports `RespectRequiredConstructorParameters = true` under its own serializer profile, matching `OrdersWireContext`; it does not change the application's web defaults. Recovery assessment documents require valid integrity checks, while other exported documents also require domain validation.
+
 For the response exercise, resolve `AvailableStock` and use `impact` on the qualified field identity. The exercise follows the field through the Orders query to `api:Order.Details`, then rebuilds twice. Adding optional `inventoryPartition` preserves the old reader; renaming required `availableStock` to `remainingStock` breaks it. The generated JSON writer and original generated reader provide a separate check on both classifications. Expression-level dependencies and target realization remain partial.
 
 For the query exercise, inspect `fulfillment/order-details`, call `references` to resolve the bound `api:` endpoint,
