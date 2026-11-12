@@ -110,5 +110,7 @@ binding evidence. Predicate/discriminator bindings and document round trips are 
 
 Creation, multi-movement paths, component composition, and automatic preservation inference remain
 unsupported. Coverage is scoped to registered canonical Transitions and their reference interpreter;
-direct storage writes are not made safe by this contract. Reactions and committed occurrence transport
+direct storage writes are not made safe by this contract. Committed occurrences can now be projected
+from atomic entity receipts without an explicit Emit declaration. [Reaction realization](reactions.md)
+documents that boundary and the next policy/runtime slice. Reaction execution and occurrence transport
 remain design requirements rather than implemented delivery guarantees.
