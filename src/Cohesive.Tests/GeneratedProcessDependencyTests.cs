@@ -17,6 +17,83 @@ public sealed class GeneratedProcessDependencyTests
         id: new("dependency/read"), revision: new("1"), result: item => item?.Id ?? "missing");
 
     [Fact]
+    public async Task Native_query_dependency_preserves_policy_and_requires_exact_prepared_reader()
+    {
+        var native = new NativeQueries(Entity).Read;
+        var read = new ProcessQuery<string, Item[]>(native, new("1"), 12, 4096,
+            Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
+        var process = new NativeReadProcess(read);
+        var dependency = Assert.Single(process.Dependencies);
+        Assert.Equal(read.Reference, dependency.Reference);
+        Assert.Equal(read.Reference, Assert.Single(process.Definition.Definition.Nodes.OfType<EvaluateRelationProcessNode>()).Relation);
+        var changedBounds = new ProcessQuery<string, Item[]>(native, new("1"), 13, 4096,
+            Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot);
+        Assert.NotEqual(read.Reference.Fingerprint, changedBounds.Reference.Fingerprint);
+        var service = Service.Define(new("native-read-service"), new("1"), RunControlFixture.Provenance)
+            .Use(new ServiceDependencies().Process(process)).Operation("read").Run(process.Definition)
+            .ExecuteEphemerally(TimeSpan.FromSeconds(1));
+        var selected = Assert.Single(service.Dependencies.Queries);
+        Assert.Equal(12, selected.MaximumRows);
+        Assert.Equal(4096, selected.MaximumBytes);
+        Assert.Empty(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
+        Assert.Throws<ServiceBindingValidationException>(() => service.Bind(process.Definition,
+            (ValueContract _) => throw new InvalidOperationException("Repository resolution should not occur.")));
+
+        var reader = new NativeReader(native);
+        var persistence = new NativePersistence(reader);
+        var prepared = service.Bind(process.Definition, persistence).Prepare();
+        Assert.Equal((12, 4096L), persistence.Bounds);
+        using var cancellation = new CancellationTokenSource();
+        var evaluation = ExecutionKernel.ProcessRelationHandlerCatalogTests.Evaluation(read.Reference, read.Contract.InputContract, "sku");
+        var result = await prepared.Host.EvaluateRelationAsync(OperationContext.Create(cancellationToken: cancellation.Token), evaluation);
+        Assert.True(result.IsSuccessful, result.Failure?.Message);
+        Assert.Equal("sku", result.Value!.Value!.Value.Array[0].GetProperty(nameof(Item.Id)).GetRequiredString());
+        Assert.Equal(cancellation.Token, reader.Cancellation);
+
+        reader.Consistency = Cohesive.Relations.Execution.RelationQueryConsistency.IndependentSources;
+        Assert.Throws<ServiceBindingValidationException>(() => service.Bind(process.Definition, persistence));
+        reader.Consistency = Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot;
+        reader.Definition = new NativeQueries(Entity).Read;
+        Assert.Throws<ServiceBindingValidationException>(() => service.Bind(process.Definition, persistence));
+    }
+
+    sealed class NativeQueries : QueryModel
+    {
+        internal NativeQueries(DomainEntity<Item> entity)
+        {
+            Read = Queries.WithInput<string>("id").Array("dependency/native-read", (query, input) =>
+                query.Source(entity).Where(item => item.Id == input.Value).Select(item => new Item(item.Id, item.Partition)));
+        }
+        internal RelationQuery<string, Item[]> Read { get; }
+    }
+
+    sealed class NativeReader(RelationQuery<string, Item[]> query) : Cohesive.Relations.Execution.IRelationQueryReader<string, Item[]>
+    {
+        public RelationQuery<string, Item[]> Definition { get; set; } = query;
+        public Cohesive.Relations.Execution.RelationQueryConsistency Consistency { get; set; } =
+            Cohesive.Relations.Execution.RelationQueryConsistency.SingleSnapshot;
+        internal CancellationToken Cancellation { get; private set; }
+        public Task<Item[]> ReadAsync(string input, CancellationToken cancellationToken = default)
+        {
+            Cancellation = cancellationToken;
+            return Task.FromResult<Item[]>([new(input, "local")]);
+        }
+    }
+
+    sealed class NativePersistence(NativeReader reader) : IServicePersistence
+    {
+        internal (int, long) Bounds { get; private set; }
+        public Cohesive.Storage.IEntityRepository Repository(ValueContract observation) => throw new InvalidOperationException();
+        public Cohesive.Relations.Execution.IRelationQueryReader<TInput, TResult> Query<TInput, TResult>(
+            RelationQuery<TInput, TResult> query, int maximumRows, long maximumBytes,
+            Cohesive.Relations.Execution.RelationQueryConsistency consistency)
+        {
+            Bounds = (maximumRows, maximumBytes);
+            return (Cohesive.Relations.Execution.IRelationQueryReader<TInput, TResult>)(object)reader;
+        }
+    }
+
+    [Fact]
     public void Direct_point_read_retains_call_site_policy_in_its_fingerprint()
     {
         var plain = new DirectPointReadProcess(Entity);
@@ -422,5 +499,17 @@ internal sealed partial class PolicyPointReadProcess : ProcessModel<string, bool
             timeout: TimeSpan.FromSeconds(2), maxAttempts: 3,
             retryableFailureCodes: ["storage.busy"], progress: ProcessReadProgress.Durable));
         return found.Entity != null;
+    }
+}
+
+
+[Process(id: "dependency/native-process", revision: "1")]
+internal sealed partial class NativeReadProcess(ProcessQuery<string, GeneratedProcessDependencyTests.Item[]> read)
+    : ProcessModel<string, GeneratedProcessDependencyTests.Item[]>
+{
+    protected override async ProcessTask<GeneratedProcessDependencyTests.Item[]> Execute(ProcessContext process, string input)
+    {
+        var result = await process.Query(read, input);
+        return result;
     }
 }

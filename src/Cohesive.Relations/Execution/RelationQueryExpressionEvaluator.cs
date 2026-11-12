@@ -338,6 +338,7 @@ sealed class RelationQueryExpressionEvaluator
             ExprFunctionNames.ParseInt32,
             ExprFunctionNames.ParseInt64,
             ExprFunctionNames.Single,
+            ExprFunctionNames.ElementAt,
             ExprFunctionNames.Contains,
             ExprFunctionNames.Count,
             ExprFunctionNames.EndsWith,
@@ -607,6 +608,7 @@ sealed class RelationQueryExpressionEvaluator
             ExprFunctionNames.StartsWith => EvaluateStartsWith(call, context),
             ExprFunctionNames.TextContains => EvaluateTextContains(call, context),
             ExprFunctionNames.Object => EvaluateObject(call, context),
+            ExprFunctionNames.ElementAt => EvaluateElementAt(call, context),
             ExprFunctionNames.Select => EvaluateSelect(call, context),
             ExprFunctionNames.Join => EvaluateJoin(call, context),
             ExprFunctionNames.Append => EvaluateAppend(call, context),
@@ -755,6 +757,13 @@ sealed class RelationQueryExpressionEvaluator
                 (matches ??= ImmutableArray.CreateBuilder<ObservationValue>()).Add(item);
         }
         return ObservationValue.FromImmutableArray(matches?.ToImmutable() ?? []);
+    }
+
+    ObservationValue EvaluateElementAt(CallExpr call, in RelationQueryExpressionContext context)
+    {
+        var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
+        var index = RequireIndex(Evaluate(call.Arguments[1], context), source.Count - 1, call.Function);
+        return Evaluate(call.Arguments[2], context.WithCurrentItem(source[index]));
     }
 
     ObservationValue EvaluateSelect(CallExpr call, in RelationQueryExpressionContext context)

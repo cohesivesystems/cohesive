@@ -10,9 +10,9 @@ using AspireFirst.Orders;
 using Cohesive.Adapters.Mcp.Development;
 using Cohesive.Semantics;
 
-if (args.Length is < 2 or > 3 || args[0] is not ("export" or "serve" or "exercise" or "wire-sample") || (args.Length == 3 && args[0] != "exercise"))
+if (args.Length is < 2 or > 3 || args[0] is not ("export" or "serve" or "exercise" or "wire-sample" or "cancellation-exercise" or "recovery-exercise") || (args.Length == 3 && args[0] is not ("exercise" or "cancellation-exercise" or "recovery-exercise")))
 {
-    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise|wire-sample> <repository-root> [authoring-base-commit for exercise]");
+    Console.Error.WriteLine("Usage: Orders.Development <export|serve|exercise|wire-sample|cancellation-exercise|recovery-exercise> <repository-root> [authoring-base-commit for exercise]");
     return 2;
 }
 var root = Path.GetFullPath(args[1]);
@@ -29,6 +29,12 @@ switch (args[0])
         using (var reader = new StreamReader(typeof(OrdersWorkspace).Assembly.GetManifestResourceStream("Orders.Development.Guide.md")!))
             await DevelopmentMcpServer.RunAsync(DevelopmentMcpServer.CreateDefaultWorkspace(root, OrdersWorkspace.Bundle),
                 new DevelopmentGuide(OrdersWorkspace.ProducerVersion, reader.ReadToEnd()));
+        break;
+    case "recovery-exercise":
+        await RecoveryWorkflow.RunAsync(root, args.Length == 3 ? args[2] : "4e7022d57efe349a33cb3630a56eb8c0a7f496f7");
+        break;
+    case "cancellation-exercise":
+        await CancellationWorkflow.RunAsync(root, args.Length == 3 ? args[2] : "744adcf9b6053f31d472bcda4b147a1ca85f4931");
         break;
     case "exercise":
         await OrdersWorkflow.RunAsync(root, args.Length == 3 ? args[2] : null);
@@ -58,9 +64,13 @@ internal static class OrdersWorkspace
             var domain = new FulfillmentDomain();
             var process = new FulfillmentProcess(domain);
             var queries = new FulfillmentQueries(domain);
-            var endpoints = new OrderEndpoints(new OrderApi(domain, process), domain, queries).Plan;
+            var cancellation = new CancellationProcess(domain, queries);
+            var execution = new FulfillmentExecutionPolicy { Lifetime = ProcessExecutionLifetime.Durable };
+            var endpoints = new OrderEndpoints(new OrderApi(domain, process, execution, cancellation), domain, queries, execution: execution).Plan;
             var executions = new[] { domain.OrderTransitions.Submit.Document, domain.InventoryTransitions.Reserve.Document,
-                domain.InventoryTransitions.Release.Document, domain.ReservationTransitions.Create.Document, process.Definition.Document }
+                domain.InventoryTransitions.Release.Document, domain.ReservationTransitions.Create.Document, process.Definition.Document,
+                domain.OrderTransitions.BeginCancellation.Document, domain.OrderTransitions.CompleteCancellation.Document,
+                domain.ReservationTransitions.MarkReleased.Document, cancellation.Definition.Document, cancellation.Reservations.Contract.Document, cancellation.ReservationEvidence.Query.Document }
                 .Concat(endpoints.Implementations.Where(e => e.Service is not null).Select(e => e.Service!.Declaration))
                 .DistinctBy(d => d.Reference);
             var requests = endpoints.QueryDependencies.Queries.Select(q => q.Request).ToArray();
@@ -71,11 +81,11 @@ internal static class OrdersWorkspace
                 .Select(json => JsonSerializer.Deserialize<JsonElement>(json));
             var catalogs = requests.Select(r => r.RelationshipCatalogDocument).OfType<RelationshipCatalogDocument>()
                 .DistinctBy(d => d.CatalogFingerprint).Select(d => JsonSerializer.Deserialize<JsonElement>(RelationshipCatalogJsonSerializer.Serialize(d)));
-            return [.. entities.Select(EntityStateDocument.Export), .. shapes, .. catalogs, .. executions.Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d))),
+            return [.. RecoveryAssessment.Export(cancellation), .. entities.Select(EntityStateDocument.Export), .. shapes, .. catalogs, .. executions.Select(d => JsonSerializer.Deserialize<JsonElement>(ExecutionDefinitionJsonSerializer.Serialize(d))),
                 .. endpoints.QueryDependencies.Queries.Select(q => q.Request.DefinitionDocument)
                     .Select(d => JsonSerializer.Deserialize<JsonElement>(RelationQueryJsonSerializer.Serialize(d))),
-                .. endpoints.Implementations.Select(e => ApiContractDocument.Lower(e.Endpoint,
-                    new JsonSerializerOptions(JsonSerializerDefaults.Web), "aspnet-web-defaults/v1",
+                .. endpoints.Implementations.Select(e => Cohesive.Adapters.AspNet.AspNetApiContract.Lower(e.Endpoint,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web), "aspnet-web-defaults/problem-details-v1",
                     e.Execution, e.Service?.Declaration.Reference, e.Service?.Operation.Id).ToJson())];
         });
     }

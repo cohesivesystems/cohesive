@@ -187,7 +187,7 @@ public sealed class NestedResultTests
         var child = Assert.Single(Assembly.Collections);
         Assert.Equal(child.Identity, child.Fields.Single(field => field.Target.ToString() == "Id").Source);
         var definition = (QueryDefinition)Model.Queries.OrderDetails.CompilationRequest.DefinitionDocument.Definition;
-        Assert.Equal(6, definition.Body.Nodes.OfType<ProjectQueryNode>().Single().Assignments.Length);
+        Assert.Equal(7, definition.Body.Nodes.OfType<ProjectQueryNode>().Single().Assignments.Length);
 
         var author = RelationQuery.Expression();
         var order = author.Source(Model.Domain.Orders);
@@ -220,6 +220,7 @@ public sealed class NestedResultTests
                 "Sku" => ObservationValue.FromString("book"),
                 "Quantity" => ObservationValue.FromObject(quantity),
                 "AvailableStock" => ObservationValue.FromObject(8),
+                "Released" => ObservationValue.FromObject(false),
                 _ => throw new InvalidOperationException()
             });
         return value;

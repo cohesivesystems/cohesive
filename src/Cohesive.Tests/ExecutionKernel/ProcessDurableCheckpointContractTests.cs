@@ -13,6 +13,23 @@ namespace Cohesive.Tests.ExecutionKernel;
 
 public sealed class ProcessDurableCheckpointContractTests
 {
+    [Theory]
+    [InlineData(ProcessAtomicScopeDemand.None)]
+    [InlineData(ProcessAtomicScopeDemand.WholeDefinition)]
+    public void RecoveryRejectsChangedCompilationPolicy(ProcessAtomicScopeDemand atomicScope)
+    {
+        var fixture = ProcessDurabilityTestFixture.Create();
+        var current = fixture.Checkpoint;
+        var checkpoint = new ProcessDurableCheckpoint(current.SchemaVersion, current.Start, current.Continuation,
+            current.Control, current.Activations, current.Operations, current.Inbox, current.Emissions,
+            current.DurableOperations, current.CreatedAtUtc, current.UpdatedAtUtc,
+            new(atomicScope, ProcessRecoveryRequirements.WorkerTakeover));
+        var validation = ProcessDurableCheckpointJsonSerializer.TryDeserialize(
+            ProcessDurableCheckpointJsonSerializer.Serialize(checkpoint), fixture.Plan, out var restored);
+        Assert.Equal(checkpoint.CompilationOptions, restored!.CompilationOptions);
+        Assert.Contains(validation.Diagnostics, d => d.Code == ProcessCheckpointDiagnosticCodes.CompilationPolicyIncompatible);
+    }
+
     [Fact]
     public void InternalSerializerProfilesAreIndependentOfCallerOptionsAndSafeToShare()
     {

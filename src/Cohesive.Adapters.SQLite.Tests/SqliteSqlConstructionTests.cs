@@ -8,6 +8,14 @@ namespace Cohesive.Adapters.SQLite.Tests;
 public sealed class SqliteSqlConstructionTests
 {
     [Fact]
+    public void ForUpdateRejectsUnsupportedDialect()
+    {
+        var query = new SqlSelectBuilder(new SqlQualifiedTable("main", "roots"), "r")
+            .Select(SqlExpression.Column("r", "id"), "id").ForUpdate();
+        Assert.Throws<SqlConstructionException>(() => query.Build(SqliteSqlDialect.Instance));
+    }
+
+    [Fact]
     public void IndentedQueriesPreserveParametersQuotedTokensAndNestedExecution()
     {
         var value = SqlExpression.RuntimeParameter("value");

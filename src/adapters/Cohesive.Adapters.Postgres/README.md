@@ -519,3 +519,28 @@ provider reads, strict admission, contributor reconstruction and retained DTO ou
 left source rows. Both variants share all behavior and return the same owned rows; only dictionary versus
 ordinal storage differs. Compilation, fixture setup, population and serialization are excluded. These
 results concern attributed query rows, separately from entity snapshot metadata and value-only ingestion.
+
+
+## Fenced process effect commits
+
+For a process and its entities sharing one `NpgsqlDataSource`, bind the snapshot supplied to the durable runtime's
+activation-host factory with `PostgresProcessDurableStore.BindWorkerFence`. Scope each native receipted repository
+with `WithWorkerFence` before composing its transition host. This shares preparation and receipt storage; no second
+receipt or lease table is introduced. Ordinary CRUD remains outside this process-operation guarantee.
+
+Fresh receipt commits lock the existing process root with `FOR UPDATE`, reconstruct the canonical paged aggregate,
+and verify the continuation, control revision, owner, fence and database-clock expiry. The root lock is held through
+the entity write and receipt commit. Lease takeover CAS updates serialize against this transaction. Replacement
+workers restore the same checkpoint and receipt occurrences; they do not start a different logical process.
+
+Configure `MaximumAggregateBytes` on the process store to bound reconstruction. Each fresh effect performs this
+reconstruction, so the guarantee adds reads and serializes effects within one process instance. No optimization
+copies lease authority into another projection. External writers, other databases, fixed hosts and external
+orchestration runtimes are not fenced automatically by this opt-in profile.
+
+Use `CreateFencedRuntime(hostFactory, options)` with a plan compiled using the desired `RequiredGuarantees` to connect
+this composition to recovery admission. `PostgresProcessRecoveryProfile.Fenced` is a recovery-only capability profile;
+its same-data-source/fenced-receipt boundary remains mandatory. The supplied host factory receives the acquired fence
+and must apply it to every transition repository. The shared cancellation conformance scenarios qualify receipt replay
+and stale-owner rejection; native tests additionally verify root-lock/takeover linearization. The profile does not
+advertise complete Process construct support or arbitrary external-effect fencing.

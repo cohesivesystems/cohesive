@@ -26,6 +26,14 @@ rejected during admission. Commit retries still reject changed content; complete
 on a commit-ID collision. The small intent digest is prepared before entering the provider. Checkpoint/store wire schemas are intentionally replaced; existing wire
 formats are not admitted. See [the contract and qualification](../../docs/performance/durable-bookkeeping.md).
 
+The activation-host factory overload of `ProcessDurableRuntime` receives the acquired snapshot, so an adapter can
+bind fresh effect commits to the exact physical worker lease. Logical continuation and operation identities stay
+unchanged across replacement workers. The adapter must enforce ownership atomically with each effect; a runtime
+lease alone does not fence external state. `ProcessWorkerFenceException` carries only `StaleFence` or `LeaseExpired`:
+the runtime stops that interpretation without committing a semantic failure checkpoint. Read-only receipt replay
+can still resolve already committed work. Factory hosts are activation-local and must not be reused for another
+acquired snapshot. Atomic prevention of an unstarted child does not acquire a lease or invoke the factory.
+
 ## Install
 
 ```bash
@@ -334,3 +342,24 @@ or a guarantee that the generation remains fresh after observation. See the
 Each invocation performs one bounded root/hydration traversal, one candidate scan and
 two position inspections per feed. It performs no comparison polling and no target
 GET per item. Values are retained only for the bounded invocation.
+
+Explicit `ProcessCompilationOptions.RequiredGuarantees` participate in recovery admission. A takeover policy can
+select `ProcessRecoveryRequirements.WorkerTakeover`; the runtime then requires an attributed recovery profile on its
+activation-host composition before creating or advancing checkpoints. Missing guarantees yield the same structured
+realization diagnostics used by tooling. Native PostgreSQL supplies this evidence through `CreateFencedRuntime`.
+Keep the selected policy consistent across restoration; it is explicit compilation configuration, not a new process
+wire identity. Hosts without an explicit policy retain their existing reference/runtime behavior.
+
+Durable checkpoint schema `cohesive-process-durable-checkpoint/v8` retains the complete
+`ProcessCompilationOptions` selected at initialization, including atomic scope and explicit guarantees.
+Every checkpoint mutation preserves this policy; aggregate commits cannot replace it. Recovery compares
+it structurally with the supplied plan before acquiring ownership or invoking a host, including activation
+replays. A mismatch reports `storage.processes.checkpoint.compilationPolicyIncompatible` at
+`/compilationOptions`. Restore the original policy; changing it requires an explicit execution migration,
+which is not implemented. Even adding guarantees requires that explicit decision.
+
+This policy is immutable execution metadata, separate from process-definition identity and logical receipt
+identities. It uses the existing canonical checkpoint serialization and content fingerprints. Older schemas
+are rejected; missing or null policy fields are not canonical v8 checkpoints. No implicit upgrade is provided.
+Target capability admission still runs independently: matching the retained policy does not make an
+unqualified host capable of satisfying it.

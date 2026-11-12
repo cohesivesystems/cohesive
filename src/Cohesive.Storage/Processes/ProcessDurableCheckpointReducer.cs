@@ -87,7 +87,8 @@ static class ProcessDurableCheckpointReducer
             emissions,
             durableOperations,
             checkpoint.CreatedAtUtc,
-            committedAtUtc);
+            committedAtUtc,
+            checkpoint.CompilationOptions);
         diagnostics = [];
         return true;
     }
@@ -175,7 +176,8 @@ static class ProcessDurableCheckpointReducer
             checkpoint.Emissions,
             checkpoint.DurableOperations,
             checkpoint.CreatedAtUtc,
-            committedAtUtc);
+            committedAtUtc,
+            checkpoint.CompilationOptions);
         diagnostics = [];
         return true;
     }
@@ -232,7 +234,8 @@ static class ProcessDurableCheckpointReducer
             checkpoint.Emissions,
             checkpoint.DurableOperations,
             checkpoint.CreatedAtUtc,
-            committedAtUtc);
+            committedAtUtc,
+            checkpoint.CompilationOptions);
     }
 
     internal static bool TryApplyDurableOperation(
@@ -289,7 +292,8 @@ static class ProcessDurableCheckpointReducer
             checkpoint.Emissions,
             operations.MoveToImmutable(),
             checkpoint.CreatedAtUtc,
-            committedAtUtc);
+            committedAtUtc,
+            checkpoint.CompilationOptions);
         diagnostics = [];
         return true;
     }

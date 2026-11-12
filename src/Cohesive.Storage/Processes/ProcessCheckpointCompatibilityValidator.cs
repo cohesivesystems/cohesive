@@ -9,6 +9,9 @@ namespace Cohesive.Storage.Processes;
 /// <summary>Stable diagnostics emitted while admitting a durable Process checkpoint.</summary>
 public static class ProcessCheckpointDiagnosticCodes
 {
+    /// <summary>The recovery plan changes the compilation policy retained at initialization.</summary>
+    public const string CompilationPolicyIncompatible = "storage.processes.checkpoint.compilationPolicyIncompatible";
+
     /// <summary>The physical checkpoint schema is not supported by this interpreter.</summary>
     public const string SchemaVersionUnsupported = "storage.processes.checkpoint.schemaVersionUnsupported";
 
@@ -60,6 +63,14 @@ public static class ProcessCheckpointCompatibilityValidator
                 ProcessCheckpointDiagnosticCodes.SchemaVersionUnsupported,
                 $"Process checkpoint schema '{checkpoint.SchemaVersion.Value}' is not supported.",
                 "/schemaVersion"));
+        }
+
+        if (checkpoint.CompilationOptions != plan.Options)
+        {
+            diagnostics.Add(Error(
+                ProcessCheckpointDiagnosticCodes.CompilationPolicyIncompatible,
+                "Recovery requires the exact compilation policy retained at initialization. Restore the original policy or explicitly migrate the execution.",
+                "/compilationOptions"));
         }
 
         var expected = plan.DefinitionReference;

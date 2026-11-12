@@ -538,6 +538,7 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
         ProcessDurableCheckpoint replacement)
     {
         if (current.SchemaVersion != replacement.SchemaVersion
+            || current.CompilationOptions != replacement.CompilationOptions
             || !CanonicalEquals(current.Start, replacement.Start)
             || current.Definition != replacement.Definition
             || current.ContinuationIdentity.ProcessInstanceId

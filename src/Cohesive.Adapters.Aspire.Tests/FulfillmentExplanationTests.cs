@@ -40,7 +40,7 @@ public sealed class FulfillmentExplanationTests
         var report = model.Explain(model.Configure(builder));
         var start = report.Endpoints.Single(endpoint => endpoint.Http?.Route == "/fulfillment");
         var poll = report.Endpoints.Single(endpoint => endpoint.ResultOf == start.Id);
-        var service = Assert.Single(report.Services);
+        var service = Assert.Single(report.Services, candidate => candidate.Reference == start.Service!.Definition);
         Assert.Equal(service.Reference, start.Service!.Definition);
         Assert.Equal(service.Reference, poll.Service!.Definition);
         var operation = Assert.IsType<ServiceProcessOperation>(start.Service.Operation);
@@ -56,7 +56,7 @@ public sealed class FulfillmentExplanationTests
         var details = report.Storage.Queries.Single(query => query.Query == report.Endpoints.Single(endpoint => endpoint.Http?.Route == "/orders/{id}/details").Execution);
         Assert.Equal(selected ? RelationQueryConsistency.Eventual : RelationQueryConsistency.SingleSnapshot, details.Read!.Consistency);
         var json = JsonNode.Parse(report.ToJson())!;
-        Assert.True(JsonNode.DeepEquals(json["services"]![0], JsonNode.Parse(ExecutionDefinitionJsonSerializer.Serialize(service))));
+        Assert.Contains(json["services"]!.AsArray(), item => JsonNode.DeepEquals(item, JsonNode.Parse(ExecutionDefinitionJsonSerializer.Serialize(service))));
         Assert.Equal(ApplicationExplanationScope.OfflineAdmission, report.Scope);
     }
 
@@ -159,7 +159,10 @@ public sealed class FulfillmentExplanationTests
         Assert.Equal(3, queries.Length);
         foreach (var query in queries)
         {
-            Assert.Contains(report.Endpoints, endpoint => endpoint.Execution == query.Query);
+            if (query.Query.DefinitionId.Value == "fulfillment/reservations-by-order")
+                Assert.Contains(report.Endpoints, endpoint => endpoint.Execution?.DefinitionId.Value == "fulfillment/cancel");
+            else
+                Assert.Contains(report.Endpoints, endpoint => endpoint.Execution == query.Query);
             Assert.NotEmpty(query.Sources);
             Assert.NotNull(query.Plan);
         }

@@ -57,18 +57,25 @@ public sealed class DurableFulfillmentIntegrationTests
     [InlineData(EntityStateAuthority.Events)]
     public Task Interrupted_inventory_commit_recovers_without_reserving_twice(EntityStateAuthority authority) => Run(authority, Scenario.InterruptedCommit);
 
+    [SchedulerPostgresTheory]
+    [InlineData(EntityStateAuthority.State)]
+    [InlineData(EntityStateAuthority.Events)]
+    public Task Accepted_multi_reservation_cancellation_survives_application_replacement(EntityStateAuthority authority) =>
+        Run(authority, Scenario.CancelledReplacement);
+
     [CqrsTheory]
     [InlineData(EntityStateAuthority.State)]
     [InlineData(EntityStateAuthority.Events)]
     public Task Fulfillment_converges_through_CDC_then_reads_can_select_and_roll_back(EntityStateAuthority authority) =>
         Run(authority, Scenario.MaterializedReads);
 
-    enum Scenario { CompletedReplacement, InterruptedCommit, MaterializedReads }
+    enum Scenario { CompletedReplacement, InterruptedCommit, MaterializedReads, CancelledReplacement }
 
     static async Task Run(EntityStateAuthority authority, Scenario scenario)
     {
         var interruptAfterCommit = scenario == Scenario.InterruptedCommit;
         var materialize = scenario == Scenario.MaterializedReads;
+        var cancel = scenario == Scenario.CancelledReplacement;
         await using var database = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable(DatabaseVariable)!);
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
         var model = CreateModel();
@@ -92,6 +99,7 @@ public sealed class DurableFulfillmentIntegrationTests
         try
         {
             ServiceProcessCommand<FulfillOrder> command;
+            ServiceProcessCommand<CancelOrder>? cancellation = null;
             string location;
             string? result = null;
             await using (var first = await Start())
@@ -126,6 +134,21 @@ public sealed class DurableFulfillmentIntegrationTests
                     Assert.Equal(3, stock!.Available);
                 }
                 else result = await AwaitResult(client, location);
+                if (cancel)
+                {
+                    // A second inventory item and reservation exercise the complete durable batch.
+                    await prepared.Persistence.Repository(model.Domain.Inventory, transitionReceipts: prepared.Receipts, stateHistory: prepared.History)
+                        .Upsert(OperationContext.Create(), new InventoryItem(sku + "-second", FulfillmentStoragePolicy.LocalPartition, 7));
+                    await prepared.Persistence.Repository(model.Domain.Reservations, transitionReceipts: prepared.Receipts, stateHistory: prepared.History)
+                        .Upsert(OperationContext.Create(), new Reservation(Guid.NewGuid().ToString("D"), FulfillmentStoragePolicy.LocalPartition, orderId, sku + "-second", 1));
+                    var cancelId = orderId + "-cancel";
+                    cancellation = new(cancelId, cancelId, cancelId, "1", new(orderId));
+                    using var cancelAccepted = await client.PostAsJsonAsync("/fulfillment/cancellations", cancellation, deadline.Token);
+                    Assert.Equal(HttpStatusCode.Accepted, cancelAccepted.StatusCode);
+                    location = (await cancelAccepted.Content.ReadFromJsonAsync<ServiceProcessReceipt>(deadline.Token))!.ResultLocation;
+                    result = await AwaitResult(client, location);
+                    Assert.Equal(CancellationOutcome.Cancelled, JsonSerializer.Deserialize<CancellationResult>(result, new JsonSerializerOptions(JsonSerializerDefaults.Web))!.Outcome);
+                }
                 await first.StopAsync(deadline.Token);
             }
             // A new application/provider/catalog reads the retained scheduler result and replays admission.
@@ -135,16 +158,27 @@ public sealed class DurableFulfillmentIntegrationTests
                 var recovered = await AwaitResult(client, location);
                 if (result is not null) Assert.Equal(result, recovered);
                 result = recovered;
-                Assert.Contains("ReservedAndSubmitted", result);
-                var repeated = await client.PostAsJsonAsync("/fulfillment", command, deadline.Token);
+                Assert.Contains(cancel ? "Cancelled" : "ReservedAndSubmitted", result);
+                var repeated = cancel
+                    ? await client.PostAsJsonAsync("/fulfillment/cancellations", cancellation!, deadline.Token)
+                    : await client.PostAsJsonAsync("/fulfillment", command, deadline.Token);
                 Assert.Equal(HttpStatusCode.Accepted, repeated.StatusCode);
                 Assert.Equal(location, (await repeated.Content.ReadFromJsonAsync<ServiceProcessReceipt>(deadline.Token))!.ResultLocation);
                 Assert.Equal(result, await AwaitResult(client, location));
                 var details = await client.GetFromJsonAsync<OrderDetails>($"/orders/{orderId}/details", deadline.Token);
-                Assert.Equal(OrderStatus.Submitted, details!.Status);
-                var reservation = Assert.Single(details.Reservations);
-                Assert.Equal(2, reservation.Quantity);
-                Assert.Equal(3, reservation.AvailableStock);
+                Assert.Equal(cancel ? OrderStatus.Cancelled : OrderStatus.Submitted, details!.Status);
+                if (cancel)
+                {
+                    Assert.Equal(2, details.Reservations.Count);
+                    Assert.Equal(3, details.Reservations.Sum(reservation => reservation.Quantity));
+                    Assert.All(details.Reservations, reservation => { Assert.True(reservation.Released); Assert.Equal(reservation.Sku == sku ? 5 : 8, reservation.AvailableStock); });
+                }
+                else
+                {
+                    var reservation = Assert.Single(details.Reservations);
+                    Assert.Equal(2, reservation.Quantity);
+                    Assert.Equal(3, reservation.AvailableStock);
+                }
                 await replacement.StopAsync(deadline.Token);
             }
             if (materialize)
@@ -176,10 +210,10 @@ public sealed class DurableFulfillmentIntegrationTests
         {
             File.Delete(comparisonFile);
             foreach (var sql in new[] {
-                "DELETE FROM public.cohesive_process_receipts WHERE subject_id=$1 OR subject_id=$2",
+                "DELETE FROM public.cohesive_process_receipts WHERE subject_id=$1 OR subject_id=$2 OR subject_id=$2||'-second' OR subject_id IN (SELECT reservation_id FROM public.cohesive_reservations WHERE order_id=$1)",
                 "DELETE FROM public.cohesive_reservations WHERE order_id=$1 AND $2 IS NOT NULL",
                 "DELETE FROM public.cohesive_orders WHERE order_id=$1 AND $2 IS NOT NULL",
-                "DELETE FROM public.cohesive_inventory WHERE sku=$2 AND $1 IS NOT NULL" })
+                "DELETE FROM public.cohesive_inventory WHERE (sku=$2 OR sku=$2||'-second') AND $1 IS NOT NULL" })
             {
                 await using var cleanup = database.CreateCommand(sql);
                 cleanup.Parameters.AddWithValue(orderId ?? "unused"); cleanup.Parameters.AddWithValue(sku);
