@@ -12,14 +12,16 @@ public sealed class WeakPreparationCacheTests
     {
         WeakPreparationCache<object, object> cache = new();
         object key = new(), expected = new();
-        using ManualResetEventSlim entered = new(), release = new();
-        var failed = Task.Run(() => Assert.Throws<InvalidOperationException>(() => cache.Get(key, _ =>
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using ManualResetEventSlim release = new();
+        // The factory blocks deliberately; give it a dedicated thread so suite load cannot starve the rendezvous.
+        var failed = Task.Factory.StartNew(() => Assert.Throws<InvalidOperationException>(() => cache.Get(key, _ =>
         {
-            entered.Set();
-            Assert.True(release.Wait(TimeSpan.FromSeconds(5)));
+            entered.SetResult();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(30)));
             throw new InvalidOperationException("retry");
-        })));
-        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+        })), CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
         var calls = 0;
         var successful = Task.Run(() => cache.Get(key, _ => { Interlocked.Increment(ref calls); return expected; }));
         release.Set();
