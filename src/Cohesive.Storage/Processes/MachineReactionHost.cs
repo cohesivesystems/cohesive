@@ -63,6 +63,8 @@ public sealed class MachineReactionHost
     /// <summary>Exact authority and tenant routed to this host; other scopes are unrelated deliveries.</summary>
     public InteractionAuthorityScope Authority => target.Authority;
 
+    internal IProcessDurableStore Store => store;
+
     /// <summary>Authorizes and atomically retains starts without contacting the target.</summary>
     /// <param name="context">Trusted source-delivery context.</param>
     /// <param name="receipt">Validated immutable source receipt.</param>
@@ -139,6 +141,12 @@ public sealed class MachineReactionHost
         var snapshot = await store.LoadAsync(context, instance).ConfigureAwait(false);
         if (snapshot is null || snapshot.Checkpoint.Start.Request.Definition != Policy.Payload.Process.Reference
             || snapshot.Checkpoint.Start.Request.Context.Authorization.AuthorityScope != Authority) return null;
+        return await RecoverSnapshotAsync(context, snapshot).ConfigureAwait(false);
+    }
+
+    internal async Task<MachineReactionProgress> RecoverSnapshotAsync(OperationContext context, ProcessDurableStoreSnapshot snapshot)
+    {
+        var instance = snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId;
         if (authorizeRecovery is null || !await authorizeRecovery(context, snapshot.Checkpoint.Start.Request).ConfigureAwait(false))
             throw new UnauthorizedAccessException("Reaction recovery access is denied.");
         var attempts = ProcessTransitionAttempt.Read(snapshot);

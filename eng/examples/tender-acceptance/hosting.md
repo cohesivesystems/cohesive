@@ -32,9 +32,11 @@ var host = new MachineReactionHost(
 var instances = await host.AdmitAsync(context, committedTenderReceipt);
 
 // A separately supervised worker discovers starts in the same Process authority.
-var cursor = await TenderReactionRecovery.RunPageAsync(
-    workerContext, (IProcessInstanceSource)processStore, [host], after: null,
-    observe: recordProgress);
+var recovery = new MachineReactionRecovery(source: processStore, hosts: [host]);
+var page = await recovery.RunPageAsync(workerContext, after: null, maximumInstances: 32);
+foreach (var (instance, progress) in page.Progress)
+    await recordProgress(instance, progress);
+var cursor = page.NextCursor;
 ```
 
 The native target validates the repository's atomic operation-receipt capability at registration.
@@ -128,8 +130,13 @@ insufficient.
 Admission requires `IProcessInstanceSource` on the same store that owns atomic initialization.
 The in-memory reference store and PostgreSQL implement it; SQLite currently does not. There is no
 separate enqueue operation that could be lost after admission. PostgreSQL discovery is scoped to its
-configured storage authority. The compiled [worker example](TenderReactionRecovery.cs) reads bounded
-pages, recovers matching policies, and reports evidence-derived progress. The supervisor continues
+configured storage authority. `MachineReactionRecovery` reads bounded pages and returns evidence-derived progress. Register both
+the pending-acceptance and receipt-confirmation hosts to recover the full episode. It loads each
+instance once for routing by exact Process revision and authority, then passes that snapshot to the
+selected host. Execution still performs the reads needed for fencing and reconciliation. Duplicate
+registrations and hosts using a different store instance fail registration. Unregistered instances
+advance the scan cursor without dispatch; an authorization or storage failure propagates without
+returning a new cursor, so the supervisor can retry the same page. The supervisor continues
 from the returned cursor and starts a new pass after reaching an empty page. Ordering is provider-local;
 keep cursors with their provider. New identities inserted behind a cursor appear on the next pass.
 Discovery currently scans all retained instances, including completed and unrelated policies; it is

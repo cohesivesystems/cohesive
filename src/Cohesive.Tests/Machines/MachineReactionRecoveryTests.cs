@@ -12,6 +12,42 @@ namespace Cohesive.Tests.Machines;
 public sealed class MachineReactionRecoveryTests
 {
     [Fact]
+    public async Task Generic_recovery_rejects_ambiguous_registration_and_advances_past_unregistered_work()
+    {
+        var f = await Fixture.Create();
+        var host = f.Host();
+        Assert.Throws<ArgumentException>(() => new MachineReactionRecovery(f.Store, [host, f.Host()]));
+        Assert.Throws<ArgumentException>(() => new MachineReactionRecovery(new InMemoryProcessDurableStore(), [host]));
+        var id = Assert.Single(await host.AdmitAsync(f.Context, f.Receipt));
+        var recovery = new MachineReactionRecovery(f.Store, []);
+        var page = await recovery.RunPageAsync(f.Context, maximumInstances: 1);
+        Assert.Empty(page.Progress);
+        Assert.Equal(id, page.NextCursor);
+        Assert.Null((await recovery.RunPageAsync(f.Context, page.NextCursor)).NextCursor);
+        Assert.Empty(ProcessTransitionAttempt.Read((await f.Store.LoadAsync(f.Context, id))!));
+    }
+
+    [Fact]
+    public async Task Generic_recovery_preserves_fresh_authorization_and_page_retry()
+    {
+        var f = await Fixture.Create();
+        var host = f.Host();
+        var id = Assert.Single(await host.AdmitAsync(f.Context, f.Receipt));
+        Assert.True(InteractionContractCatalog.TryCreate([], out var contracts).IsValid);
+        var foreignTarget = MachineReactionTarget.Local(new(f.Model.MarkPending.Compile().Plan!, f.Repository, contracts!),
+            new InteractionAuthorityScope("another-authority", "test"), (_, _) => throw new InvalidOperationException("Wrong target"));
+        var foreignHost = new MachineReactionHost(f.Model.PendingAcceptance, f.Store, foreignTarget,
+            (_, _) => throw new InvalidOperationException("Wrong source"), new("worker", TimeSpan.FromMinutes(5)),
+            (_, _) => throw new InvalidOperationException("Wrong recovery authority"));
+        var recovery = new MachineReactionRecovery(f.Store, [foreignHost, host]);
+        f.RecoveryAllowed = false;
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => recovery.RunPageAsync(f.Context));
+        Assert.Empty(ProcessTransitionAttempt.Read((await f.Store.LoadAsync(f.Context, id))!));
+        f.RecoveryAllowed = true;
+        Assert.Equal(MachineReactionStatus.Completed, (await recovery.RunPageAsync(f.Context)).Progress[id].Status);
+    }
+
+    [Fact]
     public async Task Stale_worker_discovery_cannot_exceed_the_dispatch_budget()
     {
         var f = await Fixture.Create();
@@ -61,11 +97,17 @@ public sealed class MachineReactionRecoveryTests
         var retained = ProcessDurableStoreJsonSerializer.Serialize(((InMemoryProcessDurableStore)f.Store).CaptureDocument());
         f.Store = new InMemoryProcessDurableStore(ProcessDurableStoreJsonSerializer.Deserialize(retained));
         var completed = new List<ProcessInstanceId>();
+        var recovery = new MachineReactionRecovery(f.Store, [f.Host()]);
         ProcessInstanceId? cursor = null;
         do
         {
-            cursor = await TenderReactionRecovery.RunPageAsync(f.Context, (IProcessInstanceSource)f.Store, [f.Host()], cursor,
-                (id, progress) => { Assert.Equal(MachineReactionStatus.Completed, progress.Status); completed.Add(id); return Task.CompletedTask; }, pageSize: 1);
+            var page = await recovery.RunPageAsync(f.Context, cursor, maximumInstances: 1);
+            foreach (var (id, progress) in page.Progress)
+            {
+                Assert.Equal(MachineReactionStatus.Completed, progress.Status);
+                completed.Add(id);
+            }
+            cursor = page.NextCursor;
         } while (cursor is not null);
         Assert.Equal(ids.OrderBy(id => id.Value), completed);
         foreach (var id in ids)
@@ -151,7 +193,10 @@ public sealed class MachineReactionRecoveryTests
             new("worker", TimeSpan.FromMinutes(5)), (_, _) => ValueTask.FromResult(true), retryDelay: TimeSpan.Zero);
         var id = Assert.Single(await Host(target).AdmitAsync(f.Context, confirmation));
         Assert.Equal(MachineReactionStatus.Indeterminate, (await Host(new LostAcknowledgement(target)).RecoverAsync(f.Context, id))!.Status);
-        var recovered = (await Host(target).RecoverAsync(f.Context, id))!;
+        var recovery = new MachineReactionRecovery(f.Store, [f.Host(), Host(target)]);
+        var page = await recovery.RunPageAsync(f.Context);
+        Assert.Equal(2, page.Progress.Count);
+        var recovered = page.Progress[id];
         Assert.Equal(MachineReactionStatus.Completed, recovered.Status);
         Assert.Equal("Confirmed", recovered.Receipt!.Result.Value!.Value!.Value.GetString());
         Assert.Equal("mem:3", recovered.Receipt.Entity.ConcurrencyToken!.Value);
