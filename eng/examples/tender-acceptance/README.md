@@ -61,5 +61,7 @@ The [entity binding contract](../../../docs/research/tender-acceptance/entity-bi
 semantics and current operating boundary. Existing-entity enforcement is implemented for canonical
 Transitions; initialization and component composition remain unsupported. The bounded reaction
 profile now supports durable Process execution, native or HTTP targets, and Cosmos receipt
-observation; see [infrastructure hosting](hosting.md).
+observation with durable admission and independently recoverable attempts. The compiled
+[recovery worker](TenderReactionRecovery.cs) pages the Process authority; see
+[infrastructure hosting](hosting.md) for retry and authorization boundaries.
 The legacy trace host intentionally preserves observed partial commits.

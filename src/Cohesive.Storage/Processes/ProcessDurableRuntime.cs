@@ -21,6 +21,8 @@ namespace Cohesive.Storage.Processes;
 /// A runtime may process different Process instances and operations concurrently. Supplied stores, hosts,
 /// resolvers, planners, classifiers, and adapters must therefore support concurrent calls, or the runtime must be
 /// scoped so that their documented concurrency boundary is not exceeded.
+/// Recoverable native Transition adapters additionally retain dispatch and outcome evidence in the existing
+/// fenced Process local-state ledger. Source continuation and final operation receipts still commit together.
 /// </remarks>
 public sealed partial class ProcessDurableRuntime
 {
@@ -399,12 +401,15 @@ public sealed partial class ProcessDurableRuntime
                     diagnostics: begun.Diagnostics);
             }
 
+            var transitionJournal = new NativeTransitionJournal(snapshot);
             ProcessActivationDecision decision;
             ImmutableArray<ProcessOperationReplayObservation> observations;
             try
             {
                 (decision, observations) = await InterpretAsync(
-                    context, plan, snapshot, checkpoint, activation).ConfigureAwait(false);
+                    context, plan, snapshot, checkpoint, activation, transitionJournal).ConfigureAwait(false);
+                snapshot = transitionJournal.Snapshot;
+                checkpoint = snapshot.Checkpoint;
             }
             catch (ProcessWorkerFenceException exception)
             {
@@ -930,12 +935,15 @@ public sealed partial class ProcessDurableRuntime
                 }
                 activeControl = begun.State;
             }
+            var transitionJournal = new NativeTransitionJournal(snapshot);
             ProcessActivationDecision activationDecision;
             ImmutableArray<ProcessOperationReplayObservation> observations;
             try
             {
                 (activationDecision, observations) = await InterpretAsync(
-                    context, plan, snapshot, checkpoint, activation).ConfigureAwait(false);
+                    context, plan, snapshot, checkpoint, activation, transitionJournal).ConfigureAwait(false);
+                snapshot = transitionJournal.Snapshot;
+                checkpoint = snapshot.Checkpoint;
             }
             catch (ProcessWorkerFenceException exception)
             {
@@ -1402,7 +1410,7 @@ public sealed partial class ProcessDurableRuntime
             CompiledProcessPlan plan,
             ProcessDurableStoreSnapshot? acquiredSnapshot,
             ProcessDurableCheckpoint checkpoint,
-            ProcessActivation activation)
+            ProcessActivation activation, NativeTransitionJournal? transitionJournal = null)
     {
         var selectedHost = activationHostFactory is null ? asyncHost
             : acquiredSnapshot is null ? UnacquiredHost.Instance
@@ -1438,7 +1446,7 @@ public sealed partial class ProcessDurableRuntime
         var result = transitionHost is null
             ? Activate(plan, checkpoint.Continuation, activation, replayHost)
             : await ActivateWithTransitionOperationsAsync(
-                context, plan, checkpoint.Continuation, activation, replayHost, transitionHost).ConfigureAwait(false);
+                context, plan, checkpoint.Continuation, activation, replayHost, transitionHost, transitionJournal).ConfigureAwait(false);
         return (result, replayHost.Observations);
     }
 
@@ -1492,7 +1500,7 @@ public sealed partial class ProcessDurableRuntime
         ProcessContinuationState state,
         ProcessActivation activation,
         ProcessOperationReplayHost replayHost,
-        ProcessTransitionOperationSuspensionHost transitionHost)
+        ProcessTransitionOperationSuspensionHost transitionHost, NativeTransitionJournal? transitionJournal)
     {
         while (true)
         {
@@ -1503,8 +1511,9 @@ public sealed partial class ProcessDurableRuntime
             }
             catch (ProcessTransitionOperationPendingException pending)
             {
-                var result = await transitionOperationAdapter!.ExecuteAsync(context, pending.Invocation)
-                    .ConfigureAwait(false);
+                var result = transitionOperationAdapter is IRecoverableProcessTransitionOperationAdapter recoverable
+                    ? await ExecuteRecoverableTransitionAsync(context, pending.Invocation, recoverable, transitionJournal ?? throw new InvalidOperationException("A recoverable transition requires acquired Process ownership.")).ConfigureAwait(false)
+                    : await transitionOperationAdapter!.ExecuteAsync(context, pending.Invocation).ConfigureAwait(false);
                 transitionHost.Materialize(pending.Invocation, result);
             }
         }

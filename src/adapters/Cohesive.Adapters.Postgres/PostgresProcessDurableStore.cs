@@ -29,7 +29,7 @@ namespace Cohesive.Adapters.Postgres;
 /// during bootstrap; ordinary store operations do not perform schema DDL or migration.
 /// </para>
 /// </remarks>
-public sealed partial class PostgresProcessDurableStore : IProcessDurableStore
+public sealed partial class PostgresProcessDurableStore : IProcessDurableStore, IProcessInstanceSource
 {
     const int MaximumCompareAndSwapAttempts = 32;
     readonly NpgsqlDataSource dataSource;
@@ -56,6 +56,17 @@ public sealed partial class PostgresProcessDurableStore : IProcessDurableStore
 
     /// <inheritdoc />
     public ProcessDurableStoreCapabilities Capabilities { get; }
+
+    /// <inheritdoc />
+    /// <exception cref="NpgsqlException">The discovery query fails.</exception>
+    public async Task<ImmutableArray<ProcessInstanceId>> ListInstancesAsync(OperationContext context, ProcessInstanceId? after, int maximumInstances)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumInstances, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumInstances, 1000);
+        var result = await PostgresNpgsqlExecution.ExecuteAsync(dataSource,
+            sql.ListInstances(options.AuthorityId, after?.Value ?? "", maximumInstances), context.CancellationToken).ConfigureAwait(false);
+        return [.. result.Rows.Select(row => new ProcessInstanceId((string)row[0]!))];
+    }
 
     /// <summary>Creates normalized tables and transactionally imports any legacy authority document.</summary>
     /// <param name="context">Explicit cancellation, clock, identity, and tracing context.</param>

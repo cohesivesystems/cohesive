@@ -33,10 +33,12 @@ internal sealed class PostgresProcessDurableStoreSql
     readonly SqlCommandTemplate updateRoot;
     readonly SqlCommandTemplate providerNow;
     readonly long maximumAggregateResultBytes;
+    readonly PostgresProcessDurableStoreOptions options;
 
     internal PostgresProcessDurableStoreSql(PostgresProcessDurableStoreOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
+        this.options = options;
         maximumAggregateResultBytes = options.MaximumAggregateBytes ?? long.MaxValue;
         var root = new SqlSelectBuilder(options.Instances, InstanceAlias)
             .Select(SqlExpression.Column(InstanceAlias, "physical_revision"), "physical_revision")
@@ -89,6 +91,20 @@ internal sealed class PostgresProcessDurableStoreSql
         providerNow = new SqlSelectBuilder()
             .Select(SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic), "provider_now")
             .BuildTemplate(PostgresSqlDialect.Instance);
+    }
+
+    internal PostgresNpgsqlCommand ListInstances(string authority, string after, int maximumInstances)
+    {
+        var identity = SqlExpression.Collate(SqlExpression.Column(InstanceAlias, "instance_id"), "C");
+        var template = new SqlSelectBuilder(options.Instances, InstanceAlias)
+            .Select(identity, "instance_id")
+            .Where(Equal(InstanceAlias, "authority_id", AuthorityBinding))
+            .Where(SqlExpression.Binary(SqlBinaryOperator.GreaterThan, identity, SqlExpression.RuntimeParameter(InstanceBinding)))
+            .OrderBy(identity).Limit(maximumInstances).BuildTemplate(PostgresSqlDialect.Instance);
+        return Command(template, new Dictionary<string, PostgresNpgsqlParameter>(StringComparer.Ordinal)
+            { [AuthorityBinding] = Text(authority), [InstanceBinding] = Text(after) },
+            resultTypes: [PostgresRelationQueryScalarType.Text], maximumResultBytes: MaximumRootResultBytes)
+            with { MaximumRows = maximumInstances };
     }
 
     internal PostgresNpgsqlCommand LoadRoot(string authority, string instance, bool forUpdate = false) => Command(

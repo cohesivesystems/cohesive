@@ -84,13 +84,13 @@ non-commit remains Pending. These values are inspection results, not another exe
 Exact policy, process start, operation, authority and receipt affinities are checked. A receipt for
 another command cannot mark this reaction complete.
 
-Failure inspection does not persist failures or schedule retries. The host must retain explicit
-attempt/failure evidence through its existing execution facilities. The native Transition-operation
-path currently propagates transport exceptions; it does not automatically append them to a durable
-reaction failure history. A lost acknowledgement can be diagnosed with explicit scoped failure
-evidence and reconciled through exact operation replay, as the tests demonstrate. Missing receipt
-evidence must never be promoted to known non-commit. A transport adapter returning mere acceptance
-must retain Pending work, not report a completed native Transition operation.
+`MachineReactionHost` persists native dispatch, failure and acknowledgement evidence through the
+existing Process local-state ledger. `AdmitAsync` confirms discoverable starts without target calls;
+`RecoverAsync` resumes their original operation identities with fresh authorization, a delay and a
+bounded physical-attempt budget. `ProcessTransitionAttempt.Read(snapshot)` exposes retained history.
+An interrupted call is Indeterminate; absence of a receipt never proves non-commit. Exhausted known
+non-commit is Failed, while exhausted ambiguity remains Indeterminate. See the
+[hosting contract](../../../eng/examples/tender-acceptance/hosting.md) for adapter guarantees and limits.
 
 ## Current boundary
 
@@ -99,9 +99,9 @@ and same-authority execution. `CosmosMachineReactionSource` can observe committe
 and `HttpMachineReactionTarget` realizes exact target dispatch and receipt resolution. Neither is
 part of the semantic policy. Restarting the Process as a new attempt is explicitly rejected by this inspection profile;
 recover the existing attempt instead. Component composition, fan-out, cross-authority dispatch,
-historical policy replay, actor adapters and a durable failure-journal integration need explicit
-additional semantics. Infrastructure hosting is backpressured: an inconclusive delivery prevents
-source checkpointing and requires retry of the same delivery, rather than a new attempt.
+historical policy replay and actor adapters need explicit additional semantics. Cosmos checkpoints
+after durable admission; independent workers discover and recover admitted work. Discovery currently
+supports the in-memory reference and PostgreSQL Process stores. No cross-policy ordering is inferred.
 
 Authoring and validation are cold operations. Preparation hashes one bounded origin record and
 materializes the committed source snapshot once per delivered occurrence. Execution uses existing

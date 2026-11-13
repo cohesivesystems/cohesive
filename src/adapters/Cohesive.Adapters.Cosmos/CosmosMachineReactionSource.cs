@@ -7,7 +7,8 @@ namespace Cohesive.Adapters.Cosmos;
 
 /// <summary>Observes immutable entity transition receipts through Cosmos manual-checkpoint change delivery.</summary>
 /// <remarks>Uses the existing SDK processor lifecycle and repository receipt decoder. It does not infer
-/// movements from mutable entity snapshots. Receipt retention must cover the selected observation window.</remarks>
+/// movements from mutable entity snapshots. Receipt retention must cover the selected observation window. Source checkpointing waits for durable
+/// Process admission, not target availability; a separately supervised recovery worker discovers those starts.</remarks>
 public sealed class CosmosMachineReactionSource
 {
     readonly CosmosEntityOutboxRepository repository;
@@ -71,7 +72,7 @@ public sealed class CosmosMachineReactionSource
         {
             context.ThrowIfCancellationRequested();
             if (repository.ReadTransitionFeedReceipt(document) is { } receipt)
-                await host.DeliverAsync(context, receipt).ConfigureAwait(false);
+                await host.AdmitAsync(context, receipt).ConfigureAwait(false);
         }
         context.ThrowIfCancellationRequested();
         await batch.CheckpointAsync().ConfigureAwait(false);

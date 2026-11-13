@@ -134,7 +134,7 @@ public sealed class EntityMachineOccurrenceTests
     }
 
     internal static async Task<(InMemoryEntityOutboxRepository Repository, OperationContext Context, EntityTransitionOperationCommit Commit)>
-        Prepare<TInput>(EntityDefinition entity, Transition<TenderState, TInput, string> transition, TenderState state, TInput input)
+        Prepare<TInput>(EntityDefinition entity, Transition<TenderState, TInput, string> transition, TenderState state, TInput input, string processId = "process-1")
     {
         var context = OperationContext.Create();
         var repository = new InMemoryEntityOutboxRepository(entity, EntityPartitionKeyPolicy.Fixed("test"));
@@ -142,7 +142,7 @@ public sealed class EntityMachineOccurrenceTests
         var compilation = transition.Compile();
         Assert.True(compilation.IsSuccessful);
         var plan = compilation.Plan!;
-        var operation = new ProcessOperationOccurrence(new(new("process-1"), new("attempt-1")),
+        var operation = new ProcessOperationOccurrence(new(new(processId), new("attempt-1")),
             new("activation-1"), new("token-1"), new("invoke"), occurrence: 0);
         var value = PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(input));
         var decision = TransitionReferenceInterpreter.DecideFullState(plan, operation.Activation, value,
