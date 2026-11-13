@@ -14,7 +14,7 @@ namespace Cohesive.Assurance;
 /// </remarks>
 public sealed class ClaimEvidence
 {
-    static readonly JsonSerializerOptions Options = StrictDocumentJson.CreateOptions();
+    static readonly JsonSerializerOptions Options = AssuranceJson.Options;
 
     /// <summary>Creates and validates an attributable interpretation report.</summary>
     /// <param name="claim">Derived claim with exact source, lowering, configuration and source-map provenance.</param>
@@ -31,7 +31,7 @@ public sealed class ClaimEvidence
     /// <param name="residuals">Additional bounds or assumptions narrower than the claim; required for restricted coverage.</param>
     /// <param name="sharedDependencies">Shared predicates, lowerings or other sources of correlated evidence.</param>
     /// <param name="artifacts">Exact tool reports, encodings, seeds, schedules, faults, reductions or optional witnesses.</param>
-    /// <param name="trace">Retained reference evaluation JSON for trace evidence; null for other methods.</param>
+    /// <param name="trace">Structured retained reference evaluation for trace evidence; null for other methods.</param>
     /// <exception cref="ArgumentNullException">A required reference is null.</exception>
     /// <exception cref="ArgumentException">A report is inconsistent, lacks artifacts, or uses an unsupported enum value.</exception>
     /// <exception cref="JsonException">Retained trace evidence is malformed or fails independent evaluation.</exception>
@@ -41,7 +41,7 @@ public sealed class ClaimEvidence
         AssuranceAttemptStatus status, ClaimVerdict verdict, EvidenceCoverage coverage, bool dependenciesComplete,
         ImmutableArray<ClaimReference> dependencies = default, ImmutableArray<ClaimReference> residuals = default,
         ImmutableArray<ClaimReference> sharedDependencies = default, ImmutableArray<ClaimReference> artifacts = default,
-        string? trace = null)
+        TraceEvaluation? trace = null)
     {
         ArgumentNullException.ThrowIfNull(claim);
         ValidateSubject(subject);
@@ -69,13 +69,15 @@ public sealed class ClaimEvidence
         {
             if (trace is null || coverage != EvidenceCoverage.Sampled)
                 throw new ArgumentException("Trace evidence requires retained observations and sampled coverage.");
-            var checkedTrace = TraceEvaluation.Reevaluate(trace);
-            if (checkedTrace.Claim.Fingerprint != claim.Fingerprint || checkedTrace.Batch.Target != subject.Target
-                || checkedTrace.Status != status || checkedTrace.Verdict != verdict
+            if (subject.Obligation != ProofObligation.Realization
+                || subject.Kind is not (EvidenceTargetKind.Implementation or EvidenceTargetKind.Deployment))
+                throw new ArgumentException("Trace evidence supports only realization obligations on implementation or deployment targets.", nameof(subject));
+            if (trace.Claim.Fingerprint != claim.Fingerprint || trace.Batch.Target != subject.Target
+                || trace.Status != status || trace.Verdict != verdict
                 || method != ReferenceMethod || support != TraceSupport(status))
                 throw new ArgumentException("Trace provenance or outcome disagrees with its independently checked evaluation.");
             if (status == AssuranceAttemptStatus.Completed)
-                Dependencies = ClaimReference.NormalizeSet([.. Dependencies, .. TraceReferences(checkedTrace.Batch)]);
+                Dependencies = ClaimReference.NormalizeSet([.. Dependencies, .. TraceReferences(trace)]);
             else
                 DependenciesComplete = false; // A failed validation/bounded scan may not have inspected the entire mapping.
         }
@@ -85,7 +87,7 @@ public sealed class ClaimEvidence
     }
 
     /// <summary>Current envelope schema.</summary>
-    public string Schema => "cohesive-assurance-evidence/v1";
+    public string Schema => "cohesive-assurance-evidence/v2";
     /// <summary>Claim and source/lowering provenance.</summary>
     public ClaimDocument Claim { get; }
     /// <summary>Exact assessment boundary.</summary>
@@ -115,15 +117,15 @@ public sealed class ClaimEvidence
     /// <summary>Referenced tool-specific artifacts and optional witnesses.</summary>
     public ImmutableArray<ClaimReference> Artifacts { get; }
     /// <summary>Full existing trace evaluation document, or null for external methods.</summary>
-    public string? Trace { get; }
+    public TraceEvaluation? Trace { get; }
 
     /// <summary>Exact built-in reference-evaluator identity; acceptance still requires explicit configuration.</summary>
     public static ClaimReference ReferenceMethod { get; } = new(new("assurance-method://reference-trace"),
         TraceEvaluation.MethodId, TraceEvaluation.MethodId);
 
     /// <summary>Captures a reference trace evaluation as sampled evidence.</summary>
-    /// <param name="evaluation">Retained evaluation, independently rechecked during capture.</param>
-    /// <param name="subject">Explicit target kind, full claim scope and obligation.</param>
+    /// <param name="evaluation">Evaluator-owned result, reused directly; its sealed type excludes caller-constructed or record-copy results.</param>
+    /// <param name="subject">Implementation/deployment realization subject; scope and configuration remain explicit adapter attribution.</param>
     /// <param name="configuration">Exact adapter/mapping and evaluator configuration artifact.</param>
     /// <param name="dependenciesComplete">Whether all relevant realization and mapping dependencies are declared.</param>
     /// <param name="dependencies">Additional exact dependencies such as storage guarantees.</param>
@@ -139,7 +141,7 @@ public sealed class ClaimEvidence
         ArgumentNullException.ThrowIfNull(evaluation);
         return new(evaluation.Claim, subject, EvidenceKind.TraceObservation, ReferenceMethod, configuration,
             TraceSupport(evaluation.Status), evaluation.Status, evaluation.Verdict, EvidenceCoverage.Sampled,
-            dependenciesComplete, dependencies, sharedDependencies: sharedDependencies, trace: evaluation.Serialize());
+            dependenciesComplete, dependencies, sharedDependencies: sharedDependencies, trace: evaluation);
     }
 
     /// <summary>Serializes the complete envelope canonically; this is not an authenticity signature.</summary>
@@ -173,8 +175,11 @@ public sealed class ClaimEvidence
         _ => InterpretationSupport.Supported
     };
 
-    static IEnumerable<ClaimReference> TraceReferences(TraceObservationBatch batch)
+    static IEnumerable<ClaimReference> TraceReferences(TraceEvaluation evaluation)
     {
+        System.Diagnostics.Debug.Assert(evaluation.Status == AssuranceAttemptStatus.Completed,
+            "Selector dependency shortcut requires fully validated completed observations.");
+        var batch = evaluation.Batch;
         yield return batch.Contract.Reference;
         yield return batch.Contract.Scope;
         yield return batch.Epoch;
@@ -183,7 +188,8 @@ public sealed class ClaimEvidence
         foreach (var alternative in batch.Alternatives)
         {
             yield return alternative.Reference;
-            foreach (var observation in alternative.Observations) yield return observation.Selector;
+            // Completed reference evaluation already checked every observation selector against
+            // Contract.Requirements. Enumerating those declarations above covers every row without rescanning it.
             foreach (var frontier in alternative.Completeness)
             {
                 yield return frontier.Selector;

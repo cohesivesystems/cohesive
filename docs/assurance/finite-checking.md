@@ -66,9 +66,8 @@ but `ToEvidence()` withholds a definitive successful verdict in that case.
 ```csharp
 var evidence = success.ToEvidence();
 var assessment = ClaimAssessment.Evaluate(
-    claim, evidence.Subject, acceptancePolicy,
-    acceptance: [new(evidence.Kind, evidence.Method, evidence.Configuration)],
-    evidence: [evidence], asOf: reviewTime);
+    evidence, acceptancePolicy,
+    acceptance: [EvidenceAcceptance.Of(evidence)], asOf: reviewTime);
 
 // Conditional: complete over D under A, with the bounded plan retained as a residual.
 Assert.Equal(ProofState.Conditional, assessment.State);
@@ -82,6 +81,11 @@ Actual implementation reproduction still requires executing the candidate throug
 another qualified adapter. The bridge integration test reconstructs the known two-blocker scenario
 from a finite witness, runs both scheduled operations, and checks the actual commit pre-state against
 the witness. This is a domain-specific reconstruction fixture, not a general inverse mapping.
+The integration fixture retains and reassesses the model report and the implementation trace report
+separately. Both refute the same claim in the faulty example, but their subjects and obligations
+differ; combining them into one assessment or relabeling the trace as model evidence is rejected.
+Both reports preserve the finite guard source as a dependency of the reproduction workflow.
+
 The repaired guard and accepted predicate intentionally agree; implication checks that agreement,
 not the independent correctness of the policy itself. A spurious modeled state is not automatically a reachable execution.
 

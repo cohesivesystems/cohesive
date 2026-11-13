@@ -27,9 +27,8 @@ public sealed class FiniteGuardCheckerTests
         var declaration = FiniteGuardCheck.Define(claim, input, domain ?? Domain, R("guard-source"), R("finite-config"));
         return repaired ? declaration.When(q => q.RemainingBlockers == 0) : declaration.When(q => q.OriginalResolved);
     }
-    static ClaimAssessment Assess(ClaimEvidence evidence) => ClaimAssessment.Evaluate(evidence.Claim,
-        evidence.Subject, R("policy"), [new(evidence.Kind, evidence.Method, evidence.Configuration)],
-        [evidence], DateTimeOffset.UnixEpoch);
+    static ClaimAssessment Assess(ClaimEvidence evidence) => ClaimAssessment.Evaluate(evidence,
+        R("policy"), [EvidenceAcceptance.Of(evidence)], DateTimeOffset.UnixEpoch);
 
     [Fact]
     public void DefectiveGuardFindsAnAdmissibleWitnessAndRepairCompletesOnlyTheDeclaredCatalog()
@@ -60,6 +59,29 @@ public sealed class FiniteGuardCheckerTests
         Assert.Contains(repaired.Plan.Reference(), evidence.Residuals);
         Assert.Equal(faulty.Plan.Claim.Fingerprint, repaired.Plan.Claim.Fingerprint);
         Assert.NotEqual(faulty.Plan.Reference(), repaired.Plan.Reference());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RetainedModelEvidencePreservesItsExactSubjectAndRejectsCrossPlanAssessment(bool repaired)
+    {
+        var result = FiniteGuardChecker.Check(Plan(repaired).Build());
+        var rechecked = FiniteGuardCheckResult.Recheck(result.Serialize());
+        var report = ClaimEvidence.Deserialize(rechecked.ToEvidence().Serialize());
+        var assessment = ClaimAssessment.Reassess(Assess(report).Serialize());
+        Assert.Equal(repaired ? ProofState.Conditional : ProofState.Disproven, assessment.State);
+        Assert.Equal(ProofObligation.Model, assessment.Subject.Obligation);
+        Assert.Equal(EvidenceTargetKind.Model, assessment.Subject.Kind);
+        Assert.Contains(result.Plan.Reference(), report.Residuals);
+
+        var other = FiniteGuardChecker.Check(Plan(!repaired).Build()).ToEvidence();
+        Assert.Throws<ArgumentException>(() => ClaimAssessment.Evaluate(report.Claim, report.Subject,
+            R("policy"), [EvidenceAcceptance.Of(report), EvidenceAcceptance.Of(other)],
+            [report, other], DateTimeOffset.UnixEpoch));
+        var unavailable = ClaimAssessment.Evaluate(report, R("policy"), [EvidenceAcceptance.Of(report)],
+            DateTimeOffset.UnixEpoch, unavailableDependencies: [result.Plan.Source]);
+        Assert.Equal(ProofState.Unknown, unavailable.State);
     }
 
     [Fact]

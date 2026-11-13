@@ -94,6 +94,7 @@ public sealed class ScenarioAssuranceTests
         Assert.Equal(2, faulty.Calls);
         Assert.Equal(ScenarioAssuranceMethod.CandidateExecution, first.Method);
         Assert.Equal(ClaimVerdict.Violated, first.Evaluation.Verdict);
+        Assert.Equal(PropertyCaseDisposition.Failed, first.ToPropertyEvaluation().Disposition);
         Assert.Contains(first.Evaluation.Alternatives[0].Obligations,
             x => x.Verdict == ClaimVerdict.Violated && x.Occurrence == "action/reactivate/actor/driver");
         Assert.NotEmpty(first.Evaluation.Claim.SourceMap);
@@ -112,6 +113,7 @@ public sealed class ScenarioAssuranceTests
         var corrected = await ScenarioAssurance.ReplayAsync(claim, retained, repaired, Binding(repaired.Identity));
         Assert.Equal(2, repaired.Calls);
         Assert.Equal(ClaimVerdict.Satisfied, corrected.Evaluation.Verdict);
+        Assert.Equal(PropertyCaseDisposition.Passed, corrected.ToPropertyEvaluation().Disposition);
         Assert.NotEqual(first.Trace.Fingerprint, corrected.Trace.Fingerprint);
         Assert.Equal(first.Evaluation.Claim.Fingerprint, corrected.Evaluation.Claim.Fingerprint);
         Assert.Equal(ClaimVerdict.Violated, reevaluated.Evaluation.Verdict);
@@ -123,8 +125,8 @@ public sealed class ScenarioAssuranceTests
                 R("candidate-configuration"), R("all-reactivation-inputs"), ProofObligation.Realization);
             var evidence = ClaimEvidence.FromTrace(run.Evaluation, subject, R("atomic-mapping-config"),
                 dependenciesComplete: true);
-            return ClaimAssessment.Evaluate(claim, subject, R("review-policy"),
-                [new(evidence.Kind, evidence.Method, evidence.Configuration)], [evidence], DateTimeOffset.UnixEpoch);
+            return ClaimAssessment.Evaluate(evidence, R("review-policy"),
+                [EvidenceAcceptance.Of(evidence)], DateTimeOffset.UnixEpoch);
         }
         Assert.Equal(ProofState.Disproven, AssessRun(first).State);
         Assert.Equal(ProofState.Unknown, AssessRun(corrected).State);
@@ -156,7 +158,28 @@ public sealed class ScenarioAssuranceTests
         Assert.Equal(ClaimVerdict.Violated, execution.Evaluation.Verdict);
         var observation = Assert.Single(execution.Evaluation.Batch.Alternatives[0].Observations);
         Assert.Equal(witness, observation.Values[ClaimInputRole.Before].Deserialize<Driver>());
-        Assert.Equal(EvidenceTargetKind.Model, check.ToEvidence().Subject.Kind);
+        var model = FiniteGuardCheckResult.Recheck(check.Serialize()).ToEvidence();
+        var implementation = ClaimEvidence.FromTrace(execution.Evaluation,
+            new(EvidenceTargetKind.Implementation, execution.Binding.Target, R("candidate-config"),
+                claim.Definition.Selection, ProofObligation.Realization),
+            R("mapping-config"), dependenciesComplete: true, dependencies: [plan.Source]);
+        ClaimAssessment Assess(ClaimEvidence report) => ClaimAssessment.Evaluate(report, R("policy"),
+            [EvidenceAcceptance.Of(report)], DateTimeOffset.UnixEpoch);
+        var retainedModel = ClaimAssessment.Reassess(Assess(model).Serialize());
+        var retainedImplementation = ClaimAssessment.Reassess(Assess(implementation).Serialize());
+        Assert.Equal(ProofState.Disproven, retainedModel.State);
+        Assert.Equal(ProofState.Disproven, retainedImplementation.State);
+        Assert.Equal(ProofObligation.Model, retainedModel.Subject.Obligation);
+        Assert.Equal(ProofObligation.Realization, retainedImplementation.Subject.Obligation);
+        Assert.Equal(model.Claim.Fingerprint, implementation.Claim.Fingerprint);
+        Assert.Equal(2, candidate.Calls); // Retention and reassessment do not execute the candidate.
+
+        // Model search and implementation reproduction are separate evidence, even for the same claim.
+        Assert.Throws<ArgumentException>(() => ClaimAssessment.Evaluate(claim, model.Subject, R("policy"),
+            [EvidenceAcceptance.Of(model), EvidenceAcceptance.Of(implementation)],
+            [model, implementation], DateTimeOffset.UnixEpoch));
+        Assert.Throws<ArgumentException>(() => ClaimEvidence.FromTrace(execution.Evaluation,
+            model.Subject, R("mapping-config"), dependenciesComplete: true));
     }
 
     [Theory]
@@ -191,6 +214,23 @@ public sealed class ScenarioAssuranceTests
         Assert.Equal(ClaimVerdict.Inconclusive, restored.Evaluation.Verdict);
         Assert.Equal(PropertyCaseDisposition.Discarded, restored.ToPropertyEvaluation().Disposition);
         Assert.Equal(result.Evaluation.Serialize(), restored.Evaluation.Serialize());
+    }
+
+    [Fact]
+    public async Task BudgetExhaustionDiscardsEvenWhenAnEvaluatedObligationIsViolated()
+    {
+        var (world, shape) = Scenario(new(2, 0));
+        var driver = new ExpressionAuthoring().Input<Driver>("driver");
+        var claim = Claim.Define("dq.no-blockers", "1", R("driver"), Mapping, R("source"), R("config"))
+            .AtEveryCommittedState(R("single-driver"), InitialStateSelection.Include)
+            .Require(driver, ClaimInputRole.State, d => d.RemainingBlockers == 0).Build();
+        var result = await ScenarioAssurance.ExecuteAsync(claim, world, new Candidate(shape), Binding(),
+            limits: new TraceEvaluationLimits(MaxPredicateEvaluations: 1));
+        Assert.Equal(AssuranceAttemptStatus.BudgetExceeded, result.Evaluation.Status);
+        Assert.Contains(result.Evaluation.Alternatives.SelectMany(x => x.Obligations),
+            x => x.Verdict == ClaimVerdict.Violated);
+        Assert.Equal(ClaimVerdict.Inconclusive, result.Evaluation.Verdict);
+        Assert.Equal(PropertyCaseDisposition.Discarded, result.ToPropertyEvaluation().Disposition);
     }
 
     [Fact]
@@ -280,6 +320,8 @@ public sealed class ScenarioAssuranceTests
         var claim = Claim.Define("noise", "1", R("driver"), Mapping, R("source"), R("config"))
             .ForEachCommitted(R("noise")).Require(value, ClaimInputRole.After, d => !d.Active).Build();
         var result = await ScenarioAssurance.ExecuteAsync(claim, world, new Candidate(shape), Binding() with { OperationId = "noise" });
+        Assert.Equal(AssuranceAttemptStatus.Completed, result.Evaluation.Status);
+        Assert.Equal(ClaimVerdict.Satisfied, result.Evaluation.Verdict);
         Assert.True(result.Evaluation.Alternatives[0].Vacuous);
         Assert.Equal(PropertyCaseDisposition.Discarded, result.ToPropertyEvaluation().Disposition);
     }

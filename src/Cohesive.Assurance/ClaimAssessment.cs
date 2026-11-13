@@ -10,7 +10,18 @@ namespace Cohesive.Assurance;
 /// <param name="Kind">Accepted evidence kind; accepting a proof checker does not accept provider declarations.</param>
 /// <param name="Method">Exact trusted producer/verifier identity.</param>
 /// <param name="Configuration">Exact accepted verifier/mapping configuration.</param>
-public sealed record EvidenceAcceptance(EvidenceKind Kind, ClaimReference Method, ClaimReference Configuration);
+public sealed record EvidenceAcceptance(EvidenceKind Kind, ClaimReference Method, ClaimReference Configuration)
+{
+    /// <summary>Explicitly selects the kind, method and configuration of a report for acceptance.</summary>
+    /// <param name="evidence">Report whose interpretation tuple the caller chooses to trust.</param>
+    /// <returns>An acceptance rule; creating it is a policy decision, not proof of producer authenticity.</returns>
+    /// <exception cref="ArgumentNullException">Evidence is null.</exception>
+    public static EvidenceAcceptance Of(ClaimEvidence evidence)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        return new(evidence.Kind, evidence.Method, evidence.Configuration);
+    }
+}
 
 /// <summary>Explanation of one report's contribution to a proof assessment.</summary>
 /// <param name="Evidence">Fingerprint of the immutable report.</param>
@@ -27,7 +38,7 @@ public sealed record EvidenceContribution(string Evidence, ProofState State, str
 /// </remarks>
 public sealed class ClaimAssessment
 {
-    static readonly JsonSerializerOptions Options = StrictDocumentJson.CreateOptions();
+    static readonly JsonSerializerOptions Options = AssuranceJson.Options;
 
     [JsonConstructor]
     internal ClaimAssessment(ClaimDocument claim, EvidenceSubject subject, ClaimReference policy,
@@ -44,10 +55,11 @@ public sealed class ClaimAssessment
         if (acceptance.Any(x => x is null || !Enum.IsDefined(x.Kind) || x.Method is null || x.Configuration is null)
             || evidence.Any(x => x is null))
             throw new ArgumentException("Acceptance entries and evidence must contain exact non-null values.");
+        if (evidence.Any(x => x.Claim.Fingerprint != claim.Fingerprint || x.Subject != subject))
+            throw new ArgumentException("Every report must match the assessment's exact claim and subject; partition reports before assessment.", nameof(evidence));
         Acceptance = [.. acceptance.Distinct().OrderBy(x => x.Kind)
-            .ThenBy(x => x.Method.Source.Value, StringComparer.Ordinal).ThenBy(x => x.Method.Revision, StringComparer.Ordinal)
-            .ThenBy(x => x.Method.Fingerprint, StringComparer.Ordinal).ThenBy(x => x.Configuration.Source.Value, StringComparer.Ordinal)
-            .ThenBy(x => x.Configuration.Revision, StringComparer.Ordinal).ThenBy(x => x.Configuration.Fingerprint, StringComparer.Ordinal)];
+            .ThenBy(x => x.Method, ClaimReference.CanonicalComparer)
+            .ThenBy(x => x.Configuration, ClaimReference.CanonicalComparer)];
         // Compute each retained-artifact identity once, not once per policy or predicate check.
         var reports = evidence.Select(x => (Report: x, Id: x.Fingerprint())).DistinctBy(x => x.Id)
             .OrderBy(x => x.Id, StringComparer.Ordinal).ToArray();
@@ -59,7 +71,9 @@ public sealed class ClaimAssessment
         var refuted = Contributions.Any(x => x.State == ProofState.Disproven);
         var proven = Contributions.Any(x => x.State == ProofState.Proven);
         var conditional = Contributions.Any(x => x.State == ProofState.Conditional);
-        ConflictingEvidence = refuted && (proven || conditional);
+        // A restricted proof and a refutation may concern disjoint subdomains.
+        // Only full-scope establishment guarantees overlap with every admissible counterexample.
+        ConflictingEvidence = refuted && proven;
         State = refuted ? ProofState.Disproven : proven ? ProofState.Proven : conditional ? ProofState.Conditional : ProofState.Unknown;
         Disposition = disposition;
         ValidateDisposition(disposition);
@@ -71,11 +85,9 @@ public sealed class ClaimAssessment
         HashSet<ClaimReference> unavailable)
     {
         EvidenceContribution Unknown(string reason) => new(id, ProofState.Unknown, reason);
-        if (report.Claim.Fingerprint != Claim.Fingerprint || report.Subject != Subject)
-            return Unknown("evidence.subject-mismatch");
         if (!report.DependenciesComplete) return Unknown("evidence.dependencies-unknown");
         if (report.Dependencies.Any(unavailable.Contains)) return Unknown("evidence.dependency-unavailable");
-        if (!accepted.Contains(new(report.Kind, report.Method, report.Configuration)))
+        if (!accepted.Contains(EvidenceAcceptance.Of(report)))
             return Unknown("evidence.method-not-accepted");
         if (report.Support != InterpretationSupport.Supported) return Unknown("evidence.interpretation-unsupported");
         if (report.Status != AssuranceAttemptStatus.Completed) return Unknown("evidence.attempt-not-completed");
@@ -103,7 +115,7 @@ public sealed class ClaimAssessment
     }
 
     /// <summary>Persisted assessment schema.</summary>
-    public string Schema => "cohesive-assurance-assessment/v1";
+    public string Schema => "cohesive-assurance-assessment/v2";
     /// <summary>Exact assessed claim including source provenance.</summary>
     public ClaimDocument Claim { get; }
     /// <summary>Exact target, configuration, scope and obligation.</summary>
@@ -122,9 +134,9 @@ public sealed class ClaimAssessment
     public DateTimeOffset AsOf { get; }
     /// <summary>Proof state derived from accepted reports for this boundary.</summary>
     public ProofState State { get; }
-    /// <summary>Per-report decisions, including mismatches, unsupported methods and stale dependencies.</summary>
+    /// <summary>Per-report decisions, including unsupported methods and stale dependencies.</summary>
     public ImmutableArray<EvidenceContribution> Contributions { get; }
-    /// <summary>Whether accepted establishment and refutation coexist; refutation takes precedence.</summary>
+    /// <summary>Whether accepted full-scope establishment and refutation conflict; restricted-domain overlap is not inferred.</summary>
     public bool ConflictingEvidence { get; }
     /// <summary>Whether the disposition is effective at the explicit assessment time; not a readiness decision.</summary>
     public bool DispositionEffective { get; }
@@ -134,7 +146,7 @@ public sealed class ClaimAssessment
     /// <param name="subject">Exact target and obligation; model proof cannot discharge realization.</param>
     /// <param name="policy">Exact authority artifact for the effective acceptance rules.</param>
     /// <param name="acceptance">Explicit trusted method/configuration/kind tuples; empty accepts no methods.</param>
-    /// <param name="evidence">Reports; mismatches are retained but contribute unknown.</param>
+    /// <param name="evidence">Reports; every exact claim and subject must match or construction fails.</param>
     /// <param name="asOf">Explicit time at which dispositions are evaluated.</param>
     /// <param name="unavailableDependencies">Exact prior references that changed or were refuted.</param>
     /// <param name="disposition">Optional authorized exception or revision; null means none.</param>
@@ -146,6 +158,25 @@ public sealed class ClaimAssessment
         ImmutableArray<ClaimReference> unavailableDependencies = default, ClaimDisposition? disposition = null) =>
         new(claim, subject, policy, acceptance, evidence, unavailableDependencies,
             disposition ?? new(ClaimDispositionKind.None), asOf);
+
+    /// <summary>Assesses one report using its own exact claim and subject, avoiding duplicated boundary wiring.</summary>
+    /// <param name="evidence">Report to assess.</param>
+    /// <param name="policy">Exact policy attribution.</param>
+    /// <param name="acceptance">Explicitly chosen trusted interpretation tuples; no automatic acceptance is inferred.</param>
+    /// <param name="asOf">Explicit clock for disposition expiry.</param>
+    /// <param name="unavailableDependencies">Changed or refuted prior dependencies.</param>
+    /// <param name="disposition">Optional authorized disposition.</param>
+    /// <returns>Assessment bound to the report's exact claim and subject.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="ArgumentException">Policy entries or disposition are invalid.</exception>
+    public static ClaimAssessment Evaluate(ClaimEvidence evidence, ClaimReference policy,
+        ImmutableArray<EvidenceAcceptance> acceptance, DateTimeOffset asOf,
+        ImmutableArray<ClaimReference> unavailableDependencies = default, ClaimDisposition? disposition = null)
+    {
+        ArgumentNullException.ThrowIfNull(evidence);
+        return Evaluate(evidence.Claim, evidence.Subject, policy, acceptance, [evidence], asOf,
+            unavailableDependencies, disposition);
+    }
 
     /// <summary>Retains policy, exact inputs and derived results together.</summary>
     /// <returns>Canonical portable assessment JSON.</returns>

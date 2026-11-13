@@ -104,13 +104,7 @@ public static class FiniteGuardCheck
 /// <summary>Derived portable plan for D ∧ A ∧ G ⇒ P over an explicitly listed finite catalog.</summary>
 public sealed class FiniteGuardCheckDocument
 {
-    internal static readonly JsonSerializerOptions Options = CreateOptions();
-    static JsonSerializerOptions CreateOptions()
-    {
-        var options = StrictDocumentJson.CreateOptions();
-        options.Converters.Insert(0, PortableValueJsonConverter.TaggedObservationValues);
-        return options;
-    }
+    internal static readonly JsonSerializerOptions Options = AssuranceJson.Options;
 
     [JsonConstructor]
     internal FiniteGuardCheckDocument(ClaimDocument claim, ImmutableArray<ObservationValue> members,

@@ -169,3 +169,7 @@ state. Trace and external methods share `AssuranceAttemptStatus` (renamed from `
 for explicit finite catalogs, assumptions and guards; exhaustive implication/non-vacuity checks;
 validated counterexamples; and bounded model evidence. The checker uses the same predicate
 semantics as trace evaluation and introduces no Simulation or solver dependency.
+
+For articles and tests, [fixture reference scopes](../../docs/assurance/fixture-references.md)
+provide a source-only `FixtureReferences` helper to copy or link into the example project, with
+an automatically collected immutable reference catalog. This helper is not shipped in the library. Its references identify fixture prose, not compiled domain definitions.

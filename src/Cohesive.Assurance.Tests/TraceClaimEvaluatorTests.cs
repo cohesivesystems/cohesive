@@ -457,8 +457,9 @@ public class TraceClaimEvaluatorTests
     public void TamperedVerdictFailsIndependentReevaluation()
     {
         var result = Evaluate(Invariant(), Batch([Stock("bad", 1, 12)]));
-        var forged = result with { Verdict = ClaimVerdict.Satisfied };
-        Assert.Throws<JsonException>(() => TraceEvaluation.Reevaluate(forged.Serialize()));
+        var forged = System.Text.Json.Nodes.JsonNode.Parse(result.Serialize())!;
+        forged["verdict"] = "Satisfied";
+        Assert.Throws<JsonException>(() => TraceEvaluation.Reevaluate(forged.ToJsonString()));
     }
 
     [Fact]
