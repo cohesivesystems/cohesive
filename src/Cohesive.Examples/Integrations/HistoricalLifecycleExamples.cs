@@ -43,7 +43,7 @@ public sealed partial class HistoricalQualificationExamples
                 Assert.Equal(IntegrationAdmissionOutcome.Replayed, replay.Outcome);
                 Assert.Same(admitted, replay.Receipt);
                 Assert.False(control.Complete(new(admitted, decision, Operator)).IsAccepted);
-                worker = new ProcessFixture(original, "policy");
+                worker = new ProcessFixture(original, DispatchChange.PolicyDenied);
             }
             decision = worker.Reply(decision, outcome);
         }

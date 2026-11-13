@@ -6,6 +6,7 @@ using Cohesive.Execution;
 using Cohesive.Integrations;
 using Cohesive.Integrations.Authoring;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Processes.Compilation;
 using Cohesive.Processes.Execution;
 using static Cohesive.Examples.Integrations.HistoricalMarketDataExamples;
@@ -43,13 +44,13 @@ public sealed partial class HistoricalQualificationExamples
     /// <param name="change">Current dispatch condition changed while the worker was stopped.</param>
     /// <returns>Completes after the reopened Process consumes its retained reply and finishes.</returns>
     [Theory]
-    [InlineData(0, "policy")]
-    [InlineData(0, "expiry")]
-    [InlineData(0, "default")]
-    [InlineData(1, "policy")]
-    [InlineData(2, "expiry")]
-    [InlineData(3, "default")]
-    public async Task HistoricalProcessResumesFromRetainedReply(int boundary, string change)
+    [InlineData(0, DispatchChange.PolicyDenied)]
+    [InlineData(0, DispatchChange.OfferExpired)]
+    [InlineData(0, DispatchChange.DefaultChanged)]
+    [InlineData(1, DispatchChange.PolicyDenied)]
+    [InlineData(2, DispatchChange.OfferExpired)]
+    [InlineData(3, DispatchChange.DefaultChanged)]
+    public async Task HistoricalProcessResumesFromRetainedReply(int boundary, DispatchChange change)
     {
         var fixture = new ProcessFixture(2);
         var worker = fixture;
@@ -86,7 +87,7 @@ public sealed partial class HistoricalQualificationExamples
     public async Task HistoricalProcessKeepsAdmittedProviderWhenDefaultChanges()
     {
         var original = new ProcessFixture(2);
-        var worker = new ProcessFixture(original, "default");
+        var worker = new ProcessFixture(original, DispatchChange.DefaultChanged);
         var decision = worker.Start();
         while (decision.Disposition == ProcessActivationDisposition.DurableCut)
             decision = worker.Reply(decision, await worker.Handle(Assert.IsType<RequestEnvelope>(Assert.Single(decision.Emissions))));
@@ -101,9 +102,9 @@ public sealed partial class HistoricalQualificationExamples
     /// <param name="change">Current admission restriction.</param>
     /// <returns>Completes after observing a failure without source, sink or ledger effects.</returns>
     [Theory]
-    [InlineData("policy")]
-    [InlineData("expiry")]
-    public async Task HistoricalProcessRejectsNewAcquisitionAfterAdmissionChanges(string change)
+    [InlineData(DispatchChange.PolicyDenied)]
+    [InlineData(DispatchChange.OfferExpired)]
+    public async Task HistoricalProcessRejectsNewAcquisitionAfterAdmissionChanges(DispatchChange change)
     {
         var original = new ProcessFixture(2);
         var worker = new ProcessFixture(original, change);
@@ -115,6 +116,24 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Equal(0, original.Publications);
         Assert.Equal(0, original.Settlements);
         Assert.Null(await original.Ledger.ReadAsync(original.Address, default));
+    }
+
+    sealed record FixtureSetup(IntegrationCompilation Compilation, int Sessions, HistoricalDestination Destination,
+        long ExpectedLedgerRevision = 0);
+
+    /// <summary>Explicit changes to current dispatch conditions in local recovery examples.</summary>
+    public enum DispatchChange
+    {
+        /// <summary>Keep admitted conditions.</summary>
+        Unchanged,
+        /// <summary>Deny the current provider.</summary>
+        PolicyDenied,
+        /// <summary>Expire the admitted offer.</summary>
+        OfferExpired,
+        /// <summary>Prefer another connection for new selection.</summary>
+        DefaultChanged,
+        /// <summary>Remove the current selection grant.</summary>
+        GrantRevoked
     }
 
     // One physical in-memory destination shared by both flows. Receipt objects and bytes are not crash durable.
@@ -135,7 +154,8 @@ public sealed partial class HistoricalQualificationExamples
         internal IntegrationCompilation Compilation => compilation;
         readonly CompiledProcessPlan plan;
         readonly IngestionDefinition definition;
-        readonly string change;
+        readonly DispatchChange change;
+        readonly FixtureSetup setup;
         readonly int sessions;
         readonly long expectedLedgerRevision;
         internal IngestionLedgerResult? LastAdvance;
@@ -144,14 +164,13 @@ public sealed partial class HistoricalQualificationExamples
         readonly HistoricalCoverageScope scope;
         byte[]? publicationBytes;
         readonly HistoricalDestination destination;
-        Dictionary<string, byte[]> sink => destination.Publications;
         ExecutionDefinitionDocument? requested, acquired, prepared;
         IngestionPublicationReceipt? receipt;
         ProgressReceipt? progress;
         internal CoverageEvidence? Coverage;
         readonly LocalAcquisition first = new(), second = new();
         internal byte[]? PublishedBytes => retained.prepared is null ? null
-            : sink.GetValueOrDefault(((IngestionPreparedPublication)retained.prepared.GetDefinition<IngestionWorkItem>()).Content.Locator);
+            : destination.Publications.GetValueOrDefault(((IngestionPreparedPublication)retained.prepared.GetDefinition<IngestionWorkItem>()).Content.Locator);
         internal IngestionPublicationReceipt? Publication => receipt;
         internal int PublishedSessions => PublishedBytes is { } bytes ? JsonSerializer.Deserialize<DailyBar[]>(bytes)!.Length : 0;
         internal int ProviderCalls => first.Calls;
@@ -161,19 +180,19 @@ public sealed partial class HistoricalQualificationExamples
         internal IngestionLedgerAddress Address => compilation.Binding!.GetDefinition<IngestionProviderBinding>().Consumer;
         ExecutionProvenance Origin => plan.Document.Metadata.Provenance;
 
-        internal ProcessFixture(int sessions) : this(null, "unchanged", sessions) { }
-        internal ProcessFixture(ProcessFixture original, string change) : this(original, change, original.sessions) { }
-        internal ProcessFixture(IntegrationCompilation selected, int sessions, HistoricalDestination destination, long expectedLedgerRevision = 0)
-            : this(null, "unchanged", sessions, selected, destination, expectedLedgerRevision) { }
-        ProcessFixture(ProcessFixture? original, string change, int sessions,
-            IntegrationCompilation? selected = null, HistoricalDestination? destination = null, long expectedLedgerRevision = 0)
+        internal ProcessFixture(int sessions)
+            : this(new FixtureSetup(QualifyLocalHistorical().Compilation!, sessions, new HistoricalDestination()), null, DispatchChange.Unchanged) { }
+        internal ProcessFixture(ProcessFixture original, DispatchChange change) : this(original.setup, original.retained, change) { }
+        internal ProcessFixture(FixtureSetup setup) : this(setup, null, DispatchChange.Unchanged) { }
+        ProcessFixture(FixtureSetup setup, ProcessFixture? original, DispatchChange change)
         {
-            retained = original?.retained ?? this;
+            this.setup = setup;
+            retained = original ?? this;
             this.change = change;
-            this.sessions = sessions;
-            this.expectedLedgerRevision = original?.expectedLedgerRevision ?? expectedLedgerRevision;
-            this.destination = original?.destination ?? destination ?? new HistoricalDestination();
-            compilation = Reopen(original?.compilation ?? selected ?? QualifyLocalHistorical().Compilation!);
+            sessions = setup.Sessions;
+            expectedLedgerRevision = setup.ExpectedLedgerRevision;
+            destination = setup.Destination;
+            compilation = Reopen(setup.Compilation);
             Assert.True(InteractionContractCatalog.TryCreate(compilation.Documents.Where(d => d.Kind == InteractionContractDocuments.Kind), out var contracts).IsValid);
             var compiled = ProcessStaticCompiler.Compile(compilation.Process!, new(interactionContracts: contracts));
             Assert.True(compiled.Validation.IsValid, string.Join(";", compiled.Validation.Diagnostics.Select(d => d.Message)));
@@ -200,28 +219,40 @@ public sealed partial class HistoricalQualificationExamples
 
         internal ValueTask<RequestTerminalOutcome> Handle(RequestEnvelope request) => handlers[request.Contract](request);
 
-        ValueTask<RequestTerminalOutcome> Acquire(RequestEnvelope request)
+        internal DocumentValidationResult? SelectionValidation;
+        async ValueTask<bool> CheckSelectedProgress()
+        {
+            var current = await Ledger.ReadAsync(Address, default);
+            retained.SelectionValidation = IngestionLedgerReduction.ValidateSelection(current, Address,
+                compilation.Binding!.GetDefinition<IngestionProviderBinding>().Contract.Ingestion, expectedLedgerRevision,
+                new IngestionDateRangePosition(scope.StartDate, scope.EndDateInclusive.AddDays(1)));
+            return retained.SelectionValidation.IsValid;
+        }
+
+        async ValueTask<RequestTerminalOutcome> Acquire(RequestEnvelope request)
         {
             Assert.Equal(Value(Request(request).Payload.Contract, scope), request.Payload);
             var current = Layer.Define("example/local-policy", "v2", "research-admin", new())
-                .Prefer(IntegrationChoice.Select(Profile, Connection(change == "default" ? "v2" : "v1")));
-            if (change == "policy") current = current.Enforce(new(AllowedProviders: []));
+                .Prefer(IntegrationChoice.Select(Profile, Connection(change == DispatchChange.DefaultChanged ? "v2" : "v1")));
+            if (change == DispatchChange.PolicyDenied) current = current.Enforce(new(AllowedProviders: []));
             LocalAcquisition provider;
             try
             {
                 provider = runtime.ResolveForDispatch<LocalAcquisition>(compilation, [current.Document],
-                    [new SelectionGrant("research-admin", new())], change == "expiry" ? At.AddDays(1) : At);
+                    [new SelectionGrant("research-admin", new())], change == DispatchChange.OfferExpired ? At.AddDays(1) : At);
             }
             catch (InvalidOperationException)
             {
-                return ValueTask.FromResult(Outcome(request, new IntegrationFailure("dispatch-denied"), success: false));
+                return Outcome(request, new IntegrationFailure("dispatch-denied"), success: false);
             }
+            if (!await CheckSelectedProgress())
+                return Outcome(request, new IntegrationFailure("progress-rejected"), success: false);
             provider.Acquire();
             var bytes = Response(scope.ExpectedSessions.Take(sessions));
             var content = IngestionContentReference.Describe("response.json", bytes, "application/json");
             retained.Coverage = TiingoCoverageEvidenceExamples.Evaluate(scope, content, bytes);
             if (!retained.Coverage.IsComplete)
-                return ValueTask.FromResult(Outcome(request, new IntegrationFailure("missing-sessions"), success: false));
+                return Outcome(request, new IntegrationFailure("missing-sessions"), success: false);
             var transformation = ContractPropertyDocuments.DeclareContext(new("example/process-normalizer"), new("v1"), scope.Normalizer, Origin);
             retained.requested = IngestionWorkDocuments.Create(new IngestionAcquisitionRequest(Address,
                 compilation.Binding!.GetDefinition<IngestionProviderBinding>().Contract.Ingestion, transformation.Reference,
@@ -231,20 +262,22 @@ public sealed partial class HistoricalQualificationExamples
             retained.prepared = IngestionWorkDocuments.Create(new IngestionPreparedPublication(retained.acquired.Reference, transformation.Reference,
                 IngestionContentReference.Describe("publication/" + request.Context.EmissionId.Value + ".json", retained.publicationBytes, "application/json"),
                 new IngestionDateRangePosition(scope.StartDate, scope.EndDateInclusive.AddDays(1)), At.AddSeconds(2)), Origin);
-            return ValueTask.FromResult(Outcome(request, new PreparedPublication(retained.prepared.Reference.DefinitionId.Value)));
+            return Outcome(request, new PreparedPublication(retained.prepared.Reference.DefinitionId.Value));
         }
 
-        ValueTask<RequestTerminalOutcome> Publish(RequestEnvelope request)
+        async ValueTask<RequestTerminalOutcome> Publish(RequestEnvelope request)
         {
             Assert.Equal(Value(Request(request).Payload.Contract, new PreparedPublication(retained.prepared!.Reference.DefinitionId.Value)), request.Payload);
             Assert.True(IngestionWorkDocuments.ValidateChain(retained.requested!, retained.acquired!, retained.prepared!).IsValid);
             var prepared = Assert.IsType<IngestionPreparedPublication>(retained.prepared!.GetDefinition<IngestionWorkItem>());
             Assert.True(prepared.Content.Matches(retained.publicationBytes!));
-            retained.sink.Add(prepared.Content.Locator, retained.publicationBytes!);
+            if (!await CheckSelectedProgress())
+                return Outcome(request, new IntegrationFailure("progress-rejected"), success: false);
+            retained.destination.Publications.Add(prepared.Content.Locator, retained.publicationBytes!);
             retained.Publications++;
             var acquisition = (IngestionAcquisitionRequest)retained.requested!.GetDefinition<IngestionWorkItem>();
             retained.receipt = new(acquisition.OperationId, prepared.Content.Sha256, "local-sink/receipt/" + acquisition.OperationId);
-            return ValueTask.FromResult(Outcome(request, new PublicationReceipt(retained.receipt.ReceiptReference)));
+            return Outcome(request, new PublicationReceipt(retained.receipt.ReceiptReference));
         }
 
         async ValueTask<RequestTerminalOutcome> Advance(RequestEnvelope request)

@@ -20,7 +20,7 @@ public sealed partial class HistoricalQualificationExamples
         var destination = new HistoricalDestination();
         var forward = SingleSession(new(2026, 9, 2));
         var backfill = SingleSession(new(2026, 9, 1));
-        var forwardWorker = new ProcessFixture(QualifyLocalHistorical(forward, ForwardConsumer).Compilation!, 1, destination);
+        var forwardWorker = new ProcessFixture(new FixtureSetup(QualifyLocalHistorical(forward, ForwardConsumer).Compilation!, 1, destination));
         var forwardControl = new InMemoryIntegrationLifecycle(ForwardConsumer, (_, actor) => actor == Operator);
         forwardControl.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var forwardSession = new ProcessContinuationIdentity(new("forward/september-2"), new("attempt/1"));
@@ -35,7 +35,7 @@ public sealed partial class HistoricalQualificationExamples
         var qualified = QualifyLocalHistorical(backfill, BackfillConsumer,
             Capabilities(backfill) with { MaximumRangeDays = 1 });
         Assert.True(qualified.IsAdmissible);
-        var worker = new ProcessFixture(qualified.Compilation!, 1, destination);
+        var worker = new ProcessFixture(new FixtureSetup(qualified.Compilation!, 1, destination));
         var control = new InMemoryIntegrationLifecycle(BackfillConsumer, (_, actor) => actor == Operator);
         var binding = control.Bind(worker.Compilation);
         var identity = new ProcessContinuationIdentity(new("backfill/september-1"), new("attempt/1"));
@@ -52,7 +52,7 @@ public sealed partial class HistoricalQualificationExamples
         control.Change(new("pause-backfill", 1, IntegrationDesiredState.Paused, Operator, At));
         Assert.Equal(IntegrationAdmissionOutcome.AdmissionStopped, control.Admit(intent with
             { Continuation = new(new("another-window"), new("attempt/1")), ExpectedRevision = 2 }).Outcome);
-        var restarted = new ProcessFixture(worker, "policy");
+        var restarted = new ProcessFixture(worker, DispatchChange.PolicyDenied);
         decision = restarted.Reply(decision, acquired);
         while (decision.Disposition == ProcessActivationDisposition.DurableCut)
             decision = restarted.Reply(decision, await restarted.DispatchOnce(Request(decision)));
@@ -72,63 +72,94 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Equal(1, forwardWorker.Publications);
     }
 
-    /// <summary>Backfill cannot bypass provider bounds, current dispatch policy or source coverage obligations.</summary>
-    /// <param name="restriction">Constraint preventing successful backfill.</param>
-    /// <returns>Completes with no accepted backfill progress or destination publication.</returns>
+    /// <summary>A backfill outside the provider's bounded offer is rejected with qualification diagnostics.</summary>
+    [Fact]
+    public void BackfillOutsideProviderRangeIsRejectedBeforeBinding()
+    {
+        var selection = CreateSelection();
+        var qualified = AssessLocalHistorical(selection, BackfillConsumer,
+            Capabilities(selection) with { MaximumRangeDays = 1 });
+        Assert.False(qualified.IsAdmissible);
+        Assert.Contains(qualified.Validation.Diagnostics, d => d.Code == "integrations.qualification.range");
+        var diagnostic = Assert.ThrowsAny<Exception>(() => QualifyLocalHistorical(selection, BackfillConsumer,
+            Capabilities(selection) with { MaximumRangeDays = 1 }));
+        Assert.Contains("integrations.qualification.range", diagnostic.Message);
+    }
+
+    /// <summary>Backfill retains current dispatch policy and source coverage obligations.</summary>
+    /// <param name="change">Current dispatch condition.</param>
+    /// <param name="sessions">Number of source sessions returned.</param>
+    /// <returns>Completes with no accepted progress or destination publication.</returns>
     [Theory]
-    [InlineData("range")]
-    [InlineData("policy")]
-    [InlineData("missing-session")]
-    public async Task BackfillKeepsNormalQualificationAndCoverageGates(string restriction)
+    [InlineData(DispatchChange.PolicyDenied, 1)]
+    [InlineData(DispatchChange.Unchanged, 0)]
+    public async Task BackfillKeepsNormalQualificationAndCoverageGates(DispatchChange change, int sessions)
     {
         var destination = new HistoricalDestination();
-        var selection = restriction == "range" ? CreateSelection() : SingleSession(new(2026, 9, 1));
+        var selection = SingleSession(new(2026, 9, 1));
         var qualified = QualifyLocalHistorical(selection, BackfillConsumer,
             Capabilities(selection) with { MaximumRangeDays = 1 });
-        if (restriction == "range")
-        {
-            Assert.False(qualified.IsAdmissible);
-            Assert.Contains(qualified.Validation.Diagnostics, d => d.Code == "integrations.qualification.range");
-        }
-        else
-        {
-            var original = new ProcessFixture(qualified.Compilation!, restriction == "missing-session" ? 0 : 1, destination);
-            var worker = restriction == "policy" ? new ProcessFixture(original, "policy") : original;
-            var control = new InMemoryIntegrationLifecycle(BackfillConsumer, (_, actor) => actor == Operator);
-            control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
-            var admitted = control.Admit(new(control.Bind(worker.Compilation), Session, 1, Operator, At)).Receipt;
-            var decision = await RunHistorical(worker, Session);
-            Assert.Equal(ProcessActivationDisposition.Failed, decision.Disposition);
-            Assert.Equal(IntegrationCompletionOutcome.Unresolved, control.Complete(new(admitted, decision, Operator)).Outcome);
-            Assert.Single(control.Inspect().Pending);
-            Assert.Equal(restriction == "policy" ? 0 : 1, original.ProviderCalls);
-            Assert.Equal(0, original.Publications);
-        }
+        var original = new ProcessFixture(new FixtureSetup(qualified.Compilation!, sessions, destination));
+        var worker = new ProcessFixture(original, change);
+        var control = new InMemoryIntegrationLifecycle(BackfillConsumer, (_, actor) => actor == Operator);
+        control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
+        var admitted = control.Admit(new(control.Bind(worker.Compilation), Session, 1, Operator, At)).Receipt;
+        var decision = await RunHistorical(worker, Session);
+        Assert.Equal(ProcessActivationDisposition.Failed, decision.Disposition);
+        Assert.Equal(IntegrationCompletionOutcome.Unresolved, control.Complete(new(admitted, decision, Operator)).Outcome);
+        Assert.Single(control.Inspect().Pending);
+        Assert.Equal(change == DispatchChange.PolicyDenied ? 0 : 1, original.ProviderCalls);
+        Assert.Equal(0, original.Publications);
         Assert.Empty(destination.AcceptedDates);
         Assert.Null(await destination.Ledger.ReadAsync(BackfillConsumer, default));
         Assert.Null(await destination.Ledger.ReadAsync(ForwardConsumer, default));
     }
 
     /// <summary>Even a fresh ledger revision cannot authorize rewinding an existing forward flow.</summary>
-    /// <returns>Completes with a failed Process and an unchanged forward entry after the conflicting publication.</returns>
+    /// <returns>Completes with a failed Process and an unchanged forward entry before any external effect.</returns>
     [Fact]
     public async Task ReusingForwardFlowForOlderWindowCannotRewindProgress()
     {
         var destination = new HistoricalDestination();
-        var forward = new ProcessFixture(QualifyLocalHistorical(SingleSession(new(2026, 9, 2)), ForwardConsumer).Compilation!, 1, destination);
+        var forward = new ProcessFixture(new FixtureSetup(QualifyLocalHistorical(SingleSession(new(2026, 9, 2)), ForwardConsumer).Compilation!, 1, destination));
         Assert.Equal(ProcessActivationDisposition.Completed,
             (await RunHistorical(forward, new(new("forward"), new("attempt/1")))).Disposition);
         var original = await destination.Ledger.ReadAsync(ForwardConsumer, default);
-        var mistaken = new ProcessFixture(QualifyLocalHistorical(SingleSession(new(2026, 9, 1)), ForwardConsumer).Compilation!,
-            1, destination, expectedLedgerRevision: original!.Revision);
+        var mistaken = new ProcessFixture(new FixtureSetup(QualifyLocalHistorical(SingleSession(new(2026, 9, 1)), ForwardConsumer).Compilation!,
+            1, destination, ExpectedLedgerRevision: original!.Revision));
         var failed = await RunHistorical(mistaken, new(new("mistaken-backfill"), new("attempt/1")));
         Assert.Equal(ProcessActivationDisposition.Failed, failed.Disposition);
-        Assert.Equal("integrations.ledger.position-transition", mistaken.LastAdvance!.DiagnosticCode);
+        Assert.Contains(mistaken.SelectionValidation!.Diagnostics, d => d.Code == "integrations.ledger.position-transition");
+        Assert.Null(mistaken.LastAdvance);
         Assert.Equal(original, await destination.Ledger.ReadAsync(ForwardConsumer, default));
-        // Publication preceded the rejected ledger advance. It is retained, never rolled back or hidden.
-        Assert.Equal(1, mistaken.Publications);
+        Assert.Equal(0, mistaken.ProviderCalls);
+        Assert.Equal(0, mistaken.Publications);
         Assert.Equal(0, mistaken.Settlements);
-        Assert.Equal(2, destination.AcceptedDates.Length);
+        Assert.Single(destination.AcceptedDates);
+    }
+
+    /// <summary>A competing advancement after acquisition blocks a now-stale publication.</summary>
+    /// <returns>Completes with only the competing publication present and no silent revision refresh.</returns>
+    [Fact]
+    public async Task ProgressIsRecheckedBeforePublication()
+    {
+        var destination = new HistoricalDestination();
+        var selected = QualifyLocalHistorical(SingleSession(new(2026, 9, 1)), ForwardConsumer).Compilation!;
+        var waitingWorker = new ProcessFixture(new FixtureSetup(selected, 1, destination));
+        var waiting = waitingWorker.Start(new(new("waiting"), new("attempt/1")));
+        waiting = waitingWorker.Reply(waiting, await waitingWorker.DispatchOnce(Request(waiting)));
+        Assert.Equal(1, waitingWorker.ProviderCalls);
+        var winner = new ProcessFixture(new FixtureSetup(selected, 1, destination));
+        Assert.Equal(ProcessActivationDisposition.Completed,
+            (await RunHistorical(winner, new(new("winner"), new("attempt/1")))).Disposition);
+        var entry = await destination.Ledger.ReadAsync(ForwardConsumer, default);
+        var failed = waitingWorker.Reply(waiting, await waitingWorker.DispatchOnce(Request(waiting)));
+        Assert.Equal(ProcessActivationDisposition.Failed, failed.Disposition);
+        Assert.Contains(waitingWorker.SelectionValidation!.Diagnostics, d => d.Code == "integrations.ledger.revision-conflict");
+        Assert.Equal(0, waitingWorker.Publications);
+        Assert.Null(waitingWorker.LastAdvance);
+        Assert.Equal(entry, await destination.Ledger.ReadAsync(ForwardConsumer, default));
+        Assert.Single(destination.Publications);
     }
 
     static HistoricalCoverageScope SingleSession(DateOnly date) => CreateSelection() with

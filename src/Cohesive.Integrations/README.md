@@ -762,3 +762,20 @@ returned, the Process followed its failure edge before publication, and no ledge
 It also tests stale/unauthorized/forged commands, unavailable or invalid evidence, exact concurrent
 replay, and a lifecycle change during verification. Trustworthy host evidence is a prerequisite;
 these local tests do not qualify a production evidence issuer.
+
+
+### Checking progress before new work
+
+Before dispatching a new acquisition or publication, read the intended consumer's ledger and call
+`IngestionLedgerReduction.ValidateSelection(current, address, definition, expectedRevision, position)`.
+An older, overlapping or skipped forward window, stale revision, foreign scope or changed definition
+produces the same progress diagnostic as commit evaluation. The returned validation is not a reservation:
+concurrent changes still require commit CAS and target-specific fencing. Unknown ledger reads must
+fail closed rather than be represented as an absent entry. Proposed progress is distinct from acquisition
+lookback scope; backfill uses a separate flow. Original retained-result reconciliation continues to use
+receipt-before-CAS semantics and must not be rejected by a new-work precheck.
+
+The historical backfill example checks before acquisition and again before publication. Tests prove
+known rewinds cause zero provider calls and zero publications, and that progress changing after
+acquisition rejects publication without silently refreshing the selected revision. Cross-flow group
+pause remains an explicit framework gap tracked in [COH-163](https://linear.app/cohesive-ari/issue/COH-163).

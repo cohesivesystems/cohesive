@@ -1,4 +1,6 @@
 using Cohesive.Execution;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Integrations;
 
@@ -29,26 +31,63 @@ public static class IngestionLedgerReduction
                 return IngestionLedgerResult.Conflict("receipt-integrity");
             return IngestionLedgerResult.Success(priorReceipt, replayed: true);
         }
+        var conflict = CheckProgress(current, advance.Address, advance.Definition, advance.ExpectedRevision, advance.Position);
+        if (conflict is not null) return IngestionLedgerResult.Conflict(conflict);
+        var entry = new IngestionLedgerEntry(advance.Address, advance.Definition, advance.ExpectedRevision + 1, advance.Position);
+        return IngestionLedgerResult.Success(new(reference, entry), replayed: false);
+    }
+
+    /// <summary>Checks proposed new source progress against an observed ledger entry before external dispatch.</summary>
+    /// <param name="current">Definitively observed current entry, or null for an absent entry. Unknown reads must not call this method.</param>
+    /// <param name="address">Exact consumer whose progress was observed.</param>
+    /// <param name="definition">Pinned ingestion definition.</param>
+    /// <param name="expectedRevision">Frozen revision selected for this new work; zero means absent.</param>
+    /// <param name="position">Proposed forward progress, distinct from any acquisition lookback interval.</param>
+    /// <returns>Structured diagnostics, or a valid observation. A valid result is not a reservation or dispatch capability.</returns>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="ArgumentException">Address or revision is invalid.</exception>
+    /// <remarks>Uses the same progress rules as commit evaluation. Call before new acquisition/publication to reject
+    /// known stale, rewinding or skipped windows. Concurrent progress can change after this check; commit CAS and
+    /// target-specific fencing remain necessary. Retained-result reconciliation must use original receipt semantics,
+    /// not this new-work check. This method performs no I/O and creates no publication receipt.</remarks>
+    public static DocumentValidationResult ValidateSelection(IngestionLedgerEntry? current, IngestionLedgerAddress address,
+        ExecutionDefinitionReference definition, long expectedRevision, IngestionPosition position)
+    {
+        ArgumentNullException.ThrowIfNull(address); ArgumentNullException.ThrowIfNull(definition);
+        ArgumentNullException.ThrowIfNull(position);
+        address.Validate();
+        if (expectedRevision < 0 || expectedRevision == long.MaxValue)
+            throw new ArgumentException("Revision must permit another advancement.", nameof(expectedRevision));
+        var validation = IngestionLedgerDocuments.ValidatePosition(position);
+        if (!validation.IsValid) return validation;
+        var conflict = CheckProgress(current, address, definition, expectedRevision, position);
+        return conflict is null ? DocumentValidationResult.Valid : new([new("integrations.ledger." + conflict,
+            DiagnosticSeverity.Error, "New work conflicts with observed consumer progress: " + conflict + ". Inspect progress or select an independent backfill flow.")]);
+    }
+
+    static string? CheckProgress(IngestionLedgerEntry? current, IngestionLedgerAddress address,
+        ExecutionDefinitionReference definition, long expectedRevision, IngestionPosition position)
+    {
         if (current is not null && (current.Revision < 1 || current.Position is null || current.Definition is null))
-            return IngestionLedgerResult.Conflict("entry-integrity");
-        if (current is not null && current.Address != advance.Address) return IngestionLedgerResult.Conflict("scope-conflict");
-        if ((current?.Revision ?? 0) != advance.ExpectedRevision) return IngestionLedgerResult.Conflict("revision-conflict");
+            return "entry-integrity";
+        if (current is not null && current.Address != address) return "scope-conflict";
+        if ((current?.Revision ?? 0) != expectedRevision) return "revision-conflict";
         if (current is not null)
         {
-            if (current.Definition != advance.Definition) return IngestionLedgerResult.Conflict("definition-migration-required");
-            switch (current.Position, advance.Position)
+            if (current.Definition != definition) return "definition-migration-required";
+            switch (current.Position, position)
             {
                 case (IngestionDateRangePosition previous, IngestionDateRangePosition next) when previous.EndExclusive == next.StartInclusive:
                     break;
                 case (IngestionCursorPosition previous, IngestionCursorPosition next) when previous.Format == next.Format && previous.Token is not null:
                     // Equality/order/expiry of opaque token values is source-owned. The source operation owns cycle detection.
                     break;
-                default: return IngestionLedgerResult.Conflict("position-transition");
+                default: return "position-transition";
             }
         }
-        var entry = new IngestionLedgerEntry(advance.Address, advance.Definition, advance.ExpectedRevision + 1, advance.Position);
-        return IngestionLedgerResult.Success(new(reference, entry), replayed: false);
+        return null;
     }
+
 }
 
 /// <summary>Thread-safe, process-local reference interpreter. It is not a durable ledger or a database crash proof.</summary>

@@ -16,11 +16,11 @@ public sealed partial class HistoricalQualificationExamples
     /// <param name="change">The configuration or evidence change after admission.</param>
     /// <param name="allowed">Whether a new acquisition remains permitted.</param>
     [Theory]
-    [InlineData("default", true)]
-    [InlineData("policy", false)]
-    [InlineData("grant", false)]
-    [InlineData("expiry", false)]
-    public void ReopenedHistoricalAdmissionGatesLocalProviderCalls(string change, bool allowed)
+    [InlineData(DispatchChange.DefaultChanged, true)]
+    [InlineData(DispatchChange.PolicyDenied, false)]
+    [InlineData(DispatchChange.GrantRevoked, false)]
+    [InlineData(DispatchChange.OfferExpired, false)]
+    public void ReopenedHistoricalAdmissionGatesLocalProviderCalls(DispatchChange change, bool allowed)
     {
         var original = Connection("v1");
         var replacement = Connection("v2");
@@ -33,12 +33,12 @@ public sealed partial class HistoricalQualificationExamples
 
         var current = Layer.Define("example/local-policy", "v2", "research-admin", new())
             .Prefer(IntegrationChoice.Select(Profile, replacement));
-        if (change == "policy") current = current.Enforce(new(AllowedProviders: []));
+        if (change == DispatchChange.PolicyDenied) current = current.Enforce(new(AllowedProviders: []));
         var first = new LocalAcquisition();
         var second = new LocalAcquisition();
         var runtime = new IntegrationRuntime().Register(Profile, original, first).Register(Profile, replacement, second);
-        var atDispatch = change == "expiry" ? At.AddDays(1) : At;
-        SelectionGrant[] currentGrants = change == "grant" ? [] : grants;
+        var atDispatch = change == DispatchChange.OfferExpired ? At.AddDays(1) : At;
+        SelectionGrant[] currentGrants = change == DispatchChange.GrantRevoked ? [] : grants;
 
         void Dispatch() => runtime.ResolveForDispatch<LocalAcquisition>(compiled,
             [current.Document], currentGrants, atDispatch).Acquire();
@@ -55,6 +55,14 @@ public sealed partial class HistoricalQualificationExamples
     }
 
     static IntegrationQualificationResult QualifyLocalHistorical(HistoricalCoverageScope? selection = null,
+        IngestionLedgerAddress? consumer = null, HistoricalAcquisitionCapabilities? capabilities = null)
+    {
+        var result = AssessLocalHistorical(selection, consumer, capabilities);
+        Assert.True(result.IsAdmissible, string.Join("; ", result.Validation.Diagnostics.Select(d => d.Code + ": " + d.Message)));
+        return result;
+    }
+
+    static IntegrationQualificationResult AssessLocalHistorical(HistoricalCoverageScope? selection = null,
         IngestionLedgerAddress? consumer = null, HistoricalAcquisitionCapabilities? capabilities = null)
     {
         var scope = selection ?? CreateSelection();

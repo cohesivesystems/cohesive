@@ -152,7 +152,7 @@ var candidate = model.Collect.For(backfillScope)
 The application must derive `ExpectedSessions` from its pinned calendar; this fixture uses the existing
 synthetic two-session calendar. Narrowing the interval never changes the required coverage semantics.
 Separate flows also mean separate lifecycle controllers: pausing forward admission does not implicitly
-pause backfill. A host wanting a shared stop must enforce that policy explicitly; this example pauses
+pause backfill. The missing group-control abstraction is tracked in [COH-163](https://linear.app/cohesive-ari/issue/COH-163); this example pauses
 backfill itself and verifies that an admitted window drains while another is rejected.
 
 The successful case first publishes September 2 through the forward flow, then September 1 through
@@ -162,10 +162,20 @@ rejected against the one-day offer instead of silently widening its bound. Admis
 completion returns the original receipt without creating another pending session.
 
 The negative flow-reuse case deliberately supplies a fresh forward revision for an older window.
-The ledger rejects the noncontiguous position after publication; the Process fails without settlement,
-and already-published bytes remain visible. Hosts should select the independent backfill flow before
-dispatch, since ledger rejection cannot undo an external write. Selection freezes the expected ledger
-revision; it is never reread and silently substituted after publication.
+`IngestionLedgerReduction.ValidateSelection` rejects it before acquisition or publication. It shares the
+commit reducer's scope, revision, definition and position rules rather than copying them into the host.
+The fixture checks observed progress again before publication; a competing advancement after acquisition
+therefore prevents a stale write in that case. The selected revision is never silently refreshed.
+
+This is a check of current evidence, not an atomic reservation. Another writer can advance after the
+check, so commit-time CAS and adapter-specific write fencing remain necessary; a later ledger conflict
+cannot roll back an external publication. Retained-result reconciliation uses original receipt replay,
+not the new-selection check. Qualification remains a static offer assessment; mutable consumer progress
+is checked at dispatch instead of being baked into long-lived capability evidence.
+
+`QualifyLocalHistorical` asserts admissibility with diagnostic codes and messages. Intentional rejection
+tests use `AssessLocalHistorical`. The fixture has one immutable `FixtureSetup`, explicit restart state,
+and a typed `DispatchChange`; provider-range rejection is a separate test from execution failures.
 
 These tests qualify one explicitly bounded window, not an automatic multi-window planner, bulk work
 budget or scheduled backfill service. Local publication identities now derive from exact acquisition
