@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Relations.IR;
@@ -83,7 +84,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <paramref name="orderings"/> is empty or contains a declaration whose binding belongs to another
     /// session or is not visible in <paramref name="input"/>.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// An ordering key cannot be lowered exactly or returns a raw CLR temporal carrier instead of an explicitly
     /// normalized canonical scalar key.
     /// </exception>
@@ -135,7 +136,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <paramref name="orderings"/> is empty, contains an invalid declaration, or references a binding
     /// that is not visible in <paramref name="input"/>.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// An ordering key cannot be lowered exactly or returns a raw CLR temporal carrier instead of an explicitly
     /// normalized canonical scalar key.
     /// </exception>
@@ -159,7 +160,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <paramref name="keys"/> is empty or contains null, or a binding belongs to another session or has a
     /// mismatched CLR type, or a binding is not visible in <paramref name="input"/>.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// A distinct key cannot be lowered exactly or returns a raw CLR temporal carrier instead of an explicitly
     /// normalized canonical scalar key.
     /// </exception>
@@ -219,7 +220,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <paramref name="key"/> is <see langword="null"/>, or the binding belongs to another session or has
     /// a mismatched CLR type, or the binding is not visible in <paramref name="input"/>.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The distinct key cannot be lowered exactly or returns a raw CLR temporal carrier instead of an explicitly
     /// normalized canonical scalar key.
     /// </exception>
@@ -243,10 +244,10 @@ public sealed partial class RelationQueryExpressionAuthoring
         if (visitor.CarrierType is not { } carrierType)
             return;
 
-        throw new RelationQueryExpressionAuthoringException(
+        throw new ExpressionAuthoringException(
         [
-            new RelationQueryExpressionDiagnostic(
-                RelationQueryExpressionDiagnosticCodes.KeyDomainUnsupported,
+            new ExpressionDiagnostic(
+                ExpressionDiagnosticCodes.KeyDomainUnsupported,
                 DiagnosticSeverity.Error,
                 $"The {keyRole} key contains carrier-dependent CLR type '{StableTypeName(carrierType)}'. "
                 + "Raw temporal and dynamic JSON observation carriers can vary by source, so equality, hashing, or ordering is not portable.",

@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
@@ -516,7 +517,7 @@ public sealed class RelationQueryStructuralAuthoringTests
 
     static RelationQueryAuthoringResult<IRQueryDefinition> BuildProvenanceQuery(bool includeSources)
     {
-        RelationQueryAuthoringSource? Source(string reference) =>
+        AuthoringSource? Source(string reference) =>
             includeSources ? new("expression-proof", reference) : null;
 
         var author = RelationQuery.Structural();

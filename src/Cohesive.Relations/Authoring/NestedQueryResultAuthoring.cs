@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using RelationId = Cohesive.Relations.Model.RelationId;
 using System.Linq.Expressions;
@@ -18,7 +19,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <returns>A registration-local builder; not safe for concurrent mutation.</returns>
     public NestedQueryResultSource<TResult> SingleOrDefault<TResult>() where TResult : class => new(this);
 
-    internal RelationQueryClrShape<T> ResultShape<T>() where T : notnull
+    internal ClrAuthoringShape<T> ResultShape<T>() where T : notnull
     {
         var shape = Clr.Shape<T>();
         TrackShape(shape);
@@ -101,7 +102,7 @@ public sealed class NestedQueryResultRows<TResult> where TResult : class
 public sealed class NestedQueryResultBuilder<TResult> where TResult : class
 {
     readonly RelationQueryExpressionAuthoring author;
-    readonly RelationQueryClrShape<TResult> shape;
+    readonly ClrAuthoringShape<TResult> shape;
     readonly List<FieldDefinition> slots = [];
     readonly List<RelationQueryProjectionAssignment> assignments = [];
     readonly List<QueryResultFieldMapping> fields = [];
@@ -280,7 +281,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
         return path;
     }
 
-    internal static FieldPath Target<T, TValue>(RelationQueryClrShape<T> shape, Expression<Func<T, TValue>> target) where T : notnull
+    internal static FieldPath Target<T, TValue>(ClrAuthoringShape<T> shape, Expression<Func<T, TValue>> target) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(target);
         if (target.Body is not MemberExpression { Member: PropertyInfo property, Expression: ParameterExpression parameter }
@@ -300,7 +301,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
 public sealed class NestedQueryChildBuilder<TResult, TChild> where TResult : class where TChild : class
 {
     readonly NestedQueryResultBuilder<TResult> owner;
-    readonly RelationQueryClrShape<TChild> shape;
+    readonly ClrAuthoringShape<TChild> shape;
     readonly FieldPath identity;
     readonly List<QueryResultFieldMapping> fields = [];
     bool completed;
@@ -309,7 +310,7 @@ public sealed class NestedQueryChildBuilder<TResult, TChild> where TResult : cla
         completed = true;
         return fields.ToImmutableArray();
     }
-    internal NestedQueryChildBuilder(NestedQueryResultBuilder<TResult> owner, RelationQueryClrShape<TChild> shape, FieldPath identity)
+    internal NestedQueryChildBuilder(NestedQueryResultBuilder<TResult> owner, ClrAuthoringShape<TChild> shape, FieldPath identity)
     { this.owner = owner; this.shape = shape; this.identity = identity; }
 
     /// <summary>Maps the collection's selected identity without repeating its expression or projection slot.</summary>

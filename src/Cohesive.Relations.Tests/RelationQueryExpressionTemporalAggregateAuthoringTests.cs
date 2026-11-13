@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Linq.Expressions;
 using Cohesive.Relations.IR;
 
@@ -261,10 +262,10 @@ public sealed class RelationQueryExpressionTemporalAggregateAuthoringTests
             rows.Binding,
             sourceReference: "distinct/retry");
 
-        var wholeRow = Assert.Throws<RelationQueryExpressionAuthoringException>(() =>
+        var wholeRow = Assert.Throws<ExpressionAuthoringException>(() =>
             author.Distinct(retried, sourceReference: "distinct/whole-row"));
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.KeyDomainUnsupported,
+            ExpressionDiagnosticCodes.KeyDomainUnsupported,
             Assert.Single(wholeRow.Diagnostics).Code);
     }
 
@@ -420,9 +421,9 @@ public sealed class RelationQueryExpressionTemporalAggregateAuthoringTests
 
     static void AssertTemporalKeyFailure(Action action, string keyRole)
     {
-        var exception = Assert.Throws<RelationQueryExpressionAuthoringException>(action);
+        var exception = Assert.Throws<ExpressionAuthoringException>(action);
         var diagnostic = Assert.Single(exception.Diagnostics);
-        Assert.Equal(RelationQueryExpressionDiagnosticCodes.KeyDomainUnsupported, diagnostic.Code);
+        Assert.Equal(ExpressionDiagnosticCodes.KeyDomainUnsupported, diagnostic.Code);
         Assert.Contains(keyRole, diagnostic.Message, StringComparison.Ordinal);
         Assert.Contains("normalized canonical String or Int64", diagnostic.Suggestion, StringComparison.Ordinal);
     }

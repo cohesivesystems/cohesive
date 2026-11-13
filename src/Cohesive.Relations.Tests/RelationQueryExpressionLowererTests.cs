@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Text.Json.Serialization;
@@ -20,7 +21,7 @@ public sealed class RelationQueryExpressionLowererTests
         var equipment = author.Source<Equipment>(EquipmentShape);
         var customerName = new ParameterMarker<string>(new("customer-name"));
         var stopLocation = new ParameterMarker<string>(new("stop-location"));
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, Customer, Equipment, bool>> predicate =
             (sourceLoad, sourceCustomer, sourceEquipment) =>
                 sourceCustomer.Profile.Name == customerName.Value
@@ -36,7 +37,7 @@ public sealed class RelationQueryExpressionLowererTests
 
         var lowered = result.RequireValue();
         Assert.Empty(result.Diagnostics);
-        Assert.Equal(RelationQueryExpressionLowerer.Producer, lowered.Source.Producer);
+        Assert.Equal(ExpressionLowerer.Producer, lowered.Source.Producer);
         Assert.Equal("filter/search/body", lowered.Source.Reference);
 
         var fields = Descendants(lowered.Value).OfType<FieldExpr>().ToArray();
@@ -76,7 +77,7 @@ public sealed class RelationQueryExpressionLowererTests
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
         var customer = author.Source<Customer>(CustomerShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, Customer, LoadDocument>> projection =
             (sourceLoad, sourceCustomer) => new(
                 sourceLoad.Id,
@@ -112,7 +113,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, bool>> predicate = sourceLoad =>
             sourceLoad.Tags.Contains("priority")
             && sourceLoad.Status.EndsWith("Ready", StringComparison.Ordinal);
@@ -143,7 +144,7 @@ public sealed class RelationQueryExpressionLowererTests
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
         var minimumAmount = new ParameterMarker<decimal>(new("minimum-amount"));
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, bool>> predicate = sourceLoad => sourceLoad.Amount >= minimumAmount.Value;
 
         var lowered = lowerer.LowerValue(
@@ -164,7 +165,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         var captured = new ThrowingCapturedValue();
         Expression<Func<Load, bool>> capturedPredicate = sourceLoad => sourceLoad.Status == captured.Value;
         Expression<Func<Load, bool>> methodPredicate = sourceLoad => sourceLoad.Status.StartsWith("R");
@@ -180,7 +181,7 @@ public sealed class RelationQueryExpressionLowererTests
 
         Assert.False(captureResult.IsSuccess);
         var capture = Assert.Single(captureResult.Diagnostics);
-        Assert.Equal(RelationQueryExpressionDiagnosticCodes.CapturedValueUnsupported, capture.Code);
+        Assert.Equal(ExpressionDiagnosticCodes.CapturedValueUnsupported, capture.Code);
         Assert.Equal(DiagnosticSeverity.Error, capture.Severity);
         Assert.Equal("body/right", capture.ExpressionPath);
         Assert.Equal("filter/capture", capture.SourceReference);
@@ -190,10 +191,10 @@ public sealed class RelationQueryExpressionLowererTests
 
         Assert.False(methodResult.IsSuccess);
         var method = Assert.Single(methodResult.Diagnostics);
-        Assert.Equal(RelationQueryExpressionDiagnosticCodes.MethodUnsupported, method.Code);
+        Assert.Equal(ExpressionDiagnosticCodes.MethodUnsupported, method.Code);
         Assert.Equal("body", method.ExpressionPath);
         Assert.Contains(nameof(string.StartsWith), method.Symbol, StringComparison.Ordinal);
-        var exception = Assert.Throws<RelationQueryExpressionAuthoringException>(methodResult.RequireValue);
+        var exception = Assert.Throws<ExpressionAuthoringException>(methodResult.RequireValue);
         Assert.Equal(methodResult.Diagnostics, exception.Diagnostics);
     }
 
@@ -202,7 +203,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, bool>> suffix = sourceLoad => sourceLoad.Status.EndsWith("Ready");
         Expression<Func<Load, long>> conversion = sourceLoad => sourceLoad.Sequence;
 
@@ -216,10 +217,10 @@ public sealed class RelationQueryExpressionLowererTests
             sourceReference: "projection/conversion");
 
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+            ExpressionDiagnosticCodes.MethodUnsupported,
             Assert.Single(suffixResult.Diagnostics).Code);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.ConversionUnsupported,
+            ExpressionDiagnosticCodes.ConversionUnsupported,
             Assert.Single(conversionResult.Diagnostics).Code);
     }
 
@@ -229,7 +230,7 @@ public sealed class RelationQueryExpressionLowererTests
         const decimal Expected = 0.1234567890123456789012345678m;
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, decimal>> literal = _ => Expected;
 
         var lowered = lowerer.LowerValue(
@@ -246,7 +247,7 @@ public sealed class RelationQueryExpressionLowererTests
     [Fact]
     public void IntegralLiterals_LowerWithTheirExactPortableClrTypes()
     {
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         (LambdaExpression Expression, ScalarTypeKind Kind)[] cases =
         [
             ((Expression<Func<int>>)(() => 1), ScalarTypeKind.Int32),
@@ -271,7 +272,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var source = author.Source<NormalizationSource>();
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<NormalizationSource, NormalizationSourceKind>> literal = _ =>
             NormalizationSourceKind.HumanFeedback;
         Expression<Func<NormalizationSource, NormalizationSourceFlags>> unnamedCombination = _ =>
@@ -299,10 +300,10 @@ public sealed class RelationQueryExpressionLowererTests
             ObservationValue.FromString(nameof(NormalizationSourceKind.HumanFeedback)),
             enumLiteral.Value);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
+            ExpressionDiagnosticCodes.LiteralUnsupported,
             Assert.Single(unsupported.Diagnostics).Code);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
+            ExpressionDiagnosticCodes.LiteralUnsupported,
             Assert.Single(ambiguous.Diagnostics).Code);
     }
 
@@ -311,7 +312,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, bool>> namedMember = source =>
             source.ProcessingStatus == LoadStatus.Complete;
         Expression<Func<Load, bool>> field = source =>
@@ -348,7 +349,7 @@ public sealed class RelationQueryExpressionLowererTests
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
         var source = author.Source<NormalizationSource>();
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, bool>> undefined = value =>
             value.ProcessingStatus == (LoadStatus)17;
         Expression<Func<NormalizationSource, bool>> unnamedFlags = value =>
@@ -364,7 +365,7 @@ public sealed class RelationQueryExpressionLowererTests
         };
 
         Assert.All(results, static result => Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
+            ExpressionDiagnosticCodes.LiteralUnsupported,
             Assert.Single(result.Diagnostics).Code));
     }
 
@@ -373,7 +374,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, bool>> exact = source =>
             source.OccurredAt.EqualsExact(source.ExpectedOccurredAt);
 
@@ -397,7 +398,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var source = author.Source<OptionalEvidence>();
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<OptionalEvidence, bool>> exact = input =>
             input.LastObservation != null
             && input.LastObservation.ObservedAt.EqualsExact(input.ExpectedObservation.ObservedAt)
@@ -481,7 +482,7 @@ public sealed class RelationQueryExpressionLowererTests
     [Fact]
     public void LiteralsWithoutCanonicalJsonEncoding_FailClosed()
     {
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         object[] unsupported =
         [
             ObservationValue.FromBytes(new byte[] { 1, 2, 3 }),
@@ -501,7 +502,7 @@ public sealed class RelationQueryExpressionLowererTests
 
             Assert.False(result.IsSuccess);
             var diagnostic = Assert.Single(result.Diagnostics);
-            Assert.Equal(RelationQueryExpressionDiagnosticCodes.LiteralUnsupported, diagnostic.Code);
+            Assert.Equal(ExpressionDiagnosticCodes.LiteralUnsupported, diagnostic.Code);
             Assert.Equal("body", diagnostic.ExpressionPath);
         }
     }
@@ -511,7 +512,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, string>> exact = sourceLoad => (string?)null ?? sourceLoad.Status;
         Expression<Func<Load, string>> presenceDependent = sourceLoad => sourceLoad.Status ?? "unknown";
         var normalization = author.Source<NormalizationSource>();
@@ -539,7 +540,7 @@ public sealed class RelationQueryExpressionLowererTests
             FieldPath.Parse($"{nameof(NormalizationSource.Metadata)}.{nameof(NormalizationMetadata.CorrelationId)}"),
             Assert.IsType<FieldExpr>(requiredNullableConditional.IfTrue).Path);
         var diagnostic = Assert.Single(unsupported.Diagnostics);
-        Assert.Equal(RelationQueryExpressionDiagnosticCodes.OperatorUnsupported, diagnostic.Code);
+        Assert.Equal(ExpressionDiagnosticCodes.OperatorUnsupported, diagnostic.Code);
         Assert.Contains("presence/null test", diagnostic.Message, StringComparison.Ordinal);
         Assert.NotNull(diagnostic.Suggestion);
     }
@@ -549,7 +550,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, int>> length = source => source.Stops.Length;
         Expression<Func<Load, int>> count = source => source.Stops.Count();
         Expression<Func<Load, int>> minimum = source => source.Numbers.Min();
@@ -565,12 +566,12 @@ public sealed class RelationQueryExpressionLowererTests
 
         Assert.All(results, static result => Assert.False(result.IsSuccess));
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+            ExpressionDiagnosticCodes.NodeUnsupported,
             Assert.Single(results[0].Diagnostics).Code);
         Assert.All(
             results.Skip(1),
             static result => Assert.Equal(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                ExpressionDiagnosticCodes.MethodUnsupported,
                 Assert.Single(result.Diagnostics).Code));
     }
 
@@ -579,7 +580,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var source = author.Source<NormalizationSource>();
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<NormalizationSource, NormalizationOutput>> projection = input => new()
         {
             Candidates = input.Candidates
@@ -623,7 +624,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var source = author.Source<NormalizationSource>();
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<NormalizationSource, NormalizationOutput>> guarded = input => new()
         {
             Candidates = new NormalizationCandidateOutput[] { },
@@ -664,7 +665,7 @@ public sealed class RelationQueryExpressionLowererTests
             FieldPath.FromField(nameof(NormalizationSource.Signals)),
             Assert.IsType<FieldExpr>(hasValue.Left).Path);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+            ExpressionDiagnosticCodes.NodeUnsupported,
             Assert.Single(unsupported.Diagnostics).Code);
     }
 
@@ -673,7 +674,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var source = author.Source<NormalizationSource>();
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<NormalizationSource, IEnumerable<string>>> lazy = input =>
             input.Candidates.Select(candidate => candidate.Id);
 
@@ -683,7 +684,7 @@ public sealed class RelationQueryExpressionLowererTests
             "normalization/lazy-select");
 
         var diagnostic = Assert.Single(result.Diagnostics);
-        Assert.Equal(RelationQueryExpressionDiagnosticCodes.MethodUnsupported, diagnostic.Code);
+        Assert.Equal(ExpressionDiagnosticCodes.MethodUnsupported, diagnostic.Code);
         Assert.Contains("lazy", diagnostic.Message, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -694,7 +695,7 @@ public sealed class RelationQueryExpressionLowererTests
         var nullable = author.Source<NullableLoad>();
         var customEquality = author.Source<CustomEqualitySource>();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<NullableLoad, bool>> nullableReceiver = source => source.Customer!.Name == "Acme";
         Expression<Func<NullableLoad, bool>> nullableScalarReceiver = source => source.Customer!.Age == 0;
         Expression<Func<CustomEqualitySource, bool>> overloadedNull = source => source.Value != null;
@@ -719,16 +720,16 @@ public sealed class RelationQueryExpressionLowererTests
             "inexact/temporal-membership");
 
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+            ExpressionDiagnosticCodes.NodeUnsupported,
             Assert.Single(receiverResult.Diagnostics).Code);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+            ExpressionDiagnosticCodes.NodeUnsupported,
             Assert.Single(scalarReceiverResult.Diagnostics).Code);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+            ExpressionDiagnosticCodes.OperatorUnsupported,
             Assert.Single(overloadedNullResult.Diagnostics).Code);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+            ExpressionDiagnosticCodes.MethodUnsupported,
             Assert.Single(membershipResult.Diagnostics).Code);
     }
 
@@ -738,7 +739,7 @@ public sealed class RelationQueryExpressionLowererTests
         var author = RelationQuery.Expression();
         var nullable = author.Source<NullableLoad>();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<NullableLoad, bool>> nullableItem = source =>
             source.Customers.Any(customer => customer!.Name == "Acme");
         Expression<Func<Load, bool>> comparerBearing = source =>
@@ -760,13 +761,13 @@ public sealed class RelationQueryExpressionLowererTests
             "inexact/floating-membership");
 
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+            ExpressionDiagnosticCodes.NodeUnsupported,
             Assert.Single(nullableItemResult.Diagnostics).Code);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+            ExpressionDiagnosticCodes.MethodUnsupported,
             Assert.Single(comparerResult.Diagnostics).Code);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+            ExpressionDiagnosticCodes.MethodUnsupported,
             Assert.Single(floatingPointResult.Diagnostics).Code);
     }
 
@@ -775,7 +776,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         var loadId = new ParameterMarker<Guid>(new("load-id"));
         var serviceDate = new ParameterMarker<DateOnly>(new("service-date"));
         var serviceTime = new ParameterMarker<TimeOnly>(new("service-time"));
@@ -800,8 +801,8 @@ public sealed class RelationQueryExpressionLowererTests
             Assert.False(result.IsSuccess);
             var code = Assert.Single(result.Diagnostics).Code;
             Assert.True(
-                code is RelationQueryExpressionDiagnosticCodes.OperatorUnsupported
-                    or RelationQueryExpressionDiagnosticCodes.ConversionUnsupported,
+                code is ExpressionDiagnosticCodes.OperatorUnsupported
+                    or ExpressionDiagnosticCodes.ConversionUnsupported,
                 $"Unexpected diagnostic code '{code}'.");
         });
     }
@@ -811,7 +812,7 @@ public sealed class RelationQueryExpressionLowererTests
     {
         var author = RelationQuery.Expression();
         var load = author.Source<Load>(LoadShape);
-        var lowerer = new RelationQueryExpressionLowerer(ResolvePath);
+        var lowerer = new ExpressionLowerer(ResolvePath);
         Expression<Func<Load, TransformingDto>> setter = source => new TransformingDto { Id = source.Id };
         Expression<Func<Load, DefaultedDto>> omittedDefault = source => new DefaultedDto { Id = source.Id };
         var sourceParameter = Expression.Parameter(typeof(Load), "source");
@@ -827,13 +828,13 @@ public sealed class RelationQueryExpressionLowererTests
         var boundsResult = lowerer.LowerValue(arrayBounds, [load.Binding], "unsafe/array-bounds");
 
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+            ExpressionDiagnosticCodes.ProjectionInvalid,
             Assert.Single(setterResult.Diagnostics).Code);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+            ExpressionDiagnosticCodes.ProjectionInvalid,
             Assert.Single(constructorResult.Diagnostics).Code);
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+            ExpressionDiagnosticCodes.NodeUnsupported,
             Assert.Single(boundsResult.Diagnostics).Code);
     }
 
@@ -932,9 +933,9 @@ public sealed class RelationQueryExpressionLowererTests
         }
     }
 
-    sealed class ParameterMarker<T>(QueryParameterId id) : IRelationQueryExpressionParameterMarker
+    sealed class ParameterMarker<T>(QueryParameterId id) : IExpressionParameterMarker
     {
-        public QueryParameterId ParameterId { get; } = id;
+        public string ParameterId { get; } = id.Value;
 
         public T Value => throw new InvalidOperationException("The marker must not be evaluated.");
     }

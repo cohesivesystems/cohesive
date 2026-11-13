@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Relations.Acquisition;
@@ -506,7 +507,7 @@ public sealed class EntityRelationQuerySourceCatalogTests
     }
 
     static EntityRelationQuerySourceRegistration CreateRegistration<T>(
-        RelationQueryClrShape<T> sourceShape,
+        ClrAuthoringShape<T> sourceShape,
         ImmutableArray<EntitySnapshot> snapshots)
         where T : notnull
     {
@@ -529,7 +530,7 @@ public sealed class EntityRelationQuerySourceCatalogTests
     }
 
     static EntitySnapshot Snapshot<T>(
-        RelationQueryClrShape<T> shape,
+        ClrAuthoringShape<T> shape,
         string id,
         params (string Name, ObservationValue Value)[] fields)
         where T : notnull
@@ -625,13 +626,13 @@ public sealed class EntityRelationQuerySourceCatalogTests
         maximumConcurrency: 4);
 
     sealed record QueryFixture(
-        RelationQueryClrShape<StoredLoad> SourceShape,
+        ClrAuthoringShape<StoredLoad> SourceShape,
         RelationQueryEvaluation Evaluation,
         CompiledRelationQueryPlan Plan);
 
     sealed record TraversalQueryFixture(
-        RelationQueryClrShape<JoinedLoad> LoadShape,
-        RelationQueryClrShape<JoinedCustomer> CustomerShape,
+        ClrAuthoringShape<JoinedLoad> LoadShape,
+        ClrAuthoringShape<JoinedCustomer> CustomerShape,
         RelationQueryEvaluation Evaluation,
         CompiledRelationQueryPlan Plan);
 

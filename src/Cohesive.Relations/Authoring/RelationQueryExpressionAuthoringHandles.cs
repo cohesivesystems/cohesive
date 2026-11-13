@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using Cohesive.Model.Serialization;
 using System.Linq.Expressions;
@@ -5,15 +6,6 @@ using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
 
 namespace Cohesive.Relations.Authoring;
-
-internal interface IRelationQueryExpressionParameterMarker
-{
-    QueryParameterId ParameterId { get; }
-
-    RelationQueryExpressionAuthoring? Owner => null;
-
-    bool IsProvablyNonNull => true;
-}
 
 /// <summary>Typed authoring handle for one explicit canonical relationship.</summary>
 /// <typeparam name="TSource">CLR type at the relationship source endpoint.</typeparam>
@@ -76,9 +68,9 @@ public sealed class RelationQueryExpressionRelationship<TSource, TTarget>
 /// </summary>
 /// <remarks>
 /// The binding is authoring-time metadata only. Canonical definitions retain only
-/// <see cref="Id"/> and never retain this handle or its CLR type.
+/// <see cref="ExpressionBinding.Id"/> and never retain this handle or its CLR type.
 /// </remarks>
-public abstract class RelationQueryExpressionValueBinding
+public abstract class RelationQueryExpressionValueBinding : ExpressionBinding
 {
     private protected RelationQueryExpressionValueBinding(
         RelationQueryExpressionAuthoring owner,
@@ -88,46 +80,15 @@ public abstract class RelationQueryExpressionValueBinding
         ClrMemberPathResolver? memberPathResolver,
         Func<Type, TypeRef>? typeResolver,
         bool usesImportedMapping)
+        : base(owner, structural.Id, type, shape, memberPathResolver, typeResolver, usesImportedMapping)
     {
-        Owner = owner;
         Structural = structural;
-        Type = Guard.RequireNotNull(type);
-        Shape = shape;
-        MemberPathResolver = memberPathResolver;
-        TypeResolver = typeResolver;
-        UsesImportedMapping = usesImportedMapping;
     }
 
-    internal RelationQueryExpressionAuthoring Owner { get; }
+    internal new RelationQueryExpressionAuthoring Owner => (RelationQueryExpressionAuthoring)base.Owner;
 
-    internal ClrMemberPathResolver? MemberPathResolver { get; }
-
-    internal Func<Type, TypeRef>? TypeResolver { get; }
-
-    internal bool UsesImportedMapping { get; }
-
-    /// <summary>
-    /// Structural binding handle used to author canonical operations directly through the owning
-    /// expression session's <see cref="RelationQueryExpressionAuthoring.Structural"/> core.
-    /// </summary>
+    /// <summary>Query-owned structural binding used by the Relations authoring core.</summary>
     public RelationQueryBindingHandle Structural { get; }
-
-    internal abstract Type ClrType { get; }
-
-    /// <summary>Canonical value-binding identity.</summary>
-    public ValueBindingId Id => Structural.Id;
-
-    /// <summary>Portable semantic type of the bound value.</summary>
-    public TypeRef Type { get; }
-
-    /// <summary>
-    /// Graph-qualified semantic shape represented by the binding, or <see langword="null"/> for a
-    /// scalar or structurally typed collection item that has no root shape.
-    /// </summary>
-    public QualifiedShapeId? Shape { get; }
-
-    /// <inheritdoc />
-    public override string ToString() => Id.ToString();
 }
 
 /// <summary>One typed binding seam shared by explicit bindings and focused query nodes.</summary>
@@ -142,7 +103,7 @@ public interface IRelationQueryBinding<T> where T : notnull
 
 /// <summary>Typed CLR value binding used as a parameter in expression-authoring lambdas.</summary>
 /// <typeparam name="T">CLR type represented by the binding.</typeparam>
-public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpressionValueBinding, IRelationQueryBinding<T>
+public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpressionValueBinding, IRelationQueryBinding<T>, IExpressionInput<T>
     where T : notnull
 {
     internal RelationQueryExpressionValueBinding(
@@ -159,6 +120,8 @@ public sealed class RelationQueryExpressionValueBinding<T> : RelationQueryExpres
 
     RelationQueryExpressionValueBinding<T> IRelationQueryBinding<T>.Binding => this;
     RelationQueryExpressionAuthoring IRelationQueryBinding<T>.Owner => Owner;
+
+    ExpressionBinding IExpressionInput<T>.Binding => this;
 
     internal override Type ClrType => typeof(T);
 }
@@ -243,7 +206,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <param name="projection">Canonical projection expression.</param>
     /// <returns>The projected branch.</returns>
     /// <exception cref="ArgumentNullException">Projection is null.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Select<TResult>(Expression<Func<TValue, TResult>> projection) where TResult : notnull =>
         Binding.Owner.Project(this, projection);
 
@@ -269,7 +232,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <returns>A projected branch; traversal uses left semantics, preserving missing related values.</returns>
     /// <exception cref="ArgumentNullException">Relationship or result selector is null.</exception>
     /// <exception cref="ArgumentException">Relationship endpoint shapes are incompatible.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The selector cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The selector cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Traverse<TRelated, TResult>(
         RelationQueryExpressionRelationship<TValue, TRelated> relationship, Expression<Func<TValue, TRelated, TResult>> resultSelector)
         where TRelated : notnull where TResult : notnull
@@ -288,7 +251,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <returns>A projected branch; traversal uses left semantics, preserving missing related values.</returns>
     /// <exception cref="ArgumentNullException">Relationship or result selector is null.</exception>
     /// <exception cref="ArgumentException">Relationship endpoint shapes are incompatible.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The selector cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The selector cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> TraverseInverse<TSource, TResult>(
         RelationQueryExpressionRelationship<TSource, TValue> relationship, Expression<Func<TValue, TSource, TResult>> resultSelector)
         where TSource : notnull where TResult : notnull
@@ -321,7 +284,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <returns>The focused projected branch; unmatched rows are omitted.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">A handle or expression has invalid ownership or types.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Join<TRightNode, TRight, TResult>(
         RelationQueryExpressionBoundNode<TRightNode, TRight> right,
         Expression<Func<TValue, TRight, bool>> predicate, Expression<Func<TValue, TRight, TResult>> projection)
@@ -337,7 +300,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <returns>The canonical aggregate branch. Grouped empty input produces no groups.</returns>
     /// <exception cref="ArgumentNullException">The callback is null.</exception>
     /// <exception cref="ArgumentException">The assignments or numeric contracts are invalid, or no sum is declared.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
     /// <exception cref="InvalidOperationException">The output type cannot be represented as a shape.</exception>
     public RelationQueryExpressionBoundNode<AggregateQueryNode, TResult> Aggregate<TResult>(
         Action<RelationQueryFocusedAggregateBuilder<TValue, TResult>> configure) where TResult : notnull
@@ -355,7 +318,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <returns>The canonical grouped-sum branch. Empty input produces no groups.</returns>
     /// <exception cref="ArgumentNullException">A required expression is null.</exception>
     /// <exception cref="ArgumentException">The grouping or numeric contract is invalid.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
     /// <exception cref="InvalidOperationException">The key or sum type cannot be represented in the result shape.</exception>
     public RelationQueryExpressionBoundNode<AggregateQueryNode, RelationQueryGroupedSum<TKey, TNumber>> SumBy<TKey, TNumber>(
         Expression<Func<TValue, TKey>> key, Expression<Func<TValue, TNumber>> value)
@@ -377,7 +340,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <returns>The canonical grouped-sum branch. Empty input produces no groups.</returns>
     /// <exception cref="ArgumentNullException">A required expression is null.</exception>
     /// <exception cref="ArgumentException">The result, grouping or numeric contract is invalid.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
     /// <exception cref="InvalidOperationException">The result type cannot be represented as a shape.</exception>
     public RelationQueryExpressionBoundNode<AggregateQueryNode, TResult> SumBy<TKey, TNumber, TResult>(
         Expression<Func<TValue, TKey>> key, Expression<Func<TValue, TNumber>> value,
@@ -398,7 +361,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <returns>A joined branch retaining both bindings; missing right values remain canonical missing values.</returns>
     /// <exception cref="ArgumentNullException">Right branch or predicate is null.</exception>
     /// <exception cref="ArgumentException">The right branch belongs to another session.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
     public RelationQueryExpressionJoinedNode<TValue, TRight> LeftJoin<TRightNode, TRight>(
         RelationQueryExpressionBoundNode<TRightNode, TRight> right, Expression<Func<TValue, TRight, bool>> predicate)
         where TRightNode : LogicalQueryNode where TRight : notnull
@@ -414,7 +377,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <returns>The projected left-join branch.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">A handle or expression has invalid ownership or types.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">An expression cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> LeftJoin<TRightNode, TRight, TResult>(
         RelationQueryExpressionBoundNode<TRightNode, TRight> right,
         Expression<Func<TValue, TRight, bool>> predicate, Expression<Func<TValue, TRight, TResult>> projection)
@@ -487,7 +450,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
     /// <exception cref="InvalidOperationException">
     /// This handle has no unambiguous originating source. Use the explicit authoring overload that accepts a root.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The key or an invariant cannot be lowered exactly, or the key contains a raw CLR temporal carrier instead
     /// of an explicitly normalized canonical scalar; no relation terminal is committed.
     /// </exception>
@@ -510,7 +473,7 @@ public sealed class RelationQueryExpressionBoundNode<TNode, TValue> : RelationQu
 /// to the same authoring session. Reading it as ordinary CLR code is invalid. The expression translator
 /// recognizes the framework-owned marker without evaluating user property getters or arbitrary captures.
 /// </remarks>
-public sealed class RelationQueryExpressionParameter<T> : IRelationQueryExpressionParameterMarker
+public sealed class RelationQueryExpressionParameter<T> : IExpressionParameterMarker
 {
     internal RelationQueryExpressionParameter(
         RelationQueryExpressionAuthoring owner,
@@ -526,11 +489,11 @@ public sealed class RelationQueryExpressionParameter<T> : IRelationQueryExpressi
 
     internal RelationQueryParameterHandle Structural { get; }
 
-    QueryParameterId IRelationQueryExpressionParameterMarker.ParameterId => Id;
+    string IExpressionParameterMarker.ParameterId => Id.Value;
 
-    RelationQueryExpressionAuthoring IRelationQueryExpressionParameterMarker.Owner => Owner;
+    object IExpressionParameterMarker.Owner => Owner;
 
-    bool IRelationQueryExpressionParameterMarker.IsProvablyNonNull => IsProvablyNonNull;
+    bool IExpressionParameterMarker.IsProvablyNonNull => IsProvablyNonNull;
 
     internal bool IsProvablyNonNull { get; }
 

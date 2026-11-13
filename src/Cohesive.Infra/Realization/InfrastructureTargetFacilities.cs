@@ -37,6 +37,10 @@ public sealed record InfrastructureTargetFacilityManifestFingerprint
 
     /// <summary>Lowercase hexadecimal digest.</summary>
     public string Value { get; }
+
+    /// <summary>Formats this fingerprint using the shared delimiter-safe core encoding.</summary>
+    /// <returns>Algorithm, canonicalization and digest separated by colons, with embedded percent and colon escaped.</returns>
+    public string ToCanonicalString() => Cohesive.Model.FingerprintText.Format(Algorithm, Canonicalization, Value);
 }
 
 /// <summary>Exact payload-free reference to one target-facility manifest.</summary>

@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Relations.IR;
@@ -54,7 +55,7 @@ public sealed record RelationQueryExpressionInvariant<T>
 
 public sealed partial class RelationQueryExpressionAuthoring
 {
-    RelationQueryExpressionLowerer Lowerer => ExpressionLowerer;
+    ExpressionLowerer Lowerer => ExpressionLowerer;
 
     /// <summary>Filters a logical branch using an arbitrary-width typed CLR lambda.</summary>
     /// <typeparam name="TInput">Canonical type of the input node.</typeparam>
@@ -70,7 +71,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// A binding belongs to another session, is not visible in <paramref name="input"/>, or lambda
     /// parameters do not match the binding CLR types.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The predicate contains unsupported or ambiguous C# semantics.
     /// </exception>
     public RelationQueryNodeHandle<FilterQueryNode> Filter<TInput>(
@@ -105,7 +106,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// The binding belongs to another session, is not visible in <paramref name="input"/>, or has a
     /// mismatched CLR type.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
     public RelationQueryNodeHandle<FilterQueryNode> Filter<TInput, T1>(
         RelationQueryNodeHandle<TInput> input,
         Expression<Func<T1, bool>> predicate,
@@ -129,7 +130,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="ArgumentException">
     /// A binding belongs to another session, is not visible in <paramref name="input"/>, or has a mismatched CLR type.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
     public RelationQueryNodeHandle<FilterQueryNode> Filter<TInput, T1, T2>(
         RelationQueryNodeHandle<TInput> input,
         Expression<Func<T1, T2, bool>> predicate,
@@ -157,7 +158,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="ArgumentException">
     /// A binding belongs to another session, is not visible in <paramref name="input"/>, or has a mismatched CLR type.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
     public RelationQueryNodeHandle<FilterQueryNode> Filter<TInput, T1, T2, T3>(
         RelationQueryNodeHandle<TInput> input,
         Expression<Func<T1, T2, T3, bool>> predicate,
@@ -188,7 +189,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// A binding belongs to another session, is not visible in <paramref name="input"/>, or lambda
     /// parameters do not match the binding CLR types.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The projection contains unsupported or ambiguous C# semantics.
     /// </exception>
     /// <exception cref="InvalidOperationException">
@@ -196,7 +197,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// </exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TInput, TResult>(
         RelationQueryNodeHandle<TInput> input,
-        RelationQueryClrShape<TResult> resultShape,
+        ClrAuthoringShape<TResult> resultShape,
         LambdaExpression projection,
         IReadOnlyList<RelationQueryExpressionValueBinding> bindings,
         string? sourceReference = null)
@@ -213,7 +214,8 @@ public sealed partial class RelationQueryExpressionAuthoring
         var projected = structural.Project(
             input,
             resultShape.Id,
-            lowered.Assignments,
+            [.. lowered.Assignments.Select(a => new RelationQueryProjectionAssignment(
+                a.Target, a.Value, assignmentSource: a.AssignmentSource, valueSource: a.ValueSource))],
             source: lowered.NodeSource,
             bindingSource: lowered.BindingSource);
         return new(
@@ -225,7 +227,7 @@ public sealed partial class RelationQueryExpressionAuthoring
                 resultShape.Id,
                 resultShape.ResolveMemberPath,
                 resultShape.ResolveType,
-                resultShape.IdentityOrigin == RelationQueryClrIdentityOrigin.Imported));
+                resultShape.IdentityOrigin == ClrIdentityOrigin.Imported));
     }
 
     /// <summary>Projects one typed binding to a deterministic CLR result shape.</summary>
@@ -245,7 +247,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="InvalidOperationException">
     /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TInput, T1, TResult>(
         RelationQueryNodeHandle<TInput> input,
         Expression<Func<T1, TResult>> projection,
@@ -274,7 +276,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="InvalidOperationException">
     /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TInput, T1, T2, TResult>(
         RelationQueryNodeHandle<TInput> input,
         Expression<Func<T1, T2, TResult>> projection,
@@ -307,7 +309,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="InvalidOperationException">
     /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TInput, T1, T2, T3, TResult>(
         RelationQueryNodeHandle<TInput> input,
         Expression<Func<T1, T2, T3, TResult>> projection,
@@ -336,7 +338,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="InvalidOperationException">
     /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TValue, TResult>(
         RelationQueryExpressionBoundNode<TValue> input,
         Expression<Func<TValue, TResult>> projection,
@@ -368,7 +370,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// The input has no distinct originating root of type <typeparamref name="TRoot"/>, or
     /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TRoot, TFocus, TResult>(
         RelationQueryExpressionBoundNode<TFocus> input,
         Expression<Func<TRoot, TFocus, TResult>> projection,
@@ -413,7 +415,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="InvalidOperationException">
     /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TFirst, TFocus, TResult>(
         RelationQueryExpressionBoundNode<TFocus> input,
         Expression<Func<TFirst, TFocus, TResult>> projection,
@@ -451,7 +453,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="InvalidOperationException">
     /// <typeparamref name="TResult"/> cannot be represented by the configured CLR shape context.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The projection cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ProjectQueryNode, TResult> Project<TFirst, TSecond, TFocus, TResult>(
         RelationQueryExpressionBoundNode<TFocus> input,
         Expression<Func<TFirst, TSecond, TFocus, TResult>> projection,
@@ -487,7 +489,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// A binding belongs to another session, is not visible in either input branch, or has a mismatched CLR type.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
     public RelationQueryNodeHandle<JoinQueryNode> Join<TLeft, TRight>(
         RelationQueryNodeHandle<TLeft> left,
         RelationQueryNodeHandle<TRight> right,
@@ -530,7 +532,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// A binding belongs to another session, is not visible in either input branch, or has a mismatched CLR type.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The predicate cannot be lowered exactly.</exception>
     public RelationQueryNodeHandle<JoinQueryNode> Join<TLeft, TRight, T1, T2>(
         RelationQueryNodeHandle<TLeft> left,
         RelationQueryNodeHandle<TRight> right,
@@ -559,7 +561,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="ArgumentException">
     /// A binding belongs to another session, is not visible in <paramref name="input"/>, or has a mismatched CLR type.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The collection expression cannot be lowered exactly or combines complex items whose authoritative
     /// member-path provenance cannot be proven.
     /// </exception>
@@ -586,10 +588,10 @@ public sealed partial class RelationQueryExpressionAuthoring
         var provenance = ResolveCollectionBindingProvenance(collection, handles);
         if (provenance.IsAmbiguous)
         {
-            throw new RelationQueryExpressionAuthoringException(
+            throw new ExpressionAuthoringException(
             [
-                new RelationQueryExpressionDiagnostic(
-                    RelationQueryExpressionDiagnosticCodes.MemberPathUnavailable,
+                new ExpressionDiagnostic(
+                    ExpressionDiagnosticCodes.MemberPathUnavailable,
                     DiagnosticSeverity.Error,
                     "The collection expression combines items from different semantic bindings, so one authoritative member mapping cannot be proven.",
                     expressionPath: "body",
@@ -618,7 +620,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             itemShape = registeredItemShape.Id;
             itemMemberPathResolver = registeredItemShape.ResolveMemberPath;
             itemTypeResolver = registeredItemShape.ResolveType;
-            usesImportedMapping = registeredItemShape.IdentityOrigin == RelationQueryClrIdentityOrigin.Imported;
+            usesImportedMapping = registeredItemShape.IdentityOrigin == ClrIdentityOrigin.Imported;
         }
         else
         {
@@ -630,7 +632,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             if (itemMemberPathResolver is not null && !usesImportedMapping)
             {
                 var inferredItemShape = clr.TryGetRegisteredShape<TItem>();
-                if (inferredItemShape is not { IdentityOrigin: RelationQueryClrIdentityOrigin.Imported })
+                if (inferredItemShape is not { IdentityOrigin: ClrIdentityOrigin.Imported })
                 {
                     inferredItemShape ??= clr.Shape<TItem>();
                     TrackShape(inferredItemShape);
@@ -649,7 +651,7 @@ public sealed partial class RelationQueryExpressionAuthoring
                 itemMemberPathResolver = registeredItemShape.ResolveMemberPath;
                 itemTypeResolver = registeredItemShape.ResolveType;
                 itemType = registeredItemShape.Type;
-                usesImportedMapping = registeredItemShape.IdentityOrigin == RelationQueryClrIdentityOrigin.Imported;
+                usesImportedMapping = registeredItemShape.IdentityOrigin == ClrIdentityOrigin.Imported;
             }
         }
 
@@ -770,7 +772,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// The binding belongs to another session, is not visible in <paramref name="input"/>, or has a
     /// mismatched CLR type.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The collection expression cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The collection expression cannot be lowered exactly.</exception>
     public RelationQueryExpressionBoundNode<ExpandCollectionQueryNode, TItem> Expand<TInput, T1, TItem>(
         RelationQueryNodeHandle<TInput> input,
         Expression<Func<T1, IEnumerable<TItem>>> collection,
@@ -786,7 +788,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <param name="input">Logical branch to de-duplicate.</param>
     /// <param name="sourceReference">Optional stable producer reference.</param>
     /// <returns>This operation does not return because untyped whole-row equality cannot prove portable carriers.</returns>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// Always thrown because whole-row distinctness cannot prove that every visible field uses a
     /// carrier-independent canonical equality domain. Use typed keys or the structural escape hatch.
     /// </exception>
@@ -796,10 +798,10 @@ public sealed partial class RelationQueryExpressionAuthoring
         where TInput : LogicalQueryNode
     {
         var reference = sourceReference ?? "distinct";
-        throw new RelationQueryExpressionAuthoringException(
+        throw new ExpressionAuthoringException(
         [
-            new RelationQueryExpressionDiagnostic(
-                RelationQueryExpressionDiagnosticCodes.KeyDomainUnsupported,
+            new ExpressionDiagnostic(
+                ExpressionDiagnosticCodes.KeyDomainUnsupported,
                 DiagnosticSeverity.Error,
                 "Expression-authored whole-row distinctness cannot prove carrier-independent equality for every visible field.",
                 expressionPath: "row",
@@ -827,7 +829,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="direction"/> or <paramref name="nullPlacement"/> is unsupported.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The ordering key cannot be lowered exactly or returns a raw CLR temporal carrier instead of an explicitly
     /// normalized canonical scalar key.
     /// </exception>
@@ -907,7 +909,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <exception cref="InvalidOperationException">
     /// <paramref name="output"/> has no unambiguous originating source. Use the explicit overload accepting a root.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The key or an invariant cannot be lowered exactly, or the key contains a raw CLR temporal carrier instead
     /// of an explicitly normalized canonical scalar; no relation terminal is committed.
     /// </exception>
@@ -970,7 +972,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// graph-qualified shape, an invariant is null, or invariant names repeat.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The key or an invariant cannot be lowered exactly, or the key contains a raw CLR temporal carrier instead
     /// of an explicitly normalized canonical scalar; no relation terminal is committed.
     /// </exception>
@@ -1035,7 +1037,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// invariant is null, or invariant names repeat.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="mode"/> is unsupported.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The key or an invariant cannot be lowered exactly, or the key contains a raw CLR temporal carrier
     /// instead of an explicitly normalized canonical scalar; no relation terminal is committed.
     /// </exception>
@@ -1088,7 +1090,7 @@ public sealed partial class RelationQueryExpressionAuthoring
         var reference = sourceReference ?? $"relation/{id.Value}";
 
         Expr? loweredKey = null;
-        RelationQueryAuthoringSource? keySource = null;
+        AuthoringSource? keySource = null;
         if (key is not null)
         {
             RequireCarrierIndependentKey(key, "relation output", reference + "/key");
@@ -1113,7 +1115,7 @@ public sealed partial class RelationQueryExpressionAuthoring
         }
 
         var canonicalInvariants = new InvariantDefinition[authoredInvariants.Length];
-        var invariantSources = new RelationQueryAuthoringSource?[authoredInvariants.Length];
+        var invariantSources = new AuthoringSource?[authoredInvariants.Length];
         for (var index = 0; index < authoredInvariants.Length; index++)
         {
             var invariant = authoredInvariants[index];

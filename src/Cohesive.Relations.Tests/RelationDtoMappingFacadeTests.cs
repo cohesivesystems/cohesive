@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.Execution;
@@ -124,7 +125,7 @@ public sealed class RelationDtoMappingFacadeTests
     [Fact]
     public void RejectsExecutableCallbacksDuringAuthoring()
     {
-        Assert.Throws<RelationQueryExpressionAuthoringException>(() =>
+        Assert.Throws<ExpressionAuthoringException>(() =>
             RelationDtoMapping.Create((Load x) => new Label(Unsupported(x.Status))));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             RelationDtoMapping.Create((Load x) => new Label(x.Status), maximumRows: 0));

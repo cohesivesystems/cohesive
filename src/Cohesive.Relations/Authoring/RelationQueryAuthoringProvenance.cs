@@ -1,47 +1,7 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 
 namespace Cohesive.Relations.Authoring;
-
-/// <summary>
-/// Identifies the producer input from which one structural authoring decision was lowered.
-/// </summary>
-/// <remarks>
-/// The reference is intentionally independent of C# expression trees so importers, generators,
-/// Ari, and future host-language frontends can preserve their own source identities without
-/// changing canonical relation/query semantics.
-/// </remarks>
-public sealed record RelationQueryAuthoringSource
-{
-    /// <summary>Creates an authoring source reference.</summary>
-    /// <param name="producer">Stable identity of the frontend or producer.</param>
-    /// <param name="reference">Producer-defined stable reference to the source construct.</param>
-    /// <param name="description">Optional human-readable description of the source construct.</param>
-    /// <exception cref="ArgumentNullException">
-    /// <paramref name="producer"/> or <paramref name="reference"/> is <see langword="null"/>.
-    /// </exception>
-    /// <exception cref="ArgumentException">
-    /// <paramref name="producer"/> or <paramref name="reference"/> is empty or consists only of
-    /// white-space characters.
-    /// </exception>
-    public RelationQueryAuthoringSource(
-        string producer,
-        string reference,
-        string? description = null)
-    {
-        Producer = Guard.RequireNotNullOrWhiteSpace(producer);
-        Reference = Guard.RequireNotNullOrWhiteSpace(reference);
-        Description = description.TrimmedEmptyOrWhiteSpaceAs();
-    }
-
-    /// <summary>Stable identity of the frontend or producer.</summary>
-    public string Producer { get; init; }
-
-    /// <summary>Producer-defined stable reference to the source construct.</summary>
-    public string Reference { get; init; }
-
-    /// <summary>Optional human-readable description of the source construct.</summary>
-    public string? Description { get; init; }
-}
 
 /// <summary>Category of canonical identity retained by authoring provenance.</summary>
 public enum RelationQueryAuthoringIdentityKind
@@ -100,7 +60,7 @@ public sealed record RelationQueryAuthoringIdentityDecision
         string value,
         RelationQueryAuthoringIdentityOrigin origin,
         string? convention = null,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
     {
         if (!Enum.IsDefined(kind))
         {
@@ -144,7 +104,7 @@ public sealed record RelationQueryAuthoringIdentityDecision
     public string? Convention { get; init; }
 
     /// <summary>Optional producer source responsible for the identity decision.</summary>
-    public RelationQueryAuthoringSource? Source { get; init; }
+    public AuthoringSource? Source { get; init; }
 }
 
 /// <summary>Kind of generated semantic construct carrying producer-source provenance.</summary>
@@ -188,7 +148,7 @@ public sealed record RelationQueryAuthoringSourceDecision
     public RelationQueryAuthoringSourceDecision(
         RelationQueryAuthoringDecisionKind kind,
         string target,
-        RelationQueryAuthoringSource source,
+        AuthoringSource source,
         string? role = null)
     {
         if (!Enum.IsDefined(kind))
@@ -212,7 +172,7 @@ public sealed record RelationQueryAuthoringSourceDecision
     public string? Role { get; init; }
 
     /// <summary>Producer source from which the construct was lowered.</summary>
-    public RelationQueryAuthoringSource Source { get; init; }
+    public AuthoringSource Source { get; init; }
 }
 
 /// <summary>Origin of an effective non-identity authoring configuration value.</summary>
@@ -254,7 +214,7 @@ public sealed record RelationQueryAuthoringConfigurationDecision
         string value,
         RelationQueryAuthoringValueOrigin origin,
         string? convention = null,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
     {
         if (!Enum.IsDefined(origin))
         {
@@ -299,7 +259,7 @@ public sealed record RelationQueryAuthoringConfigurationDecision
     public string? Convention { get; init; }
 
     /// <summary>Optional producer source responsible for the configuration decision.</summary>
-    public RelationQueryAuthoringSource? Source { get; init; }
+    public AuthoringSource? Source { get; init; }
 }
 
 /// <summary>

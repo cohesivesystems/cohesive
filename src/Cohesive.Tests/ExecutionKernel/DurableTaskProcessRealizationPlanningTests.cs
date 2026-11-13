@@ -321,7 +321,7 @@ public sealed class DurableTaskProcessRealizationPlanningTests
 
     static string Describe(ExecutionDefinitionReference reference) =>
         $"{reference.DefinitionId.Value}@{reference.RevisionId.Value}#"
-        + $"{reference.Fingerprint.Algorithm}:{reference.Fingerprint.Canonicalization}:{reference.Fingerprint.Value}";
+        + $"{reference.Fingerprint.ToCanonicalString()}";
 
     static CompiledProcessPlan ReturnPlan(ProcessCompilationOptions? options = null) => Compile(
         new CanonicalProcessDefinition(

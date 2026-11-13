@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Model;
@@ -22,14 +23,14 @@ public static class IdentityDirectoryQueries
     const string RowsResultIdentity = "rows";
     const int UniqueLookupLimit = 2;
 
-    static readonly RelationQueryClrAuthoringContext Clr = new();
-    static readonly RelationQueryClrShape<PrincipalAccountRecord> PrincipalShape = Clr.Shape<PrincipalAccountRecord>(
+    static readonly ClrAuthoringContext Clr = new();
+    static readonly ClrAuthoringShape<PrincipalAccountRecord> PrincipalShape = Clr.Shape<PrincipalAccountRecord>(
         IdentityDomainModel.ShapeGraphDocument,
         IdentityDomainModel.PrincipalAccountShape);
-    static readonly RelationQueryClrShape<ScopeMembershipRecord> MembershipShape = Clr.Shape<ScopeMembershipRecord>(
+    static readonly ClrAuthoringShape<ScopeMembershipRecord> MembershipShape = Clr.Shape<ScopeMembershipRecord>(
         IdentityDomainModel.ShapeGraphDocument,
         IdentityDomainModel.ScopeMembershipShape);
-    static readonly RelationQueryClrShape<IdentityScopeRecord> ScopeShape = Clr.Shape<IdentityScopeRecord>(
+    static readonly ClrAuthoringShape<IdentityScopeRecord> ScopeShape = Clr.Shape<IdentityScopeRecord>(
         IdentityDomainModel.ShapeGraphDocument,
         IdentityDomainModel.ScopeShape);
     static readonly QueryResultId RowsResultIdentityId = new(RowsResultIdentity);

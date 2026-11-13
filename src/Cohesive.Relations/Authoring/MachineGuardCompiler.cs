@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using Cohesive.Model.Authoring;
 using System.Linq.Expressions;
 using Cohesive.Machines;
@@ -16,7 +17,7 @@ public static class MachineGuardCompiler
     /// <param name="typeRefMapper">Configured CLR contracts shared with entity and Transition authoring; defaults to the framework mapper.</param>
     /// <returns>Portable predicate with structural input contracts.</returns>
     /// <exception cref="ArgumentNullException">The predicate is null.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">An expression is outside the portable language.</exception>
+    /// <exception cref="ExpressionAuthoringException">An expression is outside the portable language.</exception>
     public static MachineGuard Compile<TFacts, TInput>(Expression<Func<TFacts, TInput, bool>> predicate, IClrTypeRefMapper? typeRefMapper = null)
         where TFacts : notnull where TInput : notnull
     {
@@ -24,7 +25,7 @@ public static class MachineGuardCompiler
         var author = new RelationQueryExpressionAuthoring();
         var facts = author.Source<TFacts>("machine/facts").Binding;
         var input = author.Source<TInput>("machine/input").Binding;
-        var lowerer = new RelationQueryExpressionLowerer(author.Clr.ResolveMemberPath);
+        var lowerer = new ExpressionLowerer(author.Clr.ResolveMemberPath);
         var lowered = lowerer.LowerValue(predicate, [facts, input], "machine/guard").RequireValue();
         // Guards are standalone portable contracts, so resolve CLR enums and nested values using
         // the same mapper as Transition authoring rather than retaining graph-local named references.

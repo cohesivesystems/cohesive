@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Serialization;
@@ -186,8 +187,8 @@ public sealed record RelationQueryProjectionAssignment
         FieldPath target,
         Expr value,
         QueryAssignmentId? id = null,
-        RelationQueryAuthoringSource? assignmentSource = null,
-        RelationQueryAuthoringSource? valueSource = null)
+        AuthoringSource? assignmentSource = null,
+        AuthoringSource? valueSource = null)
     {
         Target = target;
         Value = Guard.RequireNotNull(value);
@@ -206,10 +207,10 @@ public sealed record RelationQueryProjectionAssignment
     public QueryAssignmentId? Id { get; init; }
 
     /// <summary>Optional producer-source attribution for the assignment decision.</summary>
-    public RelationQueryAuthoringSource? AssignmentSource { get; init; }
+    public AuthoringSource? AssignmentSource { get; init; }
 
     /// <summary>Optional producer-source attribution for the value-expression site.</summary>
-    public RelationQueryAuthoringSource? ValueSource { get; init; }
+    public AuthoringSource? ValueSource { get; init; }
 }
 
 /// <summary>Structural input for one grouping assignment in an aggregate node.</summary>
@@ -226,8 +227,8 @@ public sealed record RelationQueryGroupingAssignment
         FieldPath target,
         Expr key,
         QueryAssignmentId? id = null,
-        RelationQueryAuthoringSource? assignmentSource = null,
-        RelationQueryAuthoringSource? keySource = null)
+        AuthoringSource? assignmentSource = null,
+        AuthoringSource? keySource = null)
     {
         Target = target;
         Key = Guard.RequireNotNull(key);
@@ -246,10 +247,10 @@ public sealed record RelationQueryGroupingAssignment
     public QueryAssignmentId? Id { get; init; }
 
     /// <summary>Optional producer-source attribution for the assignment decision.</summary>
-    public RelationQueryAuthoringSource? AssignmentSource { get; init; }
+    public AuthoringSource? AssignmentSource { get; init; }
 
     /// <summary>Optional producer-source attribution for the key-expression site.</summary>
-    public RelationQueryAuthoringSource? KeySource { get; init; }
+    public AuthoringSource? KeySource { get; init; }
 }
 
 /// <summary>Structural input for one aggregate assignment in an aggregate node.</summary>
@@ -270,9 +271,9 @@ public sealed record RelationQueryAggregateAssignment
         Expr? value = null,
         Expr? filter = null,
         QueryAssignmentId? id = null,
-        RelationQueryAuthoringSource? assignmentSource = null,
-        RelationQueryAuthoringSource? valueSource = null,
-        RelationQueryAuthoringSource? filterSource = null)
+        AuthoringSource? assignmentSource = null,
+        AuthoringSource? valueSource = null,
+        AuthoringSource? filterSource = null)
     {
         Target = target;
         Operation = operation;
@@ -300,13 +301,13 @@ public sealed record RelationQueryAggregateAssignment
     public QueryAssignmentId? Id { get; init; }
 
     /// <summary>Optional producer-source attribution for the assignment decision.</summary>
-    public RelationQueryAuthoringSource? AssignmentSource { get; init; }
+    public AuthoringSource? AssignmentSource { get; init; }
 
     /// <summary>Optional producer-source attribution for the value-expression site.</summary>
-    public RelationQueryAuthoringSource? ValueSource { get; init; }
+    public AuthoringSource? ValueSource { get; init; }
 
     /// <summary>Optional producer-source attribution for the filter-expression site.</summary>
-    public RelationQueryAuthoringSource? FilterSource { get; init; }
+    public AuthoringSource? FilterSource { get; init; }
 }
 
 /// <summary>Structural input for one ordering expression.</summary>
@@ -322,7 +323,7 @@ public sealed record RelationQueryOrderingInput
         Expr key,
         QuerySortDirection direction = QuerySortDirection.Ascending,
         QueryNullPlacement nullPlacement = QueryNullPlacement.Last,
-        RelationQueryAuthoringSource? keySource = null)
+        AuthoringSource? keySource = null)
     {
         Key = Guard.RequireNotNull(key);
         Direction = direction;
@@ -340,7 +341,7 @@ public sealed record RelationQueryOrderingInput
     public QueryNullPlacement NullPlacement { get; init; }
 
     /// <summary>Optional producer-source attribution for the key-expression site.</summary>
-    public RelationQueryAuthoringSource? KeySource { get; init; }
+    public AuthoringSource? KeySource { get; init; }
 }
 
 /// <summary>Structural input for an expression site that has no assignment identity.</summary>
@@ -350,7 +351,7 @@ public sealed record RelationQueryExpressionInput
     /// <param name="value">Canonical semantic expression.</param>
     /// <param name="source">Optional producer-source attribution for the expression site.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    public RelationQueryExpressionInput(Expr value, RelationQueryAuthoringSource? source = null)
+    public RelationQueryExpressionInput(Expr value, AuthoringSource? source = null)
     {
         Value = Guard.RequireNotNull(value);
         Source = source;
@@ -360,7 +361,7 @@ public sealed record RelationQueryExpressionInput
     public Expr Value { get; init; }
 
     /// <summary>Optional producer-source attribution for the expression site.</summary>
-    public RelationQueryAuthoringSource? Source { get; init; }
+    public AuthoringSource? Source { get; init; }
 
     /// <summary>Wraps a canonical expression without producer-source attribution.</summary>
     /// <param name="value">Canonical semantic expression.</param>

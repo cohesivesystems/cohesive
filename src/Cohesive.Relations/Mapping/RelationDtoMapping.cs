@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Globalization;
 using System.Linq.Expressions;
 using Cohesive.Relations.Authoring;
@@ -21,7 +22,7 @@ public static class RelationDtoMapping
     /// <exception cref="ArgumentOutOfRangeException">The row bound is not positive.</exception>
     /// <exception cref="ArgumentException">A CLR source or result type is not an admissible object shape.</exception>
     /// <exception cref="RelationQueryPreparationException">The lowered relation or DTO binding cannot be compiled; original diagnostics are retained.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The expression cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The expression cannot be lowered exactly.</exception>
     /// <remarks>No source values are read and no I/O occurs. Source identities are invocation-local ordinal
     /// occurrences, not inferred entity keys. Output DTOs need no identity member. Output conversions retain the
     /// existing scalar DTO mapper boundary; nested/collection DTO members are rejected with its diagnostics. Captures and arbitrary

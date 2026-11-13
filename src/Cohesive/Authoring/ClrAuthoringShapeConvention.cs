@@ -1,9 +1,10 @@
+using Cohesive.Model;
 using System.Collections.Concurrent;
 
-namespace Cohesive.Relations.Authoring;
+namespace Cohesive.Authoring;
 
 /// <summary>
-/// Deterministically qualifies CLR types for convention-authored relationships.
+/// Deterministically qualifies CLR types for convention-authored shapes.
 /// </summary>
 /// <remarks>
 /// The shape portion follows the <c>clr:shape:</c> identity emitted by
@@ -14,7 +15,7 @@ namespace Cohesive.Relations.Authoring;
 /// Use explicit <see cref="QualifiedShapeId"/> builder overloads when a persisted or imported
 /// shape graph supplies the canonical identifiers.
 /// </remarks>
-public static class ClrRelationshipShapeConvention
+public static class ClrAuthoringShapeConvention
 {
     /// <summary>Prefix for graph identifiers derived from CLR assembly identities.</summary>
     public const string GraphIdPrefix = "clr:graph:assembly/v1:";

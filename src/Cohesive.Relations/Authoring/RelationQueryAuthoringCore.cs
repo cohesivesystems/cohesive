@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
@@ -58,7 +59,7 @@ public sealed partial class RelationQueryAuthoringCore
         FieldPresence presence = FieldPresence.Required,
         ObservationValue? defaultValue = null,
         QueryParameterId? id = null,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
     {
         var selected = SelectParameterId(id, source);
         var definition = new QueryParameterDefinition(selected.Id, type, presence, defaultValue);
@@ -86,8 +87,8 @@ public sealed partial class RelationQueryAuthoringCore
         QualifiedShapeId shape,
         QueryNodeId? nodeId = null,
         ValueBindingId? bindingId = null,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? bindingSource = null)
+        AuthoringSource? source = null,
+        AuthoringSource? bindingSource = null)
     {
         var selectedNode = SelectNodeId(RelationQueryWireNames.SourceNode, nodeId, source);
         var selectedBinding = SelectBindingId(selectedNode.Id, "source", bindingId, bindingSource ?? source);
@@ -112,8 +113,8 @@ public sealed partial class RelationQueryAuthoringCore
         RelationQueryNodeHandle<TInput> input,
         Expr predicate,
         QueryNodeId? nodeId = null,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? predicateSource = null)
+        AuthoringSource? source = null,
+        AuthoringSource? predicateSource = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -152,8 +153,8 @@ public sealed partial class RelationQueryAuthoringCore
         QueryInputRequirement requirement = QueryInputRequirement.Required,
         QueryNodeId? nodeId = null,
         ValueBindingId? resultBindingId = null,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? bindingSource = null)
+        AuthoringSource? source = null,
+        AuthoringSource? bindingSource = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -195,8 +196,8 @@ public sealed partial class RelationQueryAuthoringCore
         JoinKind kind,
         Expr predicate,
         QueryNodeId? nodeId = null,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? predicateSource = null)
+        AuthoringSource? source = null,
+        AuthoringSource? predicateSource = null)
         where TLeft : LogicalQueryNode
         where TRight : LogicalQueryNode
     {
@@ -236,9 +237,9 @@ public sealed partial class RelationQueryAuthoringCore
         Expr correlation,
         TemporalJoinMatch match,
         QueryNodeId? nodeId = null,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? correlationSource = null,
-        RelationQueryAuthoringSource? matchSource = null)
+        AuthoringSource? source = null,
+        AuthoringSource? correlationSource = null,
+        AuthoringSource? matchSource = null)
         where TLeft : LogicalQueryNode
         where TRight : LogicalQueryNode
     {
@@ -276,9 +277,9 @@ public sealed partial class RelationQueryAuthoringCore
         TypeRef itemType,
         QueryNodeId? nodeId = null,
         ValueBindingId? itemBindingId = null,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? bindingSource = null,
-        RelationQueryAuthoringSource? collectionSource = null,
+        AuthoringSource? source = null,
+        AuthoringSource? bindingSource = null,
+        AuthoringSource? collectionSource = null,
         QualifiedShapeId? itemShape = null)
         where TInput : LogicalQueryNode
     {
@@ -317,8 +318,8 @@ public sealed partial class RelationQueryAuthoringCore
         ImmutableArray<RelationQueryProjectionAssignment> assignments,
         QueryNodeId? nodeId = null,
         ValueBindingId? resultBindingId = null,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? bindingSource = null)
+        AuthoringSource? source = null,
+        AuthoringSource? bindingSource = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -380,7 +381,7 @@ public sealed partial class RelationQueryAuthoringCore
         RelationQueryNodeHandle<TInput> input,
         ImmutableArray<RelationQueryExpressionInput> keys = default,
         QueryNodeId? nodeId = null,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -424,8 +425,8 @@ public sealed partial class RelationQueryAuthoringCore
         ImmutableArray<RelationQueryAggregateAssignment> aggregates = default,
         QueryNodeId? nodeId = null,
         ValueBindingId? resultBindingId = null,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? bindingSource = null)
+        AuthoringSource? source = null,
+        AuthoringSource? bindingSource = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -536,7 +537,7 @@ public sealed partial class RelationQueryAuthoringCore
         RelationQueryNodeHandle<TInput> input,
         ImmutableArray<RelationQueryOrderingInput> orderings,
         QueryNodeId? nodeId = null,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -577,7 +578,7 @@ public sealed partial class RelationQueryAuthoringCore
         RelationQueryNodeHandle<TInput> input,
         QueryPageDefinition page,
         QueryNodeId? nodeId = null,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -611,7 +612,7 @@ public sealed partial class RelationQueryAuthoringCore
     public RelationQueryResultHandle<RowsQueryResultDefinition> Rows<TInput>(
         RelationQueryNodeHandle<TInput> input,
         QueryResultId? id = null,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -637,7 +638,7 @@ public sealed partial class RelationQueryAuthoringCore
     public RelationQueryResultHandle<AggregationQueryResultDefinition> Aggregation<TInput>(
         RelationQueryNodeHandle<TInput> input,
         QueryResultId? id = null,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -665,7 +666,7 @@ public sealed partial class RelationQueryAuthoringCore
         QueryId id,
         QueryName name,
         ImmutableArray<RelationQueryResultHandle> results,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
     {
         RequireEntries(results, nameof(results), "Query results");
         foreach (var result in results)
@@ -730,9 +731,9 @@ public sealed partial class RelationQueryAuthoringCore
         RelationOutputMode mode,
         Expr? key = null,
         ImmutableArray<InvariantDefinition> invariants = default,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? keySource = null,
-        ImmutableArray<RelationQueryAuthoringSource?> invariantSources = default)
+        AuthoringSource? source = null,
+        AuthoringSource? keySource = null,
+        ImmutableArray<AuthoringSource?> invariantSources = default)
         where TOutput : LogicalQueryNode
     {
         RequireBinding(root, nameof(root));
@@ -1071,7 +1072,7 @@ public sealed partial class RelationQueryAuthoringCore
 
     static void RequireInvariantSources(
         ImmutableArray<InvariantDefinition> invariants,
-        ImmutableArray<RelationQueryAuthoringSource?> invariantSources)
+        ImmutableArray<AuthoringSource?> invariantSources)
     {
         if (!invariantSources.IsDefault && invariantSources.Length != invariants.Length)
         {
@@ -1086,11 +1087,11 @@ public sealed partial class RelationQueryAuthoringCore
     static List<RelationQueryAuthoringSourceDecision> TerminalSourceDecisions(
         string role,
         string target,
-        RelationQueryAuthoringSource? source,
+        AuthoringSource? source,
         Expr? key,
-        RelationQueryAuthoringSource? keySource,
+        AuthoringSource? keySource,
         ImmutableArray<InvariantDefinition> invariants,
-        ImmutableArray<RelationQueryAuthoringSource?> invariantSources)
+        ImmutableArray<AuthoringSource?> invariantSources)
     {
         List<RelationQueryAuthoringSourceDecision> decisions = [];
         if (TerminalSource(role, target, source) is { } terminal)
@@ -1117,7 +1118,7 @@ public sealed partial class RelationQueryAuthoringCore
     static RelationQueryAuthoringSourceDecision? TerminalSource(
         string role,
         string target,
-        RelationQueryAuthoringSource? source) =>
+        AuthoringSource? source) =>
         source is null
             ? null
             : new RelationQueryAuthoringSourceDecision(
@@ -1153,9 +1154,9 @@ public sealed partial class RelationQueryAuthoringCore
     void AddNode(
         LogicalQueryNode node,
         SelectedIdentity<QueryNodeId> selectedNode,
-        RelationQueryAuthoringSource? nodeSource,
+        AuthoringSource? nodeSource,
         SelectedIdentity<ValueBindingId>? selectedBinding = null,
-        RelationQueryAuthoringSource? bindingSource = null)
+        AuthoringSource? bindingSource = null)
     {
         EnsureAvailable(nodesById.Keys, node.Id, nameof(node), "logical node");
         if (selectedBinding is { } binding)
@@ -1176,7 +1177,7 @@ public sealed partial class RelationQueryAuthoringCore
 
     void AddAssignment(
         SelectedIdentity<QueryAssignmentId> selected,
-        RelationQueryAuthoringSource? source)
+        AuthoringSource? source)
     {
         assignmentIds.Add(selected.Id);
         identities.Add(selected.Decision);
@@ -1197,7 +1198,7 @@ public sealed partial class RelationQueryAuthoringCore
     SelectedIdentity<QueryNodeId> SelectNodeId(
         string kind,
         QueryNodeId? explicitId,
-        RelationQueryAuthoringSource? source)
+        AuthoringSource? source)
     {
         var ordinal = PeekOrdinal(nodeOrdinals, kind);
         return explicitId is { } id
@@ -1221,7 +1222,7 @@ public sealed partial class RelationQueryAuthoringCore
         QueryNodeId node,
         string role,
         ValueBindingId? explicitId,
-        RelationQueryAuthoringSource? source) =>
+        AuthoringSource? source) =>
         explicitId is { } id
             ? Explicit(id, RelationQueryAuthoringIdentityKind.Binding, id.Value, source, nameof(explicitId))
             : Convention(
@@ -1231,7 +1232,7 @@ public sealed partial class RelationQueryAuthoringCore
 
     SelectedIdentity<QueryParameterId> SelectParameterId(
         QueryParameterId? explicitId,
-        RelationQueryAuthoringSource? source)
+        AuthoringSource? source)
     {
         var ordinal = parameterOrdinal + 1;
         return explicitId is { } id
@@ -1256,7 +1257,7 @@ public sealed partial class RelationQueryAuthoringCore
         string role,
         int ordinal,
         QueryAssignmentId? explicitId,
-        RelationQueryAuthoringSource? source) =>
+        AuthoringSource? source) =>
         explicitId is { } id
             ? Explicit(id, RelationQueryAuthoringIdentityKind.Assignment, id.Value, source, nameof(explicitId))
             : Convention(
@@ -1267,7 +1268,7 @@ public sealed partial class RelationQueryAuthoringCore
     SelectedIdentity<QueryResultId> SelectResultId(
         string kind,
         QueryResultId? explicitId,
-        RelationQueryAuthoringSource? source)
+        AuthoringSource? source)
     {
         var ordinal = PeekOrdinal(resultOrdinals, kind);
         return explicitId is { } id
@@ -1291,7 +1292,7 @@ public sealed partial class RelationQueryAuthoringCore
         TId id,
         RelationQueryAuthoringIdentityKind kind,
         string? value,
-        RelationQueryAuthoringSource? source,
+        AuthoringSource? source,
         string parameterName,
         string? ordinalScope = null,
         int ordinal = 0)
@@ -1312,7 +1313,7 @@ public sealed partial class RelationQueryAuthoringCore
     static SelectedIdentity<TId> Convention<TId>(
         TId id,
         RelationQueryAuthoringIdentityKind kind,
-        RelationQueryAuthoringSource? source,
+        AuthoringSource? source,
         string? ordinalScope = null,
         int ordinal = 0)
     {
@@ -1377,7 +1378,7 @@ public sealed partial class RelationQueryAuthoringCore
     void Trace(
         RelationQueryAuthoringDecisionKind kind,
         string target,
-        RelationQueryAuthoringSource? source,
+        AuthoringSource? source,
         string? role = null)
     {
         if (source is not null)
@@ -1418,21 +1419,21 @@ public sealed partial class RelationQueryAuthoringCore
     sealed record AuthoredProjectionAssignment(
         ProjectionAssignment Assignment,
         SelectedIdentity<QueryAssignmentId> Identity,
-        RelationQueryAuthoringSource? AssignmentSource,
-        RelationQueryAuthoringSource? ValueSource);
+        AuthoringSource? AssignmentSource,
+        AuthoringSource? ValueSource);
 
     sealed record AuthoredGroupingAssignment(
         QueryGrouping Grouping,
         SelectedIdentity<QueryAssignmentId> Identity,
-        RelationQueryAuthoringSource? AssignmentSource,
-        RelationQueryAuthoringSource? KeySource);
+        AuthoringSource? AssignmentSource,
+        AuthoringSource? KeySource);
 
     sealed record AuthoredAggregateAssignment(
         QueryAggregateAssignment Aggregate,
         SelectedIdentity<QueryAssignmentId> Identity,
-        RelationQueryAuthoringSource? AssignmentSource,
-        RelationQueryAuthoringSource? ValueSource,
-        RelationQueryAuthoringSource? FilterSource);
+        AuthoringSource? AssignmentSource,
+        AuthoringSource? ValueSource,
+        AuthoringSource? FilterSource);
 
     sealed record BodySelection(
         LogicalQueryDefinition Body,

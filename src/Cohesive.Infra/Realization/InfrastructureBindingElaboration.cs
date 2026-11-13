@@ -60,6 +60,10 @@ public sealed record InfrastructureBindingElaborationProfileFingerprint
 
     /// <summary>Lowercase hexadecimal digest.</summary>
     public string Value { get; }
+
+    /// <summary>Formats this fingerprint using the shared delimiter-safe core encoding.</summary>
+    /// <returns>Algorithm, canonicalization and digest separated by colons, with embedded percent and colon escaped.</returns>
+    public string ToCanonicalString() => Cohesive.Model.FingerprintText.Format(Algorithm, Canonicalization, Value);
 }
 
 /// <summary>Exact versioned reference to one binding-elaboration profile.</summary>
@@ -619,6 +623,10 @@ public sealed record InfrastructureBindingElaborationFingerprint
 
     /// <summary>Lowercase hexadecimal digest.</summary>
     public string Value { get; }
+
+    /// <summary>Formats this fingerprint using the shared delimiter-safe core encoding.</summary>
+    /// <returns>Algorithm, canonicalization and digest separated by colons, with embedded percent and colon escaped.</returns>
+    public string ToCanonicalString() => Cohesive.Model.FingerprintText.Format(Algorithm, Canonicalization, Value);
 }
 
 /// <summary>Exactly fingerprinted binding-elaboration result and machine-readable explanation artifact.</summary>
@@ -1069,33 +1077,33 @@ static class InfrastructureDiagnosticReferences
 {
     internal static string Definition(InfrastructureDefinitionDocument document) =>
         $"{document.Definition.Id.Value}@{document.Definition.Revision.Value}"
-        + $"#{document.Fingerprint.Algorithm}:{document.Fingerprint.Canonicalization}:{document.Fingerprint.Value}";
+        + $"#{document.Fingerprint.ToCanonicalString()}";
 
     internal static string DefinitionReference(InfrastructureDefinitionReference definition) =>
         $"{definition.Id.Value}@{definition.Revision.Value}"
-        + $"#{definition.Fingerprint.Algorithm}:{definition.Fingerprint.Canonicalization}:{definition.Fingerprint.Value}";
+        + $"#{definition.Fingerprint.ToCanonicalString()}";
 
     internal static string CapabilityProfile(InfrastructureCapabilityProfile profile) =>
         $"{profile.Id.Value}"
-        + $"#{profile.Fingerprint.Algorithm}:{profile.Fingerprint.Canonicalization}:{profile.Fingerprint.Value}";
+        + $"#{profile.Fingerprint.ToCanonicalString()}";
 
     internal static string CapabilityProfileReference(InfrastructureCapabilityProfileReference profile) =>
         $"{profile.Id.Value}"
-        + $"#{profile.Fingerprint.Algorithm}:{profile.Fingerprint.Canonicalization}:{profile.Fingerprint.Value}";
+        + $"#{profile.Fingerprint.ToCanonicalString()}";
 
     internal static string BindingProfile(InfrastructureBindingElaborationProfile profile) =>
         $"{profile.Id.Value}"
-        + $"#{profile.Fingerprint.Algorithm}:{profile.Fingerprint.Canonicalization}:{profile.Fingerprint.Value}";
+        + $"#{profile.Fingerprint.ToCanonicalString()}";
 
     internal static string BindingProfileReference(InfrastructureBindingElaborationProfileReference profile) =>
         $"{profile.Id.Value}"
-        + $"#{profile.Fingerprint.Algorithm}:{profile.Fingerprint.Canonicalization}:{profile.Fingerprint.Value}";
+        + $"#{profile.Fingerprint.ToCanonicalString()}";
 
     internal static string BoundaryAcceptancePolicy(InfrastructureBoundaryAcceptancePolicy policy) =>
         $"{policy.Id.Value}"
-        + $"#{policy.Fingerprint.Algorithm}:{policy.Fingerprint.Canonicalization}:{policy.Fingerprint.Value}";
+        + $"#{policy.Fingerprint.ToCanonicalString()}";
 
     internal static string BoundaryAcceptancePolicyReference(InfrastructureBoundaryAcceptancePolicyReference policy) =>
         $"{policy.Id.Value}"
-        + $"#{policy.Fingerprint.Algorithm}:{policy.Fingerprint.Canonicalization}:{policy.Fingerprint.Value}";
+        + $"#{policy.Fingerprint.ToCanonicalString()}";
 }

@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -13,8 +14,8 @@ public sealed class RelationQueryExpressionAuthoringTests
     [Fact]
     public void ExpressionRelationConvention_IsDeterministicAndEndpointScoped()
     {
-        var root = ClrRelationshipShapeConvention.GetQualifiedShapeId<Load>();
-        var output = ClrRelationshipShapeConvention.GetQualifiedShapeId<LoadDto>();
+        var root = ClrAuthoringShapeConvention.GetQualifiedShapeId<Load>();
+        var output = ClrAuthoringShapeConvention.GetQualifiedShapeId<LoadDto>();
 
         var first = RelationQueryExpressionRelationConvention.CreateId(root, output);
         var second = RelationQueryExpressionRelationConvention.CreateId(root, output);
@@ -443,7 +444,7 @@ public sealed class RelationQueryExpressionAuthoringTests
     [Fact]
     public void AuthoringManifest_RejectsDuplicateEffectiveConfigurationSettings()
     {
-        var source = new RelationQueryAuthoringSource("test", "relation/test");
+        var source = new AuthoringSource("test", "relation/test");
         var decision = new RelationQueryAuthoringConfigurationDecision(
             "relation/test",
             RelationQueryExpressionRelationConvention.NameSetting,
@@ -611,7 +612,7 @@ public sealed class RelationQueryExpressionAuthoringTests
         var loads = author.Source<Load>();
         var capture = new ThrowingCapture();
 
-        var exception = Assert.Throws<RelationQueryExpressionAuthoringException>(() =>
+        var exception = Assert.Throws<ExpressionAuthoringException>(() =>
             author.Filter(
                 loads.Node,
                 (Load load) => load.Status == capture.Value,
@@ -619,7 +620,7 @@ public sealed class RelationQueryExpressionAuthoringTests
                 sourceReference: "loads/captured-status"));
 
         var diagnostic = Assert.Single(exception.Diagnostics);
-        Assert.Equal(RelationQueryExpressionDiagnosticCodes.CapturedValueUnsupported, diagnostic.Code);
+        Assert.Equal(ExpressionDiagnosticCodes.CapturedValueUnsupported, diagnostic.Code);
         Assert.Equal("loads/captured-status", diagnostic.SourceReference);
         Assert.Equal(0, capture.ReadCount);
         Assert.NotNull(diagnostic.Suggestion);
@@ -633,7 +634,7 @@ public sealed class RelationQueryExpressionAuthoringTests
         var author = RelationQuery.Expression();
         var loads = author.Source<Load>();
 
-        var exception = Assert.Throws<RelationQueryExpressionAuthoringException>(() =>
+        var exception = Assert.Throws<ExpressionAuthoringException>(() =>
             author.Filter(
                 loads.Node,
                 (Load load) => load.Status == foreignStatus.Value,
@@ -641,7 +642,7 @@ public sealed class RelationQueryExpressionAuthoringTests
                 sourceReference: "loads/foreign-status"));
 
         var diagnostic = Assert.Single(exception.Diagnostics);
-        Assert.Equal(RelationQueryExpressionDiagnosticCodes.ParameterMarkerInvalid, diagnostic.Code);
+        Assert.Equal(ExpressionDiagnosticCodes.ParameterMarkerInvalid, diagnostic.Code);
         Assert.Equal("loads/foreign-status", diagnostic.SourceReference);
         Assert.Contains("another expression-authoring session", diagnostic.Message, StringComparison.Ordinal);
     }
@@ -737,7 +738,7 @@ public sealed class RelationQueryExpressionAuthoringTests
     [Fact]
     public void ShapeDocuments_IncludeOnlyGraphsReferencedByTheExpressionSession()
     {
-        var clr = new RelationQueryClrAuthoringContext();
+        var clr = new ClrAuthoringContext();
         _ = clr.Shape<UnusedShape>(new QualifiedShapeId(
             new GraphId("cohesive.tests.unused/v1"),
             new ShapeId("unused")));
@@ -772,7 +773,7 @@ public sealed class RelationQueryExpressionAuthoringTests
     [Fact]
     public void ForeignShapeAndUnrelatedOutputBindings_AreRejectedBeforeTerminalConstruction()
     {
-        var foreignShape = new RelationQueryClrAuthoringContext().Shape<Load>();
+        var foreignShape = new ClrAuthoringContext().Shape<Load>();
         var author = RelationQuery.Expression();
         var loads = author.Source<Load>();
         var customers = author.Source<Customer>();
@@ -923,7 +924,7 @@ public sealed class RelationQueryExpressionAuthoringTests
         var customers = typeof(ImportedCollectionLoad).GetProperty(nameof(ImportedCollectionLoad.Customers))!;
         var customerName = typeof(ImportedCollectionCustomer).GetProperty(
             nameof(ImportedCollectionCustomer.Name))!;
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         var importedLoad = context.Shape<ImportedCollectionLoad>(
             document,
             loadShape,

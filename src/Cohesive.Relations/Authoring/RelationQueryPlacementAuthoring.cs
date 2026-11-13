@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Model.Serialization;
@@ -324,7 +325,7 @@ public sealed class RelationQueryPlacementBuilder
     /// <exception cref="ArgumentNullException"><paramref name="source"/> or <paramref name="shape"/> is <see langword="null"/>.</exception>
     public RelationQueryPlacementInputBuilder<T> PlaceSource<T>(
         RelationQueryPlacementSourceHandle source,
-        RelationQueryClrShape<T> shape)
+        ClrAuthoringShape<T> shape)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -373,7 +374,7 @@ public sealed class RelationQueryPlacementBuilder
     public RelationQueryPlacementInputBuilder<T> Place<T>(
         RelationQuerySourceInputContract input,
         RelationQueryPlacementSourceHandle source,
-        RelationQueryClrShape<T> shape)
+        ClrAuthoringShape<T> shape)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -416,7 +417,7 @@ public sealed class RelationQueryPlacementBuilder
     public RelationQueryPlacementInputBuilder<T> Place<T>(
         RelationQueryTraversalInputContract input,
         RelationQueryPlacementSourceHandle source,
-        RelationQueryClrShape<T> shape)
+        ClrAuthoringShape<T> shape)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(input);
@@ -588,7 +589,7 @@ public sealed class RelationQueryPlacementBuilder
 
     RelationQueryPlacementInputBuilder<T> AddInvalid<T>(
         RelationQueryPlacementSourceHandle source,
-        RelationQueryClrShape<T> shape)
+        ClrAuthoringShape<T> shape)
         where T : notnull
     {
         var declaration = new TypedInputDeclaration<T>(
@@ -1103,11 +1104,11 @@ public sealed class RelationQueryPlacementBuilder
         RelationQueryPlacementSourceHandle source,
         InputContractKind kind,
         object? compiledContract,
-        RelationQueryClrShape<T> shape
+        ClrAuthoringShape<T> shape
         ) : InputDeclaration(owner, input, source, kind, compiledContract)
         where T : notnull
     {
-        public RelationQueryClrShape<T> Shape { get; } = shape;
+        public ClrAuthoringShape<T> Shape { get; } = shape;
         public override QualifiedShapeId? ClrShapeId => Shape.Id;
         public override ShapeGraphDocument? ClrShapeDocument => Shape.Document;
 

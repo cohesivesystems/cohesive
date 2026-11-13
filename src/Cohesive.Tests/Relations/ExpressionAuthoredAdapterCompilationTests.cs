@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Adapters.Cosmos;
@@ -267,7 +268,7 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
     static ExpressionAuthoredFixture<T> CompileFixture<T>(
         RelationQueryAuthoringResult<QueryDefinition> authored,
         ImmutableArray<ShapeGraphDocument> shapeDocuments,
-        RelationQueryClrShape<T> sourceShape)
+        ClrAuthoringShape<T> sourceShape)
         where T : notnull
     {
         Assert.True(authored.Validation.IsValid, Format(authored.Validation.Diagnostics));
@@ -364,6 +365,6 @@ public sealed class ExpressionAuthoredAdapterCompilationTests
     sealed record ExpressionAuthoredFixture<T>(
         RelationQueryDocument Document,
         CompiledRelationQueryPlan Plan,
-        RelationQueryClrShape<T> SourceShape)
+        ClrAuthoringShape<T> SourceShape)
         where T : notnull;
 }

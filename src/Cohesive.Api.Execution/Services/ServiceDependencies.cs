@@ -244,7 +244,7 @@ public sealed class ServiceDependencies
             foreach (var reference in references)
             {
                 if (registered(reference)) continue;
-                var exact = $"{reference.DefinitionId.Value}@{reference.RevisionId.Value} [{reference.Fingerprint.Algorithm}/{reference.Fingerprint.Canonicalization}:{reference.Fingerprint.Value}]";
+                var exact = $"{reference.DefinitionId.Value}@{reference.RevisionId.Value} [{reference.Fingerprint.ToCanonicalString()}]";
                 diagnostics.Add(new(code, DiagnosticSeverity.Error, $"Missing exact dependency: {exact}.",
                     $"/bindings/{kind}/{Uri.EscapeDataString(exact)}"));
             }

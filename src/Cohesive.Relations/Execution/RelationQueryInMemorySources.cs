@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq.Expressions;
@@ -50,7 +51,7 @@ public sealed class RelationQueryInMemorySources
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">The shape or selector does not identify the compiled root contract.</exception>
     /// <exception cref="InvalidOperationException">The root is already declared or CLR metadata cannot resolve the selector.</exception>
-    public RelationQueryInMemorySources Root<T>(RelationQueryClrShape<T> shape, Expression<Func<T, string>> identity)
+    public RelationQueryInMemorySources Root<T>(ClrAuthoringShape<T> shape, Expression<Func<T, string>> identity)
         where T : notnull
     {
         if (rootIdentityField is not null)
@@ -74,7 +75,7 @@ public sealed class RelationQueryInMemorySources
     /// or the collection exceeds its configured row limit.</exception>
     /// <exception cref="InvalidOperationException">The input is already bound or CLR metadata cannot resolve the selector.</exception>
     /// <exception cref="NotSupportedException">A row cannot be represented as observation data.</exception>
-    public RelationQueryInMemorySources Bind<T>(RelationQueryClrShape<T> shape, IEnumerable<T> rows,
+    public RelationQueryInMemorySources Bind<T>(ClrAuthoringShape<T> shape, IEnumerable<T> rows,
         Expression<Func<T, string>> identity) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(shape);
@@ -104,7 +105,7 @@ public sealed class RelationQueryInMemorySources
     }
 
     RelationQueryInMemorySources Bind<T>(RelationQuerySourceInputContract input, IEnumerable<T> rows, string field,
-        RelationQueryClrShape<T>? shape = null) where T : notnull
+        ClrAuthoringShape<T>? shape = null) where T : notnull
     {
         if (sources.ContainsKey(input.Input.Id))
             throw new InvalidOperationException($"Source '{input.Node}' is already configured.");
@@ -160,7 +161,7 @@ public sealed class RelationQueryInMemorySources
         throw new InvalidOperationException($"Source '{input.Node}' has no unambiguous default string identity. Specify its identity using {binding}.");
     }
 
-    static string IdentityField<T>(RelationQueryClrShape<T> shape, Expression<Func<T, string>> identity) where T : notnull
+    static string IdentityField<T>(ClrAuthoringShape<T> shape, Expression<Func<T, string>> identity) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(identity);
         if (!FieldPath.Capture(identity, shape.ResolveMemberPath).TryGetDirectFieldName(out var field))

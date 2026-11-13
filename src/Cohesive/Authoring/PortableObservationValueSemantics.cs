@@ -1,7 +1,8 @@
-namespace Cohesive.Relations.IR;
+using Cohesive.Model;
+namespace Cohesive.Authoring;
 
 /// <summary>Canonical relation/query persistence rules for observation values.</summary>
-static class RelationQueryPortableObservationValueSemantics
+static class PortableObservationValueSemantics
 {
     /// <summary>Finds the first reason an observation value cannot be persisted losslessly.</summary>
     /// <param name="value">Observation value to inspect recursively.</param>

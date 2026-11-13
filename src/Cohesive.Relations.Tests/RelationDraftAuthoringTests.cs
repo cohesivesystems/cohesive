@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Authoring;
@@ -87,7 +88,7 @@ public sealed class RelationDraftAuthoringTests
     [Fact]
     public void Provenance_records_the_projection_identities_and_attributed_decisions()
     {
-        var producer = new RelationQueryAuthoringSource("ari.inference", "mapping/loads");
+        var producer = new AuthoringSource("ari.inference", "mapping/loads");
         var author = RelationQuery.Structural();
         var source = author.Source(LoadShapeId, source: producer);
         var key = Expr.Call(ExprFunctionNames.Key);

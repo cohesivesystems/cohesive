@@ -1,25 +1,26 @@
+using Cohesive.Model;
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
 using Cohesive.Model.Serialization;
 
-namespace Cohesive.Relations.Authoring;
+namespace Cohesive.Authoring;
 
 /// <summary>
-/// Identifies an immutable set of CLR shape metadata providers used by relation/query authoring.
+/// Identifies an immutable set of CLR shape metadata providers used by expression authoring.
 /// </summary>
 /// <remarks>
 /// The profile identity is an explicit cache and provenance boundary. Providers should behave
 /// deterministically for a given reflection context; changing provider behavior requires a new
 /// profile version.
 /// </remarks>
-public sealed class RelationQueryClrMetadataProfile
+public sealed class ClrMetadataProfile
 {
     /// <summary>
     /// Gets the default v1 profile, which applies built-in shape attributes and the default
     /// System.Text.Json contract, including <c>JsonPropertyName</c> attributes.
     /// </summary>
-    public static RelationQueryClrMetadataProfile Default { get; } = new(
+    public static ClrMetadataProfile Default { get; } = new(
         id: "cohesive.relations.clr/default",
         version: "v1",
         providers: [new SystemTextJsonClrShapeMetadataProvider(new JsonSerializerOptions())]);
@@ -40,7 +41,7 @@ public sealed class RelationQueryClrMetadataProfile
     /// <paramref name="id"/> or <paramref name="version"/> is empty, or <paramref name="providers"/>
     /// contains a null entry.
     /// </exception>
-    public RelationQueryClrMetadataProfile(
+    public ClrMetadataProfile(
         string id,
         string version,
         IEnumerable<IClrShapeMetadataProvider>? providers = null)
@@ -76,7 +77,7 @@ public sealed class RelationQueryClrMetadataProfile
 /// <summary>
 /// Identifies the effective authority that selected a CLR-backed shape or field identity.
 /// </summary>
-public enum RelationQueryClrIdentityOrigin
+public enum ClrIdentityOrigin
 {
     /// <summary>
     /// The identity was selected by the deterministic built-in CLR convention.
@@ -102,7 +103,7 @@ public enum RelationQueryClrIdentityOrigin
 /// <summary>
 /// Explains an effective CLR member path and the authority that selected each semantic path segment.
 /// </summary>
-public sealed class RelationQueryClrMemberPathResolution
+public sealed class ClrMemberPathResolution
 {
     /// <summary>
     /// Creates a member-path resolution.
@@ -113,11 +114,11 @@ public sealed class RelationQueryClrMemberPathResolution
     /// </param>
     /// <exception cref="ArgumentException">
     /// <paramref name="path"/> is default, the origin count does not match the path segment count,
-    /// or an origin is not a defined <see cref="RelationQueryClrIdentityOrigin"/> value.
+    /// or an origin is not a defined <see cref="ClrIdentityOrigin"/> value.
     /// </exception>
-    public RelationQueryClrMemberPathResolution(
+    public ClrMemberPathResolution(
         FieldPath path,
-        ImmutableArray<RelationQueryClrIdentityOrigin> segmentOrigins)
+        ImmutableArray<ClrIdentityOrigin> segmentOrigins)
     {
         if (path.Segments.IsDefaultOrEmpty)
             throw new ArgumentException("A resolved CLR member path cannot be empty.", nameof(path));
@@ -151,21 +152,21 @@ public sealed class RelationQueryClrMemberPathResolution
     /// <summary>
     /// Gets the effective identity origin for every semantic path segment.
     /// </summary>
-    public ImmutableArray<RelationQueryClrIdentityOrigin> SegmentOrigins { get; }
+    public ImmutableArray<ClrIdentityOrigin> SegmentOrigins { get; }
 }
 
 /// <summary>
 /// Owns deterministic CLR shape registration, effective member metadata, and shape-graph snapshots
-/// for one relation/query authoring session.
+/// for one expression authoring session.
 /// </summary>
 /// <remarks>
 /// The context is thread-safe. Its caches are instance-owned so profile-specific reflection metadata
 /// cannot leak between authoring sessions. Convention-authored shapes use the assembly-scoped v1 graph
-/// identity from <see cref="ClrRelationshipShapeConvention"/> for the default profile; non-default
+/// identity from <see cref="ClrAuthoringShapeConvention"/> for the default profile; non-default
 /// profile identities and versions further qualify that graph identity so different field semantics cannot
 /// claim the same graph. Explicit qualified identifiers and imported documents are authoritative when supplied.
 /// </remarks>
-public sealed class RelationQueryClrAuthoringContext
+public sealed class ClrAuthoringContext
 {
     const int ConventionPrecedence = 0;
     const int ExplicitPrecedence = 1;
@@ -183,17 +184,17 @@ public sealed class RelationQueryClrAuthoringContext
     /// </summary>
     /// <param name="profile">
     /// Metadata profile used for inferred identities and field names, or <see langword="null"/> to use
-    /// <see cref="RelationQueryClrMetadataProfile.Default"/>.
+    /// <see cref="ClrMetadataProfile.Default"/>.
     /// </param>
-    public RelationQueryClrAuthoringContext(RelationQueryClrMetadataProfile? profile = null)
+    public ClrAuthoringContext(ClrMetadataProfile? profile = null)
     {
-        Profile = profile ?? RelationQueryClrMetadataProfile.Default;
+        Profile = profile ?? ClrMetadataProfile.Default;
     }
 
     /// <summary>
     /// Gets the metadata profile isolated by this context.
     /// </summary>
-    public RelationQueryClrMetadataProfile Profile { get; }
+    public ClrMetadataProfile Profile { get; }
 
     /// <summary>
     /// Registers a CLR root using deterministic assembly-scoped graph identity and profile-derived shape identity.
@@ -206,7 +207,7 @@ public sealed class RelationQueryClrAuthoringContext
     /// <exception cref="InvalidOperationException">
     /// The type cannot be inferred as a root shape, or its graph already has an incompatible registration.
     /// </exception>
-    public RelationQueryClrShape<T> Shape<T>(string role = ShapeRoles.ValueObject) where T : notnull
+    public ClrAuthoringShape<T> Shape<T>(string role = ShapeRoles.ValueObject) where T : notnull
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(role);
         var convention = GetConventionShapeId(typeof(T));
@@ -249,7 +250,7 @@ public sealed class RelationQueryClrAuthoringContext
     /// <exception cref="InvalidOperationException">
     /// The type cannot be inferred as a root shape, or the graph identity is already owned by an imported document.
     /// </exception>
-    public RelationQueryClrShape<T> Shape<T>(
+    public ClrAuthoringShape<T> Shape<T>(
         QualifiedShapeId id,
         string role = ShapeRoles.ValueObject)
         where T : notnull
@@ -314,7 +315,7 @@ public sealed class RelationQueryClrAuthoringContext
     /// The CLR type cannot be inspected for fallback field metadata, or the graph identity is already
     /// owned by inferred shapes.
     /// </exception>
-    public RelationQueryClrShape<T> Shape<T>(
+    public ClrAuthoringShape<T> Shape<T>(
         ShapeGraphDocument document,
         QualifiedShapeId id,
         IReadOnlyDictionary<PropertyInfo, FieldPath>? overrides = null)
@@ -398,7 +399,7 @@ public sealed class RelationQueryClrAuthoringContext
     /// <paramref name="rootType"/> has not been registered, a member has no effective path, or an
     /// imported document is definitely incompatible with the resolved path or CLR value type.
     /// </exception>
-    public RelationQueryClrMemberPathResolution ResolveMemberPathWithProvenance(
+    public ClrMemberPathResolution ResolveMemberPathWithProvenance(
         Type rootType,
         IReadOnlyList<PropertyInfo> members)
     {
@@ -407,7 +408,7 @@ public sealed class RelationQueryClrAuthoringContext
         lock (gate)
         {
             var normalized = UnwrapNullable(rootType);
-            List<(ShapeRegistration Registration, RelationQueryClrMemberPathResolution Resolution)> candidates = [];
+            List<(ShapeRegistration Registration, ClrMemberPathResolution Resolution)> candidates = [];
             foreach (var registration in registrations.Values)
             {
                 var mapping = GetMapping(registration);
@@ -422,7 +423,7 @@ public sealed class RelationQueryClrAuthoringContext
             if (candidates.Count == 0)
             {
                 throw new InvalidOperationException(
-                    $"CLR type '{normalized}' is not reachable from a registered shape in this relation/query authoring context.");
+                    $"CLR type '{normalized}' is not reachable from a registered shape in this expression authoring context.");
             }
 
             var selectedPrecedence = candidates.Max(static candidate => candidate.Registration.Precedence);
@@ -560,7 +561,7 @@ public sealed class RelationQueryClrAuthoringContext
                 root.QualifiedId,
                 precedence,
                 precedence == ExplicitPrecedence
-                    ? RelationQueryClrIdentityOrigin.Explicit
+                    ? ClrIdentityOrigin.Explicit
                     : ResolveInferredShapeOrigin(normalized, graphId, result),
                 graph,
                 imported: null,
@@ -653,7 +654,7 @@ public sealed class RelationQueryClrAuthoringContext
                 normalized,
                 id,
                 ImportedPrecedence,
-                RelationQueryClrIdentityOrigin.Imported,
+                ClrIdentityOrigin.Imported,
                 inferred: null,
                 imported,
                 overrides);
@@ -750,6 +751,8 @@ public sealed class RelationQueryClrAuthoringContext
             candidates.Add(GetRegisteredTypeRefCore(registration));
     }
 
+    // Only named and composite types require recursive imported-type resolution.
+#pragma warning disable COHDU100 // All other type kinds have no nested named-type references under this policy.
     static bool ReferencesOnlyImportedTypes(TypeRef type, ShapeGraph graph) => type switch
     {
         NamedTypeRef named => graph.TryGetType(named.TypeId, out _),
@@ -757,8 +760,9 @@ public sealed class RelationQueryClrAuthoringContext
         ObjectTypeRef objectType => objectType.Fields.All(field => ReferencesOnlyImportedTypes(field.Type, graph)),
         _ => true
     };
+#pragma warning restore COHDU100
 
-    RelationQueryClrMemberPathResolution ResolveMemberPathWithProvenance(
+    ClrMemberPathResolution ResolveMemberPathWithProvenance(
         ShapeRegistration registration,
         Type rootType,
         IReadOnlyList<PropertyInfo> members)
@@ -768,8 +772,8 @@ public sealed class RelationQueryClrAuthoringContext
 
         var mapping = GetMapping(registration);
         var segments = ImmutableArray.CreateBuilder<FieldPathSegment>();
-        var origins = ImmutableArray.CreateBuilder<RelationQueryClrIdentityOrigin>();
-        var inferredOrigins = ImmutableArray.CreateBuilder<RelationQueryClrIdentityOrigin>();
+        var origins = ImmutableArray.CreateBuilder<ClrIdentityOrigin>();
+        var inferredOrigins = ImmutableArray.CreateBuilder<ClrIdentityOrigin>();
         var currentType = UnwrapNullable(rootType);
         for (var index = 0; index < members.Count; index++)
         {
@@ -788,8 +792,8 @@ public sealed class RelationQueryClrAuthoringContext
                 segments.AddRange(memberOverride.Segments);
                 for (var segmentIndex = 0; segmentIndex < memberOverride.Segments.Length; segmentIndex++)
                 {
-                    origins.Add(RelationQueryClrIdentityOrigin.Explicit);
-                    inferredOrigins.Add(RelationQueryClrIdentityOrigin.Explicit);
+                    origins.Add(ClrIdentityOrigin.Explicit);
+                    inferredOrigins.Add(ClrIdentityOrigin.Explicit);
                 }
             }
             else
@@ -798,7 +802,7 @@ public sealed class RelationQueryClrAuthoringContext
                 segments.AddRange(single.Segments);
                 var inferredOrigin = ResolveInferredFieldOrigin(mapping, property);
                 var origin = registration.Imported is not null
-                    ? RelationQueryClrIdentityOrigin.Imported
+                    ? ClrIdentityOrigin.Imported
                     : inferredOrigin;
                 for (var segmentIndex = 0; segmentIndex < single.Segments.Length; segmentIndex++)
                 {
@@ -815,21 +819,21 @@ public sealed class RelationQueryClrAuthoringContext
         {
             for (var index = openIndex; index < origins.Count; index++)
             {
-                if (origins[index] == RelationQueryClrIdentityOrigin.Imported)
+                if (origins[index] == ClrIdentityOrigin.Imported)
                     origins[index] = inferredOrigins[index];
             }
         }
         return new(path, origins.ToImmutable());
     }
 
-    RelationQueryClrIdentityOrigin ResolveInferredShapeOrigin(
+    ClrIdentityOrigin ResolveInferredShapeOrigin(
         Type clrType,
         GraphId graphId,
         ClrShapeGraphBuildResult result)
     {
-        var conventionGraphId = ClrRelationshipShapeConvention.GetQualifiedShapeId(clrType).GraphId;
+        var conventionGraphId = ClrAuthoringShapeConvention.GetQualifiedShapeId(clrType).GraphId;
         if (graphId != conventionGraphId)
-            return RelationQueryClrIdentityOrigin.Metadata;
+            return ClrIdentityOrigin.Metadata;
 
         if (!result.ShapeIdentityOrigins.TryGetValue(clrType, out var origin))
         {
@@ -839,13 +843,13 @@ public sealed class RelationQueryClrAuthoringContext
 
         return origin switch
         {
-            ClrShapeIdentityOrigin.Convention => RelationQueryClrIdentityOrigin.Convention,
-            ClrShapeIdentityOrigin.Metadata => RelationQueryClrIdentityOrigin.Metadata,
+            ClrShapeIdentityOrigin.Convention => ClrIdentityOrigin.Convention,
+            ClrShapeIdentityOrigin.Metadata => ClrIdentityOrigin.Metadata,
             _ => throw new InvalidOperationException($"Unsupported CLR shape identity origin '{origin}'.")
         };
     }
 
-    static RelationQueryClrIdentityOrigin ResolveInferredFieldOrigin(
+    static ClrIdentityOrigin ResolveInferredFieldOrigin(
         ClrShapeGraphBuildResult mapping,
         PropertyInfo property)
     {
@@ -858,8 +862,8 @@ public sealed class RelationQueryClrAuthoringContext
 
         return origin switch
         {
-            ClrShapeIdentityOrigin.Convention => RelationQueryClrIdentityOrigin.Convention,
-            ClrShapeIdentityOrigin.Metadata => RelationQueryClrIdentityOrigin.Metadata,
+            ClrShapeIdentityOrigin.Convention => ClrIdentityOrigin.Convention,
+            ClrShapeIdentityOrigin.Metadata => ClrIdentityOrigin.Metadata,
             _ => throw new InvalidOperationException($"Unsupported CLR field identity origin '{origin}'.")
         };
     }
@@ -1142,6 +1146,8 @@ public sealed class RelationQueryClrAuthoringContext
                     $"field '{fieldName}' requires an element segment after a many-valued field.");
             }
 
+            // Navigation is allowlisted; all other (including future) kinds fail closed.
+#pragma warning disable COHDU100
             switch (currentType)
             {
                 case JsonTypeRef { Kind: JsonTypeKind.Any or JsonTypeKind.Object }:
@@ -1184,6 +1190,7 @@ public sealed class RelationQueryClrAuthoringContext
             }
         }
 
+#pragma warning restore COHDU100
         return currentType is null
             ? ImportedPathResolution.Failure("the path did not resolve to an imported field type.")
             : new(
@@ -1560,7 +1567,7 @@ public sealed class RelationQueryClrAuthoringContext
         }
     }
 
-    internal RelationQueryClrShape<T>? TryGetRegisteredShape<T>() where T : notnull
+    internal ClrAuthoringShape<T>? TryGetRegisteredShape<T>() where T : notnull
     {
         lock (gate)
         {
@@ -1647,7 +1654,7 @@ public sealed class RelationQueryClrAuthoringContext
             return ResolveMemberPathWithProvenance(registration, rootType, members).Path;
     }
 
-    internal RelationQueryClrMemberPathResolution ResolveMemberPathWithProvenance(
+    internal ClrMemberPathResolution ResolveMemberPathWithProvenance(
         ShapeRegistration registration,
         IReadOnlyList<PropertyInfo> members)
     {
@@ -1755,8 +1762,8 @@ public sealed class RelationQueryClrAuthoringContext
 
     QualifiedShapeId GetConventionShapeId(Type clrType)
     {
-        var convention = ClrRelationshipShapeConvention.GetQualifiedShapeId(clrType);
-        var defaultProfile = RelationQueryClrMetadataProfile.Default;
+        var convention = ClrAuthoringShapeConvention.GetQualifiedShapeId(clrType);
+        var defaultProfile = ClrMetadataProfile.Default;
         if (string.Equals(Profile.Id, defaultProfile.Id, StringComparison.Ordinal)
             && string.Equals(Profile.Version, defaultProfile.Version, StringComparison.Ordinal))
         {
@@ -1807,7 +1814,7 @@ public sealed class RelationQueryClrAuthoringContext
             Type clrType,
             QualifiedShapeId id,
             int precedence,
-            RelationQueryClrIdentityOrigin identityOrigin,
+            ClrIdentityOrigin identityOrigin,
             InferredGraphState? inferred,
             ImportedRegistration? imported,
             ImmutableDictionary<PropertyInfo, FieldPath> overrides)
@@ -1824,7 +1831,7 @@ public sealed class RelationQueryClrAuthoringContext
         public Type ClrType { get; }
         public QualifiedShapeId Id { get; }
         public int Precedence { get; }
-        public RelationQueryClrIdentityOrigin IdentityOrigin { get; }
+        public ClrIdentityOrigin IdentityOrigin { get; }
         public InferredGraphState? Inferred { get; }
         public ImportedRegistration? Imported { get; }
         public ImmutableDictionary<PropertyInfo, FieldPath> Overrides { get; }
@@ -1876,14 +1883,14 @@ public sealed class RelationQueryClrAuthoringContext
 /// Immutable typed authoring handle for one CLR-backed semantic shape.
 /// </summary>
 /// <typeparam name="T">CLR type represented by the semantic shape.</typeparam>
-public sealed class RelationQueryClrShape<T> where T : notnull
+public sealed class ClrAuthoringShape<T> where T : notnull
 {
-    readonly RelationQueryClrAuthoringContext context;
-    readonly RelationQueryClrAuthoringContext.ShapeRegistration registration;
+    readonly ClrAuthoringContext context;
+    readonly ClrAuthoringContext.ShapeRegistration registration;
 
-    internal RelationQueryClrShape(
-        RelationQueryClrAuthoringContext context,
-        RelationQueryClrAuthoringContext.ShapeRegistration registration)
+    internal ClrAuthoringShape(
+        ClrAuthoringContext context,
+        ClrAuthoringContext.ShapeRegistration registration)
     {
         this.context = context;
         this.registration = registration;
@@ -1897,7 +1904,7 @@ public sealed class RelationQueryClrShape<T> where T : notnull
     /// <summary>
     /// Gets the effective authority that selected <see cref="Id"/>.
     /// </summary>
-    public RelationQueryClrIdentityOrigin IdentityOrigin => registration.IdentityOrigin;
+    public ClrIdentityOrigin IdentityOrigin => registration.IdentityOrigin;
 
     /// <summary>
     /// Gets the portable semantic type reference inferred for <typeparamref name="T"/>.
@@ -1943,9 +1950,9 @@ public sealed class RelationQueryClrShape<T> where T : notnull
     /// A member has no effective semantic path, or an imported shape is definitely incompatible
     /// with the resolved path or CLR value type.
     /// </exception>
-    public RelationQueryClrMemberPathResolution ResolveMemberPathWithProvenance(
+    public ClrMemberPathResolution ResolveMemberPathWithProvenance(
         IReadOnlyList<PropertyInfo> members) =>
         context.ResolveMemberPathWithProvenance(registration, members);
 
-    internal RelationQueryClrAuthoringContext AuthoringContext => context;
+    internal ClrAuthoringContext AuthoringContext => context;
 }

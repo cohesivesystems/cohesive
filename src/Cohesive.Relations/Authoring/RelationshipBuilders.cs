@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Linq.Expressions;
 using Cohesive.Relations.Model;
 
@@ -143,7 +144,7 @@ public sealed class RelationshipReferenceBuilder<TSource> where TSource : notnul
         RelationshipDefinitionFactory.Create(
             sourceShape,
             sourceReference,
-            ClrRelationshipShapeConvention.GetQualifiedShapeId<TTarget>(),
+            ClrAuthoringShapeConvention.GetQualifiedShapeId<TTarget>(),
             id,
             sourceReferenceUniqueness);
 

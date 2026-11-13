@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Execution;
@@ -92,7 +93,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// an endpoint has no graph-qualified shape; an invariant is null; invariant names repeat; or
     /// <paramref name="revisionId"/> is default.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The key or an invariant cannot be lowered exactly, or contains a raw CLR temporal carrier instead of an
     /// explicitly normalized canonical scalar.
     /// </exception>

@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Linq.Expressions;
 using Cohesive.Relations.IR;
 using Cohesive.Relations.Model;
@@ -72,7 +73,7 @@ public sealed class RelationQueryExpressionTemporalMatchBuilder
     /// <paramref name="inclusion"/> or <paramref name="nullBehavior"/> is unsupported.
     /// </exception>
     /// <exception cref="InvalidOperationException">The enclosing temporal-match callback has completed.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The temporal value cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The temporal value cannot be lowered exactly.</exception>
     public ExpressionTemporalIntervalBound Bound(
         LambdaExpression value,
         IReadOnlyList<RelationQueryExpressionValueBinding> bindings,
@@ -127,7 +128,7 @@ public sealed class RelationQueryExpressionTemporalMatchBuilder
     /// <paramref name="inclusion"/> or <paramref name="nullBehavior"/> is unsupported.
     /// </exception>
     /// <exception cref="InvalidOperationException">The enclosing temporal-match callback has completed.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The temporal value cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The temporal value cannot be lowered exactly.</exception>
     public ExpressionTemporalIntervalBound Bound<TBinding, TValue>(
         Expression<Func<TBinding, TValue>> value,
         RelationQueryExpressionValueBinding<TBinding> binding,
@@ -194,7 +195,7 @@ public sealed class RelationQueryExpressionTemporalMatchBuilder
     /// does not use a supported temporal CLR type.
     /// </exception>
     /// <exception cref="InvalidOperationException">The enclosing temporal-match callback has completed.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The point cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The point cannot be lowered exactly.</exception>
     public TemporalPointInIntervalMatch PointInInterval(
         LambdaExpression point,
         IReadOnlyList<RelationQueryExpressionValueBinding> bindings,
@@ -245,7 +246,7 @@ public sealed class RelationQueryExpressionTemporalMatchBuilder
     /// an exact supported non-nullable temporal CLR type.
     /// </exception>
     /// <exception cref="InvalidOperationException">The enclosing temporal-match callback has completed.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The point cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The point cannot be lowered exactly.</exception>
     public TemporalPointInIntervalMatch PointInInterval<TBinding, TValue>(
         Expression<Func<TBinding, TValue>> point,
         RelationQueryExpressionValueBinding<TBinding> binding,
@@ -446,7 +447,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// builder, or a temporal operand violates its declared side, type, domain, or provenance contract.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The correlation or a temporal operand cannot be lowered exactly.
     /// </exception>
     public RelationQueryNodeHandle<TemporalJoinQueryNode> TemporalJoin<TLeft, TRight>(
@@ -524,7 +525,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// type, domain, or provenance contract.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="kind"/> is unsupported.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The correlation or a temporal operand cannot be lowered exactly.
     /// </exception>
     public RelationQueryNodeHandle<TemporalJoinQueryNode> TemporalJoin<TLeft, TRight, TLeftValue, TRightValue>(

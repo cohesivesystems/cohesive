@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Linq.Expressions;
 using Cohesive.Relations.IR;
 
@@ -32,7 +33,7 @@ public sealed class RelationQueryFocusedAggregateBuilder<TSource, TResult>
     /// <returns>This declaration builder.</returns>
     /// <exception cref="ArgumentNullException">A required expression is null.</exception>
     /// <exception cref="ArgumentException">The selector or grouping contract is invalid.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The expression cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The expression cannot be lowered exactly.</exception>
     public RelationQueryFocusedAggregateBuilder<TSource, TResult> Group<TTarget, TKey>(
         Expression<Func<TResult, TTarget>> target, Expression<Func<TSource, TKey>> key)
     {
@@ -48,7 +49,7 @@ public sealed class RelationQueryFocusedAggregateBuilder<TSource, TResult>
     /// <returns>This declaration builder.</returns>
     /// <exception cref="ArgumentNullException">A required expression is null.</exception>
     /// <exception cref="ArgumentException">The field or numeric types do not satisfy the canonical sum contract.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The expression cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The expression cannot be lowered exactly.</exception>
     public RelationQueryFocusedAggregateBuilder<TSource, TResult> Sum<TTarget, TValue>(
         Expression<Func<TResult, TTarget>> target, Expression<Func<TSource, TValue>> value)
     {

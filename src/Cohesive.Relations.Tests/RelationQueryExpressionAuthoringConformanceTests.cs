@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections;
 using System.Collections.Immutable;
 using System.Globalization;
@@ -49,7 +50,7 @@ public sealed class RelationQueryExpressionAuthoringConformanceTests
             relation.Provenance.Sources,
             decision => decision.Kind == RelationQueryAuthoringDecisionKind.Expression
                         && decision.Role == "output/key"
-                        && decision.Source.Producer == RelationQueryExpressionLowerer.Producer
+                        && decision.Source.Producer == ExpressionLowerer.Producer
                         && decision.Source.Reference == "conformance/relation/key/body");
         Assert.Contains(
             relation.Provenance.Sources,
@@ -334,7 +335,7 @@ public sealed class RelationQueryExpressionAuthoringConformanceTests
 
     static AuthoredScenario AuthorRelation(bool registerOutputFirst)
     {
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         if (registerOutputFirst)
         {
             _ = context.Shape<LoadIndexDto>();
@@ -380,7 +381,7 @@ public sealed class RelationQueryExpressionAuthoringConformanceTests
 
     static JoinedAuthoredScenario AuthorJoinedRelation(bool registerOutputFirst)
     {
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         if (registerOutputFirst)
         {
             _ = context.Shape<JoinedLoadSearchDto>();

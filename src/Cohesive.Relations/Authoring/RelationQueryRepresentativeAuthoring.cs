@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Relations.IR;
@@ -21,7 +22,7 @@ public sealed partial class RelationQueryAuthoringCore
         ImmutableArray<RelationQueryExpressionInput> keys,
         ImmutableArray<RelationQueryOrderingInput> orderings,
         QueryNodeId? nodeId = null,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
         where TInput : LogicalQueryNode
     {
         RequireNode(input, nameof(input));
@@ -54,7 +55,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <returns>A handle to materialized canonical selection with source attribution and no retained host-language expressions.</returns>
     /// <exception cref="ArgumentNullException">The keys, bindings or orderings collection is null.</exception>
     /// <exception cref="ArgumentException">A key, ordering, handle or binding is invalid or out of scope.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered to a portable canonical key.</exception>
+    /// <exception cref="ExpressionAuthoringException">An expression cannot be lowered to a portable canonical key.</exception>
     public RelationQueryNodeHandle<SelectRepresentativeQueryNode> SelectRepresentative<TInput>(
         RelationQueryNodeHandle<TInput> input,
         IEnumerable<LambdaExpression> keys,
@@ -83,7 +84,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <returns>A handle to the canonical representative selection.</returns>
     /// <exception cref="ArgumentException">An expression, handle or binding is invalid or out of scope.</exception>
     /// <exception cref="ArgumentNullException">The orderings collection is null.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">An expression cannot be lowered to a portable canonical key.</exception>
+    /// <exception cref="ExpressionAuthoringException">An expression cannot be lowered to a portable canonical key.</exception>
     public RelationQueryNodeHandle<SelectRepresentativeQueryNode> SelectRepresentative<TInput, TBinding, TKey>(
         RelationQueryNodeHandle<TInput> input,
         Expression<Func<TBinding, TKey>> key,
