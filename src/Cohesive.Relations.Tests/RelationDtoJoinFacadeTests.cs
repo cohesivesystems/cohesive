@@ -63,6 +63,15 @@ public sealed class RelationDtoJoinFacadeTests
         Assert.Equal(new[] { "customer-7", "item-1", "item-2", "load-42" },
             row.Source.InputOccurrences.Select(x => x.ObservationIdentity!).Order(StringComparer.Ordinal));
         Assert.Equal(row.Value, Assert.Single(await mapping.MapAsync(evaluator, Loads())));
+
+        var rawMapper = RelationDtoMapperCompiler.Default.Compile<RawSummary>(mapping.Compilation.Plan!).Mapper!;
+        var rawKernel = Assert.IsType<PreparedLocalDtoKernel<RawSummary>>(PreparedLocalDtoKernel<RawSummary>.TryCompile(
+            mapping.Compilation.Plan!, preparation, rawMapper, nameof(Load.Id)));
+        Assert.True(rawKernel.TryMap(Loads(), CancellationToken.None, out var rawValues, out _));
+        var rawReference = Assert.Single(rawMapper.Map(outcome.PhysicalExecution!).Rows).Value;
+        Assert.Equal(ObservationValueKind.Int64, rawReference.Total.Kind);
+        Assert.Equal(rawReference, Assert.Single(rawValues));
+
         Assert.Empty(await mapping.MapAsync(evaluator, [new Load("no-items", "customer-7")]));
         var twoLoads = Loads().Append(new Load("load-é", "customer-7")).ToArray();
         var canonical = await mapping.MapAsync(evaluator, mapping.Evaluate(new("canonical")).Supply(twoLoads, load => load.Id).Build());
@@ -294,6 +303,49 @@ public sealed class RelationDtoJoinFacadeTests
         var fused = await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, repeated));
         Assert.Equal(canonical.Message, fused.Message);
     }
+
+    [Fact]
+    public async Task PreparedJoinCanFeedAScalarKeyIntoAnotherJoinAndFallsBackForDuplicateKeys()
+    {
+        var q = RelationQuery.Expression();
+        var loads = q.Source<Load>();
+        var regionSource = q.Source<Region>();
+        var output = loads
+            .Join(q.Source<Customer>(), (load, customer) => load.CustomerId == customer.Id,
+                (load, customer) => new { load.Id, RegionCode = customer.Name })
+            .Join(regionSource, (load, region) => load.RegionCode == region.Id,
+                (load, region) => new LoadCustomer(load.Id, region.Label));
+        var mapping = RelationDtoMapping.Create(loads, output, RelationOutputMode.ZeroOrOnePerRoot);
+        Customer[] customers = [new("customer-7", "north")];
+        Region[] regions = [new("north", "load-42", "North Region")];
+        var evaluator = mapping.CreateInMemoryEvaluator(customers, regions);
+
+        var preparation = await mapping.EvaluateAsync(evaluator, Array.Empty<Load>(), static load => load.Id);
+        Assert.True(preparation.IsSuccessful, Explain(preparation));
+        Assert.NotNull(PreparedLocalDtoKernel<LoadCustomer>.TryCompile(
+            mapping.Compilation.Plan!, preparation, mapping.Mapper, nameof(Load.Id)));
+        var expected = await mapping.MapAsync(evaluator, Loads(), static load => load.Id);
+        Assert.Equal(new LoadCustomer("load-42", "North Region"), Assert.Single(expected));
+        Assert.Equal(expected, await mapping.MapAsync(evaluator, Loads()));
+
+        var fanout = RelationDtoMapping.Create(loads,
+            loads.Join(regionSource, (load, region) => load.Id == region.Code,
+                (load, region) => new LoadCustomer(load.Id, region.Label)), RelationOutputMode.ZeroOrOnePerRoot);
+        Region[] duplicates = [.. regions, new("south", "load-42", "Other Region")];
+        var duplicateEvaluator = fanout.CreateInMemoryEvaluator(sources => sources.Bind(duplicates));
+        var duplicatePreparation = await fanout.EvaluateAsync(duplicateEvaluator, Array.Empty<Load>(), static load => load.Id);
+        Assert.True(duplicatePreparation.IsSuccessful, Explain(duplicatePreparation));
+        Assert.Null(PreparedLocalDtoKernel<LoadCustomer>.TryCompile(
+            fanout.Compilation.Plan!, duplicatePreparation, fanout.Mapper, nameof(Load.Id)));
+        var reference = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => fanout.MapAsync(duplicateEvaluator, Loads(), static load => load.Id));
+        var fallback = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => fanout.MapAsync(duplicateEvaluator, Loads()));
+        Assert.Equal(reference.Message, fallback.Message);
+    }
+
+    sealed record Region(string Id, string Code, string Label);
+    sealed record RawSummary(string Id, string CustomerName, ObservationValue Total);
 
     class ObservedLoad(string? customerId, bool fail = false, string id = "load-42")
     {

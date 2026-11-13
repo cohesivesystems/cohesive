@@ -78,7 +78,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
         if (remainder != 0)
             allPresent[^1] = (1UL << remainder) - 1;
         return new(rootShape, rootLayout, rootIdentityField, identityOrdinal, allPresent, maximumRoots,
-            compiler.Compile(plan.ExecutionSlice.RelationOutput.Binding, materialize));
+            compiler.Compile(plan.ExecutionSlice.RelationOutput.Binding, mapper.Descriptor.Members, materialize));
     }
 
     internal bool TryMap<TRoot>(IEnumerable<TRoot> roots, CancellationToken cancellationToken,
@@ -254,6 +254,10 @@ sealed class PreparedLocalDtoKernel<TOutput>(
         readonly List<ParameterExpression> locals = [];
         readonly List<Expression> steps = [];
         readonly Dictionary<(ValueBindingId Binding, string Field), (Expression Value, ScalarTypeKind Kind)> fields = [];
+        readonly List<StaticJoin> joins = [];
+
+        sealed record StaticJoin(ValueBindingId Binding, Expression Key, ParameterExpression Match,
+            Dictionary<string, ObservationValue> Rows);
 
         internal bool HasValidRootContract(Shape shape, string identityField)
         {
@@ -327,11 +331,6 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             }
 
             var matched = Expression.Variable(typeof(ObservationValue), "matched");
-            locals.Add(matched);
-            var find = Expression.Call(Expression.Constant(lookup), nameof(Dictionary<string, ObservationValue>.TryGetValue),
-                Type.EmptyTypes, Expression.Property(key.Value, nameof(ObservationValue.String)), matched);
-            steps.Add(Expression.IfThen(Expression.Not(find), Expression.Return(exit, Expression.Constant(false))));
-
             if (binding.Shape is not { } shapeId)
                 return false;
             var graph = plan.Provenance.ShapeDocuments.Single(document => document.Graph.Id == shapeId.GraphId).Graph;
@@ -348,6 +347,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                     fields.Add((binding.Binding, name), (Read(matched, name), scalar.Kind));
                 }
             }
+            joins.Add(new(binding.Binding, key.Value, matched, lookup));
             return true;
         }
 
@@ -394,11 +394,85 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             return mapper.Descriptor.Members.Length == terminal.Fields.Length;
         }
 
-        internal MapRow Compile(ValueBindingId output, Func<Func<string, Expression>, Expression> materialize)
+        internal MapRow Compile(ValueBindingId output, ImmutableArray<RelationDtoMapperMemberDescriptor> members,
+            Func<Func<string, Expression>, Expression> materialize)
         {
-            steps.Add(Expression.Assign(result, materialize(name => fields[(output, name)].Value)));
+            // Projection aliases retain the same expression instance. Track the actual consumers
+            // after lowering so an unused alias does not widen the prepared join payload.
+            var demand = new Dictionary<Expression, Type?>(ReferenceEqualityComparer.Instance);
+            foreach (var join in joins)
+                Demand(join.Key, typeof(string));
+            foreach (var member in members)
+                Demand(fields[(output, member.OutputField.Path.Segments[0].Segment!)].Value, member.TargetType);
+
+            var typed = new Dictionary<Expression, Expression>(ReferenceEqualityComparer.Instance);
+            foreach (var join in joins)
+            {
+                var key = Resolve(join.Key);
+                if (key.Type != typeof(string))
+                    key = Expression.Property(key, nameof(ObservationValue.String));
+                if (!TryEmitScalarLookup(join, key, demand, typed))
+                    EmitLookup(join.Rows, key, join.Match);
+            }
+
+            steps.Add(Expression.Assign(result, materialize(name => Resolve(fields[(output, name)].Value))));
             steps.Add(Expression.Label(exit, Expression.Constant(true)));
             return Expression.Lambda<MapRow>(Expression.Block(locals, steps), rootValue, rootSlots, rootOffset, result).Compile();
+
+            Expression Resolve(Expression value) => typed.GetValueOrDefault(value, value);
+
+            void Demand(Expression read, Type destination)
+            {
+                if (!demand.TryAdd(read, destination) && demand[read] != destination)
+                    demand[read] = null;
+            }
+        }
+
+        bool TryEmitScalarLookup(StaticJoin join, Expression key, Dictionary<Expression, Type?> demand,
+            Dictionary<Expression, Expression> typed)
+        {
+            var consumed = fields.Where(field => field.Key.Binding == join.Binding && demand.ContainsKey(field.Value.Value))
+                .Take(2).ToArray();
+            if (consumed.Length != 1)
+                return false;
+
+            var field = consumed[0];
+            var destination = demand[field.Value.Value];
+            return field.Value.Kind switch
+            {
+                ScalarTypeKind.String when destination == typeof(string) =>
+                    TryEmitScalarLookup<string>(join.Rows, key, field.Key.Field, field.Value.Value, typed, RelationDtoValueReader.TryConvertString),
+                ScalarTypeKind.Decimal when destination == typeof(decimal) =>
+                    TryEmitScalarLookup<decimal>(join.Rows, key, field.Key.Field, field.Value.Value, typed, RelationDtoValueReader.TryConvertDecimal),
+                _ => false
+            };
+        }
+
+        delegate bool ReadScalar<T>(in ObservationValue value, out T result);
+
+        bool TryEmitScalarLookup<T>(Dictionary<string, ObservationValue> rows, Expression key, string field,
+            Expression originalRead, Dictionary<Expression, Expression> typed, ReadScalar<T> convert)
+        {
+            var lookup = new Dictionary<string, T>(rows.Count, StringComparer.Ordinal);
+            foreach (var (identity, row) in rows)
+            {
+                if (!row.TryGetProperty(field, out var value) || !convert(in value, out var scalar))
+                    return false;
+                lookup.Add(identity, scalar);
+            }
+
+            var matched = Expression.Variable(typeof(T), "matchedScalar");
+            typed.Add(originalRead, matched);
+            EmitLookup(lookup, key, matched);
+            return true;
+        }
+
+        void EmitLookup<T>(Dictionary<string, T> lookup, Expression key, ParameterExpression matched)
+        {
+            locals.Add(matched);
+            var find = Expression.Call(Expression.Constant(lookup), nameof(Dictionary<string, T>.TryGetValue),
+                Type.EmptyTypes, key, matched);
+            steps.Add(Expression.IfThen(Expression.Not(find), Expression.Return(exit, Expression.Constant(false))));
         }
 
         static MethodCallExpression Read(Expression row, string field) =>
