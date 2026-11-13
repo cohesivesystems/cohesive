@@ -554,3 +554,53 @@ qualification closure at original admission. Its existing acquisition handler ch
 HTTP and retains a local rejection on expiry; reconciliation reuses original results after expiry.
 This is implementation qualification, not a live access or physical durability attestation. See
 [COH-135](https://linear.app/cohesive-ari/issue/COH-135) for cross-repository validation.
+
+## Local lifecycle admission and draining (COH-136 first slice)
+
+`InMemoryIntegrationLifecycle` controls admission for one stable `IngestionLedgerAddress`. It starts
+deactivated. Explicit commands select Active, Paused or Deactivated with a command identity, expected
+revision, UTC observation and host-authenticated authorization evidence. Exact command retries return
+the original result; changed intent under the same identity and stale revisions produce diagnostics.
+The shared `ProcessControlAuthorizationContext` supplies actor/authority/evidence, not an authorization
+engine: the host callback must authenticate and authorize each lifecycle action for this consumer.
+
+```csharp
+var control = new InMemoryIntegrationLifecycle(consumer, authorizeLifecycleAction);
+var activation = new IntegrationLifecycleChange(
+    "activate/1", ExpectedRevision: 0, IntegrationDesiredState.Active, authorization, now);
+var changed = control.Change(activation, out var active);
+if (!changed.IsValid) return;
+
+var accepted = control.Admit(compiled, continuation, active.Revision,
+    authorization, now, out var admission);
+if (!accepted.IsValid) return;
+// Start or resume the existing Process using this exact continuation and compiled closure.
+// Continue checking capability freshness and current enforced policy at each new external effect.
+```
+
+Admission and lifecycle changes use the same lock. A pause racing admission either retains the already
+admitted session or rejects the new session. Admission receipts pin the exact binding, Process, attempt,
+original revision and actor. Retrying an existing admission after pause returns its receipt; it never
+permits restarting acquisition. Pause/deactivation stop **new sessions**, not new steps of an admitted
+Process. Existing work drains, remains subject to dispatch policy, and may reconcile retained results.
+Suspending/cancelling an individual Process still belongs to the existing Process control APIs.
+A new Process attempt is a new admission in this bounded profile.
+
+`Inspect()` exposes desired state, revision, pending sessions and derived Accepting/Draining flags.
+Neither flag claims execution liveness, provider health or complete data coverage. Confirmed successful
+completion of the exact Process removes it from Pending; `InspectCompletion` retains its original
+execution and authorization evidence. Failure, cancellation or an ambiguous outcome does not establish
+that external effects are resolved, so it remains pending. This conservative first slice also leaves
+known effect-free failures pending until an explicit resolution protocol is implemented.
+
+This is a **local reference controller**, not a distributed admission fence or durable store. Hosts must
+route new sessions through it; holding a returned handler or reading a snapshot is not an enforcement
+boundary. Lifecycle state is mutable runtime observation, separate from immutable integration/Process
+IR. The dictionaries retain receipts for the instance lifetime; persistent storage, retention cleanup,
+health evidence/expiry, operator resolution of failed sessions, bounded backfill and API/CLI projection
+remain COH-136 follow-up work. Do not reset a forward ledger to implement backfill; use a separate flow.
+
+Runbook: inspect → issue an authorized revision-checked pause/deactivation → inspect pending sessions →
+allow their Processes to finish or reconcile → confirm successful terminal decisions → inspect until
+Draining is false. If work is unresolved, leave it visible and use Process inspection; do not clear it or
+blindly retry. Resume/reactivate with a new authorized Active command at the current revision.

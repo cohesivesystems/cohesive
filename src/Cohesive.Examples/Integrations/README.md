@@ -77,3 +77,9 @@ policy denial or offer expiry, without another provider call, publication or led
 The sink and retained work are in-memory fixtures. These tests qualify reference execution and recovery
 from a **known retained result**, not disk persistence, process termination or recovery from an unknown
 external effect. They do not retry ambiguous effects or claim production storage durability.
+
+[HistoricalLifecycleExamples.cs](HistoricalLifecycleExamples.cs) adds the COH-136 local admission-control
+loop around that same Process. Revision-aware pause/deactivation rejects a new session while the
+admitted session finishes from its retained result through a fresh worker. Successful exact Process
+completion ends draining. Failed work stays visible until an explicit resolution protocol exists;
+these tests do not infer resolved external effects from a failure status.

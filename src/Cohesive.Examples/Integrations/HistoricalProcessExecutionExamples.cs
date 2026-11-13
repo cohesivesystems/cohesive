@@ -123,6 +123,7 @@ public sealed partial class HistoricalQualificationExamples
     {
         readonly ProcessFixture retained;
         readonly IntegrationCompilation compilation;
+        internal IntegrationCompilation Compilation => compilation;
         readonly CompiledProcessPlan plan;
         readonly IngestionDefinition definition;
         readonly string change;
