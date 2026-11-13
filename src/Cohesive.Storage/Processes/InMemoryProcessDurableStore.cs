@@ -76,6 +76,18 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore, IProcess
                 .OrderBy(id => id.Value, StringComparer.Ordinal).Take(maximumInstances).ToImmutableArray());
     }
 
+    /// <inheritdoc />
+    public Task<ImmutableArray<ProcessInstanceId>> ListPendingInstancesAsync(OperationContext context, ProcessInstanceId? after, int maximumInstances)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumInstances, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumInstances, 1000);
+        context.ThrowIfCancellationRequested();
+        lock (gate)
+            return Task.FromResult(aggregates.Where(item => item.Value.Checkpoint.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.None
+                    && (after is null || StringComparer.Ordinal.Compare(item.Key.Value, after.Value.Value) > 0))
+                .Select(item => item.Key).OrderBy(id => id.Value, StringComparer.Ordinal).Take(maximumInstances).ToImmutableArray());
+    }
+
     /// <summary>Captures the complete provider-neutral authority state in canonical instance order.</summary>
     /// <returns>An immutable current-version Process durable-store document.</returns>
     public ProcessDurableStoreDocument CaptureDocument()

@@ -22,6 +22,7 @@ internal sealed class PostgresProcessDurableStoreSql
     const string PageFingerprintsBinding = "page-fingerprints";
     const string PageFingerprintBinding = "page-fingerprint";
     const string PageContentBinding = "page-content";
+    const string TerminalBinding = "is-terminal";
     const string PageBytesBinding = "page-bytes";
 
     readonly SqlCommandTemplate loadRoot;
@@ -47,6 +48,7 @@ internal sealed class PostgresProcessDurableStoreSql
             .Select(SqlExpression.Column(InstanceAlias, "aggregate_bytes"), "aggregate_bytes")
             .Select(SqlExpression.Column(InstanceAlias, "page_manifest"), "page_manifest")
             .Select(SqlExpression.Column(InstanceAlias, "page_count"), "page_count")
+            .Select(SqlExpression.Column(InstanceAlias, "is_terminal"), "is_terminal")
             .Where(Equal(InstanceAlias, "authority_id", AuthorityBinding))
             .Where(Equal(InstanceAlias, "instance_id", InstanceBinding));
         loadRoot = root.BuildTemplate(PostgresSqlDialect.Instance);
@@ -71,6 +73,7 @@ internal sealed class PostgresProcessDurableStoreSql
             .Value("aggregate_bytes", SqlExpression.RuntimeParameter(AggregateBytesBinding))
             .Value("page_manifest", SqlExpression.RuntimeParameter(PageManifestBinding))
             .Value("page_count", SqlExpression.RuntimeParameter(PageCountBinding))
+            .Value("is_terminal", SqlExpression.RuntimeParameter(TerminalBinding))
             .Value("updated_at", SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic))
             .OnConflictDoNothing(["authority_id", "instance_id"])
             .Returning(SqlExpression.UnqualifiedColumn("physical_revision"), "physical_revision")
@@ -82,6 +85,7 @@ internal sealed class PostgresProcessDurableStoreSql
             .Set("aggregate_bytes", SqlExpression.RuntimeParameter(AggregateBytesBinding))
             .Set("page_manifest", SqlExpression.RuntimeParameter(PageManifestBinding))
             .Set("page_count", SqlExpression.RuntimeParameter(PageCountBinding))
+            .Set("is_terminal", SqlExpression.RuntimeParameter(TerminalBinding))
             .Set("updated_at", SqlExpression.Intrinsic(PostgresSqlDialect.ClockTimestampIntrinsic))
             .Where(Equal(tableAlias: null, "authority_id", AuthorityBinding))
             .Where(Equal(tableAlias: null, "instance_id", InstanceBinding))
@@ -93,16 +97,22 @@ internal sealed class PostgresProcessDurableStoreSql
             .BuildTemplate(PostgresSqlDialect.Instance);
     }
 
-    internal PostgresNpgsqlCommand ListInstances(string authority, string after, int maximumInstances)
+    internal PostgresNpgsqlCommand ListInstances(string authority, string after, int maximumInstances, bool pendingOnly = false)
     {
         var identity = SqlExpression.Collate(SqlExpression.Column(InstanceAlias, "instance_id"), "C");
-        var template = new SqlSelectBuilder(options.Instances, InstanceAlias)
+        var builder = new SqlSelectBuilder(options.Instances, InstanceAlias)
             .Select(identity, "instance_id")
             .Where(Equal(InstanceAlias, "authority_id", AuthorityBinding))
             .Where(SqlExpression.Binary(SqlBinaryOperator.GreaterThan, identity, SqlExpression.RuntimeParameter(InstanceBinding)))
-            .OrderBy(identity).Limit(maximumInstances).BuildTemplate(PostgresSqlDialect.Instance);
-        return Command(template, new Dictionary<string, PostgresNpgsqlParameter>(StringComparer.Ordinal)
-            { [AuthorityBinding] = Text(authority), [InstanceBinding] = Text(after) },
+            .OrderBy(identity).Limit(maximumInstances);
+        var parameters = new Dictionary<string, PostgresNpgsqlParameter>(StringComparer.Ordinal)
+            { [AuthorityBinding] = Text(authority), [InstanceBinding] = Text(after) };
+        if (pendingOnly)
+        {
+            builder.Where(Equal(InstanceAlias, "is_terminal", TerminalBinding));
+            parameters.Add(TerminalBinding, new(false, PostgresRelationQueryScalarType.Boolean, IsArray: false));
+        }
+        return Command(builder.BuildTemplate(PostgresSqlDialect.Instance), parameters,
             resultTypes: [PostgresRelationQueryScalarType.Text], maximumResultBytes: MaximumRootResultBytes)
             with { MaximumRows = maximumInstances };
     }
@@ -121,7 +131,8 @@ internal sealed class PostgresProcessDurableStoreSql
             PostgresRelationQueryScalarType.Text,
             PostgresRelationQueryScalarType.Int64,
             PostgresRelationQueryScalarType.Text,
-            PostgresRelationQueryScalarType.Int32
+            PostgresRelationQueryScalarType.Int32,
+            PostgresRelationQueryScalarType.Boolean
         ],
         maximumResultBytes: MaximumRootResultBytes);
 
@@ -233,7 +244,8 @@ internal sealed class PostgresProcessDurableStoreSql
             [AggregateFingerprintBinding] = Text(aggregate.AggregateFingerprint),
             [AggregateBytesBinding] = new((long)aggregate.AggregateBytes, PostgresRelationQueryScalarType.Int64, IsArray: false),
             [PageManifestBinding] = Text(aggregate.Manifest),
-            [PageCountBinding] = new(aggregate.Pages.Length, PostgresRelationQueryScalarType.Int32, IsArray: false)
+            [PageCountBinding] = new(aggregate.Pages.Length, PostgresRelationQueryScalarType.Int32, IsArray: false),
+            [TerminalBinding] = new(aggregate.IsTerminal, PostgresRelationQueryScalarType.Boolean, IsArray: false)
         };
         if (expectedRevision is { } revision)
         {

@@ -15,9 +15,7 @@ public sealed class MachineReactionHost
     readonly MachineReactionTarget target;
     readonly ProcessDurableRuntime runtime;
     readonly ProcessDurableRuntime recoveryRuntime;
-    readonly Func<OperationContext, ProcessStartRequest, ValueTask<bool>>? authorizeRecovery;
-    readonly int maximumAttempts;
-    readonly TimeSpan retryDelay;
+    readonly MachineReactionRecoveryPolicy? recovery;
     readonly CompiledProcessPlan plan;
     readonly Func<OperationContext, EntityTransitionOperationReceipt, ValueTask<ProcessControlAuthorizationContext?>> authorize;
 
@@ -27,26 +25,20 @@ public sealed class MachineReactionHost
     /// <param name="target">Exact, authorized target realization with replayable receipt resolution.</param>
     /// <param name="authorizeSource">Fresh source-resource and reaction-start authorization; null denies delivery.</param>
     /// <param name="options">Existing runtime worker, lease and bounded commit-retry policy.</param>
-    /// <param name="authorizeRecovery">Fresh permission to inspect and recover a retained start; required by recovery workers.</param>
-    /// <param name="maximumAttempts">Positive bounded physical dispatch budget, default five.</param>
-    /// <param name="retryDelay">Delay after an unsuccessful attempt, default thirty seconds.</param>
-    /// <exception cref="ArgumentOutOfRangeException">Retry budget or delay is invalid.</exception>
+    /// <param name="recovery">Validated background recovery policy, or null for synchronous delivery only.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
-    /// <exception cref="ArgumentException">Target revision does not match the policy.</exception>
+    /// <exception cref="ArgumentException">Target revision does not match the policy or the store lacks discovery.</exception>
     /// <exception cref="InvalidOperationException">The policy cannot compile.</exception>
     public MachineReactionHost(MachineReaction policy, IProcessDurableStore store, MachineReactionTarget target,
         Func<OperationContext, EntityTransitionOperationReceipt, ValueTask<ProcessControlAuthorizationContext?>> authorizeSource,
         ProcessDurableRuntimeOptions options,
-        Func<OperationContext, ProcessStartRequest, ValueTask<bool>>? authorizeRecovery = null,
-        int maximumAttempts = 5, TimeSpan? retryDelay = null)
+        MachineReactionRecoveryPolicy? recovery = null)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumAttempts);
-        this.maximumAttempts = maximumAttempts;
-        this.retryDelay = retryDelay ?? TimeSpan.FromSeconds(30);
-        if (this.retryDelay < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(retryDelay));
-        this.authorizeRecovery = authorizeRecovery;
+        this.recovery = recovery;
+        ArgumentNullException.ThrowIfNull(store);
+        if (store is not IProcessInstanceSource) throw new ArgumentException("Reaction admission requires discovery on its Process store.", nameof(store));
         Policy = policy ?? throw new ArgumentNullException(nameof(policy));
-        this.store = store ?? throw new ArgumentNullException(nameof(store));
+        this.store = store;
         this.target = target ?? throw new ArgumentNullException(nameof(target));
         authorize = authorizeSource ?? throw new ArgumentNullException(nameof(authorizeSource));
         if (target.Transition != policy.Payload.Target.Reference) throw new ArgumentException("Target revision differs from the policy.", nameof(target));
@@ -64,13 +56,14 @@ public sealed class MachineReactionHost
     public InteractionAuthorityScope Authority => target.Authority;
 
     internal IProcessDurableStore Store => store;
+    internal bool SupportsRecovery => recovery is not null;
 
     /// <summary>Authorizes and atomically retains starts without contacting the target.</summary>
     /// <param name="context">Trusted source-delivery context.</param>
     /// <param name="receipt">Validated immutable source receipt.</param>
     /// <returns>Durably discoverable reaction identities, or empty for unrelated scope or movement.</returns>
     /// <exception cref="UnauthorizedAccessException">Source/start permission is denied.</exception>
-    /// <exception cref="InvalidOperationException">The store lacks discovery or admission is not confirmed.</exception>
+    /// <exception cref="InvalidOperationException">Admission is not confirmed.</exception>
     /// <exception cref="ArgumentNullException">The context or receipt is null.</exception>
     public async Task<ImmutableArray<ProcessInstanceId>> AdmitAsync(OperationContext context, EntityTransitionOperationReceipt receipt)
     {
@@ -78,7 +71,6 @@ public sealed class MachineReactionHost
         ArgumentNullException.ThrowIfNull(receipt);
         if (receipt.Request.AuthorityScope != Authority) return [];
         var results = ImmutableArray.CreateBuilder<ProcessInstanceId>();
-        if (store is not IProcessInstanceSource) throw new InvalidOperationException("Durable reaction admission requires discovery on its Process store.");
         foreach (var occurrence in EntityMachineOccurrence.FromReceipt(receipt))
         {
             if (!MachineReactionInvocation.Matches(Policy, occurrence)) continue;
@@ -101,7 +93,10 @@ public sealed class MachineReactionHost
             }
             if (snapshot is null) throw new InvalidOperationException("Reaction admission remains indeterminate; replay this delivery.");
             var retained = MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request);
-            if (retained.Source != prepared.Source || retained.MovementNode != prepared.MovementNode || retained.Start.Input != prepared.Start.Input)
+            // Fresh permission was checked above; replay preserves the original start attribution.
+            var replayIntent = new ProcessStartRequest(prepared.Start.SchemaVersion, prepared.Start.Definition,
+                retained.Start.Context, prepared.Start.InitialContinuation, prepared.Start.Input, prepared.Start.Causation);
+            if (!retained.Start.HasSameIdempotentIntent(replayIntent))
                 throw new InvalidOperationException("Reaction identity is already retained for different source content.");
             results.Add(retained.Start.InitialContinuation.ProcessInstanceId);
         }
@@ -147,7 +142,7 @@ public sealed class MachineReactionHost
     internal async Task<MachineReactionProgress> RecoverSnapshotAsync(OperationContext context, ProcessDurableStoreSnapshot snapshot)
     {
         var instance = snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId;
-        if (authorizeRecovery is null || !await authorizeRecovery(context, snapshot.Checkpoint.Start.Request).ConfigureAwait(false))
+        if (recovery is null || !await recovery.Authorize(context, snapshot.Checkpoint.Start.Request).ConfigureAwait(false))
             throw new UnauthorizedAccessException("Reaction recovery access is denied.");
         var attempts = ProcessTransitionAttempt.Read(snapshot);
         if (!CanDispatch(context, snapshot))
@@ -159,8 +154,7 @@ public sealed class MachineReactionHost
             var retained = await store.LoadAsync(context, instance).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Admitted reaction disappeared.");
             var current = ProcessTransitionAttempt.Read(retained);
-            if (exception is not ProcessDurableRuntime.TransitionAttemptDeferredException
-                && (current.IsEmpty || (current.Length == attempts.Length && current[^1].Attempt == attempts[^1].Attempt))) throw;
+            if (current.IsEmpty || (current.Length == attempts.Length && current[^1].Attempt == attempts[^1].Attempt)) throw;
             return await InspectSnapshot(context, retained).ConfigureAwait(false);
         }
     }
@@ -170,8 +164,8 @@ public sealed class MachineReactionHost
         var attempts = ProcessTransitionAttempt.Read(snapshot);
         var last = attempts.LastOrDefault();
         return last is null || last.Result is not null || (last.Attempt.Failure?.Disposition != DurableOperationFailureDisposition.Terminal
-            && attempts.Length < maximumAttempts
-            && context.UtcNow >= (last.Attempt.CompletedAtUtc ?? last.Attempt.Claim.ExpiresAtUtc) + retryDelay);
+            && attempts.Length < recovery!.MaximumAttempts
+            && context.UtcNow - (last.Attempt.CompletedAtUtc ?? last.Attempt.Claim.ExpiresAtUtc) >= recovery!.RetryDelay);
     }
 
     async Task<MachineReactionProgress> Execute(OperationContext context, ProcessDurableStoreSnapshot snapshot,
@@ -207,11 +201,10 @@ public sealed class MachineReactionHost
         var progress = await InspectCheckpoint(context, invocation, snapshot.Checkpoint).ConfigureAwait(false);
         if (progress.Status == MachineReactionStatus.Pending && attempts.LastOrDefault() is { } last)
         {
-            var key = new ProcessOperationOccurrence(last.Invocation.Continuation, last.Invocation.Activation,
-                last.Invocation.Token, last.Invocation.Node, last.Invocation.Occurrence);
+            var key = ProcessTransitionAttempt.Operation(last.Invocation);
             progress = last.Attempt.Failure is { } failure ? invocation.InspectFailure(key, failure)
                 : new(MachineReactionStatus.Indeterminate, key);
-            if (attempts.Length >= maximumAttempts || last.Attempt.Failure?.Disposition == DurableOperationFailureDisposition.Terminal)
+            if (attempts.Length >= (recovery?.MaximumAttempts ?? int.MaxValue) || last.Attempt.Failure?.Disposition == DurableOperationFailureDisposition.Terminal)
                 progress = progress with { Status = progress.Status == MachineReactionStatus.Pending ? MachineReactionStatus.Failed : progress.Status,
                     Diagnostic = new("machine.reaction.recovery.stopped", DiagnosticSeverity.Warning,
                     "Automatic recovery stopped; retain this identity and investigate the target receipt before operator recovery.") };
@@ -227,10 +220,9 @@ public sealed class MachineReactionHost
         if (operation?.Result.ReceiptReference is { } reference)
         {
             try { receipt = await target.ResolveAsync(context, EntityTransitionReceiptReferences.Read(reference)).ConfigureAwait(false); }
-            catch (Exception exception) when (exception is IOException or TimeoutException
-                || exception is System.Net.Http.HttpRequestException http && http.StatusCode is not
-                    (System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Conflict))
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException or AccessViolationException or OperationCanceledException))
             {
+                if (target.DescribeFailure(exception).Disposition != DurableOperationFailureDisposition.Retryable) throw;
                 return invocation.Inspect(checkpoint) with { Diagnostic = new("machine.reaction.receipt.unavailable", DiagnosticSeverity.Warning,
                     "The retained target operation receipt is temporarily unavailable; commitment remains unconfirmed.") };
             }

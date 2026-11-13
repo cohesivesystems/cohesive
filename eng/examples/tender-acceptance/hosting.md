@@ -24,9 +24,10 @@ var host = new MachineReactionHost(
     authorizeSource: authorizeTenderAndStart,
     options: new ProcessDurableRuntimeOptions(
         workerId: workerInstance, workerLease: TimeSpan.FromMinutes(5)),
-    authorizeRecovery: authorizeRetainedStart,
-    maximumAttempts: 5,
-    retryDelay: TimeSpan.FromSeconds(30));
+    recovery: new MachineReactionRecoveryPolicy(
+        authorize: authorizeRetainedStart,
+        maximumAttempts: 5,
+        retryDelay: TimeSpan.FromSeconds(30)));
 
 // Source acknowledgement depends only on durable admission.
 var instances = await host.AdmitAsync(context, committedTenderReceipt);
@@ -139,10 +140,25 @@ advance the scan cursor without dispatch; an authorization or storage failure pr
 returning a new cursor, so the supervisor can retry the same page. The supervisor continues
 from the returned cursor and starts a new pass after reaching an empty page. Ordering is provider-local;
 keep cursors with their provider. New identities inserted behind a cursor appear on the next pass.
-Discovery currently scans all retained instances, including completed and unrelated policies; it is
-not a ready-work index. Poll cadence, retention and worker lifetime remain deployment choices.
+Recovery uses `ListPendingInstancesAsync`: terminal instances, including guard rejections, are excluded
+before routing or target calls. PostgreSQL projects terminal status atomically with the canonical
+checkpoint into the existing root row, with an index on authority, terminal status and ordered identity.
+The projection is derived evidence, not a second reaction status. Older roots begin conservatively as
+nonterminal candidates and are corrected on their first read; the worker also checks the loaded
+checkpoint so migration or concurrent completion never causes a terminal target call. The in-memory
+reference implementation filters metadata without materializing terminal snapshots. Roll out the new
+store readers and writers together: older writers do not maintain this projection and must not resume
+writing after the upgrade. See the [discovery query comparison](../../../docs/performance/reaction-discovery/README.md).
 
-`authorizeRetainedStart` freshly authorizes the worker for each stored start. Discovery is not an
+The candidate set still includes unrelated nonterminal Processes, delayed work and exhausted retries;
+this is not a due-time scheduler. Poll cadence, retention and worker lifetime remain deployment choices.
+`ListInstancesAsync` still enumerates all retained history for explicit administration. Explicit
+`InspectAsync` and direct per-instance `RecoverAsync` can resolve terminal receipts when requested;
+background page scans do not refresh those receipts.
+
+`MachineReactionRecoveryPolicy` validates its authorization callback, dispatch budget and delay when
+constructed. Hosts reject nondiscoverable stores at construction; background-worker registration
+rejects hosts without a recovery policy. `authorizeRetainedStart` freshly authorizes the worker for each stored start. Discovery is not an
 access grant. Target execution and receipt resolution retain their own fresh authorization checks.
 `InspectAsync` requires the caller to authorize the Process instance before inspecting it.
 
@@ -154,9 +170,16 @@ A fenced Dispatched record is committed before calling the target, followed by F
 evidence, then the ordinary activation checkpoint. An acknowledged result can finalize after restart
 without another dispatch. Cancellation or lost acknowledgement leaves explicit uncertain evidence.
 This adds durable writes to the native call path in exchange for a recoverable dispatch boundary.
+Parsed attempt evidence is weakly cached by immutable snapshot identity; admission, inspection and
+execution reuse that parse without retaining snapshots after their owners release them. Replay uses
+canonical Process operation keys and idempotent start comparison instead of independent field lists.
 
 `DeliverAsync` remains an explicitly requested synchronous dispatch/replay convenience; automatic
 retry policy belongs to `RecoverAsync`. Use the recovery API for background workers.
+
+A deferred physical dispatch returns `ProcessDurableRuntimeDisposition.Deferred` without an exception
+or semantic checkpoint. Target dispatch and receipt resolution share `MachineReactionTarget.DescribeFailure`;
+custom transports supply one classification policy for both boundaries.
 
 Retry delay and physical-attempt budget are checked again under the acquired Process lease, so stale
 worker discovery cannot bypass them. An interrupted dispatch waits until its claim expires plus the

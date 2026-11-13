@@ -250,7 +250,7 @@ public sealed class MachineReactionHostTests
         internal MachineReactionHost Host(MachineReactionTarget? target = null) => new(Model.PendingAcceptance, Store, target ?? Target,
             (_, receipt) => { SourceAuthorizations++; return ValueTask.FromResult<ProcessControlAuthorizationContext?>(SourceAllowed
                 ? new("worker", receipt.Request.AuthorityScope, "policy/test") : null); }, new("worker", TimeSpan.FromMinutes(5)),
-            authorizeRecovery: (_, _) => ValueTask.FromResult(RecoveryAllowed), retryDelay: TimeSpan.Zero);
+            recovery: new((_, _) => ValueTask.FromResult(RecoveryAllowed), retryDelay: TimeSpan.Zero));
 
         internal static async Task<Fixture> Create(bool allowed = true, string loadId = "load-1", string processId = "process-1")
         {

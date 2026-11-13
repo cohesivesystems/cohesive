@@ -87,7 +87,7 @@ another command cannot mark this reaction complete.
 `MachineReactionHost` persists native dispatch, failure and acknowledgement evidence through the
 existing Process local-state ledger. `AdmitAsync` confirms discoverable starts without target calls;
 `RecoverAsync` resumes their original operation identities with fresh authorization, a delay and a
-bounded physical-attempt budget. `ProcessTransitionAttempt.Read(snapshot)` exposes retained history.
+bounded physical-attempt budget supplied by `MachineReactionRecoveryPolicy`. `ProcessTransitionAttempt.Read(snapshot)` exposes retained history.
 An interrupted call is Indeterminate; absence of a receipt never proves non-commit. Exhausted known
 non-commit is Failed, while exhausted ambiguity remains Indeterminate. See the
 [hosting contract](../../../eng/examples/tender-acceptance/hosting.md) for adapter guarantees and limits.
@@ -100,7 +100,8 @@ and `HttpMachineReactionTarget` realizes exact target dispatch and receipt resol
 part of the semantic policy. Restarting the Process as a new attempt is explicitly rejected by this inspection profile;
 recover the existing attempt instead. Component composition, fan-out, cross-authority dispatch,
 historical policy replay and actor adapters need explicit additional semantics. Cosmos checkpoints
-after durable admission; independent workers discover and recover admitted work. Discovery currently
+after durable admission; independent workers discover and recover admitted nonterminal work. Terminal history is excluded
+from background scans before target access; explicit inspection still resolves target receipts. Discovery currently
 supports the in-memory reference and PostgreSQL Process stores. No cross-policy ordering is inferred.
 
 Authoring and validation are cold operations. Preparation hashes one bounded origin record and

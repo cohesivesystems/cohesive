@@ -96,7 +96,10 @@ public enum ProcessDurableRuntimeDisposition
     CommitOutcomeUnknown = 14,
 
     /// <summary>The requested operation is outside the runtime's current supported lifecycle surface.</summary>
-    Unsupported = 15
+    Unsupported = 15,
+
+    /// <summary>Host admission deferred physical dispatch without changing semantic continuation state.</summary>
+    Deferred = 16
 }
 
 /// <summary>Classification of an exception thrown across a Process-store mutation boundary.</summary>

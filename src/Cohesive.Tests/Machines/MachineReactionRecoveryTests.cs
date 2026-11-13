@@ -1,4 +1,5 @@
 using Cohesive.Adapters.Postgres;
+using Cohesive.Adapters.SQLite;
 using Cohesive.Execution;
 using Cohesive.Examples.TenderAcceptance;
 using Cohesive.Processes.Execution;
@@ -11,6 +12,59 @@ namespace Cohesive.Tests.Machines;
 
 public sealed class MachineReactionRecoveryTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Finished_reactions_leave_pending_discovery_without_target_calls(bool allowed)
+    {
+        var f = await Fixture.Create(allowed);
+        var target = new ObservedTarget(f.Target);
+        var host = f.Host(target);
+        var id = Assert.Single(await host.AdmitAsync(f.Context, f.Receipt));
+        var recovery = new MachineReactionRecovery(f.Store, [host]);
+        var first = await recovery.RunPageAsync(f.Context);
+        Assert.Equal(allowed ? MachineReactionStatus.Completed : MachineReactionStatus.Rejected, first.Progress[id].Status);
+        target.Unavailable = true;
+        var next = await recovery.RunPageAsync(f.Context);
+        Assert.Empty(next.Progress);
+        Assert.Null(next.NextCursor);
+        Assert.Equal(1, target.Executions);
+        Assert.Equal(1, target.Resolutions);
+        Assert.Equal(id, Assert.Single(await ((IProcessInstanceSource)f.Store).ListInstancesAsync(f.Context, null, 10)));
+    }
+
+    [Fact]
+    public async Task Receipt_resolution_uses_the_targets_failure_classifier()
+    {
+        var f = await Fixture.Create();
+        var target = new ObservedTarget(f.Target) { Unavailable = true };
+        var host = f.Host(target);
+        var id = Assert.Single(await host.AdmitAsync(f.Context, f.Receipt));
+        var progress = (await host.RecoverAsync(f.Context, id))!;
+        Assert.Equal(MachineReactionStatus.Indeterminate, progress.Status);
+        Assert.Equal("machine.reaction.receipt.unavailable", progress.Diagnostic!.Code);
+        Assert.Equal(1, target.Classifications);
+    }
+
+    [Fact]
+    public async Task Recovery_configuration_fails_at_registration_and_parsed_evidence_is_reused()
+    {
+        var f = await Fixture.Create();
+        Assert.Throws<ArgumentNullException>(() => new MachineReactionRecoveryPolicy(null!));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new MachineReactionRecoveryPolicy((_, _) => ValueTask.FromResult(true), maximumAttempts: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new MachineReactionRecoveryPolicy((_, _) => ValueTask.FromResult(true), retryDelay: TimeSpan.FromSeconds(-1)));
+        var syncOnly = new MachineReactionHost(f.Model.PendingAcceptance, f.Store, f.Target,
+            (_, _) => throw new InvalidOperationException(), new("worker", TimeSpan.FromMinutes(5)));
+        Assert.Throws<ArgumentException>(() => new MachineReactionRecovery(f.Store, [syncOnly]));
+        var unsupported = new SqliteProcessDurableStore(new SqliteDatabase(new(Path.Combine(Path.GetTempPath(), "unused-reaction-store.db"))), "test");
+        Assert.Throws<ArgumentException>(() => new MachineReactionHost(f.Model.PendingAcceptance, unsupported, f.Target,
+            (_, _) => throw new InvalidOperationException(), new("worker", TimeSpan.FromMinutes(5))));
+        var id = Assert.Single(await f.Host().AdmitAsync(f.Context, f.Receipt));
+        await f.Host().RecoverAsync(f.Context, id);
+        var snapshot = (await f.Store.LoadAsync(f.Context, id))!;
+        Assert.Same(Assert.Single(ProcessTransitionAttempt.Read(snapshot)), Assert.Single(ProcessTransitionAttempt.Read(snapshot)));
+    }
+
     [Fact]
     public async Task Generic_recovery_rejects_ambiguous_registration_and_advances_past_unregistered_work()
     {
@@ -38,7 +92,7 @@ public sealed class MachineReactionRecoveryTests
             new InteractionAuthorityScope("another-authority", "test"), (_, _) => throw new InvalidOperationException("Wrong target"));
         var foreignHost = new MachineReactionHost(f.Model.PendingAcceptance, f.Store, foreignTarget,
             (_, _) => throw new InvalidOperationException("Wrong source"), new("worker", TimeSpan.FromMinutes(5)),
-            (_, _) => throw new InvalidOperationException("Wrong recovery authority"));
+            new((_, _) => throw new InvalidOperationException("Wrong recovery authority")));
         var recovery = new MachineReactionRecovery(f.Store, [foreignHost, host]);
         f.RecoveryAllowed = false;
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => recovery.RunPageAsync(f.Context));
@@ -58,11 +112,11 @@ public sealed class MachineReactionRecoveryTests
         var resume = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var stale = new MachineReactionHost(f.Model.PendingAcceptance, f.Store, unavailable,
             (_, _) => throw new InvalidOperationException(), new("stale-worker", TimeSpan.FromMinutes(5)),
-            async (_, _) => { inspected.TrySetResult(); await resume.Task.WaitAsync(TimeSpan.FromSeconds(10)); return true; },
-            maximumAttempts: 1, retryDelay: TimeSpan.Zero);
+            new(async (_, _) => { inspected.TrySetResult(); await resume.Task.WaitAsync(TimeSpan.FromSeconds(10)); return true; },
+            maximumAttempts: 1, retryDelay: TimeSpan.Zero));
         var current = new MachineReactionHost(f.Model.PendingAcceptance, f.Store, unavailable,
             (_, _) => throw new InvalidOperationException(), new("current-worker", TimeSpan.FromMinutes(5)),
-            (_, _) => ValueTask.FromResult(true), maximumAttempts: 1, retryDelay: TimeSpan.Zero);
+            new((_, _) => ValueTask.FromResult(true), maximumAttempts: 1, retryDelay: TimeSpan.Zero));
         var id = Assert.Single(await f.Host().AdmitAsync(f.Context, f.Receipt));
         var racing = stale.RecoverAsync(f.Context, id);
         await inspected.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -144,7 +198,7 @@ public sealed class MachineReactionRecoveryTests
         var unavailable = new UnavailableTarget(f.Target);
         var host = new MachineReactionHost(f.Model.PendingAcceptance, f.Store, unavailable,
             (_, receipt) => ValueTask.FromResult<ProcessControlAuthorizationContext?>(new("worker", receipt.Request.AuthorityScope, "test")),
-            new("worker", TimeSpan.FromMinutes(5)), (_, _) => ValueTask.FromResult(true), maximumAttempts: 1, retryDelay: TimeSpan.Zero);
+            new("worker", TimeSpan.FromMinutes(5)), new((_, _) => ValueTask.FromResult(true), maximumAttempts: 1, retryDelay: TimeSpan.Zero));
         var id = Assert.Single(await host.AdmitAsync(f.Context, f.Receipt));
         await host.RecoverAsync(f.Context, id);
         var stopped = (await host.RecoverAsync(f.Context, id))!;
@@ -153,7 +207,7 @@ public sealed class MachineReactionRecoveryTests
         Assert.Equal(MachineReactionStatus.Failed, stopped.Status);
         var delayed = new MachineReactionHost(f.Model.PendingAcceptance, f.Store, unavailable,
             (_, _) => throw new InvalidOperationException(), new("worker", TimeSpan.FromMinutes(5)),
-            (_, _) => ValueTask.FromResult(true), retryDelay: TimeSpan.FromHours(1));
+            new((_, _) => ValueTask.FromResult(true), retryDelay: TimeSpan.FromHours(1)));
         await delayed.RecoverAsync(f.Context, id);
         Assert.Equal(1, unavailable.Calls);
         var rejected = await Fixture.Create(allowed: false);
@@ -190,12 +244,12 @@ public sealed class MachineReactionRecoveryTests
             f.Target.Authority, (_, _) => ValueTask.FromResult(true));
         MachineReactionHost Host(MachineReactionTarget realization) => new(f.Model.ReceiptConfirmation, f.Store, realization,
             (_, receipt) => ValueTask.FromResult<ProcessControlAuthorizationContext?>(new("worker", receipt.Request.AuthorityScope, "test")),
-            new("worker", TimeSpan.FromMinutes(5)), (_, _) => ValueTask.FromResult(true), retryDelay: TimeSpan.Zero);
+            new("worker", TimeSpan.FromMinutes(5)), new((_, _) => ValueTask.FromResult(true), retryDelay: TimeSpan.Zero));
         var id = Assert.Single(await Host(target).AdmitAsync(f.Context, confirmation));
         Assert.Equal(MachineReactionStatus.Indeterminate, (await Host(new LostAcknowledgement(target)).RecoverAsync(f.Context, id))!.Status);
         var recovery = new MachineReactionRecovery(f.Store, [f.Host(), Host(target)]);
         var page = await recovery.RunPageAsync(f.Context);
-        Assert.Equal(2, page.Progress.Count);
+        Assert.Single(page.Progress);
         var recovered = page.Progress[id];
         Assert.Equal(MachineReactionStatus.Completed, recovered.Status);
         Assert.Equal("Confirmed", recovered.Receipt!.Result.Value!.Value!.Value.GetString());
@@ -243,6 +297,18 @@ public sealed class MachineReactionRecoveryTests
         Assert.Equal(MachineReactionStatus.Completed, recovered.Status);
         Assert.Equal(2, recovered.Attempts.Length);
         Assert.Equal("mem:2", recovered.Receipt!.Entity.ConcurrencyToken!.Value);
+        Assert.Empty(await replacement.ListPendingInstancesAsync(f.Context, null, 10));
+        Assert.Equal(id, Assert.Single(await replacement.ListInstancesAsync(f.Context, null, 10)));
+        // Existing roots receive a conservative nonterminal projection during schema migration.
+        await using (var reset = replacementPool.CreateCommand($"UPDATE {options.QualifiedInstanceTable} SET is_terminal = false WHERE authority_id = @authority"))
+        {
+            reset.Parameters.AddWithValue("authority", options.AuthorityId);
+            await reset.ExecuteNonQueryAsync();
+        }
+        Assert.Equal(id, Assert.Single(await replacement.ListPendingInstancesAsync(f.Context, null, 10)));
+        var page = await new MachineReactionRecovery(replacement, [f.Host()]).RunPageAsync(f.Context);
+        Assert.Empty(page.Progress);
+        Assert.Empty(await replacement.ListPendingInstancesAsync(f.Context, null, 10));
         var other = new PostgresProcessDurableStore(replacementPool, new("unrelated-authority"));
         Assert.Empty(await other.ListInstancesAsync(f.Context, null, 10));
     }
@@ -256,6 +322,26 @@ public sealed class MachineReactionRecoveryTests
             DurableOperationEffectEvidence.NotExecuted, DurableOperationFailureDisposition.Retryable, "test.target.offline");
         public override ValueTask<EntityTransitionOperationReceipt?> ResolveAsync(OperationContext context, EntityTransitionOperationReference reference)
             => inner.ResolveAsync(context, reference);
+    }
+
+    sealed class ObservedTarget(MachineReactionTarget inner) : MachineReactionTarget(inner.Transition, inner.Authority)
+    {
+        internal int Executions, Resolutions, Classifications;
+        internal bool Unavailable;
+        public override ValueTask<ProcessOperationResult> ExecuteAsync(OperationContext context, ProcessTransitionInvocation invocation)
+        { Executions++; return inner.ExecuteAsync(context, invocation); }
+        public override ValueTask<EntityTransitionOperationReceipt?> ResolveAsync(OperationContext context, EntityTransitionOperationReference reference)
+        {
+            Resolutions++;
+            if (Unavailable) throw new InvalidOperationException("Custom transient resolver failure");
+            return inner.ResolveAsync(context, reference);
+        }
+        public override DurableOperationFailure DescribeFailure(Exception exception)
+        {
+            Classifications++;
+            return new(DurableOperationFailurePhase.InCall, DurableOperationEffectEvidence.Ambiguous,
+                DurableOperationFailureDisposition.Retryable, "test.resolver.unavailable");
+        }
     }
 
     sealed class LostAcknowledgement(MachineReactionTarget inner) : MachineReactionTarget(inner.Transition, inner.Authority)

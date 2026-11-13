@@ -1,0 +1,32 @@
+BEGIN
+INSERT 0 10001
+ANALYZE
+                                                                QUERY PLAN                                                                 
+-------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=1403.42..1428.42 rows=10000 width=32) (actual time=1.252..1.487 rows=10001 loops=1)
+   Sort Key: ((instance_id)::text) COLLATE "C"
+   Sort Method: quicksort  Memory: 385kB
+   Buffers: shared hit=589
+   ->  Seq Scan on process_durable_stores_instances  (cost=0.00..739.03 rows=10000 width=32) (actual time=0.006..0.756 rows=10001 loops=1)
+         Filter: (((instance_id)::text > ''::text) AND (authority_id = 'discovery-measurement'::text))
+         Rows Removed by Filter: 1
+         Buffers: shared hit=589
+ Planning:
+   Buffers: shared hit=39
+ Planning Time: 0.063 ms
+ Execution Time: 1.688 ms
+(12 rows)
+
+                                                                                    QUERY PLAN                                                                                    
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Index Only Scan using process_durable_stores_instances_recovery on process_durable_stores_instances  (cost=0.29..8.31 rows=1 width=32) (actual time=0.005..0.005 rows=1 loops=1)
+   Index Cond: ((authority_id = 'discovery-measurement'::text) AND (is_terminal = false) AND (instance_id > ''::text))
+   Heap Fetches: 1
+   Buffers: shared hit=3
+ Planning:
+   Buffers: shared hit=3
+ Planning Time: 0.021 ms
+ Execution Time: 0.008 ms
+(8 rows)
+
+ROLLBACK

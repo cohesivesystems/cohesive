@@ -7,25 +7,23 @@ public sealed partial class ProcessDurableRuntime
 {
     // Host policy is rechecked against the acquired snapshot, not a stale discovery read.
     internal Func<OperationContext, ProcessDurableStoreSnapshot, bool>? AdmitTransitionAttempt { get; init; }
-    internal sealed class TransitionAttemptDeferredException : Exception;
 
     sealed class NativeTransitionJournal(ProcessDurableStoreSnapshot snapshot)
     {
         internal ProcessDurableStoreSnapshot Snapshot = snapshot;
     }
 
-    async ValueTask<ProcessOperationResult> ExecuteRecoverableTransitionAsync(OperationContext context,
+    async ValueTask<ProcessOperationResult?> ExecuteRecoverableTransitionAsync(OperationContext context,
         ProcessTransitionInvocation invocation, IRecoverableProcessTransitionOperationAdapter adapter, NativeTransitionJournal journal)
     {
         var history = ProcessTransitionAttempt.Read(journal.Snapshot);
-        var related = history.Where(item => item.Invocation.Continuation == invocation.Continuation
-            && item.Invocation.Activation == invocation.Activation && item.Invocation.Token == invocation.Token
-            && item.Invocation.Node == invocation.Node && item.Invocation.Occurrence == invocation.Occurrence).ToArray();
+        var operation = ProcessTransitionAttempt.Operation(invocation);
+        var related = history.Where(item => ProcessTransitionAttempt.Operation(item.Invocation) == operation).ToArray();
         if (related.Any(item => item.Invocation != invocation))
             throw new InvalidOperationException("Native transition replay changed its retained invocation.");
         if (related.LastOrDefault()?.Result is { } retained) return retained;
         if (AdmitTransitionAttempt is { } admit && !admit(context, journal.Snapshot))
-            throw new TransitionAttemptDeferredException();
+            return null;
         var ordinal = related.Length + 1;
         var lease = journal.Snapshot.WorkerLease!;
         var now = context.UtcNow;

@@ -15,4 +15,11 @@ public interface IProcessInstanceSource
     /// <returns>At most the requested number of identities; an empty page ends a pass. Cursors are scoped to one provider authority.</returns>
     /// <exception cref="ArgumentOutOfRangeException">The page bound is outside 1–1000.</exception>
     Task<ImmutableArray<ProcessInstanceId>> ListInstancesAsync(OperationContext context, ProcessInstanceId? after, int maximumInstances);
+    /// <summary>Lists nonterminal Process instances without materializing terminal history.</summary>
+    /// <param name="context">Trusted store access and cancellation.</param>
+    /// <param name="after">Provider-scoped exclusive cursor, or null for a new pass.</param>
+    /// <param name="maximumInstances">Positive page bound, at most 1000.</param>
+    /// <returns>Bounded candidate identities; terminal instances may appear during concurrent completion or lazy migration.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">The page bound is outside 1–1000.</exception>
+    Task<ImmutableArray<ProcessInstanceId>> ListPendingInstancesAsync(OperationContext context, ProcessInstanceId? after, int maximumInstances);
 }

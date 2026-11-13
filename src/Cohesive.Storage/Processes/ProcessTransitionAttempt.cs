@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
 
@@ -23,19 +24,31 @@ public interface IRecoverableProcessTransitionOperationAdapter : IProcessTransit
 public sealed record ProcessTransitionAttempt(ProcessTransitionInvocation Invocation, DurableOperationAttempt Attempt,
     ProcessOperationResult? Result = null)
 {
+    sealed record Parsed(ImmutableArray<ProcessTransitionAttempt> Attempts);
+    static readonly ConditionalWeakTable<ProcessDurableStoreSnapshot, Parsed> Cache = new();
+
+    internal static ProcessOperationOccurrence Operation(ProcessTransitionInvocation invocation) =>
+        new(invocation.Continuation, invocation.Activation, invocation.Token, invocation.Node, invocation.Occurrence);
+
     internal const string Prefix = "process/transition-attempt/v1/";
     static readonly JsonSerializerOptions Json = ProcessDurableCheckpointJsonSerializer.CreateOptions();
     static readonly ValueContract Contract = new(new ScalarTypeRef(ScalarTypeKind.String));
 
     /// <summary>Reads native transition attempt evidence from one trusted Process snapshot.</summary>
     /// <param name="snapshot">Authoritative coherent aggregate, including its local-state ledger.</param>
-    /// <returns>Attempts ordered by physical claim time and ordinal; no storage I/O is performed.</returns>
+    /// <returns>Attempts ordered by physical claim time and ordinal; no storage I/O is performed.
+    /// Parsed evidence is weakly cached for the lifetime of the immutable snapshot.</returns>
     /// <exception cref="InvalidOperationException">Retained attempt evidence has an invalid contract or identity.</exception>
     /// <exception cref="JsonException">Retained canonical JSON is malformed.</exception>
     /// <exception cref="ArgumentNullException">The snapshot is null.</exception>
     public static ImmutableArray<ProcessTransitionAttempt> Read(ProcessDurableStoreSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        return Cache.GetValue(snapshot, static value => new(Parse(value))).Attempts;
+    }
+
+    static ImmutableArray<ProcessTransitionAttempt> Parse(ProcessDurableStoreSnapshot snapshot)
+    {
         var result = ImmutableArray.CreateBuilder<ProcessTransitionAttempt>();
         foreach (var state in snapshot.LocalState)
         {
@@ -56,7 +69,7 @@ public sealed record ProcessTransitionAttempt(ProcessTransitionInvocation Invoca
     }
 
     internal string Resource => Prefix + ProcessStorageContentFingerprints.Value(
-        new ProcessOperationOccurrence(Invocation.Continuation, Invocation.Activation, Invocation.Token, Invocation.Node, Invocation.Occurrence)).Value
+        Operation(Invocation)).Value
         + "/" + Attempt.Ordinal.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
     internal ProcessLocalMutation Mutation(long expectedVersion) => new(

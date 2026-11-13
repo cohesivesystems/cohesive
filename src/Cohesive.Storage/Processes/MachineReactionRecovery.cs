@@ -4,8 +4,8 @@ using Cohesive.Execution;
 namespace Cohesive.Storage.Processes;
 
 /// <summary>Progress from one bounded pass over admitted Process identities.</summary>
-/// <param name="Progress">Results keyed by instance for registered policies; unrelated instances are omitted.</param>
-/// <param name="NextCursor">Last scanned identity, including unrelated instances, or null after an empty page.</param>
+/// <param name="Progress">Results keyed by instance for registered policies; unrelated and terminal instances are omitted.</param>
+/// <param name="NextCursor">Last scanned candidate identity, including unrelated instances, or null after an empty candidate page.</param>
 public sealed record MachineReactionRecoveryPage(
     ImmutableDictionary<ProcessInstanceId, MachineReactionProgress> Progress, ProcessInstanceId? NextCursor);
 
@@ -24,7 +24,7 @@ public sealed class MachineReactionRecovery
     /// <param name="source">Store used by every host; it must also implement IProcessInstanceSource.</param>
     /// <param name="hosts">Hosts indexed by exact Process reference and authority; registration is copied.</param>
     /// <exception cref="ArgumentNullException">An argument or host is null.</exception>
-    /// <exception cref="ArgumentException">Discovery is unsupported, a host uses a different store instance, or a registration is duplicated.</exception>
+    /// <exception cref="ArgumentException">Discovery is unsupported, a host uses a different store instance, or a registration is duplicated, or a host has no recovery policy.</exception>
     public MachineReactionRecovery(IProcessDurableStore source, IReadOnlyList<MachineReactionHost> hosts)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -35,6 +35,8 @@ public sealed class MachineReactionRecovery
         foreach (var host in hosts)
         {
             ArgumentNullException.ThrowIfNull(host);
+            if (!host.SupportsRecovery)
+                throw new ArgumentException("Recovery hosts require a recovery policy at registration.", nameof(hosts));
             if (!ReferenceEquals(source, host.Store))
                 throw new ArgumentException("Recovery hosts must share the supplied Process store instance.", nameof(hosts));
             if (!this.hosts.TryAdd((host.Policy.Payload.Process.Reference, host.Authority), host))
@@ -52,8 +54,8 @@ public sealed class MachineReactionRecovery
     /// <exception cref="UnauthorizedAccessException">A matching host denies recovery or target evidence access.</exception>
     /// <exception cref="InvalidOperationException">Retained evidence is inconsistent or storage cannot confirm progress.</exception>
     /// <exception cref="OperationCanceledException">The caller cancels execution.</exception>
-    /// <remarks>Each scanned instance is loaded once for routing. Execution may read again for fencing or reconciliation.
-    /// Unrelated or deleted instances are skipped. Failures propagate without returning a new cursor; retrying the page
+    /// <remarks>Terminal history is filtered by discovery; each remaining candidate is loaded once for routing. Execution may read again for fencing or reconciliation.
+    /// Unrelated, deleted or concurrently completed instances are skipped. Failures propagate without returning a new cursor; retrying the page
     /// safely replays earlier progress. Reporting and polling cadence belong to the supervisor.</remarks>
     public async Task<MachineReactionRecoveryPage> RunPageAsync(OperationContext context,
         ProcessInstanceId? after = null, int maximumInstances = 32)
@@ -61,13 +63,13 @@ public sealed class MachineReactionRecovery
         ArgumentNullException.ThrowIfNull(context);
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumInstances, 1);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumInstances, 1000);
-        var instances = await source.ListInstancesAsync(context, after, maximumInstances).ConfigureAwait(false);
+        var instances = await source.ListPendingInstancesAsync(context, after, maximumInstances).ConfigureAwait(false);
         var progress = ImmutableDictionary.CreateBuilder<ProcessInstanceId, MachineReactionProgress>();
         foreach (var instance in instances)
         {
             context.ThrowIfCancellationRequested();
             var snapshot = await store.LoadAsync(context, instance).ConfigureAwait(false);
-            if (snapshot is null) continue;
+            if (snapshot is null || snapshot.Checkpoint.Continuation.Terminal.Kind != ExecutionTerminalOutcomeKind.None) continue;
             var start = snapshot.Checkpoint.Start.Request;
             if (hosts.TryGetValue((start.Definition, start.Context.Authorization.AuthorityScope), out var host))
                 progress.Add(instance, await host.RecoverSnapshotAsync(context, snapshot).ConfigureAwait(false));

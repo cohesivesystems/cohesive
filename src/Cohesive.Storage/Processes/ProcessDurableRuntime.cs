@@ -402,7 +402,7 @@ public sealed partial class ProcessDurableRuntime
             }
 
             var transitionJournal = new NativeTransitionJournal(snapshot);
-            ProcessActivationDecision decision;
+            ProcessActivationDecision? decision;
             ImmutableArray<ProcessOperationReplayObservation> observations;
             try
             {
@@ -416,6 +416,7 @@ public sealed partial class ProcessDurableRuntime
                 // Physical authority was lost. Do not turn rejection into a semantic failure checkpoint.
                 return new(MapStoreDisposition(exception.Disposition), snapshot);
             }
+            if (decision is null) return new(ProcessDurableRuntimeDisposition.Deferred, snapshot);
             if (decision.Disposition == ProcessActivationDisposition.Rejected)
             {
                 return new(
@@ -936,7 +937,7 @@ public sealed partial class ProcessDurableRuntime
                 activeControl = begun.State;
             }
             var transitionJournal = new NativeTransitionJournal(snapshot);
-            ProcessActivationDecision activationDecision;
+            ProcessActivationDecision? activationDecision;
             ImmutableArray<ProcessOperationReplayObservation> observations;
             try
             {
@@ -950,6 +951,7 @@ public sealed partial class ProcessDurableRuntime
                 // Physical authority was lost. Do not turn rejection into a semantic failure checkpoint.
                 return new(MapStoreDisposition(exception.Disposition), snapshot);
             }
+            if (activationDecision is null) return new(ProcessDurableRuntimeDisposition.Deferred, snapshot);
             if (activationDecision.Disposition is ProcessActivationDisposition.Rejected
                 || cancellationPolicy == ProcessCancellationCompletionPolicy.Immediate
                     && activationDecision.Disposition != ProcessActivationDisposition.Cancelled)
@@ -1404,7 +1406,7 @@ public sealed partial class ProcessDurableRuntime
         }
     }
 
-    async Task<(ProcessActivationDecision Decision, ImmutableArray<ProcessOperationReplayObservation> Observations)>
+    async Task<(ProcessActivationDecision? Decision, ImmutableArray<ProcessOperationReplayObservation> Observations)>
         InterpretAsync(
             OperationContext context,
             CompiledProcessPlan plan,
@@ -1494,7 +1496,7 @@ public sealed partial class ProcessDurableRuntime
         ExecutionTelemetry.CompleteActivity(activity, outcome);
     }
 
-    async Task<ProcessActivationDecision> ActivateWithTransitionOperationsAsync(
+    async Task<ProcessActivationDecision?> ActivateWithTransitionOperationsAsync(
         OperationContext context,
         CompiledProcessPlan plan,
         ProcessContinuationState state,
@@ -1514,6 +1516,7 @@ public sealed partial class ProcessDurableRuntime
                 var result = transitionOperationAdapter is IRecoverableProcessTransitionOperationAdapter recoverable
                     ? await ExecuteRecoverableTransitionAsync(context, pending.Invocation, recoverable, transitionJournal ?? throw new InvalidOperationException("A recoverable transition requires acquired Process ownership.")).ConfigureAwait(false)
                     : await transitionOperationAdapter!.ExecuteAsync(context, pending.Invocation).ConfigureAwait(false);
+                if (result is null) return null;
                 transitionHost.Materialize(pending.Invocation, result);
             }
         }

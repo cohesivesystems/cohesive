@@ -3,6 +3,7 @@ using System.Data;
 using System.Security.Cryptography;
 using System.Text;
 using Cohesive.Execution;
+using Cohesive.Adapters.Sql;
 using Cohesive.Processes.Execution;
 using Cohesive.Storage.Processes;
 using Npgsql;
@@ -26,7 +27,8 @@ namespace Cohesive.Adapters.Postgres;
 /// </para>
 /// <para>
 /// The caller owns the supplied <see cref="NpgsqlDataSource"/>. Call <see cref="EnsureCreatedAsync"/> explicitly
-/// during bootstrap; ordinary store operations do not perform schema DDL or migration.
+/// during bootstrap. Ordinary operations perform no schema DDL; reads lazily repair the terminal-discovery
+/// projection of older roots from their canonical checkpoint. Upgrade readers and writers together.
 /// </para>
 /// </remarks>
 public sealed partial class PostgresProcessDurableStore : IProcessDurableStore, IProcessInstanceSource
@@ -65,6 +67,16 @@ public sealed partial class PostgresProcessDurableStore : IProcessDurableStore, 
         ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumInstances, 1000);
         var result = await PostgresNpgsqlExecution.ExecuteAsync(dataSource,
             sql.ListInstances(options.AuthorityId, after?.Value ?? "", maximumInstances), context.CancellationToken).ConfigureAwait(false);
+        return [.. result.Rows.Select(row => new ProcessInstanceId((string)row[0]!))];
+    }
+
+    /// <inheritdoc />
+    public async Task<ImmutableArray<ProcessInstanceId>> ListPendingInstancesAsync(OperationContext context, ProcessInstanceId? after, int maximumInstances)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumInstances, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumInstances, 1000);
+        var result = await PostgresNpgsqlExecution.ExecuteAsync(dataSource,
+            sql.ListInstances(options.AuthorityId, after?.Value ?? "", maximumInstances, pendingOnly: true), context.CancellationToken).ConfigureAwait(false);
         return [.. result.Rows.Select(row => new ProcessInstanceId((string)row[0]!))];
     }
 
@@ -107,9 +119,13 @@ public sealed partial class PostgresProcessDurableStore : IProcessDurableStore, 
                 aggregate_bytes bigint NOT NULL CHECK (aggregate_bytes > 0),
                 page_manifest text NOT NULL CHECK (octet_length(page_manifest) > 0),
                 page_count integer NOT NULL CHECK (page_count > 0),
+                is_terminal boolean NOT NULL DEFAULT false,
                 updated_at timestamptz NOT NULL,
                 PRIMARY KEY (authority_id, instance_id)
             );
+            ALTER TABLE {{options.QualifiedInstanceTable}} ADD COLUMN IF NOT EXISTS is_terminal boolean NOT NULL DEFAULT false;
+            CREATE INDEX IF NOT EXISTS {{new SqlIdentifier(options.InstanceTable + "_recovery").ToSql(PostgresSqlDialect.Instance)}}
+                ON {{options.QualifiedInstanceTable}} (authority_id, is_terminal, instance_id COLLATE "C");
             """))
         {
             await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
@@ -292,7 +308,8 @@ public sealed partial class PostgresProcessDurableStore : IProcessDurableStore, 
 
         var paged = PostgresProcessDurableStorePaging.Page(replacement[0], options);
         if (root is not null
-            && string.Equals(root.AggregateFingerprint, paged.AggregateFingerprint, StringComparison.Ordinal))
+            && string.Equals(root.AggregateFingerprint, paged.AggregateFingerprint, StringComparison.Ordinal)
+            && root.IsTerminal == paged.IsTerminal)
         {
             await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
             return result;
@@ -412,7 +429,8 @@ public sealed partial class PostgresProcessDurableStore : IProcessDurableStore, 
             AggregateFingerprint: (string)row[2]!,
             AggregateBytes: (long)row[3]!,
             PageManifest: (string)row[4]!,
-            PageCount: (int)row[5]!);
+            PageCount: (int)row[5]!,
+            IsTerminal: (bool)row[6]!);
         if (!string.Equals(root.StorageFormat, PostgresProcessDurableStorePaging.Format, StringComparison.Ordinal))
         {
             throw new InvalidDataException(
@@ -522,7 +540,8 @@ sealed record PostgresProcessDurableStoreRoot(
     string AggregateFingerprint,
     long AggregateBytes,
     string PageManifest,
-    int PageCount);
+    int PageCount,
+    bool IsTerminal);
 
 sealed class PostgresProcessDurableStoreConcurrencyException(ProcessInstanceId instanceId)
     : InvalidOperationException(

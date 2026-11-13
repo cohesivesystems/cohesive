@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Cohesive.Model.Serialization;
+using Cohesive.Execution;
 using Cohesive.Storage.Processes;
 
 namespace Cohesive.Adapters.Postgres;
@@ -39,7 +40,8 @@ internal static class PostgresProcessDurableStorePaging
             AggregateFingerprint: Fingerprint(content),
             AggregateBytes: content.Length,
             Manifest: string.Join('\n', retained.Select(static page => page.Fingerprint)),
-            Pages: retained);
+            Pages: retained,
+            IsTerminal: aggregate.Checkpoint.Continuation.Terminal.Kind != ExecutionTerminalOutcomeKind.None);
     }
 
     internal static ProcessDurableAggregateDocument Reconstruct(
@@ -217,4 +219,5 @@ internal sealed record PostgresProcessDurablePagedAggregate(
     string AggregateFingerprint,
     int AggregateBytes,
     string Manifest,
-    ImmutableArray<PostgresProcessDurablePage> Pages);
+    ImmutableArray<PostgresProcessDurablePage> Pages,
+    bool IsTerminal);

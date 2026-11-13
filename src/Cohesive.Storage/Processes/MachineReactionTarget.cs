@@ -25,8 +25,10 @@ public abstract class MachineReactionTarget : IRecoverableProcessTransitionOpera
     /// <returns>Ambiguous effect evidence; protocol and authorization errors require operator intervention.</returns>
     public virtual DurableOperationFailure DescribeFailure(Exception exception) => new(
         DurableOperationFailurePhase.InCall, DurableOperationEffectEvidence.Ambiguous,
-        exception is MachineReactionProtocolException or UnauthorizedAccessException
-            ? DurableOperationFailureDisposition.Terminal : DurableOperationFailureDisposition.Retryable,
+        exception is IOException or TimeoutException
+            || exception is System.Net.Http.HttpRequestException http && http.StatusCode is not
+                (System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Conflict)
+            ? DurableOperationFailureDisposition.Retryable : DurableOperationFailureDisposition.Terminal,
         exception is MachineReactionProtocolException protocol ? protocol.Code : "machine.reaction.target.unacknowledged");
 
     /// <summary>Executes or replays an exact operation, with fresh target authorization.</summary>
