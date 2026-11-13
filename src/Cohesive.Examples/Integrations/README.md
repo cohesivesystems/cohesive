@@ -152,7 +152,7 @@ var candidate = model.Collect.For(backfillScope)
 The application must derive `ExpectedSessions` from its pinned calendar; this fixture uses the existing
 synthetic two-session calendar. Narrowing the interval never changes the required coverage semantics.
 Separate flows also mean separate lifecycle controllers: pausing forward admission does not implicitly
-pause backfill. The missing group-control abstraction is tracked in [COH-163](https://linear.app/cohesive-ari/issue/COH-163); this example pauses
+pause backfill. The local group-control example below addresses [COH-163](https://linear.app/cohesive-ari/issue/COH-163); this independent-flow example pauses
 backfill itself and verifies that an admitted window drains while another is rejected.
 
 The successful case first publishes September 2 through the forward flow, then September 1 through
@@ -190,3 +190,20 @@ position is selected once, then used to prepare work; publication reads that ret
 boundary, so a later check cannot erase evidence of the acquisition check. Both work-document validation
 and progress conflicts return structured diagnostics. Qualification assertions continue to report
 `IsAdmissible` failures with codes/messages; the explicit range-rejection test verifies that behavior.
+
+
+[HistoricalAdmissionGroupExamples.cs](HistoricalAdmissionGroupExamples.cs) registers the forward and
+backfill consumers under one partition admission group. Both actual Processes publish and lose their
+acknowledgements. A single authorized group pause then rejects new sessions across both flows. Their
+original admissions still replay, and exact sink evidence reconciles both publications without another
+provider call or write. Each Process advances only its own ledger and completes; group policy remains
+Paused while local intent remains Active. This demonstrates local admission ordering and recovery,
+not physical crash durability, cross-process coordination or cancellation of admitted work.
+
+
+Admission-group ownership is supplied by an explicit `InMemoryIntegrationLifecycleScope`. Its factories
+prevent a second controller for the same consumer within that host scope. Admissions supply only the
+local revision; the member atomically reads current group policy and records its observed group revision.
+Unrelated membership additions do not invalidate admission requests. Group/member operator commands
+retain their own revision checks. Group inspection reuses an immutable published snapshot; the shared
+member-operation lock is still a local reference tradeoff, not a durable scalability claim.

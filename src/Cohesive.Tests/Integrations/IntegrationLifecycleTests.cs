@@ -9,8 +9,8 @@ public sealed partial class IntegrationModelTests
 {
     static readonly ProcessControlAuthorizationContext LifecycleActor = new("operator", new("test", "tenant"), "authorization/1");
     static readonly ProcessContinuationIdentity LifecycleSession = new(new("session/1"), new("attempt/1"));
-    static InMemoryIntegrationLifecycle Lifecycle() => new(Candidate().Binding!.GetDefinition<IngestionProviderBinding>().Consumer,
-        (_, actor) => actor == LifecycleActor);
+    static InMemoryIntegrationLifecycle Lifecycle() => new InMemoryIntegrationLifecycleScope().CreateConsumer(Candidate().Binding!.GetDefinition<IngestionProviderBinding>().Consumer,
+        (_, actor) => actor == LifecycleActor).Receipt;
     static IntegrationLifecycleChange Change(string id, long revision, IntegrationDesiredState desired) => new(id, revision, desired, LifecycleActor, AdmissionTime);
     static IntegrationAdmissionRequest Admission(IntegrationAdmissionBinding binding, long revision = 1) =>
         new(binding, LifecycleSession, revision, LifecycleActor, AdmissionTime);
@@ -86,7 +86,7 @@ public sealed partial class IntegrationModelTests
         var control = Lifecycle();
         var candidate = Candidate();
         Assert.Throws<IntegrationBindingException>(() => control.Bind(candidate with { Process = candidate.Binding }));
-        var other = new InMemoryIntegrationLifecycle(new("other", "source", "sink", "partition"), (_, _) => true);
+        var other = new InMemoryIntegrationLifecycleScope().CreateConsumer(new("other", "source", "sink", "partition"), (_, _) => true).Receipt;
         Assert.Throws<IntegrationBindingException>(() => other.Bind(candidate));
         var sameConsumer = Lifecycle();
         Assert.Equal(IntegrationAdmissionOutcome.BindingMismatch, sameConsumer.Admit(Admission(control.Bind(candidate))).Outcome);

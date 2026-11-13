@@ -13,7 +13,7 @@ public sealed partial class HistoricalQualificationExamples
     public async Task LostPublicationAcknowledgementReconcilesWhilePaused()
     {
         var original = new ProcessFixture(2);
-        var control = new InMemoryIntegrationLifecycle(original.Address, (_, actor) => actor == Operator);
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(original.Address, (_, actor) => actor == Operator).Receipt;
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admission = control.Admit(new(control.Bind(original.Compilation), Session, 1, Operator, At)).Receipt;
         var decision = original.Start();
@@ -64,7 +64,7 @@ public sealed partial class HistoricalQualificationExamples
     public async Task PublicationWithoutMatchingEvidenceRemainsPending(DispatchLoss loss)
     {
         var original = new ProcessFixture(2);
-        var control = new InMemoryIntegrationLifecycle(original.Address, (_, actor) => actor == Operator);
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(original.Address, (_, actor) => actor == Operator).Receipt;
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admission = control.Admit(new(control.Bind(original.Compilation), Session, 1, Operator, At)).Receipt;
         var decision = original.Start();

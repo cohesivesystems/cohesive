@@ -20,7 +20,7 @@ public sealed partial class HistoricalQualificationExamples
     public async Task HealthyHistoricalSourceDoesNotImplyAcceptedCoverage(int sessions)
     {
         var fixture = new ProcessFixture(sessions);
-        var control = new InMemoryIntegrationLifecycle(fixture.Address, (_, actor) => actor == Operator);
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, actor) => actor == Operator).Receipt;
         var bound = control.Bind(fixture.Compilation);
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admission = control.Admit(new(bound, Session, 1, Operator, At)).Receipt;
