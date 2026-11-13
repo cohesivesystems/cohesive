@@ -83,3 +83,9 @@ loop around that same Process. Revision-aware pause rejects a new session while 
 admitted session finishes from its retained result through a fresh worker. Successful exact Process
 completion ends draining. Failed work stays visible until an explicit resolution protocol exists;
 these tests do not infer resolved external effects from a failure status.
+
+[HistoricalHealthExamples.cs](HistoricalHealthExamples.cs) uses the internal experimental `IntegrationInspectionHost` for evidence retrieval, clock sampling and JSON export. This is test/example infrastructure, not a production hosting contract.
+A synthetic source can be operationally Healthy while returning zero or only one of two required sessions.
+The view separates source coverage, digest-checked accepted publication, source ledger progress and
+consumer-wide versus exact-binding pending sessions. Expiry changes provider health/readiness to Unknown without deleting accepted evidence.
+The example exercises the real compiled Process with the existing local handlers and performs no live I/O.

@@ -630,3 +630,78 @@ Runbook: inspect → issue an authorized revision-checked pause → inspect pend
 Processes finish/reconcile → record exact successful completion → inspect until Draining is false.
 Leave unresolved work visible; do not clear it or blindly retry. Resume with an authorized Active command
 at the current revision.
+
+## Evidence-based health inspection (COH-136)
+
+The prevalidated binding owns inspection: `binding.Inspect(now, evidence)` reads its own controller's
+lifecycle snapshot. Callers cannot pair a binding with another lifecycle or pass arbitrary pending data.
+No public consumer accessor or repeated validation of already-admitted sessions is needed.
+
+```csharp
+var evidence = new IntegrationHealthEvidence(
+    binding.Binding, adapterObservation, validUntilUtc: expiresAt);
+var view = binding.Inspect(now, evidence);
+// ProviderHealth/ProviderReadiness describe current provider evidence only.
+// Lifecycle.Accepting/Draining describe admission control, not provider health.
+// ConsumerPendingWork describes the whole consumer; BindingPendingWork describes only this exact binding.
+```
+
+`IntegrationInspectionHost` is an **internal experiment**, accessible only to this assembly and its
+friend test/example assemblies. It exercises evidence-store reads, TimeProvider and cancellable JSON
+export, but has no production consumer yet and is not a supported public hosting API. The historical
+example uses it to test composition rather than prescribing setup for an external application.
+
+The current binding owns a concrete `InMemoryIntegrationLifecycle`. Neither public bound inspection nor
+the experimental host supports a durable lifecycle store. A real durable adapter/host must establish the
+snapshot, ownership and storage contract before a corresponding abstraction is introduced. No speculative
+lifecycle-store interface is added by this slice; Ito remains out of scope.
+
+The experimental reader returns null for missing evidence and propagates failures rather than disguising
+them as health. Cancellation is passed through and output streams remain caller-owned. Its clock is sampled
+after evidence retrieval. A future real host must authenticate its evidence source and authorize inspection
+access; the experiment installs no route or access policy. Public inspection remains `binding.Inspect(...)`.
+
+Evidence belongs to the exact binding (scope/revision/fingerprint), reuses `ExecutionHealthObservation`
+and shared health/readiness enums, and is current only in `[ObservedAtUtc, ValidUntilUtc)`. Missing,
+future or expired evidence gives Unknown while retaining the original evidence. Host policy selects the
+current observation and expiry. Authentication/capability failures stay in the original structured
+provider diagnostics, without a parallel failure enum. Expired unhealthy evidence means Unknown, not
+recovered/healthy. Health does not authorize an operation or establish accepted coverage.
+
+Clock skew is an observation, not an inspection failure. Future pending timestamps remain visible and
+produce `integrations.inspection.admission-clock-skew`; each pending summary's `OldestAdmissionAge` clamps a negative age to zero.
+Future provider evidence produces `integrations.inspection.provider-clock-skew` and remains Unknown.
+Original admission and provider timestamps are never rewritten. Missing UTC offsets or foreign-binding
+evidence remain invalid caller input. Pending timestamps are scanned once to compute age/skew, not
+revalidated as independent caller-supplied admissions.
+
+`IntegrationHealthEvidence` deliberately uses reference identity (a sealed class, not a record).
+The shared observation contains collection-bearing nested evidence, so object equality must not be used
+for content deduplication across deserialization. When comparing persisted content, serialize both complete
+evidence objects under the same `InteractionEnvelopeJsonSerializer.CreateOptions()` conventions. The
+round-trip tests compare the whole wire representation, including diagnostics and provenance. This slice
+documents that boundary instead of introducing a second structural comparer for shared execution types.
+
+Provider readiness and lifecycle acceptance remain independent. A paused integration may have a healthy
+provider; an active integration may have unknown/unhealthy evidence. Pending work has two explicit scopes:
+
+- `ConsumerPendingWork`: all unresolved sessions for `Lifecycle.Consumer`, including other providers,
+  connection revisions and requested scopes. Do not attribute this population to the inspected provider.
+- `BindingPendingWork`: only admissions whose exact binding reference equals `Binding`. Its population
+  matches the scope of `ProviderEvidence`; an empty population has count zero and null time/age.
+
+Each object reports SessionCount, OldestAdmissionAtUtc and OldestAdmissionAge. Both are computed in one
+pass over the same controller snapshot, and the JSON export keeps them as separate named objects. The
+old ambiguous top-level pending fields are removed. Neither population counts queued jobs or ambiguous
+effects, and even binding-specific pending work does not prove its provider caused the delay. Determining
+a session's cause still requires Process/effect inspection.
+
+Coverage stays domain-owned: the historical view reports source rows and unresolved expected sessions,
+accepted sessions from digest-checked published bytes, publication receipt and source ledger progress
+independently. Healthy-but-empty or partial responses do not establish acceptance. Expiring health does
+not erase publication/ledger evidence. Source and sink remain deterministic local fixtures.
+
+Use bounded enum dimensions for metrics, such as health/readiness and desired lifecycle state. Report
+pending count/age as values. Binding fingerprints, symbols, sessions, actors and evidence references belong
+in inspection/traces, not labels. Deployment wiring, explicit failure resolution, bounded backfill and
+history cleanup remain follow-up work; no durable or distributed store is introduced here.

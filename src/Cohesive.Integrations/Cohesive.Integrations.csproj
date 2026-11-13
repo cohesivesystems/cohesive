@@ -8,4 +8,8 @@
     <ProjectReference Include="../Cohesive.Processes/Cohesive.Processes.csproj" />
     <ProjectReference Include="../Cohesive.Configuration/Cohesive.Configuration.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cohesive.Tests" />
+    <InternalsVisibleTo Include="Cohesive.Examples" />
+  </ItemGroup>
 </Project>
