@@ -12,7 +12,7 @@ namespace Cohesive.Examples.Integrations;
 /// <summary>Bounded raw Tiingo-shaped adapter qualification using explicit offline resource evidence.</summary>
 /// <remarks>These are deterministic fixture offers, not live Tiingo entitlements or availability attestations.
 /// Production facts must come from the actual adapter/resource authority. Domain-specific semantics stay out of Integrations.</remarks>
-public sealed class HistoricalQualificationExamples
+public sealed partial class HistoricalQualificationExamples
 {
     const string Schema = "example/historical-acquisition/v1";
     static readonly DateTimeOffset At = new(2026, 9, 3, 12, 0, 0, TimeSpan.Zero);

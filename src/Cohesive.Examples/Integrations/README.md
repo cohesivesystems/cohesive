@@ -54,3 +54,11 @@ against the original historical Contract properties. The compatible fixture is a
 evidence pending; adjusted-only and other incompatible fixtures are rejected. The existing coverage
 walkthrough now starts with this admission, so an eligible provider that returns no rows or only partial
 coverage still cannot publish or advance progress. The fixtures do not attest live Tiingo access.
+
+[LocalHistoricalDispatchExamples.cs](LocalHistoricalDispatchExamples.cs) composes scoped selection,
+historical qualification, canonical document serialization and exact runtime registration. Four offline
+cases count actual fixture calls after a changed default, policy denial, revoked grant or expired offer.
+A new default never substitutes another connection; denied dispatch calls neither handler. Original
+handler resolution remains available for reconciliation, but does not itself replay results or permit
+another acquisition. These tests reuse the historical evaluator and require no Ito checkout, network,
+credentials or durable-store implementation.
