@@ -20,24 +20,6 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
     readonly Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy;
 
     internal TransitionEntityApiOperationBinding(
-        string operationName,
-        CompiledTransitionPlan plan,
-        Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
-        Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
-        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken,
-        InteractionContractCatalog? interactionContracts,
-        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy)
-        : base(operationName)
-    {
-        this.plan = plan ?? throw new ArgumentNullException(nameof(plan));
-        this.createTransitionInput = createTransitionInput;
-        this.createResult = createResult ?? throw new ArgumentNullException(nameof(createResult));
-        this.getExpectedConcurrencyToken = getExpectedConcurrencyToken;
-        this.interactionContracts = interactionContracts;
-        this.createEmissionPolicy = createEmissionPolicy;
-    }
-
-    internal TransitionEntityApiOperationBinding(
         ApiEndpoint endpoint,
         CompiledTransitionPlan plan,
         Func<EntityApiRequestContext, object?, object?>? createTransitionInput,

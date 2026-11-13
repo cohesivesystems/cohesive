@@ -35,6 +35,103 @@ public sealed class EntityApiEndpointTests
         TestProvenance("tests/api/entity-api-endpoint/note-revised"));
     static readonly InteractionContractCatalog NoteInteractionContracts = CreateInteractionCatalog(NoteRevisedEvent);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Typed_transition_command_preserves_canonical_evidence_and_persistence(bool reverseLayout)
+    {
+        var entity = NoteEntity.Instance;
+        var definition = entity.Definition;
+        var repository = new InMemoryEntityOutboxRepository(definition, partitionKeyFieldName: nameof(NoteState.Tenant));
+        var context = OperationContext.Create(new FixedTimeProvider());
+        var original = ObservationValue.FromObject(new NoteState("note-1", "tenant-a", "before", context.UtcNow));
+        var canonical = ObservationLayout.Create(definition.StateShape);
+        var layout = reverseLayout
+            ? ObservationLayout.Create(definition.StateShape, canonical.FieldIdentities.Reverse())
+            : canonical;
+        var observation = Observation.Create(definition.StateShape, layout,
+            layout.FieldIdentities.Select(original.GetProperty).ToArray().AsSpan());
+        var before = await repository.Upsert(context, new(new(new("note-1"), 3, observation)));
+        EntityApiCommitContext? captured = null;
+        await using var app = CreateApp(entity, repository, operationContext: context,
+            emitOnRevise: false, onRevise: commit => captured = commit);
+
+        var response = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("after"));
+
+        Assert.Equal(StatusCodes.Status200OK, response.StatusCode);
+        Assert.Equal("after", ReadJson(response.Body).GetProperty(nameof(NoteResource.Text)).GetString());
+        Assert.NotNull(captured);
+        var decision = Assert.IsType<TransitionDecision>(captured.Decision);
+        var plan = CompileReviseTransition(entity, emit: false);
+        var expected = TransitionReferenceInterpreter.DecideFullState(plan, decision.Evidence.Activation,
+            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new NoteEntity.ReviseInput("after", context.UtcNow))),
+            PortableValue.Concrete(plan.Definition.Observation, observation.Value));
+        Assert.Equal(JsonSerializer.Serialize(expected), JsonSerializer.Serialize(decision));
+        var projected = TransitionStateProjector.ApplyToEntity(definition, "note-1", expected, before.Entity);
+        Assert.Equal(projected.Observation, captured.NewState.Observation);
+        var stored = await repository.TryGet(context, "note-1", EntityReadOptions.Full);
+        Assert.NotNull(stored);
+        Assert.Equal(projected.Snapshot, stored.Entity);
+        Assert.NotEqual(before.ConcurrencyToken, stored.ConcurrencyToken);
+        Assert.Equal(original, before.Entity.Observation.Value);
+    }
+
+    [Fact]
+    public async Task Typed_transition_concurrency_policy_uses_the_request_token()
+    {
+        var entity = NoteEntity.Instance;
+        var repository = new InMemoryEntityOutboxRepository(entity.Definition,
+            partitionKeyFieldName: nameof(NoteState.Tenant));
+        var context = OperationContext.Create(new FixedTimeProvider());
+        var before = await repository.Upsert(context, new(entity.Definition.CreateState("note-1",
+            new NoteState("note-1", "tenant-a", "before", context.UtcNow)).Snapshot));
+        await using var app = CreateApp(entity, repository, operationContext: context, emitOnRevise: false,
+            expectedTransitionToken: static (_, request) => request.ExpectedToken is { } token
+                ? new EntityConcurrencyToken(token) : null);
+
+        var stale = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("stale", "stale-token"));
+        Assert.Equal(StatusCodes.Status409Conflict, stale.StatusCode);
+        var retained = await repository.TryGet(context, "note-1", EntityReadOptions.Full);
+        Assert.NotNull(retained);
+        Assert.Equal(before.Entity, retained.Entity);
+        Assert.Equal(before.ConcurrencyToken, retained.ConcurrencyToken);
+
+        var current = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("after", before.ConcurrencyToken.Value));
+        Assert.Equal(StatusCodes.Status200OK, current.StatusCode);
+        var updated = await repository.TryGet(context, "note-1", EntityReadOptions.Full);
+        Assert.NotNull(updated);
+        Assert.NotEqual(before.ConcurrencyToken, updated.ConcurrencyToken);
+        Assert.Equal("after", updated.Entity.Observation.GetField(nameof(NoteState.Text)).GetString());
+
+        var useLoadedToken = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("uses loaded token"));
+        Assert.Equal(StatusCodes.Status200OK, useLoadedToken.StatusCode);
+        Assert.Equal("uses loaded token", ReadJson(useLoadedToken.Body).GetProperty(nameof(NoteResource.Text)).GetString());
+    }
+
+    [Fact]
+    public async Task Mapping_a_snapshot_taken_before_transition_binding_fails_before_adding_routes()
+    {
+        var entity = NoteEntity.Instance;
+        var api = Cohesive.Api.Api.Define();
+        var earlier = api.Build();
+        var options = new EntityApiEndpointOptions { Entity = entity.Definition };
+        var endpoint = DeclareRevise(api).BindTransition(options, AuthorReviseTransition(entity, emit: false),
+            static (EntityApiRequestContext context, ReviseNoteRequest request) =>
+                new NoteEntity.ReviseInput(request.Text, context.OperationContext.UtcNow),
+            static (_, _) => Results.Ok());
+        await using var app = WebApplication.CreateSlimBuilder().Build();
+
+        var error = Assert.Throws<InvalidOperationException>(() => app.MapEntityApiDefinition(earlier, options));
+        Assert.Contains(endpoint.Id.Value, error.Message, StringComparison.Ordinal);
+        Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
+
+        Assert.Single(app.MapEntityApiDefinition(api.Build(), options));
+    }
+
     [Fact]
     public async Task Candidate_preparation_failure_returns_sanitized_problem_without_commit()
     {
@@ -315,31 +412,38 @@ public sealed class EntityApiEndpointTests
     }
 
     [Fact]
-    public void MapEntityApiDefinition_RejectsTransitionPlanThatDoesNotMatchExactApiReference()
+    public void EntityCommandBinding_rejects_a_conflicting_transition_before_registration()
     {
         var entity = NoteEntity.Instance;
-        var plan = CompileReviseTransition(entity);
-        var wrongReference = new ExecutionDefinitionReference(
-            plan.DefinitionReference.DefinitionId,
-            plan.DefinitionReference.RevisionId,
-            new(
-                ExecutionDefinitionFingerprinter.Algorithm,
-                ExecutionDefinitionFingerprinter.Canonicalization,
-                new string('b', 64)));
-        var builder = WebApplication.CreateSlimBuilder();
-        builder.Services.AddSingleton(OperationContext.Create());
-        var app = builder.Build();
+        var transition = AuthorReviseTransition(entity, emit: false);
+        var reference = transition.Reference;
+        var wrongReference = new ExecutionDefinitionReference(reference.DefinitionId, reference.RevisionId,
+            new(ExecutionDefinitionFingerprinter.Algorithm, ExecutionDefinitionFingerprinter.Canonicalization, new string('b', 64)));
+        var api = Cohesive.Api.Api.Define();
+        var command = DeclareRevise(api).Transition(wrongReference);
+        var options = new EntityApiEndpointOptions { Entity = entity.Definition };
 
-        var exception = Assert.Throws<InvalidOperationException>(() => app.MapEntityApiDefinition(
-            CreateApi(wrongReference),
-            new EntityApiEndpointOptions { Entity = entity.Definition }
-                .Bind(EntityApiOperationBinding.Transition(
-                    "Revise",
-                    plan,
-                    createTransitionInput: null,
-                    createResult: static (_, _) => Results.Ok()))));
+        Assert.Throws<InvalidOperationException>(() => command.BindTransition(options, transition,
+            static (EntityApiRequestContext context, ReviseNoteRequest request) => new NoteEntity.ReviseInput(
+                request.Text, context.OperationContext.UtcNow),
+            static (_, _) => Results.Ok()));
+        Assert.Empty(api.Build().Endpoints);
+        Assert.Equal(wrongReference, command.Build().Operation.TransitionReference);
+    }
 
-        Assert.Contains(plan.DefinitionReference.DefinitionId.Value, exception.Message, StringComparison.Ordinal);
+    [Fact]
+    public void EntityCommandBinding_rejects_a_conflicting_body_before_registration()
+    {
+        var entity = NoteEntity.Instance;
+        var api = Cohesive.Api.Api.Define();
+        var command = DeclareRevise(api).Body<CreateNoteRequest>();
+        var options = new EntityApiEndpointOptions { Entity = entity.Definition };
+
+        Assert.Throws<ArgumentException>(() => command.BindTransition(options, AuthorReviseTransition(entity, emit: false),
+            static (EntityApiRequestContext context, ReviseNoteRequest request) => new NoteEntity.ReviseInput(
+                request.Text, context.OperationContext.UtcNow),
+            static (_, _) => Results.Ok()));
+        Assert.Empty(api.Build().Endpoints);
     }
 
     [Fact]
@@ -436,7 +540,10 @@ public sealed class EntityApiEndpointTests
         Action<IServiceCollection>? configureServices = null,
         Func<IServiceProvider, EntityDefinition, EntityPartitionKeyPolicy?>? partitionKeyPolicyResolver = null,
         Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? transitionEmissionPolicy = null,
-        bool configureTransitionEmissions = true)
+        bool configureTransitionEmissions = true,
+        bool emitOnRevise = true,
+        Action<EntityApiCommitContext>? onRevise = null,
+        Func<EntityApiRequestContext, ReviseNoteRequest, EntityConcurrencyToken?>? expectedTransitionToken = null)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.ConfigureHttpJsonOptions(static options =>
@@ -450,15 +557,14 @@ public sealed class EntityApiEndpointTests
         configureServices?.Invoke(builder.Services);
 
         var app = builder.Build();
-        var revisePlan = CompileReviseTransition(entity);
+        var revise = AuthorReviseTransition(entity, emitOnRevise);
         var interactionContracts = configureTransitionEmissions ? NoteInteractionContracts : null;
         Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? emissionPolicy = configureTransitionEmissions
             ? transitionEmissionPolicy ?? CreateDirectEmissionPolicy
             : null;
-        var api = CreateApi(revisePlan.DefinitionReference);
-        var queryEndpoint = Assert.Single(api.Endpoints, static endpoint => endpoint.Name == "Query");
+        var api = DeclareApi();
         List<NoteResource> queryDocuments = [];
-        app.MapEntityApiDefinition(api, new EntityApiEndpointOptions
+        var options = new EntityApiEndpointOptions
         {
             Entity = entity.Definition,
             PartitionKeyPolicy = partitionKeyPolicy,
@@ -484,17 +590,6 @@ public sealed class EntityApiEndpointTests
                     queryDocuments.Add(resource);
                     return Results.Ok(resource);
                 }))
-            .Bind(EntityApiOperationBinding.Transition(
-                "Revise",
-                revisePlan,
-                static (context, request) =>
-                {
-                    var revise = (ReviseNoteRequest)request!;
-                    return new NoteEntity.ReviseInput(revise.Text, context.OperationContext.UtcNow);
-                },
-                static (_, snapshot) => Results.Ok(ToResource(snapshot)),
-                interactionContracts: interactionContracts,
-                createEmissionPolicy: emissionPolicy))
             .Bind(EntityApiOperationBinding.Load(
                 "Inspect",
                 static (_, snapshot, request) =>
@@ -504,8 +599,27 @@ public sealed class EntityApiEndpointTests
                     return Results.Ok(new NoteInspectionResponse(
                         resource.Id,
                         resource.Text.Contains(inspect.Contains, StringComparison.Ordinal)));
-                })));
-        app.MapRelationQueryApiDefinition(api, new RelationQueryApiEndpointOptions()
+                }));
+        var reviseEndpoint = DeclareRevise(api).BindTransition(options, revise,
+            static (EntityApiRequestContext context, ReviseNoteRequest request) => new NoteEntity.ReviseInput(
+                request.Text, context.OperationContext.UtcNow),
+            (commit, snapshot) =>
+            {
+                onRevise?.Invoke(commit);
+                return Results.Ok(ToResource(snapshot));
+            },
+            new()
+            {
+                InteractionContracts = interactionContracts,
+                CreateEmissionPolicy = emissionPolicy,
+                ExpectedConcurrencyToken = expectedTransitionToken
+            });
+        var definition = api.Build();
+        Assert.Same(reviseEndpoint, Assert.Single(definition.Endpoints, endpoint => endpoint.Id == reviseEndpoint.Id));
+        Assert.Equal(revise.Reference, reviseEndpoint.Operation.TransitionReference);
+        var queryEndpoint = Assert.Single(definition.Endpoints, static endpoint => endpoint.Name == "Query");
+        app.MapEntityApiDefinition(definition, options);
+        app.MapRelationQueryApiDefinition(definition, new RelationQueryApiEndpointOptions()
             .Bind(queryEndpoint.RelationQuery(
                 static (context, request) => CreateNoteQueryEvaluation(
                     context.EvaluationId,
@@ -561,9 +675,20 @@ public sealed class EntityApiEndpointTests
             .Build();
     }
 
-    static CompiledTransitionPlan CompileReviseTransition(NoteEntity entity)
+    static CompiledTransitionPlan CompileReviseTransition(NoteEntity entity, bool emit = true)
     {
-        var authored = TransitionAuthoring.Create<NoteEntity, NoteEntity.ReviseInput, bool>(
+        var compilation = AuthorReviseTransition(entity, emit).Compile();
+        Assert.True(
+            compilation.IsSuccessful,
+            string.Join(
+                Environment.NewLine,
+                compilation.Validation.Diagnostics.Select(static diagnostic =>
+                    $"{diagnostic.Code}: {diagnostic.Message}")));
+        return Assert.IsType<CompiledTransitionPlan>(compilation.Plan);
+    }
+
+    static Transition<NoteEntity, NoteEntity.ReviseInput, bool> AuthorReviseTransition(NoteEntity entity, bool emit) =>
+        TransitionAuthoring.Create<NoteEntity, NoteEntity.ReviseInput, bool>(
             entity.Definition.Shape,
             new(
                 definitionId: new("tests/aspnet/entities/note/revise"),
@@ -574,20 +699,15 @@ public sealed class EntityApiEndpointTests
                     new("tests/api/entity-api-endpoint/revise"),
                     DocumentOrigin.Generated),
                 displayName: "Revise note"),
-            transition => transition
-                .Set(new("revise/set-text"), note => note.Text, (_, input) => input.Text)
-                .Set(new("revise/set-updated-at"), note => note.UpdatedAtUtc, (_, input) => input.UpdatedAtUtc)
-                .Emit(new("revise/note-revised"), Reference(NoteRevisedEvent), (_, input) => input.Text)
-                .Return(new("revise/applied"), TransitionOutcomeDisposition.Applied, true));
-        var compilation = authored.Compile();
-        Assert.True(
-            compilation.IsSuccessful,
-            string.Join(
-                Environment.NewLine,
-                compilation.Validation.Diagnostics.Select(static diagnostic =>
-                    $"{diagnostic.Code}: {diagnostic.Message}")));
-        return Assert.IsType<CompiledTransitionPlan>(compilation.Plan);
-    }
+            transition =>
+            {
+                transition
+                    .Set(new("revise/set-text"), note => note.Text, (_, input) => input.Text)
+                    .Set(new("revise/set-updated-at"), note => note.UpdatedAtUtc, (_, input) => input.UpdatedAtUtc);
+                if (emit)
+                    transition.Emit(new("revise/note-revised"), Reference(NoteRevisedEvent), (_, input) => input.Text);
+                transition.Return(new("revise/applied"), TransitionOutcomeDisposition.Applied, true);
+            });
 
     static TransitionEmissionLoweringPolicy CreateDirectEmissionPolicy(EntityApiCommitContext context) =>
         new((intent, index) =>
@@ -635,8 +755,17 @@ public sealed class EntityApiEndpointTests
         new(source),
         DocumentOrigin.Generated);
 
-    static ApiDefinition CreateApi(ExecutionDefinitionReference reviseTransition) => Cohesive.Api.Api.Define()
-        .Entity<NoteResource>()
+    static ApiDefinition CreateApi(ExecutionDefinitionReference reviseTransition)
+    {
+        var api = DeclareApi();
+        DeclareRevise(api).Body<ReviseNoteRequest>().Transition(reviseTransition).Build();
+        return api.Build();
+    }
+
+    static ApiBuilder DeclareApi()
+    {
+        var api = Cohesive.Api.Api.Define();
+        api.Entity<NoteResource>()
             .Query("Query")
                 .Route("GET", "/notes")
                 .Query<QueryNotesRequest>()
@@ -652,20 +781,20 @@ public sealed class EntityApiEndpointTests
                 .Body<CreateNoteRequest>()
                 .Returns<NoteResource>()
                 .Done()
-            .Command("Revise")
-                .Route("POST", "/notes/{id}")
-                .RouteParameter<string>("id")
-                .Body<ReviseNoteRequest>()
-                .Returns<NoteResource>()
-                .Transition(reviseTransition)
-                .Done()
             .Command("Inspect")
                 .Route("POST", "/notes/{id}/inspect")
                 .RouteParameter<string>("id")
                 .Body<InspectNoteRequest>()
                 .Returns<NoteInspectionResponse>()
-                .Done()
-            .Build();
+                .Done();
+        return api;
+    }
+
+    static OperationBuilder<EntityApiBuilder<NoteResource>> DeclareRevise(ApiBuilder api) => api
+        .Entity<NoteResource>().Command("Revise")
+        .Route("POST", "/notes/{id}")
+        .RouteParameter<string>("id")
+        .Returns<NoteResource>();
 
     static NoteResource ToResource(EntitySnapshot snapshot) => new(
         Id: snapshot.Entity.Observation.GetField(nameof(NoteState.Id)).GetString() ?? throw new InvalidOperationException("Note id is required."),
@@ -685,7 +814,7 @@ public sealed class EntityApiEndpointTests
 
     sealed record CreateNoteRequest(string Id, string Text);
 
-    sealed record ReviseNoteRequest(string Text);
+    sealed record ReviseNoteRequest(string Text, string? ExpectedToken = null);
 
     sealed record InspectNoteRequest(string Contains);
 

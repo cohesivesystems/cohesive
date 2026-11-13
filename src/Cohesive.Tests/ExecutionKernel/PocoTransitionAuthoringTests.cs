@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
@@ -325,8 +326,16 @@ public sealed class PocoTransitionAuthoringTests
         var optionalRemoval = Compile(TransitionAuthoring.Create<RunNote, Approve, string>(optionalShape, Metadata(), transition => transition
             .Remove(new("remove"), state => state.Note)
             .Return(new("result"), TransitionOutcomeDisposition.Applied, "removed")));
-        var removed = TransitionStateProjector.Apply(state, Decide(optionalRemoval, new Approve(true), state));
+        var decision = Decide(optionalRemoval, new Approve(true), state);
+        var removed = TransitionStateProjector.Apply(state, decision);
         Assert.False(removed.TryGetField(FieldPath.FromField("Note"), out _));
+
+        var root = new GraphShapeId(new ShapeGraph(new("optional-note-graph"), [optionalShape]), optionalShape.Id);
+        var layout = ObservationLayout.Create(root);
+        var ordinal = Observation.Create(root, layout, ImmutableArray.Create(ObservationValue.FromString("old"))).Value;
+        var ordinalDecision = Decide(optionalRemoval, new Approve(true), ordinal);
+        Assert.Equal(JsonSerializer.Serialize(decision), JsonSerializer.Serialize(ordinalDecision));
+        Assert.Equal(removed, TransitionStateProjector.Apply(ordinal, ordinalDecision));
     }
 
     [Fact]
