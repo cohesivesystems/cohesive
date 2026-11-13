@@ -15,11 +15,12 @@ namespace Cohesive.Relations.Mapping;
 // Value-only realization of a restricted canonical slice. Static input rows and grouped totals are
 // obtained from the canonical interpreter; field aliases become expressions rather than new rows.
 sealed class PreparedLocalDtoKernel<TOutput>(
-    GraphShapeId rootShape, ObservationLayout rootLayout, string identityField, int identityOrdinal,
-    ulong[] allPresent, long maximumRoots, PreparedLocalDtoKernel<TOutput>.MapRow map) where TOutput : notnull
+    GraphShapeId rootShape, Observation.CompleteProjectionAdmission rootAdmission, string identityField,
+    int identityOrdinal, long maximumRoots, PreparedLocalDtoKernel<TOutput>.MapRow map) where TOutput : notnull
 {
-    // Keep the optional rental bounded even when an evaluator has a much larger row limit.
-    const int MaximumPooledRootSlots = 64 * 1024;
+    // Bound each slot rental. The evaluator's row limit bounds the complete batch.
+    const int MaximumRootSlotsPerBlock = 64 * 1024;
+    const int MinimumPackedSortRoots = 128;
 
     readonly WeakPreparationCache<Type, ObservationValue.ScalarProjection?> rootProjections = new();
 
@@ -72,12 +73,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
         }
         maximumRoots = Math.Min(maximumRoots, rowLimit - acquiredRows);
 
-        var allPresent = new ulong[(rootLayout.Count + 63) / 64];
-        Array.Fill(allPresent, ulong.MaxValue);
-        var remainder = rootLayout.Count % 64;
-        if (remainder != 0)
-            allPresent[^1] = (1UL << remainder) - 1;
-        return new(rootShape, rootLayout, rootIdentityField, identityOrdinal, allPresent, maximumRoots,
+        return new(rootShape, new(rootLayout), rootIdentityField, identityOrdinal, maximumRoots,
             compiler.Compile(plan.ExecutionSlice.RelationOutput.Binding, mapper.Descriptor.Members, materialize));
     }
 
@@ -87,23 +83,28 @@ sealed class PreparedLocalDtoKernel<TOutput>(
         cancellationToken.ThrowIfCancellationRequested();
         var type = typeof(TRoot);
         if (!rootProjections.TryGet(type, out var project))
-            project = rootProjections.Get(type, owner => ObservationValue.CompileCompleteScalarProjection(owner, rootLayout));
+            project = rootProjections.Get(type, owner => ObservationValue.CompileCompleteScalarProjection(owner, rootAdmission.Layout));
 
         // Arrays provide an exact extent without consulting caller-defined enumeration or count logic.
         // A batch that may need canonical budget handling retains the ordinary owned observations.
-        var capacity = roots is TRoot[] array && array.Length <= maximumRoots && array.Length <= MaximumPooledRootSlots
-            ? array.Length
-            : 0;
-        var width = rootLayout.Count;
-        var slots = project is not null && capacity > 0 && capacity <= MaximumPooledRootSlots / width
-            ? ArrayPool<ObservationValue>.Shared.Rent(capacity * width)
+        var capacity = roots is TRoot[] array && array.Length <= maximumRoots ? array.Length : 0;
+        var width = rootAdmission.Layout.Count;
+        var rootsPerBlock = MaximumRootSlotsPerBlock / width;
+        var slots = project is not null && capacity > 0 && rootsPerBlock > 0
+            ? ArrayPool<ObservationValue>.Shared.Rent(Math.Min(capacity, rootsPerBlock) * width)
             : null;
+        ObservationValue[][]? blocks = null;
         AdmittedRoot[]? rootBuffer = null;
         string[]? orderKeys = null;
         int[]? orderBuffer = null;
         budgetFallback = [];
         try
         {
+            if (slots is not null && capacity > rootsPerBlock)
+            {
+                blocks = new ObservationValue[(capacity - 1) / rootsPerBlock + 1][];
+                blocks[0] = slots;
+            }
             if (slots is not null && capacity > 1)
             {
                 rootBuffer = ArrayPool<AdmittedRoot>.Shared.Rent(capacity);
@@ -112,24 +113,36 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             }
             var ownedRoots = rootBuffer is null ? new List<AdmittedRoot>(capacity) : null;
             var count = 0;
+            var currentSlots = slots;
+            var blockStart = 0;
+            var nextBlock = rootsPerBlock;
+            var blockIndex = 0;
             foreach (var value in roots)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (blocks is not null && count == nextBlock)
+                {
+                    currentSlots = ArrayPool<ObservationValue>.Shared.Rent(Math.Min(capacity - count, rootsPerBlock) * width);
+                    blocks[++blockIndex] = currentSlots;
+                    blockStart = count;
+                    nextBlock = count + Math.Min(capacity - count, rootsPerBlock);
+                }
+
                 AdmittedRoot admitted;
                 if (project is not null && value?.GetType() == type)
                 {
-                    var offset = slots is null ? 0 : count * width;
-                    var projected = slots ?? new ObservationValue[width];
+                    var offset = currentSlots is null ? 0 : (count - blockStart) * width;
+                    var projected = currentSlots ?? new ObservationValue[width];
                     project(value, projected, offset);
                     var rowValues = projected.AsSpan(offset, width);
                     Observation? observation = null;
-                    if (slots is null)
-                        observation = Observation.AdmitCompleteProjection(rootShape, rootLayout,
-                            ImmutableCollectionsMarshal.AsImmutableArray(projected), allPresent);
+                    if (currentSlots is null)
+                        observation = rootAdmission.Admit(ImmutableCollectionsMarshal.AsImmutableArray(projected));
                     else
-                        Observation.ValidateCompleteProjection(rootShape, rootLayout, rowValues, allPresent);
+                        rootAdmission.Validate(rowValues);
                     var id = RelationQueryEvaluationBuilder.RequireRootIdentity(rowValues[identityOrdinal], identityField);
-                    admitted = new(id, Uri.EscapeDataString(id), observation, offset);
+                    // Whole-entry sorting on the collision path may move the row away from its admission index.
+                    admitted = new(id, Uri.EscapeDataString(id), observation, blocks is null ? offset : count);
                 }
                 else
                 {
@@ -151,22 +164,8 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             var rows = rootBuffer is null ? CollectionsMarshal.AsSpan(ownedRoots) : rootBuffer.AsSpan(0, count);
             var order = orderBuffer is null ? Span<int>.Empty : orderBuffer.AsSpan(0, count);
             var keys = orderKeys is null ? Span<string>.Empty : orderKeys.AsSpan(0, count);
-            // Physical source occurrence IDs share an input prefix and escape the observation identity.
-            if (order.IsEmpty)
-                rows.Sort();
-            else
-                keys.Sort(order, StringComparer.Ordinal);
-
-            for (var index = 1; index < rows.Length; index++)
-            {
-                // Equal identities always have equal escaped keys. Only a tie needs the original identities.
-                if (!keys.IsEmpty && keys[index - 1] != keys[index])
-                    continue;
-                var left = order.IsEmpty ? index - 1 : order[index - 1];
-                var right = order.IsEmpty ? index : order[index];
-                if (rows[left].Id == rows[right].Id)
-                    throw new ArgumentException("Supplied roots cannot repeat an observation identity.", "observations");
-            }
+            if (count > 1 && SortAndFindDuplicate(rows, keys, ref order, preserveWholeRowTies: blocks is not null))
+                throw new ArgumentException("Supplied roots cannot repeat an observation identity.", "observations");
 
             if (rows.Length > maximumRoots)
             {
@@ -175,7 +174,7 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                 return false;
             }
 
-            result = MapAdmitted(rows, order, slots, cancellationToken);
+            result = MapAdmitted(rows, order, slots, blocks, rootsPerBlock, width, cancellationToken);
             return true;
         }
         finally
@@ -186,13 +185,113 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                 ArrayPool<string>.Shared.Return(orderKeys, clearArray: true);
             if (rootBuffer is not null)
                 ArrayPool<AdmittedRoot>.Shared.Return(rootBuffer, clearArray: true);
+            if (blocks is not null)
+                for (var block = 1; block < blocks.Length; block++)
+                    if (blocks[block] is { } rental)
+                        ArrayPool<ObservationValue>.Shared.Return(rental, clearArray: true);
             if (slots is not null)
                 ArrayPool<ObservationValue>.Shared.Return(slots, clearArray: true);
         }
     }
 
+    static bool SortAndFindDuplicate(Span<AdmittedRoot> rows, Span<string> keys, ref Span<int> order,
+        bool preserveWholeRowTies)
+    {
+        // Physical source occurrence IDs share an input prefix and escape the observation identity.
+        if (order.IsEmpty)
+            rows.Sort();
+        else
+        {
+            if (TrySortPackedKeys(rows, keys, order, out var duplicate))
+                return duplicate;
+            keys.Sort(order, StringComparer.Ordinal);
+        }
+
+        var repeated = false;
+        for (var index = 1; index < rows.Length; index++)
+        {
+            if (!keys.IsEmpty && keys[index - 1] != keys[index])
+                continue;
+            var left = order.IsEmpty ? index - 1 : order[index - 1];
+            var right = order.IsEmpty ? index : order[index];
+            if (rows[left].Id == rows[right].Id)
+            {
+                if (!preserveWholeRowTies)
+                    return true;
+                repeated = true;
+            }
+            else if (preserveWholeRowTies)
+            {
+                // Distinct identities can escape to the same text. Keep the previous large-batch tie behavior.
+                order = default;
+                return SortAndFindDuplicate(rows, default, ref order, preserveWholeRowTies: false);
+            }
+        }
+        return repeated;
+    }
+
+    static bool TrySortPackedKeys(ReadOnlySpan<AdmittedRoot> rows, ReadOnlySpan<string> keys,
+        Span<int> order, out bool duplicate)
+    {
+        duplicate = false;
+        if (keys.Length < MinimumPackedSortRoots)
+            return false;
+
+        ReadOnlySpan<char> shared = keys[0];
+        var longest = shared.Length;
+        for (var index = 1; index < keys.Length; index++)
+        {
+            var key = keys[index].AsSpan();
+            longest = Math.Max(longest, key.Length);
+            shared = shared[..shared.CommonPrefixLength(key)];
+            if (longest - shared.Length > sizeof(ulong))
+                return false;
+        }
+
+        var buffer = ArrayPool<ulong>.Shared.Rent(keys.Length);
+        try
+        {
+            var packed = buffer.AsSpan(0, keys.Length);
+            for (var index = 0; index < keys.Length; index++)
+            {
+                var suffix = keys[index].AsSpan(shared.Length);
+                ulong value = 0;
+                for (var character = 0; character < suffix.Length; character++)
+                {
+                    var code = suffix[character];
+                    if (code > byte.MaxValue)
+                        return false;
+                    value |= (ulong)code << ((sizeof(ulong) - 1 - character) * 8);
+                }
+                packed[index] = value;
+            }
+
+            packed.Sort(order);
+            for (var index = 1; index < packed.Length; index++)
+            {
+                if (packed[index - 1] != packed[index])
+                    continue;
+                if (rows[order[index - 1]].Id == rows[order[index]].Id)
+                    duplicate = true;
+                else
+                {
+                    // An escaped-key collision must retain the ordinary sort's tie behavior.
+                    for (var original = 0; original < order.Length; original++)
+                        order[original] = original;
+                    return false;
+                }
+            }
+            return true;
+        }
+        finally
+        {
+            ArrayPool<ulong>.Shared.Return(buffer);
+        }
+    }
+
     TOutput[] MapAdmitted(ReadOnlySpan<AdmittedRoot> admitted, ReadOnlySpan<int> order,
-        ObservationValue[]? slots, CancellationToken cancellationToken)
+        ObservationValue[]? slots, ObservationValue[][]? blocks, int rootsPerBlock, int width,
+        CancellationToken cancellationToken)
     {
         var result = admitted.IsEmpty ? [] : new TOutput[admitted.Length];
         List<string>? failures = null;
@@ -203,7 +302,15 @@ sealed class PreparedLocalDtoKernel<TOutput>(
             ref readonly var row = ref admitted[order.IsEmpty ? index : order[index]];
             try
             {
-                if (map(row.Value?.Value ?? default, row.Value is null ? slots : null, row.Offset, out var dto))
+                var projected = row.Value is null ? slots : null;
+                var offset = row.Offset;
+                if (projected is not null && blocks is not null)
+                {
+                    var block = offset / rootsPerBlock;
+                    projected = blocks[block];
+                    offset = (offset - block * rootsPerBlock) * width;
+                }
+                if (map(row.Value?.Value ?? default, projected, offset, out var dto))
                     result[count++] = dto;
             }
             catch (RelationDtoRowMappingException exception)
@@ -340,9 +447,10 @@ sealed class PreparedLocalDtoKernel<TOutput>(
                 if (field is not { Cardinality: FieldCardinality.Single, Type: ScalarTypeRef { Format: PrimitiveFormat.None, Kind: ScalarTypeKind.String or ScalarTypeKind.Decimal } scalar })
                     continue;
                 var name = field.Name.Value;
+                var contract = ValueContract.FromField(field);
                 if (lookup.Values.All(row => row.TryGetProperty(name, out var value)
                     && value.Kind is not (ObservationValueKind.Null or ObservationValueKind.Undefined)
-                    && ValueContract.FromField(field).IsSatisfiedByConstant(value)))
+                    && contract.IsSatisfiedByConstant(value)))
                 {
                     fields.Add((binding.Binding, name), (Read(matched, name), scalar.Kind));
                 }

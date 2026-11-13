@@ -821,6 +821,7 @@ public sealed class RelationQueryPhysicalExecutor
 
             List<RelationQueryObservationOccurrence> occurrences = [];
             long expandedRows = 0;
+            var occurrencePrefix = SourceOccurrencePrefix(contract.Input.Id);
             foreach (var row in supplied.Observations)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -850,7 +851,7 @@ public sealed class RelationQueryPhysicalExecutor
                 var acquired = Materialize(
                     row,
                     binding.Binding,
-                    SourceOccurrenceId(contract.Input.Id, row.Identity),
+                    new(string.Concat(occurrencePrefix, Uri.EscapeDataString(row.Identity))),
                     cancellationToken);
                 GetOccurrences(contract.Binding).Add(acquired);
                 occurrences.Add(acquired.Occurrence);
@@ -1443,13 +1444,14 @@ public sealed class RelationQueryPhysicalExecutor
             )
         {
             var acquired = ImmutableArray.CreateBuilder<AcquiredOccurrence>(rows.Length);
+            var occurrencePrefix = SourceOccurrencePrefix(contract.Input.Id);
             foreach (var row in rows)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 acquired.Add(Materialize(
                     row,
                     contract.Binding,
-                    SourceOccurrenceId(contract.Input.Id, row.Identity),
+                    new(string.Concat(occurrencePrefix, Uri.EscapeDataString(row.Identity))),
                     cancellationToken));
             }
             return acquired.MoveToImmutable();
@@ -1674,31 +1676,29 @@ public sealed class RelationQueryPhysicalExecutor
         {
             if (row.Shape != shape)
                 return "A source reader returned an observation with a shape different from the exact request.";
-            if (row.Fields.Length != fields.Length
-                || !row.Fields.Select(static result => result.Field).SequenceEqual(fields))
+            const string selectionError = "A source reader returned missing, extra, or altered field selections.";
+            if (row.Fields.Length != fields.Length)
+                return selectionError;
+            for (var index = 0; index < fields.Length; index++)
+                if (row.Fields[index].Field != fields[index])
+                    return selectionError;
+
+            // Keep selection, contract, then identity diagnostic precedence across the row.
+            foreach (var result in row.Fields)
             {
-                return "A source reader returned missing, extra, or altered field selections.";
-            }
-            if (row.Fields.Any(result =>
-                    result is
-                    {
-                        State: RelationQuerySourceReadFieldState.Value,
-                        Field.Input: { } input,
-                        Value: { } value
-                    }
+                if (result is { State: RelationQuerySourceReadFieldState.Value, Field.Input: { } input, Value: { } value }
                     && fieldInputs[input].ValueContract is { } contract
-                    && !contract.IsSatisfiedByConstant(value)))
-            {
-                return "A source reader returned a concrete field value that violates its compiled value contract.";
+                    && !contract.IsSatisfiedByConstant(value))
+                    return "A source reader returned a concrete field value that violates its compiled value contract.";
             }
-            if (row.Fields.Any(result =>
-                    result.Field.Input is { } input
+            foreach (var result in row.Fields)
+            {
+                if (result.Field.Input is { } input
                     && identityFieldInputs.Contains(input)
                     && (result.State != RelationQuerySourceReadFieldState.Value
                         || result.Value is not { Kind: ObservationValueKind.String } value
-                        || !string.Equals(value.String, row.Identity, StringComparison.Ordinal))))
-            {
-                return "A source reader returned a semantic identity field that differs from its observation identity.";
+                        || !string.Equals(value.String, row.Identity, StringComparison.Ordinal)))
+                    return "A source reader returned a semantic identity field that differs from its observation identity.";
             }
             return null;
         }
@@ -1986,8 +1986,8 @@ public sealed class RelationQueryPhysicalExecutor
             return occurrences;
         }
 
-        static RelationQueryOccurrenceId SourceOccurrenceId(RelationQueryInputId input, string identity) =>
-            new($"physical/source/{Uri.EscapeDataString(input.Value)}/{Uri.EscapeDataString(identity)}");
+        static string SourceOccurrencePrefix(RelationQueryInputId input) =>
+            $"physical/source/{Uri.EscapeDataString(input.Value)}/";
 
         static RelationQueryOccurrenceId TraversalOccurrenceId(
             RelationQueryInputId input,

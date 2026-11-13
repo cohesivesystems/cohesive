@@ -306,8 +306,8 @@ public sealed class RelationQueryInMemoryInterpreterTests
             specs:
             [
                 new("a", "load-a", "customer-1", "Acme", Amount: 10d, Active: true),
-                new("b", "load-b", "customer-1", "Acme", Amount: 5d, Active: false),
-                new("c", "load-c", "customer-2", "Beta", Amount: 7d, Active: true)
+                new("b", "load-b", "customer-2", "Beta", Amount: 7d, Active: true),
+                new("c", "load-c", "customer-1", "Acme", Amount: 5d, Active: false)
             ],
             parameters: new Dictionary<QueryParameterId, ObservationValue>
             {
@@ -330,9 +330,9 @@ public sealed class RelationQueryInMemoryInterpreterTests
         Assert.Equal(
             [
                 scenario.Customers["a"].Id,
-                scenario.Customers["b"].Id,
+                scenario.Customers["c"].Id,
                 scenario.Loads["a"].Id,
-                scenario.Loads["b"].Id
+                scenario.Loads["c"].Id
             ],
             branch.Rows[0].InputOccurrences.Select(static occurrence => occurrence.Id));
         AssertObject(

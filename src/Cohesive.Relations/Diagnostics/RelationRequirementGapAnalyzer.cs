@@ -88,7 +88,8 @@ public static class RelationRequirementGapAnalyzer
         readonly Dictionary<RelationQueryInputId, RelationQueryCollectionExpansionInputContract> forwardCollectionReferences = [];
         readonly Dictionary<RelationQueryInputId, RelationQueryIdentityInputContract> inverseAnchorIdentities = [];
         readonly Dictionary<RelationQueryInputId, RelationQuerySourceEvidence> sources;
-        readonly Dictionary<(RelationQueryInputId Input, RelationQueryOccurrenceId Owner), RelationQueryFieldEvidence> fields;
+        readonly Dictionary<RelationQueryInputId, Dictionary<RelationQueryOccurrenceId, RelationQueryFieldEvidence>> fields = [];
+        bool hasInconclusiveFields;
         readonly Dictionary<(RelationQueryInputId Input, RelationQueryOccurrenceId From), RelationQueryTraversalEvidence> traversals;
         readonly Dictionary<RelationQueryInputId, RelationQueryParameterEvidence> parameters;
         readonly Dictionary<RelationQueryInputId, RelationQueryCapabilityEvidence> capabilities;
@@ -126,7 +127,6 @@ public static class RelationRequirementGapAnalyzer
             capabilityContracts = planIndex.CapabilityContracts;
             expansionContracts = planIndex.ExpansionContracts;
             sources = new(evidence.Sources.Length);
-            fields = new(usePreparedScope ? evidence.SuppliedFieldsForAnalysis.Length : evidence.Fields.Length);
             traversals = new(evidence.Traversals.Length);
             parameters = new(evidence.Parameters.Length);
             capabilities = new(evidence.Capabilities.Length);
@@ -172,8 +172,7 @@ public static class RelationRequirementGapAnalyzer
                     source.State != RelationQuerySourceEvidenceState.Inconclusive
                     && (source.State != RelationQuerySourceEvidenceState.Provided
                         || source.Completeness == RelationQueryEvidenceCompleteness.Complete))
-                && fields.Values.All(static field =>
-                    field.State != RelationQueryFieldEvidenceState.Inconclusive)
+                && !hasInconclusiveFields
                 && traversals.Values.All(static traversal =>
                     traversal.State != RelationQueryTraversalEvidenceState.Inconclusive
                     && (traversal.State != RelationQueryTraversalEvidenceState.Completed
@@ -356,53 +355,7 @@ public static class RelationRequirementGapAnalyzer
                 }
             }
 
-            foreach (var field in QuarantineOrderedDuplicateEvidence(
-                         usePreparedScope ? evidence.SuppliedFieldsForAnalysis : evidence.Fields,
-                         static field => (field.Input, field.Owner),
-                         static field => field.Input,
-                         static field => field.Owner,
-                         "field"))
-            {
-                if (!ValidateInputKind<RelationQueryFieldInput>(field.Input, "field", field.Owner))
-                {
-                    continue;
-                }
-
-                fields.Add((field.Input, field.Owner), field);
-
-                var contract = fieldContracts[field.Input].Input;
-                if (!occurrences.TryGetValue(field.Owner, out var owner))
-                {
-                    AddDiagnostic(
-                        RelationRuntimeDiagnosticCodes.EvidenceConflict,
-                        $"Field evidence references unknown owner occurrence '{field.Owner.Value}'.",
-                        field.Input,
-                        field.Owner,
-                        field.EvidenceReference);
-                    continue;
-                }
-                if (owner.Binding != contract.Binding || owner.Shape != contract.Field.Shape)
-                {
-                    AddDiagnostic(
-                        RelationRuntimeDiagnosticCodes.EvidenceConflict,
-                        $"Field owner occurrence '{owner.Id.Value}' does not match compiled binding '{contract.Binding.Value}' and shape '{contract.Field.Shape}'.",
-                        field.Input,
-                        owner.Id,
-                        field.EvidenceReference);
-                }
-                if (field.State == RelationQueryFieldEvidenceState.Value
-                    && contract.ValueContract is { } valueContract
-                    && field.Value is { } observed
-                    && !valueContract.IsSatisfiedByConstant(observed))
-                {
-                    AddDiagnostic(
-                        RelationRuntimeDiagnosticCodes.ValueContractMismatch,
-                        $"Field evidence for input '{field.Input.Value}' does not satisfy its compiled value contract.",
-                        field.Input,
-                        field.Owner,
-                        field.EvidenceReference);
-                }
-            }
+            ValidateFieldEvidence();
 
             foreach (var parameter in QuarantineOrderedDuplicateEvidence(
                          evidence.Parameters,
@@ -521,6 +474,78 @@ public static class RelationRequirementGapAnalyzer
             }
         }
 
+        void ValidateFieldEvidence()
+        {
+            var observedFields = QuarantineOrderedDuplicateEvidence(
+                usePreparedScope ? evidence.SuppliedFieldsForAnalysis : evidence.Fields,
+                static field => (field.Input, field.Owner),
+                static field => field.Input,
+                static field => field.Owner,
+                "field").AsSpan();
+
+            // Canonical evidence orders fields by input, then by owner. Bind the contract and
+            // index the owners once for each input while retaining the individual row checks.
+            while (!observedFields.IsEmpty)
+            {
+                var input = observedFields[0].Input;
+                var length = 1;
+                while (length < observedFields.Length && observedFields[length].Input == input)
+                    length++;
+                var inputFields = observedFields[..length];
+                observedFields = observedFields[length..];
+
+                if (!ValidateInputKind<RelationQueryFieldInput>(input, "field", inputFields[0].Owner))
+                {
+                    foreach (var field in inputFields[1..])
+                        ValidateInputKind<RelationQueryFieldInput>(input, "field", field.Owner);
+                    continue;
+                }
+
+                var contract = fieldContracts[input].Input;
+                var byOwner = new Dictionary<RelationQueryOccurrenceId, RelationQueryFieldEvidence>(length);
+                fields.Add(input, byOwner);
+                foreach (var field in inputFields)
+                {
+                    byOwner.Add(field.Owner, field);
+                    hasInconclusiveFields |= field.State == RelationQueryFieldEvidenceState.Inconclusive;
+                    if (!occurrences.TryGetValue(field.Owner, out var owner))
+                    {
+                        AddDiagnostic(
+                            RelationRuntimeDiagnosticCodes.EvidenceConflict,
+                            $"Field evidence references unknown owner occurrence '{field.Owner.Value}'.",
+                            input,
+                            field.Owner,
+                            field.EvidenceReference);
+                        continue;
+                    }
+                    if (owner.Binding != contract.Binding || owner.Shape != contract.Field.Shape)
+                    {
+                        AddDiagnostic(
+                            RelationRuntimeDiagnosticCodes.EvidenceConflict,
+                            $"Field owner occurrence '{owner.Id.Value}' does not match compiled binding '{contract.Binding.Value}' and shape '{contract.Field.Shape}'.",
+                            input,
+                            owner.Id,
+                            field.EvidenceReference);
+                    }
+                    if (field.State == RelationQueryFieldEvidenceState.Value
+                        && contract.ValueContract is { } valueContract
+                        && field.Value is { } observed
+                        && !valueContract.IsSatisfiedByConstant(observed))
+                    {
+                        AddDiagnostic(
+                            RelationRuntimeDiagnosticCodes.ValueContractMismatch,
+                            $"Field evidence for input '{input.Value}' does not satisfy its compiled value contract.",
+                            input,
+                            field.Owner,
+                            field.EvidenceReference);
+                    }
+                }
+            }
+        }
+
+        RelationQueryFieldEvidence? FindField(RelationQueryInputId input, RelationQueryOccurrenceId owner) =>
+            fields.GetValueOrDefault(input)?.GetValueOrDefault(owner);
+
         void ValidateTopology()
         {
             var allFields = fieldContracts.Values.ToArray();
@@ -589,8 +614,7 @@ public static class RelationRequirementGapAnalyzer
 
                     ObservationValue? referenceValue = null;
                     if (forwardReferenceFields.TryGetValue(contract.Input.Id, out var reference)
-                        && fields.TryGetValue((reference.Input.Id, observedTraversal.From), out var observedReference)
-                        && observedReference.State == RelationQueryFieldEvidenceState.Value)
+                        && FindField(reference.Input.Id, observedTraversal.From) is { State: RelationQueryFieldEvidenceState.Value } observedReference)
                     {
                         referenceValue = observedReference.Value;
                     }
@@ -666,7 +690,7 @@ public static class RelationRequirementGapAnalyzer
                 RelationRequirementGapRelationshipContext? relationshipContext = null;
                 if (fieldContracts.TryGetValue(conversion.Input, out var field))
                 {
-                    fields.TryGetValue((conversion.Input, occurrence!.Id), out var observed);
+                    var observed = FindField(conversion.Input, occurrence!.Id);
                     valueContext = new(
                         field.Input.Field,
                         field.Input.ValueContract,
@@ -849,7 +873,7 @@ public static class RelationRequirementGapAnalyzer
                                 continue;
                             }
 
-                            fields.TryGetValue((reference.Input.Id, owner.Id), out var observedReference);
+                            var observedReference = FindField(reference.Input.Id, owner.Id);
                             if (observedReference is null
                                 && evidence.Completeness == RelationQueryEvidenceCompleteness.Partial)
                             {
@@ -1004,6 +1028,7 @@ public static class RelationRequirementGapAnalyzer
 
         void AnalyzeFields()
         {
+            var hasDispositions = blockedOccurrences.Count != 0 || processedFields.Count != 0 || processedConversions.Count != 0;
             foreach (var contract in fieldContracts.Values.OrderBy(static item => item.Input.Id.Value, StringComparer.Ordinal))
             {
                 if (!occurrenceOwners.TryGetValue(
@@ -1013,16 +1038,17 @@ public static class RelationRequirementGapAnalyzer
                     continue;
                 }
 
+                fields.TryGetValue(contract.Input.Id, out var byOwner);
                 foreach (var owner in owners)
                 {
-                    if (blockedOccurrences.Contains(owner.Id)
+                    if (hasDispositions && (blockedOccurrences.Contains(owner.Id)
                         || processedFields.Contains((contract.Input.Id, owner.Id))
-                        || IsConversionHandled(contract.Input.Id, owner.Id))
+                        || IsConversionHandled(contract.Input.Id, owner.Id)))
                     {
                         continue;
                     }
 
-                    fields.TryGetValue((contract.Input.Id, owner.Id), out var observed);
+                    var observed = byOwner?.GetValueOrDefault(owner.Id);
                     if (observed is null && evidence.Completeness == RelationQueryEvidenceCompleteness.Partial)
                     {
                         continue;

@@ -282,13 +282,22 @@ public sealed class RelationDtoJoinFacadeTests
         Assert.InRange(allocated, 0, count * 175);
     }
 
-    [Fact]
-    public async Task FusedLargeBatchMatchesCanonicalEscapedOrderAndDuplicateRejection()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task FusedLargeBatchMatchesCanonicalEscapedOrderAndDuplicateRejection(bool shortSuffixes)
     {
         var mapping = Build(compact: true);
-        string[] prefixes = ["load/", "load%", "load-é", "load-"];
-        var loads = Enumerable.Range(0, 2049).Reverse()
-            .Select(index => new Load($"{prefixes[index % prefixes.Length]}{index}", "customer-7")).ToArray();
+        string[] prefixes = shortSuffixes ? ["load-"] : ["load/", "load%", "load-é", "load-"];
+        string[] edges = shortSuffixes
+            ? ["load-", "load-/", "load-%", "load-\0"]
+            : ["load", "load-prefix", "load-prefix-a", "load-prefix-ab", "load-%C3%A9", "load-🧪"];
+        Load[] loads =
+        [
+            .. Enumerable.Range(0, 2049).Reverse()
+                .Select(index => new Load($"{prefixes[index % prefixes.Length]}{index}", "customer-7")),
+            .. edges.Select(identity => new Load(identity, "customer-7"))
+        ];
         var items = loads.Where((_, index) => index % 7 != 0)
             .Select((load, index) => new LineItem(load.Id, load.Id, 1m, index)).ToArray();
         var evaluator = mapping.CreateInMemoryEvaluator(new[] { new Customer("customer-7", "Acme") }, items);
@@ -302,6 +311,39 @@ public sealed class RelationDtoJoinFacadeTests
             () => mapping.MapAsync(evaluator, repeated, static load => load.Id));
         var fused = await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, repeated));
         Assert.Equal(canonical.Message, fused.Message);
+    }
+
+    [Fact]
+    public async Task FusedMappingKeepsOneCanonicalOrderAndDuplicateCheckAcrossPooledBlocks()
+    {
+        const int loadCount = 32_771;
+        var q = RelationQuery.Expression();
+        var loads = q.Source<Load>();
+        var output = loads.Join(q.Source<Customer>(), (load, customer) => load.CustomerId == customer.Id,
+            (load, customer) => new LoadCustomer(load.Id, customer.Name));
+        var mapping = RelationDtoMapping.Create(loads, output, RelationOutputMode.ZeroOrOnePerRoot);
+        Customer[] customers = [new("customer-0", "First"), new("customer-1", "Second")];
+        var evaluator = mapping.CreateInMemoryEvaluator(
+            sources => sources.Bind(customers), maximumRows: loadCount + customers.Length);
+        var roots = Enumerable.Range(0, loadCount).Reverse()
+            .Select(index => new Load($"load-{index}", $"customer-{index % 3}")).ToArray();
+
+        var canonical = await mapping.MapAsync(evaluator, roots, static load => load.Id);
+        Assert.NotEmpty(canonical);
+        Assert.Equal(canonical, await mapping.MapAsync(evaluator, roots));
+
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        var warm = mapping.MapAsync(evaluator, roots);
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.True(warm.IsCompletedSuccessfully);
+        Assert.Equal(canonical, await warm);
+        Assert.InRange(allocated, 0, loadCount * 160);
+
+        roots[^1] = roots[0];
+        var expected = await Assert.ThrowsAsync<ArgumentException>(
+            () => mapping.MapAsync(evaluator, roots, static load => load.Id));
+        var actual = await Assert.ThrowsAsync<ArgumentException>(() => mapping.MapAsync(evaluator, roots));
+        Assert.Equal(expected.Message, actual.Message);
     }
 
     [Fact]

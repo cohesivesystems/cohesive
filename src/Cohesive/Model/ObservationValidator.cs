@@ -205,6 +205,22 @@ public static class ObservationValidator
         return false;
     }
 
+    internal static bool TryValidateCompleteProjection(Observation.CompleteProjectionAdmission admission,
+        ReadOnlySpan<ObservationValue> values)
+    {
+        var layout = admission.Layout;
+        if (values.Length != layout.Count)
+            throw new ArgumentException("A complete projection requires one value per field slot.", nameof(values));
+
+        NoDiagnostics diagnostics = default;
+        var graph = layout.Graph;
+        for (var ordinal = 0; ordinal < values.Length; ordinal++)
+            if (!TryValidateFieldValue(in values[ordinal], layout.GetFieldDefinition(ordinal), graph, ref diagnostics))
+                return false;
+
+        return true;
+    }
+
     static bool TryValidateRoot<TDiagnostics>(
         in ObservationValue value,
         Shape shape,
