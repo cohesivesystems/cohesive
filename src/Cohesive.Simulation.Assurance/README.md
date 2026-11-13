@@ -69,9 +69,30 @@ reading its result. It never blocks a pending task. Async candidate execution an
 supported and tested separately. General async property campaigns require an async search
 interpreter; this bridge does not introduce a second search/shrink engine or block async I/O.
 
-Retain the generation replay token/result, binding and method label, serialized claim,
-`ScenarioExecutionTraceJsonSerializer` output, and `TraceEvaluation.Serialize()` output as
-separate existing artifacts. Restore and re-evaluate the retained trace independently; merely
-restoring/rechecking artifacts must never be reported as candidate execution. This package
-has no production monitoring adapter, generalized event binding, no-op commit receipt mapping,
-transaction scheduler, cross-aggregate ordering, or ARI/ITO integration.
+## Retaining an attempt
+
+```csharp
+var json = ScenarioAssuranceArtifact.Serialize(run);
+// Store this envelope as an immutable artifact.
+var checkedAgain = ScenarioAssuranceArtifact.Reevaluate(json);
+// Always TraceReevaluation, even if the recorded attempt was CandidateExecution.
+```
+
+The versioned envelope retains the recorded method, exact binding, Simulation trace and
+Assurance evaluation. Embedded documents use their existing serializers and carry the claim,
+source maps, target, scope assumption, observation contract, limits, coverage and diagnostics.
+Their exact JSON is embedded as strings so their wire contracts remain independently owned.
+Loading validates the existing documents, reconstructs observations from the retained scenario
+and binding, and requires exact agreement with the retained evaluation. Substituting another
+candidate's binding or evaluation is rejected. No candidate code runs during this check.
+
+Recorded execution method and candidate identity are attribution, not authenticated receipts.
+Consistently rewriting an entire artifact is not prevented by validation; authenticity needs an
+external trusted store or signing boundary. Satisfied sampled traces remain trace evidence,
+not universal proofs. This is the scenario-retention slice of COH-147, not the general evidence,
+proof-state, verifier-support or readiness model. Shared policy dependencies and independent
+policy support still need that general evidence model.
+
+Retain generation campaign results and replay tokens separately using Simulation's existing
+artifacts. This package has no production monitoring adapter, generalized event binding, no-op
+commit receipt mapping, transaction scheduler, cross-aggregate ordering, or ARI/ITO integration.

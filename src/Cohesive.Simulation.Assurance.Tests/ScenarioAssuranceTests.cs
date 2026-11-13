@@ -117,6 +117,72 @@ public sealed class ScenarioAssuranceTests
         Assert.Equal(ClaimVerdict.Violated, reevaluated.Evaluation.Verdict);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RetainedArtifactRechecksWithoutExecutingAndPreservesExactEvidence(bool repaired)
+    {
+        var (world, shape) = Scenario(new(2, 0));
+        var candidate = new Candidate(shape, repaired: repaired);
+        var result = await ScenarioAssurance.ExecuteAsync(Safety(), world, candidate, Binding(candidate.Identity));
+        var json = ScenarioAssuranceArtifact.Serialize(result);
+        var restored = ScenarioAssuranceArtifact.Reevaluate(json);
+        Assert.Equal(2, candidate.Calls);
+        Assert.Equal(ScenarioAssuranceMethod.TraceReevaluation, restored.Method);
+        Assert.Equal(result.Evaluation.Serialize(), restored.Evaluation.Serialize());
+        Assert.Equal(result.Trace.Fingerprint, restored.Trace.Fingerprint);
+        Assert.Equal(result.Binding, restored.Binding);
+        Assert.Equal(json, ScenarioAssuranceArtifact.Serialize(result));
+        var recheckJson = ScenarioAssuranceArtifact.Serialize(restored);
+        Assert.NotEqual(json, recheckJson); // The recorded method is part of the artifact.
+        Assert.Equal(recheckJson, ScenarioAssuranceArtifact.Serialize(ScenarioAssuranceArtifact.Reevaluate(recheckJson)));
+    }
+
+    [Fact]
+    public async Task RetainedBudgetExhaustionRemainsInconclusive()
+    {
+        var (world, shape) = Scenario(new(2, 0));
+        var result = await ScenarioAssurance.ExecuteAsync(Safety(), world, new Candidate(shape), Binding(),
+            limits: new TraceEvaluationLimits(MaxObservations: 1));
+        var restored = ScenarioAssuranceArtifact.Reevaluate(ScenarioAssuranceArtifact.Serialize(result));
+        Assert.Equal(TraceEvaluationStatus.BudgetExceeded, restored.Evaluation.Status);
+        Assert.Equal(ClaimVerdict.Inconclusive, restored.Evaluation.Verdict);
+        Assert.Equal(PropertyCaseDisposition.Discarded, restored.ToPropertyEvaluation().Disposition);
+        Assert.Equal(result.Evaluation.Serialize(), restored.Evaluation.Serialize());
+    }
+
+    [Fact]
+    public async Task RetainedArtifactRejectsDuplicateAndUnknownEnvelopeFields()
+    {
+        var (world, shape) = Scenario(new(2, 0));
+        var result = await ScenarioAssurance.ExecuteAsync(Safety(), world, new Candidate(shape), Binding());
+        var json = ScenarioAssuranceArtifact.Serialize(result);
+        Assert.Throws<System.Text.Json.JsonException>(() => ScenarioAssuranceArtifact.Reevaluate(
+            "{\"schema\":\"cohesive-simulation-assurance/v1\"," + json[1..]));
+        Assert.Throws<System.Text.Json.JsonException>(() => ScenarioAssuranceArtifact.Reevaluate(
+            "{\"unexpected\":true," + json[1..]));
+    }
+
+    [Theory]
+    [InlineData("binding")]
+    [InlineData("evaluation")]
+    [InlineData("trace")]
+    [InlineData("schema")]
+    [InlineData("recordedMethod")]
+    [InlineData("missing")]
+    public async Task RetainedArtifactRejectsMismatchedOrMalformedEvidence(string tamper)
+    {
+        var (world, shape) = Scenario(new(2, 0));
+        var faulty = await ScenarioAssurance.ExecuteAsync(Safety(), world, new Candidate(shape), Binding());
+        var repaired = await ScenarioAssurance.ExecuteAsync(Safety(), world, new Candidate(shape, repaired: true), Binding("dq/repaired/v2"));
+        var document = System.Text.Json.Nodes.JsonNode.Parse(ScenarioAssuranceArtifact.Serialize(faulty))!;
+        var other = System.Text.Json.Nodes.JsonNode.Parse(ScenarioAssuranceArtifact.Serialize(repaired))!;
+        if (tamper == "missing") document.AsObject().Remove("trace");
+        else if (tamper is "binding" or "evaluation" or "trace") document[tamper] = other[tamper]!.DeepClone();
+        else document[tamper] = "unsupported";
+        Assert.Throws<System.Text.Json.JsonException>(() => ScenarioAssuranceArtifact.Reevaluate(document.ToJsonString()));
+    }
+
     [Fact]
     public async Task BindingMismatchAndUnsupportedFormsFailBeforeRunningTheCandidate()
     {
