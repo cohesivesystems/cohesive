@@ -138,6 +138,8 @@ public sealed partial class HistoricalQualificationExamples
         ProgressReceipt? progress;
         internal CoverageEvidence? Coverage;
         readonly LocalAcquisition first = new(), second = new();
+        internal byte[]? PublishedBytes => sink.Values.SingleOrDefault();
+        internal IngestionPublicationReceipt? Publication => receipt;
         internal int PublishedSessions => sink.Values.Sum(bytes => JsonSerializer.Deserialize<DailyBar[]>(bytes)!.Length);
         internal int ProviderCalls => first.Calls;
         internal int ReplacementCalls => second.Calls;

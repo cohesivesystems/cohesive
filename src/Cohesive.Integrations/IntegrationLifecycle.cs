@@ -146,6 +146,8 @@ public sealed record IntegrationLifecycleChangeReceipt(IntegrationLifecycleChang
 public sealed class IntegrationAdmissionBinding
 {
     internal InMemoryIntegrationLifecycle Owner { get; }
+    /// <summary>Stable consumer controlled by the owner of this validated binding.</summary>
+    public IngestionLedgerAddress Consumer => Owner.Consumer;
     internal IntegrationAdmissionBinding(InMemoryIntegrationLifecycle owner, ExecutionDefinitionReference binding, ExecutionDefinitionReference process)
     { Owner = owner; Binding = binding; Process = process; }
     /// <summary>Exact validated canonical integration binding.</summary>

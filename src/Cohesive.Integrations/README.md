@@ -630,3 +630,46 @@ Runbook: inspect → issue an authorized revision-checked pause → inspect pend
 Processes finish/reconcile → record exact successful completion → inspect until Draining is false.
 Leave unresolved work visible; do not clear it or blindly retry. Resume with an authorized Active command
 at the current revision.
+
+## Evidence-based health inspection (COH-136)
+
+`IntegrationInspection.Create` composes a prevalidated binding, a coherent lifecycle snapshot and
+optional `IntegrationHealthEvidence` at an explicit UTC boundary. It is a read-only projection and
+never authorizes an operation, renews evidence or changes pending work. It reuses the shared
+`ExecutionHealthObservation`, `ExecutionHealthStatus` and `ExecutionReadinessStatus` contracts.
+
+```csharp
+var evidence = new IntegrationHealthEvidence(
+    binding.Binding, adapterObservation, validUntilUtc: expiresAt);
+var view = IntegrationInspection.Create(binding, control.Inspect(), now, evidence);
+// view.ProviderHealth and ProviderReadiness describe current provider evidence only.
+// view.Lifecycle.Accepting/Draining describe admission control, not provider health.
+// view.PendingSessionCount and OldestPendingAtUtc describe unresolved consumer sessions.
+```
+
+Evidence belongs to the exact binding (including scope/revision/fingerprint), carries producer
+provenance and source references, and is current only in `[ObservedAtUtc, ValidUntilUtc)`. Missing,
+future or expired evidence gives Unknown health/readiness while the original evidence remains visible.
+A host must authenticate the producer, select the current observation and specify its expiry policy;
+this projection does not discover providers or authenticate arbitrary claims. Authentication/capability
+failures remain attributable structured diagnostics on the shared observation, without another failure
+enum in Integrations. Expiry of a healthy or unhealthy observation means Unknown, not recovered/healthy.
+
+Provider readiness and lifecycle acceptance are deliberately independent. A paused integration may
+have a healthy provider. An active integration may have unknown/unhealthy evidence. Actual admission
+and new-effect policy/qualification checks remain mandatory. Pending-session counts cover the whole
+consumer, including sessions on other bindings. They are not queued-work counts or counts of ambiguous
+external effects; a pending session's cause needs Process/effect inspection. The caller supplies a coherent
+snapshot; scope and timestamps are validated, and oldest pending time is computed in one linear pass.
+
+Coverage stays with its domain contract interpreter. The historical health example reports validated
+source rows and unresolved expected sessions, accepted sessions from digest-checked published bytes,
+the matching publication receipt and source ledger progress independently. Healthy-but-empty or partial
+responses do not establish accepted coverage. Expiring provider evidence does not erase retained
+publication/ledger evidence. The example emits JSON as a host inspection projection; it does not add
+an HTTP route or CLI command. Source and sink are deterministic local fixtures.
+
+For metrics, use bounded enum dimensions such as provider health/readiness and desired lifecycle state.
+Report pending count/age as values. Never label metrics with binding fingerprints, symbols, session IDs,
+actors or evidence references; those belong in the detailed inspection/traces. Health trust providers,
+operational endpoints, explicit failure resolution and bounded backfill remain follow-up work.

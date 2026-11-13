@@ -16,6 +16,7 @@ public sealed class InMemoryIntegrationLifecycle
 {
     readonly object sync = new();
     readonly IngestionLedgerAddress consumer;
+    internal IngestionLedgerAddress Consumer => consumer;
     readonly Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize;
     readonly Dictionary<string, IntegrationLifecycleChangeReceipt> changes = new(StringComparer.Ordinal);
     readonly Dictionary<ProcessContinuationIdentity, IntegrationAdmission> pending = new();
