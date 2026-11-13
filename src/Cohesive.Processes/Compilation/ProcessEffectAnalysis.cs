@@ -39,8 +39,11 @@ public sealed record ProcessCompilationOptions
     /// <param name="atomicScope">
     /// Atomic-scope demand to preflight structurally and retain for downstream realization proof.
     /// </param>
+    /// <param name="requiredGuarantees">Explicit guarantees demanded by the source-selected realization policy; defaults to none.</param>
+    /// <exception cref="ArgumentException">A guarantee is outside the canonical catalog.</exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="atomicScope"/> is unsupported.</exception>
-    public ProcessCompilationOptions(ProcessAtomicScopeDemand atomicScope = ProcessAtomicScopeDemand.None)
+    public ProcessCompilationOptions(ProcessAtomicScopeDemand atomicScope = ProcessAtomicScopeDemand.None,
+        ImmutableArray<ProcessInterpreterRequirementKey> requiredGuarantees = default)
     {
         if (!Enum.IsDefined(atomicScope))
         {
@@ -51,12 +54,34 @@ public sealed record ProcessCompilationOptions
         }
 
         AtomicScope = atomicScope;
+        RequiredGuarantees = requiredGuarantees.IsDefault ? [] : [.. requiredGuarantees.Distinct().OrderBy(key => key.Name, StringComparer.Ordinal)];
+        if (RequiredGuarantees.Any(key => !ProcessInterpreterGuarantees.Contains(key)))
+            throw new ArgumentException("Required guarantees must belong to the canonical Process catalog.", nameof(requiredGuarantees));
     }
 
     /// <summary>
     /// Atomic-scope demand checked for known structural blockers and retained for downstream realization proof.
     /// </summary>
     public ProcessAtomicScopeDemand AtomicScope { get; }
+
+    /// <summary>Normalized explicit guarantees; adapter selection must satisfy these without weakening them.</summary>
+    public ImmutableArray<ProcessInterpreterRequirementKey> RequiredGuarantees { get; }
+
+    /// <summary>Compares normalized compiler demands structurally.</summary>
+    /// <param name="other">Other policy, or null.</param>
+    /// <returns>True when atomic scope and requested guarantees are equal.</returns>
+    public bool Equals(ProcessCompilationOptions? other) => other is not null
+        && AtomicScope == other.AtomicScope && RequiredGuarantees.SequenceEqual(other.RequiredGuarantees);
+
+    /// <summary>Hashes the normalized compiler demands.</summary>
+    /// <returns>A structural hash consistent with equality.</returns>
+    public override int GetHashCode()
+    {
+        var hash = new HashCode();
+        hash.Add(AtomicScope);
+        foreach (var guarantee in RequiredGuarantees) hash.Add(guarantee);
+        return hash.ToHashCode();
+    }
 }
 
 /// <summary>Target-independent operational effect derived from one canonical Process node.</summary>

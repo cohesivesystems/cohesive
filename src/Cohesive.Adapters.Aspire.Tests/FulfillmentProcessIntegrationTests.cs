@@ -234,7 +234,7 @@ public sealed class FulfillmentProcessIntegrationTests
         }
     }
 
-    sealed class PostgresTheoryAttribute : TheoryAttribute
+    internal sealed class PostgresTheoryAttribute : TheoryAttribute
     {
         public PostgresTheoryAttribute()
         {

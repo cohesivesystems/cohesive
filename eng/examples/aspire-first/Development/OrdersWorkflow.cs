@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using Cohesive.Model.Serialization;
 using Cohesive.Semantics;
+using Cohesive.Adapters.Mcp.Development;
 using ModelContextProtocol.Client;
 
 // An opt-in integration exercise, not an MCP tool. All edits/builds run in an isolated source copy.
@@ -41,6 +42,14 @@ internal static class OrdersWorkflow
                 foreach (var relative in authoringFiles)
                     await File.WriteAllTextAsync(Path.Combine(scratch, relative), await RunProcess(root, "git", ["show", commit + ":" + relative], token), token);
             }
+            // Match the retained generated reader in OrdersWireContext. This policy is local to the
+            // exercise copy; the application exporter keeps its normal ASP.NET web defaults.
+            var exporterPath = Path.Combine(scratch, OrdersWorkspace.Project, "Program.cs");
+            var exporter = await File.ReadAllTextAsync(exporterPath, token);
+            exporter = ReplaceOnce(exporter, "new JsonSerializerOptions(JsonSerializerDefaults.Web),",
+                "new JsonSerializerOptions(JsonSerializerDefaults.Web) { RespectRequiredConstructorParameters = true },");
+            exporter = ReplaceOnce(exporter, "aspnet-web-defaults/problem-details-v1", "exercise/strict-constructors/problem-details-v1");
+            await File.WriteAllTextAsync(exporterPath, exporter, token);
             await Export();
             await using var client = await McpClient.CreateAsync(new StdioClientTransport(new()
             {
@@ -138,7 +147,7 @@ internal static class OrdersWorkflow
             // A demonstration policy change: retain at least one unit rather than exhausting available stock.
             var edited = ReplaceOnce(source, "item.Available >= input.Quantity", "item.Available > input.Quantity");
             edited = ReplaceOnce(edited, "id: new(\"fulfillment/reserve\"), revision: new(\"2\")", "id: new(\"fulfillment/reserve\"), revision: new(\"3\")");
-            edited = ReplaceOnce(edited, "[Process(id: \"fulfillment/submit\", revision: \"7\")]", "[Process(id: \"fulfillment/submit\", revision: \"8\")]");
+            edited = ReplaceOnce(edited, "[Process(id: \"fulfillment/submit\", revision: \"8\")]", "[Process(id: \"fulfillment/submit\", revision: \"9\")]");
             await File.WriteAllTextAsync(path, edited, token);
             var stale = await Workspace();
             Require(stale.SnapshotId == before.SnapshotId && stale.ChangedInputs.Contains(OrdersWorkspace.DomainSource), "Source edit was not reported before export.");
@@ -193,7 +202,7 @@ internal static class OrdersWorkflow
             }
             Require(fieldId is not null, "No field → shape/type → query → API path was found.");
             var responseSource = await File.ReadAllTextAsync(queryPath, token);
-            responseSource = ReplaceOnce(responseSource, "int AvailableStock);", "int AvailableStock)\n{\n    /// <summary>Optional inventory partition.</summary>\n    public string? InventoryPartition { get; init; }\n}");
+            responseSource = ReplaceOnce(responseSource, "int AvailableStock, bool Released = false);", "int AvailableStock, bool Released = false)\n{\n    /// <summary>Optional inventory partition.</summary>\n    public string? InventoryPartition { get; init; }\n}");
             responseSource = ReplaceOnce(responseSource, ".Field(result => result.AvailableStock, inventory, item => item.Available)",
                 ".Field(result => result.InventoryPartition, inventory, item => item.Partition)\n                    .Field(result => result.AvailableStock, inventory, item => item.Available)");
             await File.WriteAllTextAsync(queryPath, responseSource, token);
@@ -207,7 +216,7 @@ internal static class OrdersWorkflow
             Require(JsonSerializer.Deserialize<JsonElement>(additivePayload).GetProperty("reservations")[0].TryGetProperty("inventoryPartition", out _)
                 && JsonSerializer.SerializeToElement(JsonSerializer.Deserialize(additivePayload, OrdersWireContext.Default.OrderDetails), OrdersWireContext.Default.OrderDetails!).GetProperty("reservations")[0].GetProperty("availableStock").GetInt32() == 42,
                 "Old generated reader did not preserve the known value with an additional response field.");
-            responseSource = ReplaceOnce(responseSource, "int AvailableStock)", "int RemainingStock)");
+            responseSource = ReplaceOnce(responseSource, "int AvailableStock,", "int RemainingStock,");
             responseSource = ReplaceOnce(responseSource, "result => result.AvailableStock", "result => result.RemainingStock");
             responseSource = ReplaceOnce(responseSource, "<param name=\"AvailableStock\">", "<param name=\"RemainingStock\">");
             await File.WriteAllTextAsync(queryPath, responseSource, token);
@@ -279,7 +288,18 @@ internal static class OrdersWorkflow
                 {
                     result = await Call("check", new() { ["expectedSnapshot"] = snapshot, ["offset"] = offset, ["limit"] = 100 });
                     foreach (var check in result.GetProperty("result").GetProperty("items").EnumerateArray())
-                        Require(check.GetProperty("isValid").GetBoolean() && check.GetProperty("domainValidationAvailable").GetBoolean(), check.GetRawText());
+                    {
+                        Require(check.GetProperty("isValid").GetBoolean(), check.GetRawText());
+                        if (!check.GetProperty("domainValidationAvailable").GetBoolean())
+                        {
+                            // Recovery assessments have checked integrity, not an executable domain validator.
+                            // Keep requiring domain validation for every other exported document kind.
+                            var schema = await Call("inspect", new() { ["id"] = check.GetProperty("id").GetString(),
+                                ["expectedSnapshot"] = snapshot, ["pointer"] = "/schemaVersion" });
+                            Require(schema.GetProperty("result").GetProperty("value").GetString() == ProcessRecoveryWorkspaceProjection.Schema,
+                                check.GetRawText());
+                        }
+                    }
                     offset = result.GetProperty("result").TryGetProperty("nextOffset", out var next) && next.ValueKind == JsonValueKind.Number
                         ? next.GetInt32() : -1;
                 } while (offset >= 0);
@@ -301,7 +321,7 @@ internal static class OrdersWorkflow
         if (!condition) throw new InvalidOperationException(message);
     }
 
-    static async Task<string> RunProcess(string root, string command, string[] arguments, CancellationToken token)
+    internal static async Task<string> RunProcess(string root, string command, string[] arguments, CancellationToken token)
     {
         var start = new ProcessStartInfo(command) { WorkingDirectory = root, RedirectStandardOutput = true, RedirectStandardError = true };
         foreach (var argument in arguments) start.ArgumentList.Add(argument);

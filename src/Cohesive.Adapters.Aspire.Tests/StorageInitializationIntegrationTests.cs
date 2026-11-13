@@ -275,7 +275,12 @@ public sealed partial class OrderStorageIntegrationTests
             using var resource = new StreamReader(typeof(OrderStorageIntegrationTests).Assembly.GetManifestResourceStream("Migration001.sql")!);
             await using (var migrate = database.CreateCommand((await resource.ReadToEndAsync()).Replace("public.", schema + ".", StringComparison.Ordinal)))
                 await migrate.ExecuteNonQueryAsync();
+            using var cancellationMigration = new StreamReader(typeof(OrderStorageIntegrationTests).Assembly.GetManifestResourceStream("Migration002.sql")!);
+            await using (var migrate = database.CreateCommand((await cancellationMigration.ReadToEndAsync()).Replace("public.", schema + ".", StringComparison.Ordinal)))
+                await migrate.ExecuteNonQueryAsync();
             await desired.PrepareSchemaAsync(database);
+            await using var released = database.CreateCommand($"SELECT released FROM {schema}.cohesive_reservations WHERE reservation_id='reservation'");
+            Assert.Equal(false, await released.ExecuteScalarAsync());
             await using var row = database.CreateCommand($"SELECT quantity FROM {schema}.cohesive_reservations WHERE reservation_id='reservation'");
             Assert.Equal(2, await row.ExecuteScalarAsync());
         }

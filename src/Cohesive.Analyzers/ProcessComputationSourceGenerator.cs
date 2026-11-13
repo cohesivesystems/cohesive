@@ -5134,6 +5134,12 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                 dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.PointRead({relationReference})");
                 relationReference = $"{relationReference}.Reference";
             }
+            else if (relation.Parameter?.Type is INamedTypeSymbol { Name: "ProcessQuery", Arity: 2 } native
+                && native.ContainingNamespace.ToDisplayString() == "Cohesive.Processes.Authoring")
+            {
+                dependencies.Add($"global::Cohesive.Processes.Authoring.ProcessDependency.Query({relationReference})");
+                relationReference = $"{relationReference}.Reference";
+            }
             else if (IsTypedCanonicalRelationQueryHandle(relation.Parameter?.Type))
                 relationReference = $"{relationReference}.Reference";
 
@@ -5489,6 +5495,33 @@ public sealed class ProcessComputationSourceGenerator : IIncrementalGenerator
                     memberProjections,
                     out expression,
                     out failure);
+            }
+
+            // Indexed projections use the canonical scoped selector, evaluating only the selected element.
+            var indexed = operation;
+            List<string> indexedPath = [];
+            while (true)
+            {
+                if (TryResolvePureAlias(indexed, out var indexedAlias))
+                {
+                    indexed = Strip(indexedAlias);
+                    continue;
+                }
+                if (indexed is not IPropertyReferenceOperation { Instance: not null } member) break;
+                indexedPath.Add(SerializedName(member.Property) ?? member.Property.Name);
+                indexed = Strip(member.Instance);
+            }
+            if (indexed is IArrayElementReferenceOperation { Indices.Length: 1 } element)
+            {
+                if (!TryEmit(element.ArrayReference, out var array, out failure)
+                    || !TryEmit(element.Indices[0], out var index, out failure))
+                { expression = string.Empty; return false; }
+                indexedPath.Reverse();
+                var selector = indexedPath.Count == 0 ? "new global::Cohesive.Model.CurrentItemExpr()"
+                    : "global::Cohesive.Model.Expr.Field(new global::Cohesive.Model.FieldPath([global::Cohesive.Model.FieldPathSegment.ForField(\"item\"), " + string.Join(", ", indexedPath.Select(part => $"global::Cohesive.Model.FieldPathSegment.ForField({Literal(part)})")) + "]))";
+                expression = $"new global::Cohesive.Model.CallExpr(global::Cohesive.Model.ExprFunctionNames.ElementAt, [{array}, {index}, {selector}], {ReturnType(operation.Type)})";
+                failure = string.Empty;
+                return true;
             }
 
             if (TryEmitCount(operation, out expression, out failure))

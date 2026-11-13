@@ -166,6 +166,20 @@ public sealed class ServiceImplementationPlan
         });
     }
 
+    /// <summary>Includes native queries selected by a process service in storage admission.</summary>
+    /// <param name="dependencies">Exact process dependency selections.</param>
+    /// <exception cref="ServiceBindingValidationException">Query bounds, authority or consistency conflict.</exception>
+    /// <exception cref="ArgumentNullException">Dependencies are null.</exception>
+    public void RequireQueries(ServiceDependencies dependencies)
+    {
+        ArgumentNullException.ThrowIfNull(dependencies);
+        state.Edit(() =>
+        {
+            foreach (var selection in dependencies.Queries) queries = queries.Select(selection);
+            return this;
+        });
+    }
+
     /// <summary>Records one bounded query selection for runtime and infrastructure preparation.</summary>
     /// <typeparam name="TInput">Query input.</typeparam><typeparam name="TResult">Query result.</typeparam>
     /// <param name="query">Canonical query authority.</param><param name="revision">Semantic revision.</param>
@@ -177,12 +191,7 @@ public sealed class ServiceImplementationPlan
         state.Edit(() =>
         {
             var reference = ServiceQueryBinding.GetReference(revision, query.CompilationRequest);
-            var existing = queries.Queries.FirstOrDefault(item => item.Reference.DefinitionId == reference.DefinitionId);
-            if (existing is null) queries = queries.Query(query, revision, rows, bytes, consistency);
-            else if (existing.Reference != reference
-                || RelationQueryCompilationRequestReference.From(existing.Request) != RelationQueryCompilationRequestReference.From(query.CompilationRequest)
-                || existing.MaximumRows != rows || existing.MaximumBytes != bytes || existing.Consistency != consistency)
-                throw Error("services.api.querySelectionMismatch", "One query authority must have one revision, preparation bound and consistency requirement.");
+            queries = queries.Select(new(reference, query.CompilationRequest, rows, bytes, consistency), "services.api.querySelectionMismatch");
             return reference;
         });
 

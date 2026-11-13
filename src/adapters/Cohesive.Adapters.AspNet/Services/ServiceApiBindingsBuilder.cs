@@ -342,12 +342,13 @@ public sealed class ServiceApiImplementation<TApi>
         {
             if (executionLifetime == ProcessExecutionLifetime.Durable) model.RequireDurableProvider();
             model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
+            model.Plan.RequireQueries(service.Dependencies);
             model.Plan.ImplementProcess(definition, pair);
             var policies = authorizationPolicyResolver;
             model.ConfigureServices(services => policies ??= ServiceProcessHttpAuthorization.Register(services, pair, authorization));
             model.Add((lifetime, persistence) =>
             {
-                var prepared = service.PrepareProcess(process.Definition, persistence.Repository);
+                var prepared = service.PrepareProcess(process.Definition, persistence.Repository, persistence: persistence);
                 if (logPrivateFailures) lifetime.Log(prepared);
                 var runtime = executionLifetime == ProcessExecutionLifetime.Host
                     ? lifetime.Worker(prepared, maximumExecutions).Bind(declaration, authority, authorization)
@@ -380,10 +381,11 @@ public sealed class ServiceApiImplementation<TApi>
             throw ServiceImplementationPlan.Error("services.api.operationMismatch", "This finite host requires the endpoint's single declared service operation.");
         var http = endpoint.Operation.Http ?? throw ServiceImplementationPlan.Error("services.api.httpMissing", "Process endpoint requires HTTP binding.");
         model.Plan.RequireRepositories(service.Dependencies.RepositoryRequirements(process.Definition.Definition));
+        model.Plan.RequireQueries(service.Dependencies);
         model.Plan.ImplementProcess(definition, endpoint, declaration);
         model.Add(persistence =>
         {
-            var hosted = service.Bind(process.Definition, persistence.Repository).Build(authority, authorization);
+            var hosted = service.Bind(process.Definition, persistence).Build(authority, authorization);
             if (hosted.OperationId != endpoint.OperationId)
                 throw ServiceImplementationPlan.Error("services.api.operationMismatch", "The endpoint and hosted service select different operations.");
             return new([endpoint], routes => routes.MapServiceEphemeralProcess(hosted, http,

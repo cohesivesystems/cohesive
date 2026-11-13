@@ -44,6 +44,7 @@ public sealed record ProcessTransitionInvocation(
 /// project this from their start receipt, independently of the current worker identity. It is attribution
 /// evidence, not a new authorization grant or proof of continuing permission. Direct interpreters leave it null.</param>
 /// <param name="Policy">Read budget and required progress retention from the canonical node.</param>
+/// <param name="Process">Exact originating Process definition, supplied by canonical interpretation. Null supports legacy callers only where a host can resolve ownership unambiguously.</param>
 public sealed record ProcessRelationEvaluation(
     ExecutionDefinitionReference Definition,
     PortableValue Input,
@@ -55,7 +56,8 @@ public sealed record ProcessRelationEvaluation(
     DateTimeOffset ObservedAtUtc,
     ProcessActivationContext Context,
     ProcessControlCommandContext? StartContext = null,
-    Cohesive.Processes.IR.ProcessReadPolicy? Policy = null)
+    Cohesive.Processes.IR.ProcessReadPolicy? Policy = null,
+    ExecutionDefinitionReference? Process = null)
 {
     /// <summary>Projects retained admission attribution for this instance and authority, replacing any supplied context.</summary>
     /// <remarks>The caller must obtain this evidence from the authoritative retained start receipt. This projection

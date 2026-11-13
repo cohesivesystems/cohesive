@@ -19,7 +19,7 @@ public sealed class FulfillmentDomain : DomainModel
     /// <summary>Canonical partition field shared by the example entities.</summary>
     public const string PartitionField = "partition";
     /// <summary>Declares the shared entities and their canonical references.</summary>
-    public FulfillmentDomain() : base(revision: "3")
+    public FulfillmentDomain() : base(revision: "4")
     {
         (Orders, Inventory, Reservations) = Discover(DomainDiscovery.For<FulfillmentDomain>(),
             entities => (entities.Entity<Order>(), entities.Entity<InventoryItem>(), entities.Entity<Reservation>()));
@@ -66,13 +66,15 @@ public sealed record InventoryItem(
 /// <param name="OrderId">Referenced order observation identity.</param>
 /// <param name="Sku">Referenced inventory observation identity.</param>
 /// <param name="Quantity">Positive reserved quantity.</param>
+/// <param name="Released">Whether cancellation returned this reservation to inventory.</param>
 [DomainEntity(typeof(FulfillmentDomain), "example/reservation")]
 public sealed record Reservation(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("partition")] string Partition,
     [property: JsonPropertyName("orderId")] string OrderId,
     [property: JsonPropertyName(FulfillmentDomain.InventoryIdField)] string Sku,
-    [property: JsonPropertyName("quantity")] int Quantity);
+    [property: JsonPropertyName("quantity")] int Quantity,
+    [property: JsonPropertyName("released")] bool Released = false);
 
 /// <summary>POCO authoring source for the canonical order state.</summary>
 /// <param name="Id">Order identity, serialized under its stable canonical field name.</param>
@@ -91,7 +93,11 @@ public enum OrderStatus
     /// <summary>Order may be submitted.</summary>
     [JsonStringEnumMemberName("Draft")] Draft,
     /// <summary>Order has been submitted.</summary>
-    [JsonStringEnumMemberName("Submitted")] Submitted
+    [JsonStringEnumMemberName("Submitted")] Submitted,
+    /// <summary>One cancellation occurrence owns release and completion.</summary>
+    [JsonStringEnumMemberName("Cancelling")] Cancelling,
+    /// <summary>Reserved inventory has been released.</summary>
+    [JsonStringEnumMemberName("Cancelled")] Cancelled
 }
 
 /// <summary>Closed submission outcomes, independent of transport messages and status codes.</summary>
@@ -115,17 +121,34 @@ public sealed class OrderTransitions
     /// <summary>Only draft orders may be submitted; a rejected decision produces no commit.</summary>
     public Transition<Order, Cohesive.Prelude.Unit, SubmitOrderResult> Submit { get; }
 
+    /// <summary>Claims cancellation for exactly one receipted process occurrence.</summary>
+    public Transition<Order, Cohesive.Prelude.Unit, CancellationResult> BeginCancellation { get; }
+    /// <summary>Completes the owned cancellation after all releases succeed.</summary>
+    public Transition<Order, Cohesive.Prelude.Unit, CancellationResult> CompleteCancellation { get; }
+
     /// <summary>Declares guarded order operations against the supplied entity.</summary>
     /// <param name="orders">Canonical order entity authority.</param>
     public OrderTransitions(DomainEntity<Order> orders)
     {
         Submit = orders.Transition<SubmitOrderResult>(
-            id: new("example/order/submit"), revision: new("4"),
+            id: new("example/order/submit"), revision: new("5"),
             transition => transition
                 .Requires(order => order.Status == OrderStatus.Draft, order => new SubmitOrderResult(order.Status, SubmissionOutcome.NotDraft))
                 .Set(order => order.Status, OrderStatus.Submitted)
                 .Return(new SubmitOrderResult(OrderStatus.Submitted, SubmissionOutcome.Submitted))
             );
+        BeginCancellation = orders.Transition<CancellationResult>(
+            id: new("fulfillment/cancellation/begin"), revision: new("1"), transition => transition
+                .Requires(order => order.Status == OrderStatus.Submitted, order => new CancellationResult(
+                    order.Status == OrderStatus.Cancelled ? CancellationOutcome.AlreadyCancelled
+                        : order.Status == OrderStatus.Cancelling ? CancellationOutcome.InProgress : CancellationOutcome.NotSubmitted))
+                .Set(order => order.Status, OrderStatus.Cancelling)
+                .Return(new CancellationResult(CancellationOutcome.Claimed)));
+        CompleteCancellation = orders.Transition<CancellationResult>(
+            id: new("fulfillment/cancellation/complete"), revision: new("1"), transition => transition
+                .Requires(order => order.Status == OrderStatus.Cancelling, order => new CancellationResult(CancellationOutcome.NotCancelling))
+                .Set(order => order.Status, OrderStatus.Cancelled)
+                .Return(new CancellationResult(CancellationOutcome.Cancelled)));
     }
 }
 
@@ -200,15 +223,22 @@ public sealed class ReservationTransitions
 {
     /// <summary>Creates an absent reservation; retries resolve the original creation receipt.</summary>
     public Transition<Reservation, Reservation, ReservationCreationOutcome> Create { get; }
+    /// <summary>Records a completed inventory release within the owned cancellation.</summary>
+    public Transition<Reservation, Cohesive.Prelude.Unit, CancellationResult> MarkReleased { get; }
     /// <summary>Declares reservation creation against the canonical entity.</summary>
     /// <param name="reservations">Canonical reservation entity.</param>
     public ReservationTransitions(DomainEntity<Reservation> reservations)
     {
         Create = reservations.Transition<Reservation, ReservationCreationOutcome>(
-            id: new("fulfillment/reservation/create"), revision: new("1"), transition => transition
+            id: new("fulfillment/reservation/create"), revision: new("2"), transition => transition
                 .CreatesFrom(new("reservation/initialize"), input => new Reservation(input.Id, input.Partition, input.OrderId, input.Sku, input.Quantity))
                 .Requires((reservation, _) => reservation.Quantity > 0, (_, _) => ReservationCreationOutcome.InvalidQuantity)
                 .Return(ReservationCreationOutcome.Created));
+        MarkReleased = reservations.Transition<CancellationResult>(
+            id: new("fulfillment/cancellation/mark-released"), revision: new("1"), transition => transition
+                .Requires(reservation => !reservation.Released, _ => new CancellationResult(CancellationOutcome.ReservationConflict))
+                .Set(reservation => reservation.Released, true)
+                .Return(new CancellationResult(CancellationOutcome.Released)));
     }
 }
 
@@ -244,7 +274,7 @@ public sealed class InventoryTransitions
 
 /// <summary>Canonical multi-entity sequence. This syntax is compiled into Process IR, never executed as C#.</summary>
 /// <param name="domain">Entity and transition authority used by the process.</param>
-[Process(id: "fulfillment/submit", revision: "7")]
+[Process(id: "fulfillment/submit", revision: "8")]
 public sealed partial class FulfillmentProcess(FulfillmentDomain domain) : ProcessModel<FulfillOrder, FulfillmentResult>
 {
     /// <inheritdoc />

@@ -6,6 +6,21 @@ namespace Cohesive.Tests.Postgres;
 public sealed class PostgresSqlConstructionTests
 {
     [Fact]
+    public void ForUpdateLocksABaseTableAndRejectsUnsupportedQueryShapes()
+    {
+        static SqlSelectBuilder Query() => new SqlSelectBuilder(new SqlQualifiedTable("public", "roots"), "r")
+            .Select(SqlExpression.Column("r", "id"), "id");
+        Assert.EndsWith("FOR UPDATE", Query().ForUpdate().Build(PostgresSqlDialect.Instance).Text);
+        Assert.Throws<InvalidOperationException>(() => new SqlSelectBuilder()
+            .Select(SqlExpression.Constant(1), "id").ForUpdate().BuildQuery());
+        Assert.Throws<InvalidOperationException>(() => Query().Join(new SqlQualifiedTable("public", "other"), "o", SqlJoinKind.Cross).ForUpdate().BuildQuery());
+        Assert.Throws<InvalidOperationException>(() => Query().Distinct().ForUpdate().BuildQuery());
+        Assert.Throws<InvalidOperationException>(() => Query().GroupBy(SqlExpression.Column("r", "id")).ForUpdate().BuildQuery());
+        Assert.Throws<InvalidOperationException>(() => new SqlSelectBuilder(Query().BuildQuery(), "nested")
+            .Select(SqlExpression.Column("nested", "id"), "id").ForUpdate().BuildQuery());
+    }
+
+    [Fact]
     public void RowNumberUsesSharedOrderingEscapingAndRuntimeSlots()
     {
         var runtime = SqlExpression.RuntimeParameter("offset");

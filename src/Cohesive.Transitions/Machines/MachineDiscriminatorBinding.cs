@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Model.Authoring;
 using Cohesive.Machines;
 using System.Linq.Expressions;
@@ -57,6 +58,23 @@ public sealed class MachineDiscriminatorBinding<TEntity, TValue> where TEntity :
             throw new ArgumentException("State belongs to another exact machine.", nameof(state));
         return Map(state.Id, value);
     }
+    /// <summary>Binds this machine as the entity's sole lifecycle authority.</summary>
+    /// <param name="entity">Unbound entity definition.</param>
+    /// <returns>A new definition carrying classification and discriminator assignments.</returns>
+    /// <exception cref="ArgumentException">The mapping is incomplete or noninjective.</exception>
+    /// <exception cref="InvalidOperationException">The entity is already bound.</exception>
+    /// <exception cref="NotSupportedException">The entity already has a published shape graph.</exception>
+    /// <exception cref="ArgumentNullException">Entity is null.</exception>
+    public Cohesive.Transitions.Model.EntityDefinition Bind(Cohesive.Transitions.Model.EntityDefinition entity)
+    {
+        _ = Build();
+        var field = Expr.Field(Cohesive.Transitions.IR.TransitionBindingIds.Observation, path);
+        return new EntityMachineBinding(machine.Document,
+            values.ToImmutableSortedDictionary(pair => pair.Key,
+                pair => new EntityMachineState(Expr.Eq(field, Expr.Const(pair.Value.Value!.Value)),
+                    [new(path, pair.Value)]), StringComparer.Ordinal)).Attach(entity);
+    }
+
     /// <summary>Derives immutable guarded links; ownership and shape checks remain in Transition compilation.</summary>
     /// <returns>Exact machine edge catalog.</returns>
     /// <exception cref="ArgumentException">Mapping is incomplete or invalid.</exception>

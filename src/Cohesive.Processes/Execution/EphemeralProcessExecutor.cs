@@ -44,6 +44,9 @@ public sealed class EphemeralProcessExecutor
     /// <summary>Compiler-owned capability evidence for this exact plan and its ephemeral operating boundaries.</summary>
     public ProcessInterpreterRealizationReport Realization { get; }
 
+    /// <summary>Declared finite-host capabilities, including explicit recovery gaps.</summary>
+    public static ProcessInterpreterCapabilityProfile CapabilityProfile => Profile.Value;
+
     static readonly Lazy<ProcessInterpreterCapabilityProfile> Profile = new(() =>
     {
         var evidence = new List<ProcessInterpreterCapabilityEvidence>();
@@ -59,7 +62,9 @@ public sealed class EphemeralProcessExecutor
             CapabilityRealizationKind.Constrained, operatingBoundaries: [new("host/no-interaction-emissions"), new("invocation/no-automatic-mutation-retry")]));
         evidence.Add(new(new("ephemeral/payloads"), ProcessInterpreterGuarantees.SensitiveAndOversizedPayloads,
             CapabilityRealizationKind.Constrained, operatingBoundaries: [new("invocation/protected-in-memory-evidence")]));
-        return new(new("cohesive.processes/ephemeral/v1"), new("cohesive.processes/ephemeral"), [.. evidence]);
+        evidence.AddRange(ProcessRecoveryRequirements.WorkerTakeover.Select(key =>
+            new ProcessInterpreterCapabilityEvidence(new("ephemeral/" + key.Name), key, CapabilityRealizationKind.Unavailable)));
+        return new(new("cohesive.processes/ephemeral/v2"), new("cohesive.processes/ephemeral"), [.. evidence]);
     });
 
     static ProcessInterpreterRealizationReport Realize(CompiledProcessPlan plan)

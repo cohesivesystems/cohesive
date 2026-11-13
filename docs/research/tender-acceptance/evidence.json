@@ -1,0 +1,148 @@
+{
+  "schema": "tender-extraction-evidence/v1",
+  "capturedOn": "2026-11-07",
+  "sourceRevision": null,
+  "revisionNote": "No Git revision available at supplied Archive root; full-file and excerpt hashes pin the inspected bytes. No source files are copied.",
+  "entries": [
+    {
+      "id": "E01",
+      "path": "Features/InboundTenders/InboundTenderService.Ingest.cs",
+      "startLine": 263,
+      "endLine": 333,
+      "fileSha256": "5425798b37abd9305913407c2ab5dcde0964dd21548a3ae815d508a18daef680",
+      "excerptSha256": "4816e1c81738ad19f2f1410de4da802d1372f3210044b2534043fb6d0dc64fb3",
+      "claim": "Admission, orphan cleanup, duplicate checks, and reuse/create branch selection.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E02",
+      "path": "Features/InboundTenders/InboundTenderService.Ingest.cs",
+      "startLine": 324,
+      "endLine": 347,
+      "fileSha256": "5425798b37abd9305913407c2ab5dcde0964dd21548a3ae815d508a18daef680",
+      "excerptSha256": "05de3f325e3386b06948adf6e912f46fbe5b00a7670dc8ff08de58c99cb651a9",
+      "claim": "Create and persist linkage before outbound acceptance in the new-load branch.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E03",
+      "path": "Features/InboundTenders/InboundTenderService.Ingest.cs",
+      "startLine": 350,
+      "endLine": 444,
+      "fileSha256": "5425798b37abd9305913407c2ab5dcde0964dd21548a3ae815d508a18daef680",
+      "excerptSha256": "d7ec95fe9d743389701b1d6da8b0a4711966129e187ebb4762e7bb41238887da",
+      "claim": "Auto-ack branching, legacy versus event-sourced commit ordering, optional publications, failure return.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E04",
+      "path": "Features/InboundTenders/InboundTenderService.Ingest.cs",
+      "startLine": 1028,
+      "endLine": 1141,
+      "fileSha256": "5425798b37abd9305913407c2ab5dcde0964dd21548a3ae815d508a18daef680",
+      "excerptSha256": "e79684d1831f71b5bc9017f223f9773c85b78873c834d9cd28cee72c036d9fdb",
+      "claim": "Receipt type logging, tender lookup, load-first acknowledgement, update/cancel alternatives, final persistence.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E05",
+      "path": "Features/InboundTenders/InboundTender.cs",
+      "startLine": 1510,
+      "endLine": 1629,
+      "fileSha256": "edf746cd2c0810cbff43d8d8c63fe2dcb8eab0c7eb6ed307d70f862fd4a79135",
+      "excerptSha256": "b8178764ada88750fdae8e239556503b005ae9bc8c6b9eeb0824daef5018bcfd",
+      "claim": "Pending acceptance, assignment, confirmed acceptance and SetAccepted fields.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E06",
+      "path": "Features/InboundTenders/InboundTender.cs",
+      "startLine": 2161,
+      "endLine": 2186,
+      "fileSha256": "edf746cd2c0810cbff43d8d8c63fe2dcb8eab0c7eb6ed307d70f862fd4a79135",
+      "excerptSha256": "19d21c5e903c9d8e83f83e4cc40726c416a9d7c9d120459bcfadffa3479d13c4",
+      "claim": "Linkage rewrites tender identity to load identity; unlink does not restore identity.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E07",
+      "path": "Features/InboundTenders/InboundTenderService.Linking.cs",
+      "startLine": 78,
+      "endLine": 150,
+      "fileSha256": "0cdc42d0cf406225796884aca0115aa8ae9acfbc4dd5a1a7de2b7cf95eb20a40",
+      "excerptSha256": "dc9d64b5c098ec0a8a5e4c80eafa5ba7ca0e94e57050521c3c89fffa19242074",
+      "claim": "Existing-load link path, send or auto-ack, soft delete/create, then link load.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E08",
+      "path": "Features/Loads/LoadDetails.cs",
+      "startLine": 1769,
+      "endLine": 1777,
+      "fileSha256": "8e7541381b67a56163fcd8b435aea6a8ee31589035751d8ed96a9f30662c4b70",
+      "excerptSha256": "77f35ee2c00f3fb0c2380c28626440ae1e0eac5456b15b95560664e36f8be757",
+      "claim": "MarkAccepted changes acknowledgement flag and source, not load/trip lifecycle statuses.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E09",
+      "path": "Features/InboundTenders/InboundTender.EventSourcing.cs",
+      "startLine": 268,
+      "endLine": 335,
+      "fileSha256": "c3c93aa3776eaeb561b687cd0d3144d3654a2bc74a9011bac874d4831b02eca4",
+      "excerptSha256": "a6e31fe80caa697788b977e32bc25a19be028380c6b268092ffdd0c38b68fc2b",
+      "claim": "Event application and acknowledgement deadline calculation.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E10",
+      "path": "Features/InboundTenders/InboundTender.EventSourcing.cs",
+      "startLine": 871,
+      "endLine": 966,
+      "fileSha256": "c3c93aa3776eaeb561b687cd0d3144d3654a2bc74a9011bac874d4831b02eca4",
+      "excerptSha256": "786c8958261e87d06e6b4a71c3b3bccffdddfe00875f8e184054fb05c89a7e84",
+      "claim": "Event-sourced acceptance guards and request-plus-assignment event sequence.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E11",
+      "path": "Features/Loads/LoadService.Tenders.cs",
+      "startLine": 101,
+      "endLine": 125,
+      "fileSha256": "1fd003be28f91e68e8c57bfbc241b50a86ebc63b9ef7c0035598ccce6920b21a",
+      "excerptSha256": "e34b89b4d271f49c3076b0be887a27b3ffbec7cb25aa678653d56a7d7d37de16",
+      "claim": "MarkAsAccepted load persistence and existing-load linkage effects.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E12",
+      "path": "Features/InboundTenders/CosmosInboundTenderRepository.cs",
+      "startLine": 97,
+      "endLine": 123,
+      "fileSha256": "e208046615a306cca04022ffdb96cf09a28fee6e454ccce226c023c3784b7c95",
+      "excerptSha256": "acfb02228832ba3e7508f28cfe19b3ffefed225136a475b7e17a5c5a733af8dc",
+      "claim": "Receipt correlation requires control number and sender/receiver and accepts historical control numbers.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E13",
+      "path": "Features/InboundTenders/InboundTenderService.cs",
+      "startLine": 480,
+      "endLine": 491,
+      "fileSha256": "8b00957a25aec8930dead890d458b92e97299ffb2502519510fbfd364363d1a0",
+      "excerptSha256": "0fc0330310e6f2ee05b660dccaf2b101f52e7efbfed9ce34f68d9f7154571afb",
+      "claim": "Public acceptance entry takes a tenant/source/shipment lock.",
+      "classification": "observed-code"
+    },
+    {
+      "id": "E14",
+      "path": "Features/InboundTenders/InboundTenderStatus.cs",
+      "startLine": 14,
+      "endLine": 44,
+      "fileSha256": "ec31c64e7da028450c2f7dc7ccf7292a1b04aa6217432c2fdd146a531dc027b4",
+      "excerptSha256": "d8cf834950bbed1cd9188fee784b63dbd9256ddc471a68876221febc375ec15f",
+      "claim": "Status catalog does not distinguish acknowledgement progress.",
+      "classification": "observed-code"
+    }
+  ]
+}

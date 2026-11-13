@@ -402,6 +402,7 @@ internal sealed class PortableExpressionReferenceEvaluator
             ExprFunctionNames.StartsWith => EvaluateTextPredicate(call, context, static (value, part) => value.StartsWith(part, StringComparison.Ordinal)),
             ExprFunctionNames.TextContains => EvaluateTextPredicate(call, context, static (value, part) => value.Contains(part, StringComparison.Ordinal)),
             ExprFunctionNames.Object => EvaluateObject(call, context),
+            ExprFunctionNames.ElementAt => EvaluateElementAt(call, context),
             ExprFunctionNames.Select => EvaluateSelect(call, context),
             ExprFunctionNames.Append => EvaluateAppend(call, context),
             ExprFunctionNames.AppendRange => EvaluateAppendRange(call, context),
@@ -471,6 +472,13 @@ internal sealed class PortableExpressionReferenceEvaluator
             fields.Add(key, Evaluate(call.Arguments[index + 1], context).RequireEmbeddable(call.Function));
         }
         return PortableExpressionValue.Concrete(ObservationValue.FromObject(fields.ToImmutable()));
+    }
+
+    PortableExpressionValue EvaluateElementAt(CallExpr call, PortableExpressionEvaluationContext context)
+    {
+        var source = RequireArray(Evaluate(call.Arguments[0], context), call.Function);
+        var index = RequireIndex(Evaluate(call.Arguments[1], context), source.Count - 1, call.Function);
+        return Evaluate(call.Arguments[2], context.WithCurrentItem(PortableExpressionValue.FromObservation(source[index])));
     }
 
     PortableExpressionValue EvaluateSelect(CallExpr call, PortableExpressionEvaluationContext context)

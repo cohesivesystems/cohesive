@@ -57,6 +57,7 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
 
     internal override Delegate CreateHandler(ApiOperation operation, EntityApiEndpointOptions options)
     {
+        Cohesive.Transitions.Machines.EntityMachineBinding.RequireSame(options.Entity, plan.Definition.MachineBinding);
         if (operation.TransitionReference != plan.DefinitionReference)
         {
             throw new InvalidOperationException(

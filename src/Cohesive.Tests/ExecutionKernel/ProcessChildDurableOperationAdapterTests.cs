@@ -146,6 +146,20 @@ public sealed class ProcessChildDurableOperationAdapterTests
     }
 
     [Fact]
+    public async Task PreventChildStart_DoesNotConstructAnUnacquiredActivationHost()
+    {
+        var fixture = CreateFixture();
+        var runtime = new ProcessDurableRuntime(new InMemoryProcessDurableStore(),
+            activationHostFactory: _ => throw new InvalidOperationException("No worker was acquired."),
+            options: new("worker/fenced-prevention", TimeSpan.FromMinutes(5)));
+        var result = await runtime.PreventChildStartAsync(fixture.Context, fixture.ChildPlan,
+            fixture.ParentRequest, PreventionContext(fixture), new("tests-parent-attempt-closed"));
+        Assert.Equal(ProcessChildStartPreventionDisposition.Prevented, result.Disposition);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, result.Snapshot!.Checkpoint.Continuation.Terminal.Kind);
+        Assert.Empty(result.Snapshot.Checkpoint.Operations);
+    }
+
+    [Fact]
     public async Task PreventChildStart_AtomicallyPublishesReplayableCancelledCheckpoint()
     {
         var fixture = CreateFixture();

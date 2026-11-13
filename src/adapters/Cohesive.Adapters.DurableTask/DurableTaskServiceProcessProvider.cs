@@ -20,7 +20,7 @@ public sealed class DurableTaskServiceProcessProvider : IDurableServiceProcessPr
     readonly DurableTaskClient client;
     readonly DurableTaskProcessExecutionRepository values;
     readonly Dictionary<ExecutionDefinitionReference, PreparedServiceProcess> processes = [];
-    readonly Dictionary<ExecutionDefinitionReference, IAsyncProcessReferenceHost> queries = [];
+    readonly Dictionary<(ExecutionDefinitionReference Process, ExecutionDefinitionReference Query), IAsyncProcessReferenceHost> queries = [];
     readonly Dictionary<ExecutionDefinitionReference, DurableTaskProcessRealizationPlan> plans = [];
     DurableTaskSequentialProcessPlanCatalog? catalog;
 
@@ -67,12 +67,9 @@ public sealed class DurableTaskServiceProcessProvider : IDurableServiceProcessPr
                 throw Error("services.binding.processRevisionConflict",
                     "One process ID/revision cannot identify different fingerprints in a deployment.", "/bindings/process");
             var dependencies = process.Plan.Definition.Nodes.OfType<EvaluateRelationProcessNode>().Select(item => item.Relation).Distinct().ToArray();
-            foreach (var dependency in dependencies)
-                if (queries.ContainsKey(dependency)) throw Error("services.binding.ambiguousQueryHost",
-                    $"Query '{dependency}' has competing process host bindings; compose a shared explicit catalog instead.", "/bindings/process/queries");
             processes.Add(reference, process);
             plans.Add(reference, plan);
-            foreach (var dependency in dependencies) queries.Add(dependency, process.Host);
+            foreach (var dependency in dependencies) queries.Add((reference, dependency), process.Host);
         }
         return runtime;
     }
@@ -97,8 +94,20 @@ public sealed class DurableTaskServiceProcessProvider : IDurableServiceProcessPr
     public ValueTask<ProcessOperationResult> EvaluateRelationAsync(OperationContext context, ProcessRelationEvaluation evaluation)
     {
         RequireComplete();
-        return (queries.TryGetValue(evaluation.Definition, out var host) ? host
-            : throw new InvalidOperationException("The exact process query is not deployed.")).EvaluateRelationAsync(context, evaluation);
+        if (evaluation.Process is { } owner)
+            return (queries.TryGetValue((owner, evaluation.Definition), out var ownedHost) ? ownedHost
+                : throw new InvalidOperationException("The exact process query is not deployed for this owner."))
+                .EvaluateRelationAsync(context, evaluation);
+        // Legacy evaluation envelopes carry no owner. Preserve only unambiguous routing, never registration order.
+        IAsyncProcessReferenceHost? selected = null;
+        foreach (var (key, candidate) in queries)
+        {
+            if (key.Query != evaluation.Definition) continue;
+            if (selected is not null) throw new InvalidOperationException("The query has multiple process owners; an exact originating process is required.");
+            selected = candidate;
+        }
+        return (selected ?? throw new InvalidOperationException("The exact process query is not deployed."))
+            .EvaluateRelationAsync(context, evaluation);
     }
 
     /// <inheritdoc />

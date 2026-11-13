@@ -6,6 +6,8 @@ using Cohesive.Storage;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.Authoring;
 using Cohesive.Processes.IR;
+using Cohesive.Processes.Execution;
+using Cohesive.Relations.Authoring;
 using Microsoft.DurableTask.Client.AzureManaged;
 using Microsoft.DurableTask.Worker.AzureManaged;
 
@@ -52,6 +54,71 @@ public sealed class DurableServiceProcessProviderTests
         Assert.Contains("services.binding.duplicateProcess", failure.Message);
         Assert.NotNull(provider.Complete());
     }
+
+    [Fact]
+    public async Task Shared_query_routes_by_exact_originating_process_and_rejects_ambiguous_legacy_envelopes()
+    {
+        await using var services = Services().BuildServiceProvider();
+        var provider = services.GetRequiredService<DurableTaskServiceProcessProvider>();
+        var first = QueryProcess("first");
+        var second = QueryProcess("second");
+        provider.Bind(first.Prepared, first.Declaration, "tests", new Authorization());
+        provider.Bind(second.Prepared, second.Declaration, "tests", new Authorization());
+        provider.Complete();
+        foreach (var (prepared, expected) in new[] { (first.Prepared, "first"), (second.Prepared, "second") })
+        {
+            var evaluation = Evaluation(prepared) with { Process = prepared.Plan.DefinitionReference };
+            var result = await provider.EvaluateRelationAsync(OperationContext.Create(), evaluation);
+            Assert.Equal(expected, result.Value!.Value!.Value.GetRequiredString());
+            var executed = await new EphemeralProcessExecutor(prepared.Plan).ExecuteAsync(OperationContext.Create(),
+                evaluation.Continuation, evaluation.Input, evaluation.Context, provider, TimeSpan.FromSeconds(5));
+            Assert.Equal(expected, Assert.IsType<ObservationValue>(executed.Decision.State.Terminal.Detail!.Value!.Value).GetRequiredString());
+        }
+        var legacy = Evaluation(first.Prepared);
+        Assert.Throws<InvalidOperationException>(() => provider.EvaluateRelationAsync(OperationContext.Create(), legacy));
+        var undeployed = Process().Item1.Plan.DefinitionReference;
+        Assert.Throws<InvalidOperationException>(() => provider.EvaluateRelationAsync(OperationContext.Create(), legacy with { Process = undeployed }));
+    }
+
+    [Fact]
+    public async Task Legacy_query_envelope_requires_one_deployed_owner()
+    {
+        await using var services = Services().BuildServiceProvider();
+        var provider = services.GetRequiredService<DurableTaskServiceProcessProvider>();
+        var first = QueryProcess("first");
+        provider.Bind(first.Prepared, first.Declaration, "tests", new Authorization());
+        provider.Complete();
+        var result = await provider.EvaluateRelationAsync(OperationContext.Create(), Evaluation(first.Prepared));
+        Assert.Equal("first", result.Value!.Value!.Value.GetRequiredString());
+        var unknown = Evaluation(first.Prepared) with { Definition = Process().Item1.Plan.DefinitionReference };
+        Assert.Throws<InvalidOperationException>(() => provider.EvaluateRelationAsync(OperationContext.Create(), unknown));
+    }
+
+    static (PreparedServiceProcess Prepared, ExecutionDefinitionDocument Declaration) QueryProcess(string name)
+    {
+        var provenance = new ExecutionProvenance(new("tests"), new("tests/durable-service"), DocumentOrigin.Generated);
+        var query = HostedQuery<string, string>.Create(new("shared-query"), new("1"), new("test/shared", "1"), "text", provenance);
+        var output = new ValueBindingId("query-result");
+        var document = ProcessDefinitionDocuments.Create(new(name), new("1"),
+            new(query.InputContract, query.ResultContract, new("read"), [
+                new EvaluateRelationProcessNode(new("read"), query.Reference, Expr.BoundValue(ProcessBindingIds.Input),
+                    new(new(new("next"), new("return")), new(output, query.ResultContract))),
+                new ReturnProcessNode(new("return"), Expr.BoundValue(output))], ProcessRecoveryPolicy.ContinueAttempt), provenance);
+        var process = ProcessAuthoring.Project<string, string>(document);
+        var declaration = Service.Define(new(name + "-service"), new("1"), provenance)
+            .Operation("start").Run(process).ReturnAfterAdmission(ProcessExecutionLifetime.Durable)
+            .Operation("result").ReadResultOf(process).Build();
+        var prepared = Service.Define(new(name + "-bindings"), new("1"), provenance).Operation("start")
+            .Run(process, host => host.Query(query, (_, _, _) => ValueTask.FromResult(name))).Prepare();
+        return (prepared, declaration);
+    }
+
+    static ProcessRelationEvaluation Evaluation(PreparedServiceProcess prepared) => new(
+        prepared.Plan.Definition.Nodes.OfType<EvaluateRelationProcessNode>().Single().Relation,
+        PortableValue.Concrete(prepared.Plan.Definition.Input, ObservationValue.FromString("input")),
+        new(new("test-instance"), new("test-attempt")), new("test-activation"), new("test-token"), new("read"), 0,
+        DateTimeOffset.UtcNow, new(new("tests", "tests"), new("test-instance"),
+            new(InteractionDurabilityDemand.ActivationLocal, InteractionVisibilityDemand.ActivationLocal), prepared.Plan.Document.Metadata.Provenance));
 
     static ServiceCollection Services()
     {

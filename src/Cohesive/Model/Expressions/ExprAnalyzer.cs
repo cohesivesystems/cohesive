@@ -673,6 +673,8 @@ public static class ExprAnalyzer
                     NodeResult.FromValue(firstArgument),
                 ExprFunctionResultRule.FirstArgument =>
                     new(definition.ResultCategory, null),
+                ExprFunctionResultRule.ScopedSelector when definition.ScopedArguments[0].ArgumentIndex < argumentResults.Length =>
+                    argumentResults[definition.ScopedArguments[0].ArgumentIndex],
                 ExprFunctionResultRule.CollectionOfSelector =>
                     CollectionResult(argumentResults, definition),
                 ExprFunctionResultRule.CollectionOfScopedSource

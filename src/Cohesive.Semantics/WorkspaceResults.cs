@@ -43,9 +43,15 @@ public sealed record WorkspaceSubject(string Id, string Kind, string? DisplayNam
 /// <param name="Children">Paged child pointers for progressive retrieval.</param>
 /// <param name="SourceReferences">Paged source references mapped to the selected semantic location.</param>
 /// <param name="SourceMappings">Producer mappings with optional portable locations; root inspection lists all mappings.</param>
+/// <param name="ValueKind">JSON kind of the selected value, including when its content is truncated.</param>
 public sealed record WorkspaceInspection(
     WorkspaceSubject Subject, string Pointer, JsonElement? Value,
-    WorkspacePage<string> Children, WorkspacePage<string> SourceReferences, WorkspacePage<ExecutionSourceProvenance> SourceMappings);
+    WorkspacePage<string> Children, WorkspacePage<string> SourceReferences, WorkspacePage<ExecutionSourceProvenance> SourceMappings,
+    JsonValueKind ValueKind)
+{
+    /// <summary>True only when content exceeds the inspection bound; a selected JSON null is complete.</summary>
+    public bool IsTruncated => !Value.HasValue && ValueKind != JsonValueKind.Null;
+}
 
 /// <summary>Validation evidence for a single exported definition.</summary>
 /// <param name="Id">Stable definition identity.</param>

@@ -60,6 +60,11 @@ public static class ExprFunctionNames
     /// <summary>Returns the sole collection item; fails on empty or ambiguous collections rather than choosing by position.</summary>
     public const string Single = "single";
 
+    /// <summary>Selects one zero-based array element and evaluates a projection in its current-item scope.</summary>
+    /// <remarks>Requires a present array, an in-range integer index, and exactly one scoped projection.
+    /// Empty arrays and invalid indices fail; no whole-array projection or copy is performed.</remarks>
+    public const string ElementAt = "elementAt";
+
     /// <summary>
     /// Function name for concatenating string arguments.
     /// </summary>

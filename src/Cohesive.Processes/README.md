@@ -3,6 +3,10 @@
 `Cohesive.Processes` describes typed workflows that coordinate Relations, Transitions, requests, events, signals,
 waits, parallel work, recurrence, and terminal outcomes without binding the workflow to one runtime.
 
+[Declarative machine reactions](Machines/README.md) select committed entity movements and lower typed
+target-command projections into ordinary Processes. The tender example demonstrates receipt-backed
+completion, target guard rejection and exact-operation recovery.
+
 Canonical execution IR declares `IImmutableExecutionDefinition`, so repeated typed reads share
 document-owned immutable decoding. Integrity, canonical-wire, contextual semantics, and deployment
 admission remain independently validated. See [immutable execution preparation](../../docs/performance/immutable-execution-preparation.md).
@@ -286,3 +290,9 @@ and arranged compilation manually. Closure compilation derives both edges and pr
 `ProcessClosureCompilationTests` qualifies this diamond, root selection, duplicate calls, canonical
 plan equivalence, external-authority conflicts, and resolution/validation failures. The reusable graph
 operation belongs in Cohesive; product root policy and runtime adapter admission remain in Ari.
+
+## Bounded native query dependencies
+
+`ProcessQuery<TInput, TResult>` attaches an existing `RelationQuery<TInput, TResult>` to generated process authoring. It requires a projection revision, positive complete-result row/byte bounds and explicit consistency. Its derived observational hosted contract retains the exact native-query dependency and portable acquisition configuration. The typed result projection stays attached to the original native query.
+
+Use `await process.Query(read, input)` in a process computation. Generated dependencies contribute the native query to service storage admission. Hosts bind through `IServicePersistence` so existing adapter preparation owns placement, result completeness, consistency and limits. A repository-only binding fails explicitly for a process that requires a native query. Preparation rejects a foreign reader definition or a weaker consistency guarantee, and invocation forwards cancellation to the reader.

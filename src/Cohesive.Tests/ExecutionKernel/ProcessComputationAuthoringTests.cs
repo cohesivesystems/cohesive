@@ -1509,6 +1509,40 @@ public sealed class ProcessComputationAuthoringTests
     }
 
     [Fact]
+    public void Completed_recurrence_retains_exact_state_across_a_later_cut()
+    {
+        var generated = GeneratedStatefulRecurrenceWithCutProcess.Define(RecurrenceMetadata());
+        var compilation = generated.Compile(RelationContext(GeneratedStatefulRecurrenceProcess.Poll));
+        Assert.True(compilation.IsSuccessful, Format(compilation.Validation));
+        var plan = compilation.Plan!;
+        var identity = new ProcessContinuationIdentity(new("recurrence/retained"), new("1"));
+        var state = ProcessReferenceInterpreter.Create(plan, identity,
+            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromString("cursor/0")));
+        var host = new SequenceRelationHost("cursor/1", "approved");
+        for (var index = 0; index < 2; index++)
+        {
+            var decision = ProcessReferenceInterpreter.Activate(plan, state,
+                Activation(plan, identity, $"cut/{index}", index == 0 ? ProcessActivationCause.Start : ProcessActivationCause.Continue,
+                    new DateTimeOffset(2026, 8, 23, 12, index, 0, TimeSpan.Zero)), host);
+            Assert.Equal(ProcessActivationDisposition.DurableCut, decision.Disposition);
+            state = decision.State;
+            Assert.True(ProcessContinuationValidator.Validate(plan, state).IsValid);
+        }
+        Assert.False(Assert.Single(state.Recurrences).Active);
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var json = JsonNode.Parse(JsonSerializer.Serialize(state, options))!;
+        json["recurrences"]![0]!["currentState"]!["value"]!["$value"] = "tampered";
+        var tampered = JsonSerializer.Deserialize<ProcessContinuationState>(json.ToJsonString(), options)!;
+        Assert.Contains(ProcessContinuationValidator.Validate(plan, tampered).Diagnostics,
+            item => item.Code == ProcessContinuationDiagnosticCodes.RecurrenceStateMismatch);
+        var completed = ProcessReferenceInterpreter.Activate(plan, state,
+            Activation(plan, identity, "cut/2", ProcessActivationCause.Continue,
+                new DateTimeOffset(2026, 8, 23, 12, 2, 0, TimeSpan.Zero)), host);
+        Assert.Equal(ProcessActivationDisposition.Completed, completed.Disposition);
+        Assert.Equal(ObservationValue.FromString("approved"), completed.State.Terminal.Detail?.Value?.Value);
+    }
+
+    [Fact]
     public void TypedEffectRecurrenceJoin_IsByteEquivalentAndExecutesThroughTheReferenceInterpreter()
     {
         var metadata = TypedEffectRecurrenceMetadata();
@@ -4173,5 +4207,37 @@ public static partial class NoInputTransitionProcess
     {
         var result = await process.Transition(Complete, subject);
         return result;
+    }
+}
+
+/// <summary>Stateful recurrence whose returned state survives a subsequent durable cut.</summary>
+[GenerateProcessDefinition(nameof(Run))]
+public static partial class GeneratedStatefulRecurrenceWithCutProcess
+{
+    /// <summary>Exact Relation used to advance the cursor.</summary>
+    public static ExecutionDefinitionReference Poll => GeneratedRecurrenceProcess.Poll;
+
+    static async ProcessTask<string> Run(ProcessContext process, string input)
+    {
+        async ProcessTask<string> PollOnce(string cursor)
+        {
+            var observation = await process.Query<string>(Poll, cursor);
+            return observation;
+        }
+
+        async ProcessTask Exhausted() { }
+        async ProcessTask Stalled() { }
+
+        var final = await process.RepeatAcrossActivation(
+            occurrence: PollOnce(input),
+            continueWhen: cursor => cursor != "approved",
+            progress: cursor => cursor,
+            policy: new ProcessRecurrencePolicy(
+                maximumOccurrences: 3,
+                maximumUnchangedProgressOccurrences: 1),
+            exhausted: Exhausted,
+            stalled: Stalled);
+        await process.DurableCut();
+        return final;
     }
 }

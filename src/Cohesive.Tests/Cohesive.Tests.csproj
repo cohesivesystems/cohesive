@@ -22,6 +22,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../../eng/examples/tender-acceptance/*.cs" Link="Machines/Distillation/%(Filename)%(Extension)" />
     <Using Include="Xunit" />
   </ItemGroup>
   

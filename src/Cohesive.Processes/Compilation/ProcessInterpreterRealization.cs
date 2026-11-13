@@ -552,7 +552,19 @@ public static class ProcessInterpreterRealizationCompiler
         ArgumentNullException.ThrowIfNull(plan);
         ArgumentNullException.ThrowIfNull(targetProfile);
 
-        var inventory = ProcessInterpreterRequirementCollector.Collect(plan, lifetime);
+        return Compile(ProcessInterpreterRequirementCollector.Collect(plan, lifetime), targetProfile);
+    }
+
+    /// <summary>Matches an explicitly scoped inventory using the same capability and coverage rules.</summary>
+    /// <param name="inventory">Requirements derived from an exact plan and explicit policy.</param>
+    /// <param name="targetProfile">Attributed target capability evidence.</param>
+    /// <returns>The complete disposition ledger for this inventory, not a claim about omitted requirements.</returns>
+    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    public static ProcessInterpreterRealizationReport Compile(ProcessInterpreterRequirementInventory inventory,
+        ProcessInterpreterCapabilityProfile targetProfile)
+    {
+        ArgumentNullException.ThrowIfNull(inventory);
+        ArgumentNullException.ThrowIfNull(targetProfile);
         List<ProcessInterpreterRealizationDiagnostic> diagnostics = [];
         HashSet<ProcessInterpreterCapabilityEvidenceId> invalidEvidence = [];
         ValidateProfile(targetProfile, diagnostics, invalidEvidence);

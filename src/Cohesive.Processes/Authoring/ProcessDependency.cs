@@ -44,6 +44,28 @@ public abstract class ProcessDependency
         return new PointReadDependency<TEntity, TInput, TResult>(read);
     }
 
+    /// <summary>Retains a bounded native query attachment.</summary>
+    /// <typeparam name="TInput">Invocation projection.</typeparam><typeparam name="TResult">Result projection.</typeparam>
+    /// <param name="query">Exact query and acquisition policy.</param><returns>A setup-only dependency.</returns>
+    /// <exception cref="ArgumentNullException">Query is null.</exception>
+    public static ProcessDependency Query<TInput, TResult>(ProcessQuery<TInput, TResult> query)
+        where TInput : notnull where TResult : notnull
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return new QueryDependency<TInput, TResult>(query);
+    }
+
+    sealed class QueryDependency<TInput, TResult>(ProcessQuery<TInput, TResult> query) : ProcessDependency
+        where TInput : notnull where TResult : notnull
+    {
+        private protected override object Authority => query;
+        public override ExecutionDefinitionReference Reference => query.Reference;
+        public override void Contribute(IProcessDependencyReceiver receiver)
+        {
+            ArgumentNullException.ThrowIfNull(receiver);
+            receiver.Query(query);
+        }
+    }
     sealed class TransitionDependency<TEntity, TInput, TResult>(Transition<TEntity, TInput, TResult> transition) : ProcessDependency where TEntity : notnull
     {
         private protected override object Authority => transition;
@@ -62,6 +84,13 @@ public abstract class ProcessDependency
 /// <summary>Adapter seam for generated typed dependencies; it owns no canonical semantics or runtime state.</summary>
 public interface IProcessDependencyReceiver
 {
+    /// <summary>Registers an explicit bounded native query.</summary>
+    /// <typeparam name="TInput">Invocation projection.</typeparam><typeparam name="TResult">Result projection.</typeparam>
+    /// <param name="query">Exact query authority and acquisition policy.</param>
+    /// <exception cref="NotSupportedException">This host does not support native Process queries.</exception>
+    void Query<TInput, TResult>(ProcessQuery<TInput, TResult> query) where TInput : notnull where TResult : notnull
+        => throw new NotSupportedException("This host does not support native Process queries.");
+
     /// <summary>Registers a transition selected by the process.</summary>
     /// <typeparam name="TEntity">Entity state.</typeparam><typeparam name="TInput">Input.</typeparam><typeparam name="TResult">Outcome.</typeparam>
     /// <param name="transition">Canonical transition.</param>
