@@ -162,7 +162,8 @@ rejected against the one-day offer instead of silently widening its bound. Admis
 completion returns the original receipt without creating another pending session.
 
 The negative flow-reuse case deliberately supplies a fresh forward revision for an older window.
-`IngestionLedgerReduction.ValidateSelection` rejects it before acquisition or publication. It shares the
+`IngestionLedgerReduction.ValidateSelection` consumes the frozen acquisition request before fetching;
+`ValidatePublication` consumes the retained chain and its actual prepared position before writing. It shares the
 commit reducer's scope, revision, definition and position rules rather than copying them into the host.
 The fixture checks observed progress again before publication; a competing advancement after acquisition
 therefore prevents a stale write in that case. The selected revision is never silently refreshed.
@@ -182,3 +183,10 @@ budget or scheduled backfill service. Local publication identities now derive fr
 Request emissions, allowing separate sessions to share the destination without colliding on fixture
 constants. The sink and receipts are still in-memory; cross-flow concurrent writes, correction/upsert
 policy, durable storage and a production operator API remain unqualified. No Ito changes.
+
+The fixture keeps sessions, destination and frozen revision only in `FixtureSetup`. The proposed forward
+position is selected once, then used to prepare work; publication reads that retained preparation.
+`AcquisitionValidation` and `PublicationValidation` remain separate, and failure replies identify the
+boundary, so a later check cannot erase evidence of the acquisition check. Both work-document validation
+and progress conflicts return structured diagnostics. Qualification assertions continue to report
+`IsAdmissible` failures with codes/messages; the explicit range-rejection test verifies that behavior.

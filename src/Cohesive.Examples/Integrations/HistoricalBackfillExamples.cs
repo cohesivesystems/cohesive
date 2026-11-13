@@ -129,7 +129,8 @@ public sealed partial class HistoricalQualificationExamples
             1, destination, ExpectedLedgerRevision: original!.Revision));
         var failed = await RunHistorical(mistaken, new(new("mistaken-backfill"), new("attempt/1")));
         Assert.Equal(ProcessActivationDisposition.Failed, failed.Disposition);
-        Assert.Contains(mistaken.SelectionValidation!.Diagnostics, d => d.Code == "integrations.ledger.position-transition");
+        Assert.Contains(mistaken.AcquisitionValidation!.Diagnostics, d => d.Code == "integrations.ledger.position-transition");
+        Assert.Null(mistaken.PublicationValidation);
         Assert.Null(mistaken.LastAdvance);
         Assert.Equal(original, await destination.Ledger.ReadAsync(ForwardConsumer, default));
         Assert.Equal(0, mistaken.ProviderCalls);
@@ -155,7 +156,8 @@ public sealed partial class HistoricalQualificationExamples
         var entry = await destination.Ledger.ReadAsync(ForwardConsumer, default);
         var failed = waitingWorker.Reply(waiting, await waitingWorker.DispatchOnce(Request(waiting)));
         Assert.Equal(ProcessActivationDisposition.Failed, failed.Disposition);
-        Assert.Contains(waitingWorker.SelectionValidation!.Diagnostics, d => d.Code == "integrations.ledger.revision-conflict");
+        Assert.Contains(waitingWorker.PublicationValidation!.Diagnostics, d => d.Code == "integrations.ledger.revision-conflict");
+        Assert.True(waitingWorker.AcquisitionValidation!.IsValid);
         Assert.Equal(0, waitingWorker.Publications);
         Assert.Null(waitingWorker.LastAdvance);
         Assert.Equal(entry, await destination.Ledger.ReadAsync(ForwardConsumer, default));

@@ -154,7 +154,7 @@ public sealed partial class HistoricalQualificationExamples
             if (retained.publicationRequest != fingerprint || retained.receipt is null || retained.prepared is null)
                 return null;
             var prepared = (IngestionPreparedPublication)retained.prepared.GetDefinition<IngestionWorkItem>();
-            if (!retained.destination.Publications.TryGetValue(prepared.Content.Locator, out var bytes) || !prepared.Content.Matches(bytes)
+            if (!retained.setup.Destination.Publications.TryGetValue(prepared.Content.Locator, out var bytes) || !prepared.Content.Matches(bytes)
                 || retained.receipt.ContentFingerprint != prepared.Content.Sha256) return null;
             var outcome = Outcome(request, new PublicationReceipt(retained.receipt.ReceiptReference));
             retained.dispatches[id] = (fingerprint, outcome);

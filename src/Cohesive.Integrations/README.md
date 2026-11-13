@@ -767,7 +767,13 @@ these local tests do not qualify a production evidence issuer.
 ### Checking progress before new work
 
 Before dispatching a new acquisition or publication, read the intended consumer's ledger and call
-`IngestionLedgerReduction.ValidateSelection(current, address, definition, expectedRevision, position)`.
+`IngestionLedgerReduction.ValidateSelection(current, retainedRequest, selectedPosition)` before acquisition.
+Before publication use `ValidatePublication(current, retainedRequest, retainedAcquisition, retainedPreparation)`.
+The request owns the address, definition and frozen revision; the linked preparation owns `NextPosition`.
+The five-scalar helper is internal. Invalid documents/identities/revisions/positions and progress conflicts
+all return diagnostics. Publication validation also checks lineage, so callers cannot silently substitute
+a preparation from another acquisition. Freeze the request before acquisition and reuse the selected
+position when preparing the publication; do not rebuild it separately at dispatch.
 An older, overlapping or skipped forward window, stale revision, foreign scope or changed definition
 produces the same progress diagnostic as commit evaluation. The returned validation is not a reservation:
 concurrent changes still require commit CAS and target-specific fencing. Unknown ledger reads must
@@ -779,3 +785,9 @@ The historical backfill example checks before acquisition and again before publi
 known rewinds cause zero provider calls and zero publications, and that progress changing after
 acquisition rejects publication without silently refreshing the selected revision. Cross-flow group
 pause remains an explicit framework gap tracked in [COH-163](https://linear.app/cohesive-ari/issue/COH-163).
+
+
+These methods are explicit host dispatch boundaries, not automatic interception of arbitrary clients.
+The reference example consumes them for new effects and retains separate acquisition/publication validation
+results. Retained-result reconciliation bypasses new-dispatch checks. Automatic integration with a general
+Process runtime is not claimed by this API; that runtime does not own domain request handlers or ledger I/O.

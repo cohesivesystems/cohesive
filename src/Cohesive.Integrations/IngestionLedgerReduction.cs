@@ -37,33 +37,65 @@ public static class IngestionLedgerReduction
         return IngestionLedgerResult.Success(new(reference, entry), replayed: false);
     }
 
-    /// <summary>Checks proposed new source progress against an observed ledger entry before external dispatch.</summary>
-    /// <param name="current">Definitively observed current entry, or null for an absent entry. Unknown reads must not call this method.</param>
-    /// <param name="address">Exact consumer whose progress was observed.</param>
-    /// <param name="definition">Pinned ingestion definition.</param>
-    /// <param name="expectedRevision">Frozen revision selected for this new work; zero means absent.</param>
-    /// <param name="position">Proposed forward progress, distinct from any acquisition lookback interval.</param>
-    /// <returns>Structured diagnostics, or a valid observation. A valid result is not a reservation or dispatch capability.</returns>
-    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
-    /// <exception cref="ArgumentException">Address or revision is invalid.</exception>
-    /// <remarks>Uses the same progress rules as commit evaluation. Call before new acquisition/publication to reject
-    /// known stale, rewinding or skipped windows. Concurrent progress can change after this check; commit CAS and
-    /// target-specific fencing remain necessary. Retained-result reconciliation must use original receipt semantics,
-    /// not this new-work check. This method performs no I/O and creates no publication receipt.</remarks>
-    public static DocumentValidationResult ValidateSelection(IngestionLedgerEntry? current, IngestionLedgerAddress address,
-        ExecutionDefinitionReference definition, long expectedRevision, IngestionPosition position)
+    /// <summary>Checks frozen acquisition work before a new source effect.</summary>
+    /// <param name="current">Definitively observed entry, or null for absent progress. Unknown reads must fail closed.</param>
+    /// <param name="request">Retained canonical acquisition request owning consumer, definition and expected revision.</param>
+    /// <param name="position">Proposed progress selected before acquisition; reuse it when preparing publication.</param>
+    /// <returns>Diagnostics for invalid work or conflicting progress; validity is an observation, not a reservation.</returns>
+    /// <remarks>Performs no I/O. Hosts invoke this at new dispatch boundaries; it does not automatically intercept
+    /// arbitrary provider clients. Retained-result reconciliation uses receipt-first commit semantics instead.</remarks>
+    public static DocumentValidationResult ValidateSelection(IngestionLedgerEntry? current,
+        ExecutionDefinitionDocument? request, IngestionPosition? position)
     {
-        ArgumentNullException.ThrowIfNull(address); ArgumentNullException.ThrowIfNull(definition);
-        ArgumentNullException.ThrowIfNull(position);
-        address.Validate();
+        if (request is null) return Invalid("request", "A retained acquisition request is required.");
+        var validation = IngestionWorkDocuments.TryRead(request, out var item);
+        if (!validation.IsValid) return validation;
+        if (item is not IngestionAcquisitionRequest selected) return Invalid("request", "Expected acquisition work.");
+        return ValidateSelectedRequest(current, selected, position);
+    }
+
+    /// <summary>Checks a linked retained publication against current progress without rebuilding its position.</summary>
+    /// <param name="current">Definitively observed entry, or null for absent progress. Unknown reads must fail closed.</param>
+    /// <param name="request">Original canonical acquisition request.</param>
+    /// <param name="acquisition">Retained acquisition receipt linked to that exact request.</param>
+    /// <param name="prepared">Retained preparation owning the proposed next position.</param>
+    /// <returns>Lineage, work-validation or progress diagnostics; no receipt or reservation is created.</returns>
+    /// <remarks>Reads NextPosition from preparation and revision/scope/definition from its linked request.
+    /// Concurrent advancement after validation still requires commit CAS and adapter-specific effect fencing.</remarks>
+    public static DocumentValidationResult ValidatePublication(IngestionLedgerEntry? current,
+        ExecutionDefinitionDocument? request, ExecutionDefinitionDocument? acquisition, ExecutionDefinitionDocument? prepared)
+    {
+        if (request is null || acquisition is null || prepared is null)
+            return Invalid("lineage", "Publication requires the complete retained work chain.");
+        var validation = IngestionWorkDocuments.ValidateChain(request, acquisition, prepared);
+        if (!validation.IsValid) return validation;
+        var publication = (IngestionPreparedPublication)prepared.GetDefinition<IngestionWorkItem>();
+        return ValidateSelectedRequest(current, (IngestionAcquisitionRequest)request.GetDefinition<IngestionWorkItem>(), publication.NextPosition);
+    }
+
+    static DocumentValidationResult ValidateSelectedRequest(IngestionLedgerEntry? current,
+        IngestionAcquisitionRequest selected, IngestionPosition? position) =>
+        selected.ExpectedLedgerRevision is { } revision
+            ? ValidateSelection(current, selected.Address, selected.Definition, revision, position)
+            : Invalid("revision", "Separate-ledger progress requires a frozen revision.");
+
+    internal static DocumentValidationResult ValidateSelection(IngestionLedgerEntry? current, IngestionLedgerAddress? address,
+        ExecutionDefinitionReference? definition, long expectedRevision, IngestionPosition? position)
+    {
+        if (address is null || definition is null) return Invalid("identity", "Consumer and definition are required.");
+        try { address.Validate(); }
+        catch (ArgumentException) { return Invalid("identity", "Consumer identity is invalid."); }
         if (expectedRevision < 0 || expectedRevision == long.MaxValue)
-            throw new ArgumentException("Revision must permit another advancement.", nameof(expectedRevision));
+            return Invalid("revision", "Revision must permit another advancement.");
         var validation = IngestionLedgerDocuments.ValidatePosition(position);
         if (!validation.IsValid) return validation;
-        var conflict = CheckProgress(current, address, definition, expectedRevision, position);
-        return conflict is null ? DocumentValidationResult.Valid : new([new("integrations.ledger." + conflict,
-            DiagnosticSeverity.Error, "New work conflicts with observed consumer progress: " + conflict + ". Inspect progress or select an independent backfill flow.")]);
+        var conflict = CheckProgress(current, address, definition, expectedRevision, position!);
+        return conflict is null ? DocumentValidationResult.Valid : Invalid(conflict,
+            "New work conflicts with observed consumer progress: " + conflict + ". Inspect progress or select an independent backfill flow.");
     }
+
+    static DocumentValidationResult Invalid(string code, string message) =>
+        new([new("integrations.ledger." + code, DiagnosticSeverity.Error, message)]);
 
     static string? CheckProgress(IngestionLedgerEntry? current, IngestionLedgerAddress address,
         ExecutionDefinitionReference definition, long expectedRevision, IngestionPosition position)
