@@ -133,6 +133,55 @@ public sealed class ScenarioAssuranceTests
         Assert.Equal(ProofState.Unknown, ClaimAssessment.Reassess(AssessRun(corrected).Serialize()).State);
     }
 
+    [Fact]
+    public async Task FiniteGuardWitnessMapsToControllableInputsAndReproducesTheFaultyCommit()
+    {
+        var input = new ExpressionAuthoring().Input<Driver>("driver");
+        var claim = Claim.Define("reactivate.precondition", "1", R("driver"), Mapping, R("source"), R("config"))
+            .ForEachCommitted(R("reactivate"))
+            .Require(input, ClaimInputRole.Before, d => d.RemainingBlockers == 0).Build();
+        Driver[] catalog = [new(false, true, 0), new(false, true, 1)];
+        var plan = FiniteGuardCheck.Define(claim, input, catalog, R("finite-guard-source"), R("finite-config"))
+            .When(d => d.OriginalResolved).Build();
+        var check = FiniteGuardChecker.Check(plan);
+        Assert.Equal(ClaimVerdict.Violated, check.Verdict);
+        var witness = plan.Members[check.CounterexampleIndex!.Value].Deserialize<Driver>()!;
+
+        // Domain-specific reconstruction: resolve one original blocker before reactivation.
+        // Only initial state and scheduled commands are supplied; the candidate computes every after-state.
+        var (world, shape) = Scenario(new Parameters(Blockers: witness.RemainingBlockers + 1, Noise: 0));
+        var candidate = new Candidate(shape, yield: true);
+        var execution = await ScenarioAssurance.ExecuteAsync(claim, world, candidate,
+            Binding() with { OperationId = "reactivate" });
+        Assert.Equal(2, candidate.Calls);
+        Assert.Equal(ScenarioAssuranceMethod.CandidateExecution, execution.Method);
+        Assert.Equal(ClaimVerdict.Violated, execution.Evaluation.Verdict);
+        var observation = Assert.Single(execution.Evaluation.Batch.Alternatives[0].Observations);
+        Assert.Equal(witness, observation.Values[ClaimInputRole.Before].Deserialize<Driver>());
+        var model = FiniteGuardCheckResult.Recheck(check.Serialize()).ToEvidence();
+        var implementation = ClaimEvidence.FromTrace(execution.Evaluation,
+            new(EvidenceTargetKind.Implementation, execution.Binding.Target, R("candidate-config"),
+                claim.Definition.Selection, ProofObligation.Realization),
+            R("mapping-config"), dependenciesComplete: true, dependencies: [plan.Source]);
+        ClaimAssessment Assess(ClaimEvidence report) => ClaimAssessment.Evaluate(report, R("policy"),
+            [EvidenceAcceptance.Of(report)], DateTimeOffset.UnixEpoch);
+        var retainedModel = ClaimAssessment.Reassess(Assess(model).Serialize());
+        var retainedImplementation = ClaimAssessment.Reassess(Assess(implementation).Serialize());
+        Assert.Equal(ProofState.Disproven, retainedModel.State);
+        Assert.Equal(ProofState.Disproven, retainedImplementation.State);
+        Assert.Equal(ProofObligation.Model, retainedModel.Subject.Obligation);
+        Assert.Equal(ProofObligation.Realization, retainedImplementation.Subject.Obligation);
+        Assert.Equal(model.Claim.Fingerprint, implementation.Claim.Fingerprint);
+        Assert.Equal(2, candidate.Calls); // Retention and reassessment do not execute the candidate.
+
+        // Model search and implementation reproduction are separate evidence, even for the same claim.
+        Assert.Throws<ArgumentException>(() => ClaimAssessment.Evaluate(claim, model.Subject, R("policy"),
+            [EvidenceAcceptance.Of(model), EvidenceAcceptance.Of(implementation)],
+            [model, implementation], DateTimeOffset.UnixEpoch));
+        Assert.Throws<ArgumentException>(() => ClaimEvidence.FromTrace(execution.Evaluation,
+            model.Subject, R("mapping-config"), dependenciesComplete: true));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
