@@ -21,7 +21,9 @@ public enum IntegrationLifecycleAction
     /// <summary>Admit a new exact Process session.</summary>
     Admit,
     /// <summary>Record successful completion of an admitted Process.</summary>
-    Complete
+    Complete,
+    /// <summary>Resolve a failed session using host-verified complete effect accounting.</summary>
+    ResolveFailure
 }
 
 /// <summary>Attributable, revision-aware desired-state command; this is runtime intent, not a Process definition.</summary>
@@ -47,10 +49,10 @@ public sealed record IntegrationAdmission(IngestionLedgerAddress Consumer, Proce
 
 /// <summary>Immutable lifecycle inspection; execution health and accepted data coverage are separate observations.</summary>
 /// <param name="Consumer">Controlled consumer.</param>
-/// <param name="Revision">Monotonic desired-state revision, initially zero.</param>
+/// <param name="Revision">Monotonic control revision for desired-state changes and failure resolutions, initially zero.</param>
 /// <param name="Desired">Desired admission state, initially Paused.</param>
-/// <param name="LastChange">Last accepted command, or null before explicit activation.</param>
-/// <param name="Pending">Admitted sessions without confirmed successful Process completion.</param>
+/// <param name="LastChange">Last accepted desired-state command, or null before any desired-state change.</param>
+/// <param name="Pending">Admitted sessions without successful completion or an explicit verified failure resolution.</param>
 public sealed record IntegrationLifecycleSnapshot(IngestionLedgerAddress Consumer, long Revision,
     IntegrationDesiredState Desired, IntegrationLifecycleChange? LastChange, ImmutableArray<IntegrationAdmission> Pending)
 {
@@ -117,7 +119,9 @@ public enum IntegrationCompletionOutcome
     /// <summary>Completion does not match an admitted session.</summary>
     CompletionMismatch,
     /// <summary>The Process has not confirmed successful completion.</summary>
-    Unresolved
+    Unresolved,
+    /// <summary>This admission was already closed through explicit failure resolution.</summary>
+    ResolvedFailure
 }
 
 /// <summary>Typed operation result with a receipt only for accepted outcomes.</summary>

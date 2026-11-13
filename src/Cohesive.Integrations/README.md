@@ -616,18 +616,19 @@ execution and authorization evidence. A second authorized recorder receives
 `ReplayedWithOriginalRecorder` and the original receipt; attribution is never overwritten. Neither Active
 nor Draining claims execution liveness, provider health or complete data coverage. Failure, cancellation
 or ambiguity remains pending because terminal status alone cannot prove external effects are resolved.
-This also conservatively leaves known effect-free failures pending until explicit resolution is implemented.
+Explicit failed-session resolution is described below; cancellation remains pending.
 
 This is a **local reference controller**, not a durable/distributed fence. Hosts must route new sessions
 through it and protect inspection at their API boundary. Authorization freshness remains host-owned.
 Binding tokens are local validated handles, not portable authoring documents. Runtime lifecycle intent
-and observations remain separate from immutable integration/Process IR. Original change and completion
+and observations remain separate from immutable integration/Process IR. Original change, completion and failed-session resolution
 receipts are retained for the controller lifetime: memory is linear in changes + admissions, not changes
-× pending sessions. Persistent storage, cleanup, health evidence/expiry, operator resolution, bounded
+× pending sessions. Persistent storage, cleanup, cancelled-session resolution, bounded
 backfill and API/CLI projection remain follow-up work. Do not reset forward progress for backfill.
 
 Runbook: inspect → issue an authorized revision-checked pause → inspect pending sessions → let their
-Processes finish/reconcile → record exact successful completion → inspect until Draining is false.
+Processes finish/reconcile → record exact successful completion or verify and explicitly resolve a failed
+session → inspect until Draining is false.
 Leave unresolved work visible; do not clear it or blindly retry. Resume with an authorized Active command
 at the current revision.
 
@@ -703,5 +704,61 @@ not erase publication/ledger evidence. Source and sink remain deterministic loca
 
 Use bounded enum dimensions for metrics, such as health/readiness and desired lifecycle state. Report
 pending count/age as values. Binding fingerprints, symbols, sessions, actors and evidence references belong
-in inspection/traces, not labels. Deployment wiring, explicit failure resolution, bounded backfill and
+in inspection/traces, not labels. Deployment wiring, cancelled-session resolution, bounded backfill and
 history cleanup remain follow-up work; no durable or distributed store is introduced here.
+
+
+### Explicit failed-session resolution
+
+`ResolveFailure` closes lifecycle pending work after a host proves the exact admitted Process attempt
+failed and **every dispatched effect is accounted for**. A failed Process, missing acknowledgement,
+healthy provider or empty destination alone cannot establish this. The host supplies a trusted
+`verifyFailureResolution` callback when creating `InMemoryIntegrationLifecycle`; without it the
+operation returns `EvidenceRejected`. The callback resolves an immutable evidence reference and
+returns the authoritative failed decision only when effect accounting is complete. The controller
+checks the exact Process definition and continuation as well as its failed disposition. Authenticity,
+terminal-state freshness and domain-specific effect accounting remain the verifier's responsibility.
+
+```csharp
+var command = new IntegrationFailureResolutionRequest(
+    Id: "resolve/session-1",
+    Admission: admission,
+    ExpectedRevision: control.Inspect().Revision,
+    EvidenceReference: "evidence/coverage-failure/1",
+    Authorization: operatorAuthorization,
+    AtUtc: now);
+var result = control.ResolveFailure(command);
+if (result.IsAccepted)
+{
+    var originalEvidence = result.Receipt.Command.EvidenceReference;
+    var failedDecision = result.Receipt.Decision;
+}
+```
+
+The verifier runs outside the lock, after authorization and cheap command/admission checks. It may
+be called concurrently, must not dispatch effects, and must fail closed for missing or ambiguous
+evidence. Exceptions propagate without controller mutation. The controller rechecks the revision
+and admission after verification, so a concurrent pause/resume, completion or resolution cannot be
+silently overwritten. Host policy freshness is the same host-owned boundary as other lifecycle actions.
+
+Accepted resolution increments the shared **control revision**, as does a desired-state change.
+Admission and successful-completion recording do not increment it. `LastChange` remains the last
+desired-state command; `InspectFailureResolution` supplies resolution attribution. Resolution is
+allowed while paused and does not change the desired state. It neither grants redispatch permission
+nor advances coverage or the ledger. Successful completion and verified failed resolution are
+separate retained facts; `InspectCompletion` remains null for a resolved failure. Cancelled or still
+running decisions cannot be resolved by this operation.
+
+Exact command retry—including a serialized/reopened command—rechecks authorization and returns
+the original receipt without another verifier call, even after subsequent control changes. Changed
+intent or attribution under the same command identity is rejected. An admission retry still returns
+its original receipt after resolution; it cannot create new pending work or authorize another effect.
+Receipts remain in memory without automatic eviction to preserve these guarantees. This does not add
+durable/distributed storage, a production endpoint or an IR authoring surface; these are explicit
+runtime commands over an already-derived binding, not a second integration definition language.
+
+The historical example proves complete effect accounting for a coverage rejection: the source read
+returned, the Process followed its failure edge before publication, and no ledger advance occurred.
+It also tests stale/unauthorized/forged commands, unavailable or invalid evidence, exact concurrent
+replay, and a lifecycle change during verification. Trustworthy host evidence is a prerequisite;
+these local tests do not qualify a production evidence issuer.

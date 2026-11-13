@@ -7,7 +7,7 @@ using Cohesive.Processes.Execution;
 namespace Cohesive.Integrations;
 
 /// <summary>Thread-safe local reference implementation of revision-fenced admission and drain control.</summary>
-/// <remarks>One instance owns one stable consumer. Lifecycle changes and admission linearize under the same lock.
+/// <remarks>One instance owns one stable consumer. Lifecycle changes, admission and failure-resolution commits linearize under the same lock.
 /// Admitted work is never cancelled by this controller: Process control owns suspension/cancellation and current
 /// provider policy still gates new effects. This in-memory implementation is not durable or distributed.
 /// Authorization is evaluated before the lock; the host owns authentication and policy freshness. Published
@@ -20,6 +20,9 @@ public sealed class InMemoryIntegrationLifecycle
     readonly Dictionary<string, IntegrationLifecycleChangeReceipt> changes = new(StringComparer.Ordinal);
     readonly Dictionary<ProcessContinuationIdentity, IntegrationAdmission> pending = new();
     readonly Dictionary<ProcessContinuationIdentity, IntegrationCompletion> completed = new();
+    readonly Func<IntegrationFailureResolutionRequest, ProcessActivationDecision?>? verifyFailureResolution;
+    readonly Dictionary<string, IntegrationFailureResolution> resolutionCommands = new(StringComparer.Ordinal);
+    readonly Dictionary<ProcessContinuationIdentity, IntegrationFailureResolution> resolvedFailures = new();
     long revision;
     IntegrationDesiredState desired = IntegrationDesiredState.Paused;
     IntegrationLifecycleChange? lastChange;
@@ -27,13 +30,20 @@ public sealed class InMemoryIntegrationLifecycle
     /// <summary>Creates a paused local controller for an explicit consumer and host authorization authority.</summary>
     /// <param name="consumer">Stable consumer; every identity component must be nonempty and bounded.</param>
     /// <param name="authorize">Host decision for the requested action; exceptions propagate without mutation.</param>
-    /// <exception cref="ArgumentNullException">An argument is null.</exception>
+    /// <param name="verifyFailureResolution">Optional trusted host verifier. It must authenticate and resolve the immutable
+    /// evidence reference, establish that the exact attempt is terminal and every dispatched effect is accounted for,
+    /// then return its authoritative failed Process decision. Return null for missing or ambiguous evidence. No verifier
+    /// means failure resolution is unavailable. Called outside the controller lock after authorization and cheap checks;
+    /// may run concurrently. Exceptions propagate without controller mutation. This callback must not dispatch effects.</param>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">A consumer identity is invalid.</exception>
     public InMemoryIntegrationLifecycle(IngestionLedgerAddress consumer,
-        Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize)
+        Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize,
+        Func<IntegrationFailureResolutionRequest, ProcessActivationDecision?>? verifyFailureResolution = null)
     {
         ArgumentNullException.ThrowIfNull(consumer); ArgumentNullException.ThrowIfNull(authorize);
         consumer.Validate(); this.consumer = consumer; this.authorize = authorize;
+        this.verifyFailureResolution = verifyFailureResolution;
     }
 
     /// <summary>Inspects current desired state and unresolved admissions without changing either.</summary>
@@ -88,7 +98,7 @@ public sealed class InMemoryIntegrationLifecycle
     }
 
     /// <summary>Admits a session using a prevalidated token, or retrieves its original admission.</summary>
-    /// <remarks>Exact replay after pause or completion is not permission to repeat external effects.
+    /// <remarks>Exact replay after pause, completion or failed-session resolution is not permission to repeat external effects.
     /// Admission performs no catalog construction, binding inspection, lowering or history enumeration.</remarks>
     /// <param name="request">Complete original intent, including the controller-owned binding token.</param>
     /// <returns>Typed disposition with the original receipt on acceptance or replay.</returns>
@@ -103,7 +113,8 @@ public sealed class InMemoryIntegrationLifecycle
         if (!ReferenceEquals(request.Binding.Owner, this)) return new(IntegrationAdmissionOutcome.BindingMismatch);
         lock (sync)
         {
-            var prior = pending.GetValueOrDefault(request.Continuation) ?? completed.GetValueOrDefault(request.Continuation)?.Admission;
+            var prior = pending.GetValueOrDefault(request.Continuation) ?? completed.GetValueOrDefault(request.Continuation)?.Admission
+                ?? resolvedFailures.GetValueOrDefault(request.Continuation)?.Command.Admission;
             if (prior is not null)
             {
                 var matches = prior.Binding == request.Binding.Binding && prior.Process == request.Binding.Process
@@ -120,7 +131,7 @@ public sealed class InMemoryIntegrationLifecycle
     }
 
     /// <summary>Moves a successfully completed exact Process out of the pending set, retaining its original evidence.</summary>
-    /// <remarks>Failed/cancelled/unresolved work stays pending. A later authorized recorder receives
+    /// <remarks>Failed/cancelled/unresolved work stays pending unless an explicit verified failure resolution is accepted. A later authorized recorder receives
     /// ReplayedWithOriginalRecorder and the first completion receipt; attribution is never silently replaced.</remarks>
     /// <param name="request">Exact admission, trusted completion evidence and authenticated recorder.</param>
     /// <returns>A typed disposition and original completion receipt on acceptance or replay.</returns>
@@ -134,6 +145,9 @@ public sealed class InMemoryIntegrationLifecycle
         var decision = request.Decision;
         lock (sync)
         {
+            if (resolvedFailures.TryGetValue(admission.Continuation, out var resolved))
+                return new(resolved.Command.Admission == admission
+                    ? IntegrationCompletionOutcome.ResolvedFailure : IntegrationCompletionOutcome.CompletionMismatch);
             var prior = pending.GetValueOrDefault(admission.Continuation) ?? completed.GetValueOrDefault(admission.Continuation)?.Admission;
             if (prior != admission || decision.State.Definition != admission.Process || decision.State.Continuation != admission.Continuation)
                 return new(IntegrationCompletionOutcome.CompletionMismatch);
@@ -146,6 +160,76 @@ public sealed class InMemoryIntegrationLifecycle
             pending.Remove(admission.Continuation);
             return new(IntegrationCompletionOutcome.Applied, receipt);
         }
+    }
+
+    /// <summary>Closes a failed admission only after host verification of complete effect accounting.</summary>
+    /// <remarks>Available while paused. Does not execute, retry, cancel or complete a Process, alter coverage or advance
+    /// the ingestion ledger. The host owns evidence authenticity and effect accounting; this controller owns exact
+    /// admission matching, terminal disposition, authorization, replay and revision fencing. Verification occurs outside
+    /// the lock; the control fence and admission are rechecked before committing. Exact replay rechecks authorization
+    /// but returns the original receipt without repeating verification. Receipt history is retained without eviction.</remarks>
+    /// <param name="request">Exact attributable command and host-owned evidence reference.</param>
+    /// <returns>A typed disposition and original receipt only on acceptance or exact replay.</returns>
+    /// <exception cref="ArgumentNullException">A required request field is null.</exception>
+    /// <exception cref="ArgumentException">Identity or evidence reference is blank, revision is negative, or time is invalid.</exception>
+    public IntegrationLifecycleResult<IntegrationFailureResolutionOutcome, IntegrationFailureResolution> ResolveFailure(
+        IntegrationFailureResolutionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Admission);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Id); ArgumentException.ThrowIfNullOrWhiteSpace(request.EvidenceReference);
+        Validate(request.Authorization, request.AtUtc);
+        if (request.ExpectedRevision < 0 || request.AtUtc < request.Admission.AtUtc)
+            throw new ArgumentException("Resolution requires a nonnegative revision and cannot predate admission.", nameof(request));
+        if (!authorize(IntegrationLifecycleAction.ResolveFailure, request.Authorization))
+            return new(IntegrationFailureResolutionOutcome.Unauthorized);
+        lock (sync)
+        {
+            var rejectedOrReplayed = CheckResolution(request);
+            if (rejectedOrReplayed is not null) return rejectedOrReplayed;
+        }
+        var decision = verifyFailureResolution?.Invoke(request);
+        lock (sync)
+        {
+            var rejectedOrReplayed = CheckResolution(request);
+            if (rejectedOrReplayed is not null) return rejectedOrReplayed;
+            if (decision is null) return new(IntegrationFailureResolutionOutcome.EvidenceRejected);
+            if (decision.Disposition != ProcessActivationDisposition.Failed
+                || decision.State.Definition != request.Admission.Process
+                || decision.State.Continuation != request.Admission.Continuation)
+                return new(IntegrationFailureResolutionOutcome.DecisionMismatch);
+            revision++;
+            var receipt = new IntegrationFailureResolution(request, decision, revision);
+            resolutionCommands.Add(request.Id, receipt);
+            resolvedFailures.Add(request.Admission.Continuation, receipt);
+            pending.Remove(request.Admission.Continuation);
+            return new(IntegrationFailureResolutionOutcome.Applied, receipt);
+        }
+    }
+
+    /// <summary>Reads the retained original resolution of one failed session.</summary>
+    /// <param name="continuation">Exact Process instance and attempt.</param>
+    /// <returns>The original resolution, or null if none was accepted.</returns>
+    /// <exception cref="ArgumentNullException">Continuation is null.</exception>
+    public IntegrationFailureResolution? InspectFailureResolution(ProcessContinuationIdentity continuation)
+    {
+        ArgumentNullException.ThrowIfNull(continuation);
+        lock (sync) return resolvedFailures.GetValueOrDefault(continuation);
+    }
+
+    // Called only under sync. Both indexes retain the same receipt; there is one resolution authority.
+    IntegrationLifecycleResult<IntegrationFailureResolutionOutcome, IntegrationFailureResolution>? CheckResolution(
+        IntegrationFailureResolutionRequest request)
+    {
+        if (resolutionCommands.TryGetValue(request.Id, out var prior))
+            return prior.Command == request ? new(IntegrationFailureResolutionOutcome.Replayed, prior)
+                : new(IntegrationFailureResolutionOutcome.IdentityConflict);
+        if (request.ExpectedRevision != revision) return new(IntegrationFailureResolutionOutcome.RevisionConflict);
+        if (completed.ContainsKey(request.Admission.Continuation) || resolvedFailures.ContainsKey(request.Admission.Continuation))
+            return new(IntegrationFailureResolutionOutcome.AlreadyClosed);
+        if (pending.GetValueOrDefault(request.Admission.Continuation) != request.Admission)
+            return new(IntegrationFailureResolutionOutcome.AdmissionMismatch);
+        if (revision == long.MaxValue) return new(IntegrationFailureResolutionOutcome.RevisionExhausted);
+        return null;
     }
 
     DocumentValidationResult ValidateCompilation(IntegrationCompilation compilation)
