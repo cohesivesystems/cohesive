@@ -118,3 +118,30 @@ Deferred quick wins:
 - **Validation is repeated** across the loaded snapshot, the interpreter's activation frame and candidate
   construction. Removing the duplicates requires admission evidence on the observation storage rather than
   local skips.
+
+## Fused ordinal candidate writes
+
+An eligible transition with a complete root layout prepares a generated body once per plan and layout. Direct
+assignments write into one owned ordinal candidate during execution. Candidate preparation then reuses those
+slots and still validates entity fields and the governing shape. The reference interpreter continues to own
+the decision, patch evidence, invariants, and coherence checks. Rejected and conflicting decisions discard
+their working slots. Unsupported bodies and layouts use ordinary execution and patch projection.
+
+Two Release BenchmarkDotNet runs per revision on Apple M5 Max, macOS 27.0.1 and .NET 10.0.13 (SDK 10.0.402). The baseline is [`c495740f`](https://github.com/cohesivesystems/cohesive/commit/c495740f) and the candidate is [`a50e0ee8`](https://github.com/cohesivesystems/cohesive/commit/a50e0ee8). Run order was baseline, candidate, candidate, baseline.
+
+Each operation reads a JSON request, runs the mapped ASP.NET endpoint, reads and conditionally commits state, and serializes the response. SQLite uses a real file, WAL, and FULL synchronization. The in-memory repository exercises dictionary fallback. Setup, first-use compilation, and network transport are outside the measurement.
+
+| Store | Response | Main KiB/op | PR KiB/op | Allocation change | Main mean µs (two runs) | PR mean µs (two runs) |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| InMemory | ClrResource | 20.02 | 20.04 | +0.1% | 6.59 / 6.78 | 6.93 / 7.16 |
+| InMemory | Observation | 19.90 | 19.91 | +0.1% | 6.83 / 6.82 | 7.57 / 6.90 |
+| Sqlite | ClrResource | 45.46 | 42.12 / 42.11 | -7.4% | 776.90 / 791.58 | 951.09 / 847.97 |
+| Sqlite | Observation | 45.33 | 41.98 | -7.4% | 768.39 / 778.58 | 856.31 / 837.52 |
+
+Managed allocation fell about 7.4% on SQLite for both response projections and was effectively flat on the in-memory fallback. SQLite mean latency was higher in both comparisons (about 8–22% across response projections). The magnitude varied between runs.
+
+Run the same workload with the following arguments against each Release build.
+
+```sh
+dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*EntityTransitionEndToEndBenchmarks.Transition*' --inProcess --launchCount 1 --warmupCount 5 --iterationCount 12 --iterationTime 250 --noForcedGCs
+```
