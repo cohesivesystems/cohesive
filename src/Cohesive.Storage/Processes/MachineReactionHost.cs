@@ -259,7 +259,7 @@ public sealed partial class MachineReactionHost
                     "Process execution was cancelled. Retained target evidence still governs commitment; cancellation does not undo effects or authorize a new request.")
             };
         return progress with { Attempts = attempts, Prerequisite = prerequisite is null ? null
-            : MachineReactionInvocation.InstanceFor(prerequisite.Policy, invocation.Source, invocation.MovementNode) };
+            : MachineReactionInvocation.InstanceFor(prerequisite.Policy, invocation.Source, invocation.MovementNode, invocation.Episode) };
     }
 
     async Task<MachineReactionProgress> InspectCheckpoint(OperationContext context, MachineReactionInvocation invocation, ProcessDurableCheckpoint checkpoint)

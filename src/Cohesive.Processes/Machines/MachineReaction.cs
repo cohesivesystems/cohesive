@@ -18,7 +18,9 @@ public enum MachineReactionIdentityScope
     /// <summary>Each distinct committed source occurrence creates independent work.</summary>
     SourceOccurrence,
     /// <summary>One immutable occurrence per source entity and exact policy revision; conflicting reuse is rejected.</summary>
-    SourceEntity
+    SourceEntity,
+    /// <summary>One immutable occurrence per source entity, typed episode key and exact policy revision.</summary>
+    SourceEpisode
 }
 
 /// <summary>Portable reaction payload. Construct only through authoring lowering or persistence.</summary>
@@ -26,12 +28,14 @@ public enum MachineReactionIdentityScope
 /// <param name="Movement">Selected edge in that machine.</param>
 /// <param name="Target">Exact target Transition declaration.</param>
 /// <param name="Process">Canonical request projection and invocation; the sole action authority.</param>
-/// <param name="IdentityScope">Occurrence or one-shot source-entity identity boundary.</param>
+/// <param name="IdentityScope">Occurrence, one-shot source-entity, or source-episode identity boundary.</param>
 /// <param name="Prerequisite">Exact reaction whose successful target receipt releases the Process wait, or null.</param>
+/// <param name="EpisodeKey">Required source field selecting an episode, or null for other identity scopes.</param>
 public sealed record MachineReactionPayload(Shape Source, ExecutionNodeId Movement,
     ExecutionDefinitionDocument Target, ExecutionDefinitionDocument Process,
     [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] MachineReactionIdentityScope IdentityScope = MachineReactionIdentityScope.SourceOccurrence,
-    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ExecutionDefinitionDocument? Prerequisite = null);
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ExecutionDefinitionDocument? Prerequisite = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] FieldPath? EpisodeKey = null);
 
 /// <summary>A committed-movement trigger and a pure request policy lowered to an ordinary Process.</summary>
 /// <remarks>Definitions carry no transport, callback or runtime state. A successful Process result does
@@ -56,14 +60,18 @@ public sealed class MachineReaction
         Payload = document.GetDefinition<MachineReactionPayload>();
         var payload = Payload;
         if (!Enum.IsDefined(payload.IdentityScope)) throw new InvalidOperationException("Unknown reaction identity scope.");
+        if ((payload.IdentityScope == MachineReactionIdentityScope.SourceEpisode) != payload.EpisodeKey.HasValue)
+            throw new InvalidOperationException("Episode identity requires exactly one source episode field.");
+        if (payload.EpisodeKey is { } episode) EpisodeContract = ValidateEpisodeField(payload.Source, episode);
         if (payload.Prerequisite is { } prerequisiteDocument)
         {
             var prerequisite = new MachineReaction(prerequisiteDocument);
-            if (payload.IdentityScope != MachineReactionIdentityScope.SourceEntity
-                || prerequisite.Payload.IdentityScope != MachineReactionIdentityScope.SourceEntity
+            if (payload.IdentityScope == MachineReactionIdentityScope.SourceOccurrence
+                || prerequisite.Payload.IdentityScope != payload.IdentityScope
+                || prerequisite.Payload.EpisodeKey != payload.EpisodeKey
                 || prerequisite.Payload.Source != payload.Source
                 || prerequisite.Document.Metadata.DefinitionId == document.Metadata.DefinitionId)
-                throw new InvalidOperationException("Prerequisites require distinct exact policies bound once to the same source entity shape.");
+                throw new InvalidOperationException("Prerequisites require distinct policies with the same source shape and entity/episode identity selector.");
             PrerequisiteSignal = CreatePrerequisiteSignal(prerequisiteDocument);
         }
         var binding = EntityMachineBinding.Read(payload.Source)
@@ -108,6 +116,44 @@ public sealed class MachineReaction
     public ExecutionDefinitionDocument Document { get; }
     /// <summary>Derived portable payload.</summary>
     public MachineReactionPayload Payload { get; }
+
+    /// <summary>Episode scalar contract derived from the source field, or null for other identity scopes.</summary>
+    public ValueContract? EpisodeContract { get; }
+
+    internal static ValueContract ValidateEpisodeField(Shape source, FieldPath path)
+    {
+        if (path.Segments.IsDefaultOrEmpty || path.Segments.Length != 1 || !path.Segments[0].TryGetFieldIdentity(out var name)
+            || !source.TryGetField(name, out var field) || field.Presence != FieldPresence.Required
+            || field.Nullability != FieldNullability.NonNullable || field.Cardinality != FieldCardinality.Single
+            || field.Type is not ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Guid or ScalarTypeKind.Int32 or ScalarTypeKind.Int64 })
+            throw new InvalidOperationException("Episode keys must select a direct required non-null string, Guid, Int32 or Int64 source field.");
+        return ValueContract.FromField(field);
+    }
+
+    /// <summary>Selects portable episode identity from a committed or retained source snapshot.</summary>
+    /// <param name="source">Concrete source input with the exact reaction source contract.</param>
+    /// <returns>The typed episode value with canonical integer/Guid representation, or null when the policy has no episode selector. Strings compare ordinally without trimming or case folding.</returns>
+    /// <exception cref="ArgumentNullException">Source is null.</exception>
+    /// <exception cref="InvalidOperationException">The source contract or selected episode value is invalid.</exception>
+    public PortableValue? SelectEpisode(PortableValue source)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (Payload.EpisodeKey is not { } path) return null;
+        if (source.Contract != ValueContract.FromShape(Payload.Source) || source.State != PortableValueState.Concrete
+            || source.Value is not { } observation || !observation.TryGetField(path, out var selected))
+            throw new InvalidOperationException("Episode identity requires the exact concrete source snapshot and episode field.");
+        var episode = PortableValue.Concrete(EpisodeContract!, selected);
+        if (!PortableExecutionValidator.Validate(episode).IsValid
+            || selected.Kind == ObservationValueKind.String && string.IsNullOrWhiteSpace(selected.GetString()))
+            throw new InvalidOperationException("Episode identity must be a valid non-null scalar; string keys cannot be blank.");
+        var canonical = ((ScalarTypeRef)EpisodeContract!.Type!).Kind switch
+        {
+            ScalarTypeKind.Guid => ObservationValue.FromObject(Guid.Parse(selected.GetString()!)),
+            ScalarTypeKind.Int32 or ScalarTypeKind.Int64 => ObservationValue.FromInt64(selected.GetInt64()),
+            _ => selected
+        };
+        return canonical.Kind == selected.Kind && canonical == selected ? episode : PortableValue.Concrete(EpisodeContract, canonical);
+    }
 
     /// <summary>Derived exact success-signal contract for the prerequisite, or null for independent reactions.</summary>
     public ExecutionDefinitionDocument? PrerequisiteSignal { get; }
@@ -162,26 +208,55 @@ public sealed class MachineReactionSource<TSource> where TSource : notnull
     readonly string revision;
     MachineReactionIdentityScope identityScope;
     MachineReaction? prerequisite;
+    FieldPath? episodeKey;
 
     /// <summary>Declares one reaction occurrence per source entity and exact policy revision.</summary>
     /// <returns>This authoring source; conflicting second source receipts will fail admission.</returns>
+    /// <exception cref="InvalidOperationException">Episode identity has already been selected.</exception>
     public MachineReactionSource<TSource> OncePerSourceEntity()
-    { identityScope = MachineReactionIdentityScope.SourceEntity; return this; }
+    {
+        if (episodeKey is not null) throw new InvalidOperationException("Episode identity is already selected.");
+        identityScope = MachineReactionIdentityScope.SourceEntity; return this;
+    }
 
-    /// <summary>Requires a successful target receipt from another one-shot reaction on the same source entity.</summary>
+    /// <summary>Declares one occurrence per source entity and explicit typed episode field.</summary>
+    /// <typeparam name="TKey">String, Guid, Int32 or Int64 field type.</typeparam>
+    /// <param name="key">Direct required source property identifying the business episode; no computation or closure is retained.</param>
+    /// <returns>This source with a portable field selector. Coordinated dependents inherit it through After.</returns>
+    /// <exception cref="ArgumentNullException">Key is null.</exception>
+    /// <exception cref="ArgumentException">The selector is not a property path.</exception>
+    /// <exception cref="InvalidOperationException">Identity is already selected or the field contract is unsupported.</exception>
+    public MachineReactionSource<TSource> OncePerEpisode<TKey>(Expression<Func<TSource, TKey>> key)
+    {
+        ArgumentNullException.ThrowIfNull(key);
+        if (identityScope != MachineReactionIdentityScope.SourceOccurrence)
+            throw new InvalidOperationException("Reaction identity is already selected.");
+        var author = new RelationQueryExpressionAuthoring();
+        _ = author.Clr.Shape<TSource>();
+        var path = FieldPath.Capture(key, author.Clr.ResolveMemberPath);
+        _ = MachineReaction.ValidateEpisodeField(source.Shape, path);
+        episodeKey = path;
+        identityScope = MachineReactionIdentityScope.SourceEpisode;
+        return this;
+    }
+
+    /// <summary>Requires a successful target receipt from another reaction on the same source entity and, when selected, the same episode.</summary>
     /// <param name="reaction">Exact prerequisite reaction declaration.</param>
-    /// <returns>This source with source-entity identity and a durable prerequisite wait.</returns>
+    /// <returns>This source with the prerequisite's entity/episode identity selector and a durable prerequisite wait.</returns>
     /// <exception cref="ArgumentNullException">The reaction is null.</exception>
-    /// <exception cref="ArgumentException">The prerequisite is not one-shot or belongs to another source shape.</exception>
+    /// <exception cref="ArgumentException">The prerequisite uses occurrence identity, belongs to another source shape, or conflicts with an explicitly selected identity.</exception>
     /// <exception cref="InvalidOperationException">A prerequisite is already declared.</exception>
     public MachineReactionSource<TSource> After(MachineReaction reaction)
     {
         ArgumentNullException.ThrowIfNull(reaction);
         if (prerequisite is not null) throw new InvalidOperationException("This profile supports one prerequisite per reaction.");
-        if (reaction.Payload.IdentityScope != MachineReactionIdentityScope.SourceEntity || reaction.Payload.Source != source.Shape)
-            throw new ArgumentException("The prerequisite must be declared once for the same source entity shape.", nameof(reaction));
+        if (reaction.Payload.IdentityScope == MachineReactionIdentityScope.SourceOccurrence || reaction.Payload.Source != source.Shape
+            || identityScope != MachineReactionIdentityScope.SourceOccurrence
+                && (identityScope != reaction.Payload.IdentityScope || episodeKey != reaction.Payload.EpisodeKey))
+            throw new ArgumentException("The prerequisite must share the source shape and entity/episode identity selector.", nameof(reaction));
         prerequisite = reaction;
-        identityScope = MachineReactionIdentityScope.SourceEntity;
+        identityScope = reaction.Payload.IdentityScope;
+        episodeKey = reaction.Payload.EpisodeKey;
         return this;
     }
     internal MachineReactionSource(EntityDefinition source, MachineMovement movement, string id, string revision)
@@ -253,6 +328,6 @@ public sealed class MachineReactionSource<TSource> where TSource : notnull
                 p.Return(MachineReaction.ReturnNode, result.Value);
             }, sourceFile, sourceLine);
         return new(ExecutionDefinitionDocument.Create(MachineReaction.Kind, new(id), new(revision),
-            new MachineReactionPayload(source.Shape, new(movement.Id), target.Document, process.Document, identityScope, prerequisite?.Document), provenance));
+            new MachineReactionPayload(source.Shape, new(movement.Id), target.Document, process.Document, identityScope, prerequisite?.Document, episodeKey), provenance));
     }
 }

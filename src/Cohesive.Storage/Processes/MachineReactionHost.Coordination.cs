@@ -36,7 +36,7 @@ public sealed partial class MachineReactionHost
     bool HasPrerequisiteProof(ProcessDurableStoreSnapshot snapshot, MachineReactionInvocation invocation)
     {
         if (snapshot.Checkpoint.Inbox.IsEmpty) return false;
-        var required = MachineReactionInvocation.InstanceFor(prerequisite!.Policy, invocation.Source, invocation.MovementNode);
+        var required = MachineReactionInvocation.InstanceFor(prerequisite!.Policy, invocation.Source, invocation.MovementNode, invocation.Episode);
         var found = false;
         foreach (var entry in snapshot.Checkpoint.Inbox)
         {
@@ -58,7 +58,7 @@ public sealed partial class MachineReactionHost
 
     async Task<MachineReactionProgress> InspectPrerequisiteAsync(OperationContext context, MachineReactionInvocation invocation)
     {
-        var required = MachineReactionInvocation.InstanceFor(prerequisite!.Policy, invocation.Source, invocation.MovementNode);
+        var required = MachineReactionInvocation.InstanceFor(prerequisite!.Policy, invocation.Source, invocation.MovementNode, invocation.Episode);
         return PrerequisiteDisposition(required, await ReadPrerequisiteAsync(context, required).ConfigureAwait(false));
     }
 
