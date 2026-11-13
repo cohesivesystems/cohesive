@@ -160,6 +160,7 @@ public sealed partial class HistoricalQualificationExamples
         readonly Dictionary<RequestContractReference, Func<RequestEnvelope, ValueTask<RequestTerminalOutcome>>> handlers;
         readonly IntegrationRuntime runtime;
         readonly HistoricalCoverageScope scope;
+        internal HistoricalCoverageScope RequestedScope => scope;
         readonly IngestionDateRangePosition selectedPosition;
         byte[]? publicationBytes;
         ExecutionDefinitionDocument? requested, acquired, prepared;
