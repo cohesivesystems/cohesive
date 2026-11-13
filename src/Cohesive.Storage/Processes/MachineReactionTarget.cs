@@ -6,7 +6,7 @@ namespace Cohesive.Storage.Processes;
 /// <summary>Infrastructure realization of one exact target transition with replayable atomic receipts.</summary>
 /// <remarks>Implementations must authorize fresh execution and receipt access, preserve exact operation identity,
 /// and never translate transport acceptance into successful execution. Ambiguous failures propagate.</remarks>
-public abstract class MachineReactionTarget : IProcessTransitionOperationAdapter
+public abstract class MachineReactionTarget : IRecoverableProcessTransitionOperationAdapter
 {
     /// <summary>Declares the exact operation and logical scope supplied by this realization.</summary>
     /// <param name="transition">Exact target transition reference.</param>
@@ -19,6 +19,17 @@ public abstract class MachineReactionTarget : IProcessTransitionOperationAdapter
     public ExecutionDefinitionReference Transition { get; }
     /// <summary>Supported authority scope, including tenant.</summary>
     public InteractionAuthorityScope Authority { get; }
+
+    /// <summary>Conservatively classifies target failures; missing acknowledgement never proves non-commit.</summary>
+    /// <param name="exception">Physical dispatch failure.</param>
+    /// <returns>Ambiguous effect evidence; protocol and authorization errors require operator intervention.</returns>
+    public virtual DurableOperationFailure DescribeFailure(Exception exception) => new(
+        DurableOperationFailurePhase.InCall, DurableOperationEffectEvidence.Ambiguous,
+        exception is IOException or TimeoutException
+            || exception is System.Net.Http.HttpRequestException http && http.StatusCode is not
+                (System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Conflict)
+            ? DurableOperationFailureDisposition.Retryable : DurableOperationFailureDisposition.Terminal,
+        exception is MachineReactionProtocolException protocol ? protocol.Code : "machine.reaction.target.unacknowledged");
 
     /// <summary>Executes or replays an exact operation, with fresh target authorization.</summary>
     /// <param name="context">Trusted caller identity, clock and cancellation.</param>

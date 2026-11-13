@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
 using Cohesive.Processes.IR;
@@ -27,10 +28,11 @@ public enum MachineReactionStatus
 /// <param name="Operation">Exact target operation when known.</param>
 /// <param name="Receipt">Resolved authoritative target evidence when available.</param>
 /// <param name="Failure">Explicit attempt failure evidence when supplied by the execution host.</param>
+/// <param name="Attempts">Retained physical attempt evidence, when inspected through a host.</param>
 /// <param name="Diagnostic">Explanation when no conclusive target receipt is available.</param>
 public sealed record MachineReactionProgress(MachineReactionStatus Status, ProcessOperationOccurrence? Operation = null,
     EntityTransitionOperationReceipt? Receipt = null, DurableOperationFailure? Failure = null,
-    DocumentValidationDiagnostic? Diagnostic = null);
+    DocumentValidationDiagnostic? Diagnostic = null, ImmutableArray<ProcessTransitionAttempt> Attempts = default);
 
 /// <summary>Deterministic reaction start intent and evidence inspection for the atomic entity/Process interpretation.</summary>
 /// <remarks>Preparing does not admit, persist, authorize or dispatch a start. Supply Start to the existing

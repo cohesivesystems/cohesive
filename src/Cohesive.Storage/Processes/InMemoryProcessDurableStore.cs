@@ -13,7 +13,7 @@ namespace Cohesive.Storage.Processes;
 /// staged in isolated immutable values and published under one lock so an injected pre-commit crash exposes none of
 /// the staged state and an injected post-commit crash exposes all of it.
 /// </remarks>
-public sealed class InMemoryProcessDurableStore : IProcessDurableStore
+public sealed class InMemoryProcessDurableStore : IProcessDurableStore, IProcessInstanceSource
 {
     readonly Lock gate = new();
     readonly Func<ProcessStoreCrashContext, bool>? shouldCrash;
@@ -64,6 +64,29 @@ public sealed class InMemoryProcessDurableStore : IProcessDurableStore
         SupportsAtomicAggregateCommit: true,
         SupportsCompareAndSwap: true,
         SupportsWorkerFencing: true);
+
+    /// <inheritdoc />
+    public Task<ImmutableArray<ProcessInstanceId>> ListInstancesAsync(OperationContext context, ProcessInstanceId? after, int maximumInstances)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumInstances, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumInstances, 1000);
+        context.ThrowIfCancellationRequested();
+        lock (gate)
+            return Task.FromResult(aggregates.Keys.Where(id => after is null || StringComparer.Ordinal.Compare(id.Value, after.Value.Value) > 0)
+                .OrderBy(id => id.Value, StringComparer.Ordinal).Take(maximumInstances).ToImmutableArray());
+    }
+
+    /// <inheritdoc />
+    public Task<ImmutableArray<ProcessInstanceId>> ListPendingInstancesAsync(OperationContext context, ProcessInstanceId? after, int maximumInstances)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumInstances, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumInstances, 1000);
+        context.ThrowIfCancellationRequested();
+        lock (gate)
+            return Task.FromResult(aggregates.Where(item => item.Value.Checkpoint.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.None
+                    && (after is null || StringComparer.Ordinal.Compare(item.Key.Value, after.Value.Value) > 0))
+                .Select(item => item.Key).OrderBy(id => id.Value, StringComparer.Ordinal).Take(maximumInstances).ToImmutableArray());
+    }
 
     /// <summary>Captures the complete provider-neutral authority state in canonical instance order.</summary>
     /// <returns>An immutable current-version Process durable-store document.</returns>

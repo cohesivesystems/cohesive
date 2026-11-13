@@ -23,7 +23,10 @@ public sealed class MachineReactionHostTests
         var f = await Fixture.Create(allowed);
         var first = Assert.Single(await f.Host().DeliverAsync(f.Context, f.Receipt));
         Assert.Equal(expected, first.Status);
-        Assert.Equal(first, Assert.Single(await f.Host().DeliverAsync(f.Context, f.Receipt)));
+        var replay = Assert.Single(await f.Host().DeliverAsync(f.Context, f.Receipt));
+        Assert.Equal(first.Status, replay.Status);
+        Assert.Equal(first.Receipt!.Commit.Fingerprint, replay.Receipt!.Commit.Fingerprint);
+        Assert.Single(replay.Attempts);
         f.SourceAllowed = false;
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => f.Host().DeliverAsync(f.Context, f.Receipt));
         f.SourceAllowed = true;
@@ -200,7 +203,7 @@ public sealed class MachineReactionHostTests
     }
 
     [Fact]
-    public async Task Cosmos_checkpoints_only_conclusive_batches_and_validates_receipt_content()
+    public async Task Cosmos_checkpoints_durable_admission_before_target_execution_and_validates_receipts()
     {
         var f = await Fixture.Create();
         using var client = new CosmosClient("https://localhost:8081", Convert.ToBase64String(new byte[64]));
@@ -211,9 +214,13 @@ public sealed class MachineReactionHostTests
         var document = repository.CreateTransitionReceiptDocument(f.Context, f.Receipt.Commit, entity, "test");
         var checkpoints = 0;
         var batch = new CosmosManagedMaterializationProviderBatch("range", "cursor", [document], () => { checkpoints++; return Task.CompletedTask; });
-        await Assert.ThrowsAsync<TimeoutException>(() => CosmosMachineReactionSource.DeliverBatchAsync(repository,
-            f.Host(new LostResponse(f.Target)), f.Context, batch));
-        Assert.Equal(0, checkpoints);
+        await CosmosMachineReactionSource.DeliverBatchAsync(repository, f.Host(new LostResponse(f.Target)), f.Context, batch);
+        Assert.Equal(1, checkpoints);
+        var instance = Assert.Single(await ((IProcessInstanceSource)f.Store).ListInstancesAsync(f.Context, null, 10));
+        Assert.Equal(MachineReactionStatus.Pending, (await f.Host().InspectAsync(f.Context, instance))!.Status);
+        Assert.Equal(MachineReactionStatus.Indeterminate, (await f.Host(new LostResponse(f.Target)).RecoverAsync(f.Context, instance))!.Status);
+        Assert.Equal(MachineReactionStatus.Completed, (await f.Host().RecoverAsync(f.Context, instance))!.Status);
+        checkpoints = 0;
         await CosmosMachineReactionSource.DeliverBatchAsync(repository, f.Host(), f.Context, batch);
         Assert.Equal(1, checkpoints);
         await CosmosMachineReactionSource.DeliverBatchAsync(repository, f.Host(), f.Context, batch);
@@ -228,30 +235,32 @@ public sealed class MachineReactionHostTests
         Assert.NotEqual(source.ProcessorName, other.ProcessorName);
     }
 
-    sealed class Fixture
+    internal sealed class Fixture
     {
         internal TenderReactionModel Model = null!;
         internal OperationContext Context = null!;
         internal EntityTransitionOperationReceipt Receipt = null!;
         internal InMemoryEntityOutboxRepository Repository = null!;
         internal MachineReactionTarget Target = null!;
-        internal readonly InMemoryProcessDurableStore Store = new();
+        internal IProcessDurableStore Store = new InMemoryProcessDurableStore();
         internal bool SourceAllowed = true;
         internal bool TargetAllowed = true;
+        internal bool RecoveryAllowed = true;
         internal int SourceAuthorizations;
         internal MachineReactionHost Host(MachineReactionTarget? target = null) => new(Model.PendingAcceptance, Store, target ?? Target,
             (_, receipt) => { SourceAuthorizations++; return ValueTask.FromResult<ProcessControlAuthorizationContext?>(SourceAllowed
-                ? new("worker", receipt.Request.AuthorityScope, "policy/test") : null); }, new("worker", TimeSpan.FromMinutes(5)));
+                ? new("worker", receipt.Request.AuthorityScope, "policy/test") : null); }, new("worker", TimeSpan.FromMinutes(5)),
+            recovery: new((_, _) => ValueTask.FromResult(RecoveryAllowed), retryDelay: TimeSpan.Zero));
 
-        internal static async Task<Fixture> Create(bool allowed = true)
+        internal static async Task<Fixture> Create(bool allowed = true, string loadId = "load-1", string processId = "process-1")
         {
             var f = new Fixture { Model = new() };
             var (source, context, commit) = await EntityMachineOccurrenceTests.Prepare(f.Model.Tender.Entity,
-                f.Model.Tender.AcceptPending, new TenderState("load-1", false, false, false, ""), new SendResult(false));
+                f.Model.Tender.AcceptPending, new TenderState(loadId, false, false, false, ""), new SendResult(false), processId);
             f.Context = context;
             f.Receipt = (await source.CommitTransitionOperation(context, commit)).Receipt!;
             f.Repository = new(f.Model.Load, EntityPartitionKeyPolicy.Fixed("test"));
-            await f.Repository.Upsert(context, new(f.Model.Load.CreateState("load-1", new LoadAcknowledgementState(LoadAcknowledgementStatus.Ready, allowed)).Snapshot));
+            await f.Repository.Upsert(context, new(f.Model.Load.CreateState(loadId, new LoadAcknowledgementState(LoadAcknowledgementStatus.Ready, allowed)).Snapshot));
             Assert.True(InteractionContractCatalog.TryCreate([], out var contracts).IsValid);
             f.Target = MachineReactionTarget.Local(new(f.Model.MarkPending.Compile().Plan!, f.Repository, contracts!),
                 f.Receipt.Request.AuthorityScope, (_, _) => ValueTask.FromResult(f.TargetAllowed));

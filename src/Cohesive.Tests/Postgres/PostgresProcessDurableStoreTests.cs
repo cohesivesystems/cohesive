@@ -445,7 +445,7 @@ public sealed class PostgresProcessDurableStoreTests
         }
     }
 
-    sealed class PostgresFactAttribute : FactAttribute
+    internal sealed class PostgresFactAttribute : FactAttribute
     {
         public PostgresFactAttribute()
         {
