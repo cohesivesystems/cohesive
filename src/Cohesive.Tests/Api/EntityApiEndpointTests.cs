@@ -78,6 +78,61 @@ public sealed class EntityApiEndpointTests
     }
 
     [Fact]
+    public async Task Typed_transition_concurrency_policy_uses_the_request_token()
+    {
+        var entity = NoteEntity.Instance;
+        var repository = new InMemoryEntityOutboxRepository(entity.Definition,
+            partitionKeyFieldName: nameof(NoteState.Tenant));
+        var context = OperationContext.Create(new FixedTimeProvider());
+        var before = await repository.Upsert(context, new(entity.Definition.CreateState("note-1",
+            new NoteState("note-1", "tenant-a", "before", context.UtcNow)).Snapshot));
+        await using var app = CreateApp(entity, repository, operationContext: context, emitOnRevise: false,
+            expectedTransitionToken: static (_, request) => request.ExpectedToken is { } token
+                ? new EntityConcurrencyToken(token) : null);
+
+        var stale = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("stale", "stale-token"));
+        Assert.Equal(StatusCodes.Status409Conflict, stale.StatusCode);
+        var retained = await repository.TryGet(context, "note-1", EntityReadOptions.Full);
+        Assert.NotNull(retained);
+        Assert.Equal(before.Entity, retained.Entity);
+        Assert.Equal(before.ConcurrencyToken, retained.ConcurrencyToken);
+
+        var current = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("after", before.ConcurrencyToken.Value));
+        Assert.Equal(StatusCodes.Status200OK, current.StatusCode);
+        var updated = await repository.TryGet(context, "note-1", EntityReadOptions.Full);
+        Assert.NotNull(updated);
+        Assert.NotEqual(before.ConcurrencyToken, updated.ConcurrencyToken);
+        Assert.Equal("after", updated.Entity.Observation.GetField(nameof(NoteState.Text)).GetString());
+
+        var useLoadedToken = await InvokeAsync(app, route: "/notes/{id}", method: "POST",
+            routeValues: new() { ["id"] = "note-1" }, body: new ReviseNoteRequest("uses loaded token"));
+        Assert.Equal(StatusCodes.Status200OK, useLoadedToken.StatusCode);
+        Assert.Equal("uses loaded token", ReadJson(useLoadedToken.Body).GetProperty(nameof(NoteResource.Text)).GetString());
+    }
+
+    [Fact]
+    public async Task Mapping_a_snapshot_taken_before_transition_binding_fails_before_adding_routes()
+    {
+        var entity = NoteEntity.Instance;
+        var api = Cohesive.Api.Api.Define();
+        var earlier = api.Build();
+        var options = new EntityApiEndpointOptions { Entity = entity.Definition };
+        var endpoint = DeclareRevise(api).BindTransition(options, AuthorReviseTransition(entity, emit: false),
+            static (EntityApiRequestContext context, ReviseNoteRequest request) =>
+                new NoteEntity.ReviseInput(request.Text, context.OperationContext.UtcNow),
+            static (_, _) => Results.Ok());
+        await using var app = WebApplication.CreateSlimBuilder().Build();
+
+        var error = Assert.Throws<InvalidOperationException>(() => app.MapEntityApiDefinition(earlier, options));
+        Assert.Contains(endpoint.Id.Value, error.Message, StringComparison.Ordinal);
+        Assert.Empty(((IEndpointRouteBuilder)app).DataSources);
+
+        Assert.Single(app.MapEntityApiDefinition(api.Build(), options));
+    }
+
+    [Fact]
     public async Task Candidate_preparation_failure_returns_sanitized_problem_without_commit()
     {
         var entity = NoteEntity.Instance;
@@ -487,7 +542,8 @@ public sealed class EntityApiEndpointTests
         Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? transitionEmissionPolicy = null,
         bool configureTransitionEmissions = true,
         bool emitOnRevise = true,
-        Action<EntityApiCommitContext>? onRevise = null)
+        Action<EntityApiCommitContext>? onRevise = null,
+        Func<EntityApiRequestContext, ReviseNoteRequest, EntityConcurrencyToken?>? expectedTransitionToken = null)
     {
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.ConfigureHttpJsonOptions(static options =>
@@ -555,7 +611,8 @@ public sealed class EntityApiEndpointTests
             new()
             {
                 InteractionContracts = interactionContracts,
-                CreateEmissionPolicy = emissionPolicy
+                CreateEmissionPolicy = emissionPolicy,
+                ExpectedConcurrencyToken = expectedTransitionToken
             });
         var definition = api.Build();
         Assert.Same(reviseEndpoint, Assert.Single(definition.Endpoints, endpoint => endpoint.Id == reviseEndpoint.Id));
@@ -757,7 +814,7 @@ public sealed class EntityApiEndpointTests
 
     sealed record CreateNoteRequest(string Id, string Text);
 
-    sealed record ReviseNoteRequest(string Text);
+    sealed record ReviseNoteRequest(string Text, string? ExpectedToken = null);
 
     sealed record InspectNoteRequest(string Contains);
 

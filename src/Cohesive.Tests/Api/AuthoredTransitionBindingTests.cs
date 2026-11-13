@@ -1,4 +1,6 @@
 using Cohesive.Adapters.AspNet.Entities;
+using Cohesive.Api;
+using Cohesive.Model.Authoring;
 using Cohesive.Model.Serialization;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.IR;
@@ -32,6 +34,46 @@ public sealed class AuthoredTransitionBindingTests
         Assert.False(exception.Compilation.IsSuccessful);
         Assert.Contains(exception.Compilation.Validation.Diagnostics, diagnostic => diagnostic.Code == "transitions.ir.nodeIdentityDuplicate");
     }
+
+    [Fact]
+    public void Qualified_request_contract_requires_the_supplied_shape_graph()
+    {
+        var entity = ObjectEntityDefinition.For<State>();
+        TypeId inputType = new("named-submit-input");
+        var graph = new ShapeGraph(new("submit-graph"), [entity.Shape], namedTypes:
+        [
+            new TypeDefinition.Structural(inputType,
+                [new(new(nameof(SubmitInput.Confirmed)), new ScalarTypeRef(ScalarTypeKind.Bool))])
+        ]);
+        var transition = TransitionAuthoring.Create<State, SubmitInput, string>(
+            entity.Shape,
+            new(new("test/qualified-submit"), new("1"), new("body"),
+                new(new(TransitionAuthoring.Producer), new("test/qualified-submit"), DocumentOrigin.Generated)),
+            builder => builder.Set(new("set-status"), state => state.Status, "Submitted")
+                .Return(new("result"), TransitionOutcomeDisposition.Applied, "Submitted"),
+            typeRefMapper: new DefaultClrTypeRefMapper(new Dictionary<Type, TypeRef>
+            {
+                [typeof(SubmitInput)] = new NamedTypeRef(inputType)
+            }));
+        var api = Cohesive.Api.Api.Define();
+        var command = api.Entity<State>().Command("Submit").Route("POST", "/state/{id}/submit");
+        var options = new EntityApiEndpointOptions { Entity = entity };
+
+        Assert.Throws<TransitionApiPreparationException>(() => Bind(policy: null));
+        Assert.Empty(api.Build().Endpoints);
+
+        var endpoint = Bind(new() { ShapeGraph = graph });
+        Assert.Same(endpoint, Assert.Single(api.Build().Endpoints));
+        Assert.Equal(transition.Reference, endpoint.Operation.TransitionReference);
+        Assert.Equal(typeof(SubmitInput), endpoint.Operation.Http!.Body!.BodyType);
+
+        ApiEndpoint Bind(EntityTransitionCommandPolicy<SubmitInput>? policy) =>
+            command.BindTransition(options, transition,
+                static (EntityApiRequestContext _, SubmitInput request) => request,
+                static (_, _) => Results.Ok(), policy);
+    }
+
+    sealed record SubmitInput(bool Confirmed);
 
     static Cohesive.Api.ApiEndpoint Bind(Cohesive.Api.ApiBuilder api, Transition<State, bool, string> transition) =>
         api.Entity<State>().Command("Submit").Route("POST", "/state/{id}/submit").RouteParameter<string>("id")

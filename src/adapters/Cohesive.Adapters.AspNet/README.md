@@ -295,6 +295,7 @@ there is no hidden retry or result cache. The mapper adds no query execution alg
 ### Authored entity transitions
 
 Complete a JSON entity command with `BindTransition` before building the API definition.
+Mapping an earlier definition snapshot fails at startup and identifies the missing bound endpoint.
 
 ```csharp
 var options = new EntityApiEndpointOptions { Entity = entity.Definition };

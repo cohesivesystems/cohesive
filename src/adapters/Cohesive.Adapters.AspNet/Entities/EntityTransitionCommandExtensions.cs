@@ -46,7 +46,8 @@ public static class EntityTransitionCommandExtensions
     /// <exception cref="InvalidOperationException">The command cannot be finalized or pins another transition.</exception>
     /// <exception cref="TransitionApiPreparationException">The authored transition failed compilation.</exception>
     /// <exception cref="NotSupportedException">Canonical transition content contains an unsupported runtime value.</exception>
-    /// <remarks>Complete the command before taking the API definition snapshot with <see cref="ApiBuilder.Build"/>.</remarks>
+    /// <remarks>Complete the command before taking the API definition snapshot with <see cref="ApiBuilder.Build"/>.
+    /// Mapping an earlier snapshot that omits this binding fails during registration.</remarks>
     public static ApiEndpoint BindTransition<TResource, TEntity, TRequest, TInput, TOutcome>(
         this OperationBuilder<EntityApiBuilder<TResource>> command,
         EntityApiEndpointOptions options,

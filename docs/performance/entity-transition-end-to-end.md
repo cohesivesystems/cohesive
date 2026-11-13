@@ -126,11 +126,12 @@ Both ordinal write experiments used the same
 13-field Shipment workload and BenchmarkDotNet settings on an Apple M5 Max, macOS 27.0.1, .NET 10.0.13
 (SDK 10.0.402). Each result below gives both warm run means. Managed allocation is per operation.
 
-### Decision and candidate preparation
+### Historical stage measurements
 
-On the original PR tip, [`15ffb61a`](https://github.com/cohesivesystems/cohesive/commit/15ffb61a), a stage
-benchmark loaded a SQLite snapshot before measurement and reused its plan, input, activation and snapshot.
-Setup confirmed that the optimized path produced a candidate, that both decisions serialized identically,
+On the original PR tip, [`15ffb61a`](https://github.com/cohesivesystems/cohesive/commit/15ffb61a), a local
+scratch benchmark loaded a SQLite snapshot before measurement and reused its plan, input, activation
+and snapshot. The scratch harness was never committed, so these figures are historical and cannot be
+rerun from the cited revision alone. Setup confirmed that the optimized path produced a candidate, that both decisions serialized identically,
 and that the resulting observations were equal. This excludes request parsing, database I/O, response writing,
 and first-use compilation.
 
@@ -144,10 +145,10 @@ and first-use compilation.
 The first pair calls `DecideFullState` and `DecideForEntity`. The second pair also calls the respective
 `ApplyToEntity` overload, including normal entity validation. The decision timings are within 1.1% of
 one another. The candidate saves 0.38–0.62 µs once entity preparation is included. The original SQLite
-endpoint runs measured a 56–174 µs increase, whose cause remains unisolated. The specialized body also kept the interpreter's ordinary candidate
-writes and performed a second write into ordinal slots.
+endpoint runs measured a 56–174 µs increase, whose cause remains unisolated. The specialized body also kept the interpreter's
+ordinary candidate writes and performed a second write into ordinal slots.
 
-### Endpoint with file-backed SQLite
+### Historical endpoint measurements with file-backed SQLite
 
 | Variant | CLR response KiB/op | Observation response KiB/op | CLR mean µs (run 1 / run 2) | Observation mean µs (run 1 / run 2) |
 | --- | ---: | ---: | ---: | ---: |
@@ -157,8 +158,8 @@ writes and performed a second write into ordinal slots.
 | Canonical patch projected into ordinal slots | 43.11 / 43.10 | 42.98 / 42.97 | 996.52 / 827.36 | 1063.21 / 881.70 |
 
 Both main baselines used [`c495740f`](https://github.com/cohesivesystems/cohesive/commit/c495740f). The second
-experiment kept the reference interpreter and applied the canonical patch once into one owned slot vector.
-It reduced managed allocations by about 5.2%, with opposite SQLite latency results across the two comparisons.
+experiment used an uncommitted patch projector that kept the reference interpreter and applied the canonical
+patch once into one owned slot vector. It reduced managed allocations by about 5.2%, with opposite SQLite latency results across the two comparisons.
 In-memory allocations stayed within 0.1% of main in both experiments. The endpoint benchmark includes JSON
 request reading and response writing and an actual conditional SQLite commit with WAL and FULL synchronization.
 

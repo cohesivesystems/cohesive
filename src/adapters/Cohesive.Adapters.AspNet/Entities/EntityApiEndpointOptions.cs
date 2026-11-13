@@ -138,6 +138,16 @@ public sealed class EntityApiEndpointOptions
         return this;
     }
 
+    internal void ValidateTransitionBindings(ApiDefinition definition)
+    {
+        foreach (var (endpointId, binding) in bindingsByEndpointId)
+        {
+            if (binding is TransitionEntityApiOperationBinding && !definition.TryGetOperation(endpointId, out _))
+                throw new InvalidOperationException(
+                    $"The API definition does not contain bound transition endpoint '{endpointId}'. Build the definition after completing its transition command.");
+        }
+    }
+
     internal bool TryGetBinding(ApiOperation operation, out EntityApiOperationBinding binding)
     {
         ArgumentNullException.ThrowIfNull(operation);
