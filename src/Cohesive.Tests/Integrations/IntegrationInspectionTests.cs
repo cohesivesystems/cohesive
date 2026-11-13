@@ -23,7 +23,7 @@ public sealed partial class IntegrationModelTests
         var control = Lifecycle();
         var binding = control.Bind(Candidate());
         var evidence = new IntegrationHealthEvidence(binding.Binding, Health(AdmissionTime), AdmissionTime.AddHours(1));
-        var view = IntegrationInspection.Create(binding, control.Inspect(), AdmissionTime.AddMinutes(minutes), evidence);
+        var view = binding.Inspect(AdmissionTime.AddMinutes(minutes), evidence);
         Assert.Equal(current, view.HasCurrentProviderEvidence);
         Assert.Equal(current ? ExecutionHealthStatus.Healthy : ExecutionHealthStatus.Unknown, view.ProviderHealth);
         Assert.Equal(current ? ExecutionReadinessStatus.Ready : ExecutionReadinessStatus.Unknown, view.ProviderReadiness);
@@ -39,7 +39,7 @@ public sealed partial class IntegrationModelTests
         control.Change(Change("start", 0, IntegrationDesiredState.Active));
         control.Admit(Admission(binding));
         control.Admit(Admission(binding) with { Continuation = new(new("later"), new("attempt/1")), AtUtc = AdmissionTime.AddMinutes(1) });
-        var view = IntegrationInspection.Create(binding, control.Inspect(), AdmissionTime.AddMinutes(2));
+        var view = binding.Inspect(AdmissionTime.AddMinutes(2));
         Assert.True(view.Lifecycle.Accepting);
         Assert.Equal(ExecutionHealthStatus.Unknown, view.ProviderHealth);
         Assert.Equal(ExecutionReadinessStatus.Unknown, view.ProviderReadiness);
@@ -55,7 +55,7 @@ public sealed partial class IntegrationModelTests
         var binding = control.Bind(Candidate());
         control.Change(Change("start", 0, IntegrationDesiredState.Active));
         var observation = Health(AdmissionTime, ExecutionHealthStatus.Unhealthy);
-        var view = IntegrationInspection.Create(binding, control.Inspect(), AdmissionTime,
+        var view = binding.Inspect(AdmissionTime,
             new(binding.Binding, observation, AdmissionTime.AddMinutes(5)));
         Assert.Equal(ExecutionHealthStatus.Unhealthy, view.ProviderHealth);
         Assert.Equal(ExecutionReadinessStatus.NotReady, view.ProviderReadiness);
@@ -66,16 +66,14 @@ public sealed partial class IntegrationModelTests
     }
 
     [Fact]
-    public void HealthCannotBeBorrowedFromAnotherBindingOrConsumer()
+    public void HealthCannotBeBorrowedFromAnotherBinding()
     {
         var control = Lifecycle();
         var binding = control.Bind(Candidate());
         var other = control.Bind(Candidate("v2"));
         var evidence = new IntegrationHealthEvidence(other.Binding, Health(AdmissionTime), AdmissionTime.AddHours(1));
-        Assert.Throws<ArgumentException>(() => IntegrationInspection.Create(binding, control.Inspect(), AdmissionTime, evidence));
-        Assert.Throws<ArgumentException>(() => IntegrationInspection.Create(binding,
-            control.Inspect() with { Consumer = new("other", "source", "sink", "partition") }, AdmissionTime));
-        Assert.Throws<ArgumentException>(() => IntegrationInspection.Create(binding, control.Inspect(), AdmissionTime.ToOffset(TimeSpan.FromHours(1))));
+        Assert.Throws<ArgumentException>(() => binding.Inspect(AdmissionTime, evidence));
+        Assert.Throws<ArgumentException>(() => binding.Inspect(AdmissionTime.ToOffset(TimeSpan.FromHours(1))));
     }
 
     [Fact]
@@ -89,19 +87,20 @@ public sealed partial class IntegrationModelTests
             AdmissionTime, Profile().Document.Metadata.Provenance);
         Assert.Throws<ArgumentException>(() => new IntegrationHealthEvidence(binding.Binding, noSource, AdmissionTime.AddHours(1)));
     }
-    [Fact]
-    public void RetainedHealthReopensWithoutRenewingItsValidityWindow()
+    [Theory]
+    [InlineData(ExecutionHealthStatus.Healthy)]
+    [InlineData(ExecutionHealthStatus.Unhealthy)]
+    public void RetainedHealthReopensWithoutRenewingItsValidityWindow(ExecutionHealthStatus health)
     {
         var control = Lifecycle();
         var binding = control.Bind(Candidate());
-        var evidence = new IntegrationHealthEvidence(binding.Binding, Health(AdmissionTime), AdmissionTime.AddMinutes(1));
+        var evidence = new IntegrationHealthEvidence(binding.Binding, Health(AdmissionTime, health), AdmissionTime.AddMinutes(1));
         var options = InteractionEnvelopeJsonSerializer.CreateOptions();
         var restored = JsonSerializer.Deserialize<IntegrationHealthEvidence>(JsonSerializer.Serialize(evidence, options), options)!;
-        Assert.Equal(evidence.Binding, restored.Binding);
-        Assert.Equal(evidence.ValidUntilUtc, restored.ValidUntilUtc);
-        Assert.Equal(evidence.Observation.ObservedAtUtc, restored.Observation.ObservedAtUtc);
-        Assert.Equal(evidence.Observation.Provenance, restored.Observation.Provenance);
-        var view = IntegrationInspection.Create(binding, control.Inspect(), AdmissionTime.AddMinutes(1), restored);
+        // The wrapper uses reference identity, not record equality over nested collection-bearing evidence.
+        Assert.NotEqual(evidence, restored);
+        Assert.Equal(JsonSerializer.Serialize(evidence, options), JsonSerializer.Serialize(restored, options));
+        var view = binding.Inspect(AdmissionTime.AddMinutes(1), restored);
         Assert.False(view.HasCurrentProviderEvidence);
         Assert.Equal(ExecutionHealthStatus.Unknown, view.ProviderHealth);
         Assert.Null(view.OldestPendingAtUtc);
@@ -109,16 +108,64 @@ public sealed partial class IntegrationModelTests
     }
 
     [Fact]
-    public void PendingSnapshotCannotInventAnAgeFromFutureOrForeignAdmissions()
+    public void ClockSkewRetainsTimestampsAndClampsPendingAge()
     {
         var control = Lifecycle();
         var binding = control.Bind(Candidate());
         control.Change(Change("start", 0, IntegrationDesiredState.Active));
         var admission = control.Admit(Admission(binding)).Receipt;
-        var snapshot = control.Inspect();
-        Assert.Throws<ArgumentException>(() => IntegrationInspection.Create(binding, snapshot, AdmissionTime.AddTicks(-1)));
-        Assert.Throws<ArgumentException>(() => IntegrationInspection.Create(binding,
-            snapshot with { Pending = [admission with { Consumer = new("other", "source", "sink", "partition") }] }, AdmissionTime));
+        var evidence = new IntegrationHealthEvidence(binding.Binding, Health(AdmissionTime), AdmissionTime.AddMinutes(5));
+        var view = binding.Inspect(AdmissionTime.AddSeconds(-2), evidence);
+        Assert.Equal(admission.AtUtc, view.OldestPendingAtUtc);
+        Assert.Equal(TimeSpan.Zero, view.OldestPendingAge);
+        Assert.Equal(ExecutionHealthStatus.Unknown, view.ProviderHealth);
+        Assert.Contains(view.Diagnostics, d => d.Code == "integrations.inspection.admission-clock-skew");
+        Assert.Contains(view.Diagnostics, d => d.Code == "integrations.inspection.provider-clock-skew");
+        var later = binding.Inspect(AdmissionTime.AddSeconds(2), evidence);
+        Assert.Equal(TimeSpan.FromSeconds(2), later.OldestPendingAge);
+        Assert.Empty(later.Diagnostics);
+    }
+
+    [Fact]
+    public async Task HostExportsSkewedInspectionAndLeavesTheStreamOpen()
+    {
+        var control = Lifecycle();
+        var binding = control.Bind(Candidate());
+        control.Change(Change("start", 0, IntegrationDesiredState.Active));
+        control.Admit(Admission(binding));
+        var evidence = new IntegrationHealthEvidence(binding.Binding, Health(AdmissionTime), AdmissionTime.AddMinutes(5));
+        var reads = 0;
+        var clock = new InspectionTestClock(AdmissionTime.AddSeconds(-1));
+        var host = new IntegrationInspectionHost(binding, _ => { reads++; return ValueTask.FromResult<IntegrationHealthEvidence?>(evidence); }, clock);
+        using var stream = new MemoryStream();
+        await host.WriteJsonAsync(stream);
+        Assert.Equal(1, reads);
+        Assert.True(stream.CanWrite);
+        using var json = JsonDocument.Parse(stream.ToArray());
+        Assert.Equal(1, json.RootElement.GetProperty("pendingSessionCount").GetInt32());
+        Assert.Contains("integrations.inspection.admission-clock-skew", json.RootElement.GetRawText());
+        Assert.Single(control.Inspect().Pending);
+    }
+
+    [Fact]
+    public async Task HostDoesNotDisguiseReaderFailuresAndHonorsCancellation()
+    {
+        var control = Lifecycle();
+        var binding = control.Bind(Candidate());
+        var reads = 0;
+        var host = new IntegrationInspectionHost(binding, _ => { reads++; throw new IOException("store unavailable"); });
+        await Assert.ThrowsAsync<IOException>(() => host.ReadAsync().AsTask());
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => host.ReadAsync(cancellation.Token).AsTask());
+        Assert.Equal(1, reads);
+        var noEvidence = new IntegrationInspectionHost(binding, _ => ValueTask.FromResult<IntegrationHealthEvidence?>(null), new InspectionTestClock(AdmissionTime));
+        Assert.Equal(ExecutionHealthStatus.Unknown, (await noEvidence.ReadAsync()).ProviderHealth);
+    }
+
+    sealed class InspectionTestClock(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
 }

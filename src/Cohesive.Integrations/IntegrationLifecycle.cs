@@ -146,10 +146,16 @@ public sealed record IntegrationLifecycleChangeReceipt(IntegrationLifecycleChang
 public sealed class IntegrationAdmissionBinding
 {
     internal InMemoryIntegrationLifecycle Owner { get; }
-    /// <summary>Stable consumer controlled by the owner of this validated binding.</summary>
-    public IngestionLedgerAddress Consumer => Owner.Consumer;
     internal IntegrationAdmissionBinding(InMemoryIntegrationLifecycle owner, ExecutionDefinitionReference binding, ExecutionDefinitionReference process)
     { Owner = owner; Binding = binding; Process = process; }
+    /// <summary>Inspects the bound controller's current lifecycle and optional exact provider evidence.</summary>
+    /// <param name="atUtc">Explicit UTC inspection boundary; clock skew is reported rather than rejected.</param>
+    /// <param name="providerEvidence">Optional authenticated evidence for this exact binding.</param>
+    /// <returns>A read-only view using the owner controller's snapshot, with retained timestamps and skew diagnostics.</returns>
+    /// <exception cref="ArgumentException">Inspection time is not UTC or evidence belongs to another binding.</exception>
+    public IntegrationInspection Inspect(DateTimeOffset atUtc, IntegrationHealthEvidence? providerEvidence = null) =>
+        IntegrationInspection.Create(this, atUtc, providerEvidence);
+
     /// <summary>Exact validated canonical integration binding.</summary>
     public ExecutionDefinitionReference Binding { get; }
     /// <summary>Exact validated canonical Process.</summary>

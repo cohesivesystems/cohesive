@@ -84,7 +84,7 @@ admitted session finishes from its retained result through a fresh worker. Succe
 completion ends draining. Failed work stays visible until an explicit resolution protocol exists;
 these tests do not infer resolved external effects from a failure status.
 
-[HistoricalHealthExamples.cs](HistoricalHealthExamples.cs) adds a read-only JSON inspection projection.
+[HistoricalHealthExamples.cs](HistoricalHealthExamples.cs) uses the reusable `IntegrationInspectionHost` for evidence retrieval, clock sampling and JSON export.
 A synthetic source can be operationally Healthy while returning zero or only one of two required sessions.
 The view separates source coverage, digest-checked accepted publication, source ledger progress and
 pending sessions. Expiry changes provider health/readiness to Unknown without deleting accepted evidence.

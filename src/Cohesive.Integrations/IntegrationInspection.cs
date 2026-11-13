@@ -1,11 +1,17 @@
+using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Integrations;
 
 /// <summary>Host-attributed operational evidence for one exact integration binding, with an explicit expiry.</summary>
 /// <remarks>Source health does not establish complete observations, accepted destination coverage or source progress.
-/// The host authenticates the evidence producer and decides its validity horizon. This wrapper does not renew evidence.</remarks>
-public sealed record IntegrationHealthEvidence
+/// The host authenticates the evidence producer and decides its validity horizon. This wrapper does not renew evidence.
+/// Equality is reference identity, not value equivalence: the shared observation contains collection-bearing evidence.
+/// To compare persisted content, compare complete serializations under the same shared serializer options. Do not use
+/// object equality as an evidence deduplication key. This class deliberately does not advertise record equality.</remarks>
+public sealed class IntegrationHealthEvidence
 {
     /// <summary>Associates an existing health observation with its exact binding and validity horizon.</summary>
     /// <param name="binding">Exact binding observed by the producer, not a logical provider name.</param>
@@ -38,37 +44,35 @@ public sealed record IntegrationHealthEvidence
 public sealed class IntegrationInspection
 {
     IntegrationInspection(IntegrationAdmissionBinding binding, IntegrationLifecycleSnapshot lifecycle,
-        DateTimeOffset atUtc, IntegrationHealthEvidence? providerEvidence, DateTimeOffset? oldestPendingAtUtc)
+        DateTimeOffset atUtc, IntegrationHealthEvidence? providerEvidence, DateTimeOffset? oldestPendingAtUtc, ImmutableArray<DocumentValidationDiagnostic> diagnostics)
     {
         Binding = binding.Binding; Lifecycle = lifecycle; AtUtc = atUtc;
-        ProviderEvidence = providerEvidence; OldestPendingAtUtc = oldestPendingAtUtc;
+        ProviderEvidence = providerEvidence; OldestPendingAtUtc = oldestPendingAtUtc; Diagnostics = diagnostics;
     }
 
-    /// <summary>Projects a coherent host-supplied lifecycle snapshot and optional exact provider observation.</summary>
-    /// <param name="binding">Prevalidated binding to inspect; no compilation is repeated.</param>
-    /// <param name="lifecycle">Consumer-wide snapshot, including work admitted under other bindings of the same consumer.</param>
-    /// <param name="atUtc">Explicit UTC inspection boundary, no earlier than any pending admission.</param>
-    /// <param name="providerEvidence">Optional host-authenticated evidence; absent, future or expired evidence yields Unknown.</param>
-    /// <returns>An immutable projection retaining the original evidence and lifecycle revision.</returns>
-    /// <exception cref="ArgumentNullException">Binding or lifecycle is null.</exception>
-    /// <exception cref="ArgumentException">The UTC boundary, consumer scope, pending snapshot or evidence binding is invalid.</exception>
-    public static IntegrationInspection Create(IntegrationAdmissionBinding binding, IntegrationLifecycleSnapshot lifecycle,
-        DateTimeOffset atUtc, IntegrationHealthEvidence? providerEvidence = null)
+    internal static IntegrationInspection Create(IntegrationAdmissionBinding binding, DateTimeOffset atUtc,
+        IntegrationHealthEvidence? providerEvidence)
     {
-        ArgumentNullException.ThrowIfNull(binding); ArgumentNullException.ThrowIfNull(lifecycle);
         if (atUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Inspection must use UTC.", nameof(atUtc));
-        if (binding.Consumer != lifecycle.Consumer) throw new ArgumentException("Lifecycle belongs to another consumer.", nameof(lifecycle));
         if (providerEvidence is not null && providerEvidence.Binding != binding.Binding)
             throw new ArgumentException("Health evidence belongs to another binding revision or scope.", nameof(providerEvidence));
-        if (lifecycle.Pending.IsDefault) throw new ArgumentException("Pending snapshot must be materialized.", nameof(lifecycle));
+        // Only the bound controller can supply this snapshot. Admission already validates its invariants.
+        var lifecycle = binding.Owner.Inspect();
         DateTimeOffset? oldest = null;
+        var hasFutureAdmission = false;
         foreach (var admission in lifecycle.Pending)
         {
-            if (admission is null || admission.Consumer != lifecycle.Consumer || admission.AtUtc.Offset != TimeSpan.Zero || admission.AtUtc > atUtc)
-                throw new ArgumentException("Pending admissions must belong to the consumer and precede inspection in UTC.", nameof(lifecycle));
+            if (admission.AtUtc > atUtc) hasFutureAdmission = true;
             if (oldest is null || admission.AtUtc < oldest) oldest = admission.AtUtc;
         }
-        return new(binding, lifecycle, atUtc, providerEvidence, oldest);
+        var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>();
+        if (hasFutureAdmission)
+            diagnostics.Add(new("integrations.inspection.admission-clock-skew", DiagnosticSeverity.Warning,
+                "Pending admission timestamps are ahead of inspection time; original timestamps are retained and negative age is clamped to zero."));
+        if (providerEvidence is { } evidence && evidence.Observation.ObservedAtUtc > atUtc)
+            diagnostics.Add(new("integrations.inspection.provider-clock-skew", DiagnosticSeverity.Warning,
+                "Provider observation is ahead of inspection time; current health remains Unknown."));
+        return new(binding, lifecycle, atUtc, providerEvidence, oldest, diagnostics.ToImmutable());
     }
 
     /// <summary>Exact binding whose provider evidence is being inspected.</summary>
@@ -90,4 +94,8 @@ public sealed class IntegrationInspection
     public int PendingSessionCount => Lifecycle.Pending.Length;
     /// <summary>Earliest pending admission time, or null with no pending sessions.</summary>
     public DateTimeOffset? OldestPendingAtUtc { get; }
+    /// <summary>Elapsed age of the oldest pending session, clamped to zero for clock skew; null with no pending work.</summary>
+    public TimeSpan? OldestPendingAge => OldestPendingAtUtc is { } oldest ? (AtUtc >= oldest ? AtUtc - oldest : TimeSpan.Zero) : null;
+    /// <summary>Projection diagnostics such as observed clock skew, separate from original provider diagnostics.</summary>
+    public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
 }
