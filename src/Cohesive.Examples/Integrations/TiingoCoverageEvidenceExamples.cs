@@ -111,7 +111,13 @@ public sealed class TiingoCoverageEvidenceExamples
     }
 
     // A deliberately small domain interpreter for this synthetic raw-price fixture, not a production Tiingo adapter.
-    static CoverageEvidence Evaluate(HistoricalCoverageScope selection, IngestionContentReference retained, ReadOnlyMemory<byte> bytes)
+    /// <summary>Checks retained synthetic rows against the exact expected session scope.</summary>
+    /// <param name="selection">Pinned historical scope.</param>
+    /// <param name="retained">Digest and length of the retained response.</param>
+    /// <param name="bytes">Response bytes to verify and evaluate.</param>
+    /// <returns>Validated rows and unresolved expected sessions.</returns>
+    /// <exception cref="InvalidDataException">Evidence, normalization or rows violate the fixture contract.</exception>
+    internal static CoverageEvidence Evaluate(HistoricalCoverageScope selection, IngestionContentReference retained, ReadOnlyMemory<byte> bytes)
     {
         if (!retained.Matches(bytes.Span)) throw new InvalidDataException("Retained response digest or length differs.");
         if (selection.Normalizer != CreateSelection().Normalizer)
@@ -140,13 +146,20 @@ public sealed class TiingoCoverageEvidenceExamples
         return new([.. bars.OrderBy(b => b.Date)], [.. expected.Except(observed).Order()]);
     }
 
-    static byte[] Prepare(CoverageEvidence evidence)
+    /// <summary>Produces local publication bytes only for complete source coverage.</summary>
+    /// <param name="evidence">Validated source observations.</param>
+    /// <returns>Serialized ordered bars.</returns>
+    /// <exception cref="InvalidDataException">Expected sessions remain unresolved.</exception>
+    internal static byte[] Prepare(CoverageEvidence evidence)
     {
         if (!evidence.IsComplete) throw new InvalidDataException("Missing sessions remain unresolved; publication is blocked.");
         return JsonSerializer.SerializeToUtf8Bytes(evidence.Bars);
     }
 
-    static byte[] Response(int sessions) => JsonSerializer.SerializeToUtf8Bytes(Enumerable.Range(0, sessions)
+    /// <summary>Creates an offline daily-price response.</summary>
+    /// <param name="sessions">Number of consecutive fixture sessions starting September 1.</param>
+    /// <returns>Synthetic JSON response bytes.</returns>
+    internal static byte[] Response(int sessions) => JsonSerializer.SerializeToUtf8Bytes(Enumerable.Range(0, sessions)
         .Select(day => new DailyBar(new(2026, 9, day + 1, 0, 0, 0, TimeSpan.Zero), 100, 110, 90, 105, 1000)).ToArray());
 
     /// <summary>Minimal raw daily-price wire payload used by the offline fixture.</summary>
@@ -156,7 +169,7 @@ public sealed class TiingoCoverageEvidenceExamples
     /// <param name="Low">Raw session low.</param>
     /// <param name="Close">Raw closing price.</param>
     /// <param name="Volume">Nonnegative session volume.</param>
-    sealed record DailyBar([property: JsonPropertyName("date"), JsonRequired] DateTimeOffset Date,
+    internal sealed record DailyBar([property: JsonPropertyName("date"), JsonRequired] DateTimeOffset Date,
         [property: JsonPropertyName("open"), JsonRequired] decimal Open, [property: JsonPropertyName("high"), JsonRequired] decimal High,
         [property: JsonPropertyName("low"), JsonRequired] decimal Low, [property: JsonPropertyName("close"), JsonRequired] decimal Close,
         [property: JsonPropertyName("volume"), JsonRequired] decimal Volume);
@@ -164,7 +177,7 @@ public sealed class TiingoCoverageEvidenceExamples
     /// <summary>Derived source-coverage observation; acceptance still needs sink evidence.</summary>
     /// <param name="Bars">Validated rows ordered by session.</param>
     /// <param name="MissingSessions">Expected dates without observations.</param>
-    sealed record CoverageEvidence(ImmutableArray<DailyBar> Bars, ImmutableArray<DateOnly> MissingSessions)
+    internal sealed record CoverageEvidence(ImmutableArray<DailyBar> Bars, ImmutableArray<DateOnly> MissingSessions)
     {
         /// <summary>Whether the source covers every expected session.</summary>
         public bool IsComplete => MissingSessions.IsEmpty;

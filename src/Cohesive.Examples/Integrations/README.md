@@ -62,3 +62,18 @@ A new default never substitutes another connection; denied dispatch calls neithe
 handler resolution remains available for reconciliation, but does not itself replay results or permit
 another acquisition. These tests reuse the historical evaluator and require no Ito checkout, network,
 credentials or durable-store implementation.
+
+[HistoricalProcessExecutionExamples.cs](HistoricalProcessExecutionExamples.cs) executes the compiled
+historical ingestion **Process**, using the reference interpreter and local Request handlers. The graph
+owns acquisition, publication, ledger advancement, settlement and failure routing. Handlers reuse the
+same coverage evaluator and native ingestion work/ledger contracts; they do not define a second sequence.
+
+The cases cover empty, partial and complete coverage; a changed default before acquisition; policy and
+freshness rejection before any effect; and restart at each successful Request boundary. Restart reopens
+the canonical definition closure, serializes/deserializes the continuation and retained reply, and starts
+a fresh worker. A reply retained before the interruption resumes the original graph even after current
+policy denial or offer expiry, without another provider call, publication or ledger advancement.
+
+The sink and retained work are in-memory fixtures. These tests qualify reference execution and recovery
+from a **known retained result**, not disk persistence, process termination or recovery from an unknown
+external effect. They do not retry ambiguous effects or claim production storage durability.

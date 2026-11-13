@@ -22,27 +22,10 @@ public sealed partial class HistoricalQualificationExamples
     [InlineData("expiry", false)]
     public void ReopenedHistoricalAdmissionGatesLocalProviderCalls(string change, bool allowed)
     {
-        var scope = CreateSelection();
         var original = Connection("v1");
         var replacement = Connection("v2");
-        var logical = ConnectionReference.Named("market-data");
         SelectionGrant[] grants = [new("research-admin", new())];
-        var admission = Layer.Define("example/local-policy", "v1", "research-admin", new())
-            .Prefer(IntegrationChoice.Select(Profile, original));
-        var selected = IntegrationSelection.Resolve(logical, new(), [admission.Document], grants,
-            [Profile], [original, replacement]);
-        Assert.True(selected.Resolution.Validation.IsValid);
-        var model = new HistoricalMarketData();
-        var candidate = model.Collect.For(scope)
-            .Use(model.Collect.Provider(selected.Profile!).Provides(model.RetainedResponse))
-            .Through(logical).ForConsumer(new("research/eod", "tiingo", "research/bars", "SPY"))
-            .Compile(selected.Bindings!);
-        var evidence = ContractPropertyDocuments.DeclareContext(new("example/local-conformance"), new("v1"),
-            new HistoricalOfferEvidence("offline/raw-adapter-fixture/v1", "tiingo/research-account"), Profile.Document.Metadata.Provenance);
-        var offer = IntegrationCapabilityOffer.Declare("example/local-offer", "v1", Profile, original, Schema,
-            Capabilities(scope), evidence, At.AddDays(-1), At.AddDays(1));
-        var qualified = IntegrationQualification.Qualify(candidate, offer, Evaluator, At);
-        Assert.True(qualified.IsAdmissible);
+        var qualified = QualifyLocalHistorical();
         var compiled = Reopen(qualified.Compilation!);
         Assert.Equal(qualified.Compilation!.Binding!.Reference, compiled.Binding!.Reference);
         Assert.All(qualified.Decisions, decision =>
@@ -69,6 +52,32 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Same(first, runtime.Resolve<LocalAcquisition>(compiled));
         Assert.Equal(allowed ? 1 : 0, first.Calls);
         Assert.Equal(0, second.Calls);
+    }
+
+    static IntegrationQualificationResult QualifyLocalHistorical()
+    {
+        var scope = CreateSelection();
+        var original = Connection("v1");
+        var replacement = Connection("v2");
+        var logical = ConnectionReference.Named("market-data");
+        SelectionGrant[] grants = [new("research-admin", new())];
+        var admission = Layer.Define("example/local-policy", "v1", "research-admin", new())
+            .Prefer(IntegrationChoice.Select(Profile, original));
+        var selected = IntegrationSelection.Resolve(logical, new(), [admission.Document], grants,
+            [Profile], [original, replacement]);
+        Assert.True(selected.Resolution.Validation.IsValid);
+        var model = new HistoricalMarketData();
+        var candidate = model.Collect.For(scope)
+            .Use(model.Collect.Provider(selected.Profile!).Provides(model.RetainedResponse))
+            .Through(logical).ForConsumer(new("research/eod", "tiingo", "research/bars", "SPY"))
+            .Compile(selected.Bindings!);
+        var evidence = ContractPropertyDocuments.DeclareContext(new("example/local-conformance"), new("v1"),
+            new HistoricalOfferEvidence("offline/raw-adapter-fixture/v1", "tiingo/research-account"), Profile.Document.Metadata.Provenance);
+        var offer = IntegrationCapabilityOffer.Declare("example/local-offer", "v1", Profile, original, Schema,
+            Capabilities(scope), evidence, At.AddDays(-1), At.AddDays(1));
+        var qualified = IntegrationQualification.Qualify(candidate, offer, Evaluator, At);
+        Assert.True(qualified.IsAdmissible);
+        return qualified;
     }
 
     static IntegrationCompilation Reopen(IntegrationCompilation compilation)
