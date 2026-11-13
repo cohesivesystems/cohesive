@@ -113,4 +113,9 @@ supports the in-memory reference and PostgreSQL Process stores. No cross-policy 
 Authoring and validation are cold operations. Preparation hashes one bounded origin record and
 materializes the committed source snapshot once per delivered occurrence. Execution uses existing
 Process and Transition plans. Inspection scans retained operation evidence and performs no storage
-I/O; callers resolve and authorize receipts through the existing repository boundary.
+I/O in the pure invocation inspector; the storage host resolves and authorizes receipts through the repository boundary.
+
+The storage host also exposes `InspectLifecycleAsync` and `AbandonAsync`. Abandonment uses canonical
+Process cancellation and retains its revision, reason and command receipt; it never clears target evidence.
+`MachineReactionRecovery.InspectDependentsAsync` provides bounded, authorized history inspection separately
+from pending recovery. See [operator lifecycle](../../../eng/examples/tender-acceptance/lifecycle.md).

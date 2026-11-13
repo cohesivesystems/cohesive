@@ -4,7 +4,7 @@ using Cohesive.Execution;
 namespace Cohesive.Storage.Processes;
 
 /// <summary>Progress from one bounded pass over admitted Process identities.</summary>
-/// <param name="Progress">Results keyed by instance for registered policies; unrelated and terminal instances are omitted.</param>
+/// <param name="Progress">Results keyed by instance for registered policies; recovery omits terminal history, while explicit dependent inspection includes it.</param>
 /// <param name="NextCursor">Last scanned candidate identity, including unrelated instances, or null after an empty candidate page.</param>
 public sealed record MachineReactionRecoveryPage(
     ImmutableDictionary<ProcessInstanceId, MachineReactionProgress> Progress, ProcessInstanceId? NextCursor);
@@ -73,6 +73,41 @@ public sealed class MachineReactionRecovery
             var start = snapshot.Checkpoint.Start.Request;
             if (hosts.TryGetValue((start.Definition, start.Context.Authorization.AuthorityScope), out var host))
                 progress.Add(instance, await host.RecoverSnapshotAsync(context, snapshot).ConfigureAwait(false));
+        }
+        return new(progress.ToImmutable(), instances.IsEmpty ? null : instances[^1]);
+    }
+
+    /// <summary>Inspects a bounded page of retained dependents, including terminal history, without dispatch.</summary>
+    /// <param name="context">Trusted caller and store access; each matching instance requires fresh host authorization.</param>
+    /// <param name="prerequisite">Exact predecessor instance to match; this locator is not an authorization grant.</param>
+    /// <param name="after">Exclusive discovery cursor, or null to start.</param>
+    /// <param name="maximumInstances">Maximum candidates scanned, from 1 through 1000.</param>
+    /// <returns>Authorized dependent progress and a cursor over scanned candidates; an empty page ends the scan.</returns>
+    /// <exception cref="ArgumentNullException">Context is null.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The page bound is outside 1–1000.</exception>
+    /// <exception cref="UnauthorizedAccessException">A matching instance or its evidence is not authorized.</exception>
+    /// <exception cref="InvalidOperationException">Retained evidence is inconsistent.</exception>
+    /// <exception cref="OperationCanceledException">The caller cancels inspection.</exception>
+    /// <remarks>This explicit history query scans retained instances; background recovery still uses the pending index.
+    /// An empty result with a non-null cursor does not mean there are no later dependents.</remarks>
+    public async Task<MachineReactionRecoveryPage> InspectDependentsAsync(OperationContext context,
+        ProcessInstanceId prerequisite, ProcessInstanceId? after = null, int maximumInstances = 32)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumInstances, 1);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(maximumInstances, 1000);
+        var instances = await source.ListInstancesAsync(context, after, maximumInstances).ConfigureAwait(false);
+        var progress = ImmutableDictionary.CreateBuilder<ProcessInstanceId, MachineReactionProgress>();
+        foreach (var instance in instances)
+        {
+            var snapshot = await store.LoadAsync(context, instance).ConfigureAwait(false);
+            if (snapshot is null) continue;
+            var start = snapshot.Checkpoint.Start.Request;
+            if (!hosts.TryGetValue((start.Definition, start.Context.Authorization.AuthorityScope), out var host)
+                || host.Policy.Payload.Prerequisite is null) continue;
+            if (host.RequiredPrerequisite(start) != prerequisite) continue;
+            var inspected = await host.InspectLifecycleSnapshotAsync(context, snapshot).ConfigureAwait(false);
+            progress.Add(instance, inspected.Progress);
         }
         return new(progress.ToImmutable(), instances.IsEmpty ? null : instances[^1]);
     }
