@@ -23,7 +23,9 @@ public enum IntegrationLifecycleAction
     /// <summary>Record successful completion of an admitted Process.</summary>
     Complete,
     /// <summary>Resolve a failed session using host-verified complete effect accounting.</summary>
-    ResolveFailure
+    ResolveFailure,
+    /// <summary>Register a consumer in an admission group.</summary>
+    RegisterMember
 }
 
 /// <summary>Attributable, revision-aware desired-state command; this is runtime intent, not a Process definition.</summary>
@@ -43,9 +45,11 @@ public sealed record IntegrationLifecycleChange(string Id, long ExpectedRevision
 /// <param name="LifecycleRevision">Admission revision, preserved across lifecycle changes.</param>
 /// <param name="Authorization">Host-authenticated admission evidence.</param>
 /// <param name="AtUtc">Original UTC admission time.</param>
+/// <param name="GroupRevision">Original group admission fence, or null for a standalone consumer.</param>
+/// <param name="GroupId">Owning group identity, or null for a standalone consumer.</param>
 public sealed record IntegrationAdmission(IngestionLedgerAddress Consumer, ProcessContinuationIdentity Continuation,
     ExecutionDefinitionReference Binding, ExecutionDefinitionReference Process, long LifecycleRevision,
-    ProcessControlAuthorizationContext Authorization, DateTimeOffset AtUtc);
+    ProcessControlAuthorizationContext Authorization, DateTimeOffset AtUtc, long? GroupRevision = null, string? GroupId = null);
 
 /// <summary>Immutable lifecycle inspection; execution health and accepted data coverage are separate observations.</summary>
 /// <param name="Consumer">Controlled consumer.</param>
@@ -53,11 +57,12 @@ public sealed record IntegrationAdmission(IngestionLedgerAddress Consumer, Proce
 /// <param name="Desired">Desired admission state, initially Paused.</param>
 /// <param name="LastChange">Last accepted desired-state command, or null before any desired-state change.</param>
 /// <param name="Pending">Admitted sessions without successful completion or an explicit verified failure resolution.</param>
+/// <param name="Group">Observed group fence and desired state, or null for a standalone consumer.</param>
 public sealed record IntegrationLifecycleSnapshot(IngestionLedgerAddress Consumer, long Revision,
-    IntegrationDesiredState Desired, IntegrationLifecycleChange? LastChange, ImmutableArray<IntegrationAdmission> Pending)
+    IntegrationDesiredState Desired, IntegrationLifecycleChange? LastChange, ImmutableArray<IntegrationAdmission> Pending, IntegrationAdmissionGroupSnapshot? Group = null)
 {
     /// <summary>Whether a new session may be admitted, subject to revision and authorization checks.</summary>
-    public bool Accepting => Desired == IntegrationDesiredState.Active;
+    public bool Accepting => Desired == IntegrationDesiredState.Active && (Group is null || Group.Desired == IntegrationDesiredState.Active);
     /// <summary>Whether admission is stopped while previously admitted work remains unresolved.</summary>
     public bool Draining => !Accepting && !Pending.IsEmpty;
 }
@@ -69,10 +74,10 @@ public sealed record IntegrationLifecycleSnapshot(IngestionLedgerAddress Consume
 public sealed record IntegrationCompletion(IntegrationAdmission Admission, ProcessActivationDecision Decision,
     ProcessControlAuthorizationContext Authorization);
 
-/// <summary>Possible dispositions of a desired-state change.</summary>
+/// <summary>Possible dispositions of a desired-state or group-membership change.</summary>
 public enum IntegrationChangeOutcome
 {
-    /// <summary>New desired state was accepted.</summary>
+    /// <summary>The requested state or membership change was accepted.</summary>
     Applied,
     /// <summary>The original change receipt was returned without mutation.</summary>
     Replayed,
@@ -82,7 +87,7 @@ public enum IntegrationChangeOutcome
     RevisionConflict,
     /// <summary>The command identity was reused with changed intent.</summary>
     IdentityConflict,
-    /// <summary>The lifecycle revision cannot advance further.</summary>
+    /// <summary>The control revision cannot advance further.</summary>
     RevisionExhausted
 }
 
@@ -102,7 +107,11 @@ public enum IntegrationAdmissionOutcome
     /// <summary>New sessions are stopped; a fresh revision alone will not permit admission.</summary>
     AdmissionStopped,
     /// <summary>The bound token belongs to a different controller.</summary>
-    BindingMismatch
+    BindingMismatch,
+    /// <summary>The group fence is missing, unexpected or stale.</summary>
+    GroupRevisionConflict,
+    /// <summary>The admission group is paused; a local resume cannot bypass it.</summary>
+    GroupAdmissionStopped
 }
 
 /// <summary>Possible dispositions of recording Process completion.</summary>
@@ -174,8 +183,9 @@ public sealed class IntegrationAdmissionBinding
 /// <param name="ExpectedRevision">Original expected lifecycle revision.</param>
 /// <param name="Authorization">Host-authenticated actor and authority.</param>
 /// <param name="AtUtc">Original UTC admission observation.</param>
+/// <param name="ExpectedGroupRevision">Exact observed group revision; required for grouped consumers, null for standalone consumers.</param>
 public sealed record IntegrationAdmissionRequest(IntegrationAdmissionBinding Binding, ProcessContinuationIdentity Continuation,
-    long ExpectedRevision, ProcessControlAuthorizationContext Authorization, DateTimeOffset AtUtc);
+    long ExpectedRevision, ProcessControlAuthorizationContext Authorization, DateTimeOffset AtUtc, long? ExpectedGroupRevision = null);
 
 /// <summary>Intent to record successful completion of an admitted session.</summary>
 /// <param name="Admission">Original admission receipt.</param>

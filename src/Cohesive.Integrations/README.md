@@ -783,11 +783,63 @@ receipt-before-CAS semantics and must not be rejected by a new-work precheck.
 
 The historical backfill example checks before acquisition and again before publication. Tests prove
 known rewinds cause zero provider calls and zero publications, and that progress changing after
-acquisition rejects publication without silently refreshing the selected revision. Cross-flow group
-pause remains an explicit framework gap tracked in [COH-163](https://linear.app/cohesive-ari/issue/COH-163).
+acquisition rejects publication without silently refreshing the selected revision. The local cross-flow group
+pause below implements the initial [COH-163](https://linear.app/cohesive-ari/issue/COH-163) control scope.
 
 
 These methods are explicit host dispatch boundaries, not automatic interception of arbitrary clients.
 The reference example consumes them for new effects and retains separate acquisition/publication validation
 results. Retained-result reconciliation bypasses new-dispatch checks. Automatic integration with a general
 Process runtime is not claimed by this API; that runtime does not own domain request handlers or ledger I/O.
+
+
+### Group admission across forward and backfill consumers
+
+`InMemoryIntegrationAdmissionGroup` supplies one local control scope for independently progressing
+consumers. Create grouped members through `Register`; do not create separate standalone controllers
+for those consumers. Both the group and each new member start Paused. The group policy and consumer
+policy must authorize registration. A consumer may be registered once; exact registration replay
+returns the original controller and attribution. Changing registration intent cannot replace it.
+
+```csharp
+var group = new InMemoryIntegrationAdmissionGroup(
+    "research/tiingo/SPY", authorizeGroup, authorizeConsumer);
+var forward = group.Register(new(forwardAddress, 0, actor, now)).Receipt.Controller;
+var backfill = group.Register(new(backfillAddress, 1, actor, now)).Receipt.Controller;
+forward.Change(new("forward-active", 0, IntegrationDesiredState.Active, actor, now));
+backfill.Change(new("backfill-active", 0, IntegrationDesiredState.Active, actor, now));
+group.Change(new("partition-active", 2, IntegrationDesiredState.Active, actor, now));
+
+var intent = new IntegrationAdmissionRequest(
+    forward.Bind(forwardCompilation), session,
+    ExpectedRevision: 1, Authorization: actor, AtUtc: now,
+    ExpectedGroupRevision: 3);
+var admitted = forward.Admit(intent);
+group.Change(new("partition-pause", 3, IntegrationDesiredState.Paused, actor, now));
+```
+
+Group desired-state changes, registration and every member admission linearize on one shared lock.
+New membership increments the group revision and invalidates previously observed group fences.
+Registration during a pause is allowed, but its controller remains governed by that pause even after
+local activation or binding a new provider. Local resume cannot bypass group pause; group resume does
+not override a local pause. Authorize callbacks run outside the lock; hosts own authentication and
+policy freshness and must authorize membership for the intended tenant/source/partition.
+
+Admission requires both local and group revisions. Missing/stale/unexpected group revisions return
+`GroupRevisionConflict`; a current paused group returns `GroupAdmissionStopped`. Standalone controllers
+require a null group revision. Original admission receipts retain the group ID and revision. Exact
+admission replay remains available after group changes and rechecks consumer authorization; replay
+retrieves evidence and never authorizes repeated effects. Changing a replay's fence is changed intent.
+
+Member inspection atomically returns local desired state plus a compact Group snapshot. `Accepting`
+requires both Active; `Draining` also reflects a group pause. Group inspection is constant-size and does
+not scan members or pending sessions. Member ledger addresses and accepted coverage remain independent.
+Successful completion, verified failure resolution and retained-result reconciliation remain available
+while the group is paused; pause gates new sessions, not execution of already-admitted sessions.
+
+The implementation retains membership and replay receipts for its lifetime. Membership is append-only:
+no detach, controller transfer, nested groups or distributed/durable coordination is implemented.
+Constructing another standalone controller for the same consumer bypasses this local authority just
+as constructing a second standalone controller already did; hosts must maintain one owning route.
+This is runtime control intent over existing canonical bindings, not a new integration authoring IR.
+The new internal desired-state helper centralizes Change semantics for groups and members.
