@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json.Serialization;
 using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Execution;
@@ -52,60 +53,108 @@ public sealed record ClaimObligationResult(string Occurrence, string Partition, 
 public sealed record TraceAlternativeResult(ClaimReference Alternative, ClaimVerdict Verdict,
     ImmutableArray<ClaimObligationResult> Obligations, int DuplicateDeliveries, bool SelectionClosed, bool Vacuous);
 
-/// <summary>Immutable reference-evaluation evidence. A trace success is never a universal implementation proof.</summary>
-/// <param name="Claim">Exact derived claim and authoritative source provenance.</param>
-/// <param name="Batch">Retained observations, exact target, mapping and completeness evidence.</param>
-/// <param name="Limits">Effective evaluation bounds.</param>
-/// <param name="Status">Attempt outcome, separate from verdict.</param>
-/// <param name="Verdict">Verdict over every compatible alternative under declared completeness.</param>
-/// <param name="Alternatives">Per-alternative witnesses, coverage and obligation outcomes.</param>
-/// <param name="Diagnostics">Missing evidence, unsupported semantics or invalid observation details.</param>
-public sealed record TraceEvaluation(ClaimDocument Claim, TraceObservationBatch Batch, TraceEvaluationLimits Limits,
-    AssuranceAttemptStatus Status, ClaimVerdict Verdict, ImmutableArray<TraceAlternativeResult> Alternatives,
-    ImmutableArray<TraceEvaluationDiagnostic> Diagnostics)
+/// <summary>Evaluator-owned immutable result. Only reference evaluation or verified restoration can produce this type.</summary>
+/// <remarks>Inputs retain core immutable observation snapshots; arbitrary CLR payload objects are projected before evaluation.</remarks>
+[JsonConverter(typeof(TraceEvaluationJsonConverter))]
+public sealed class TraceEvaluation
 {
-    static readonly JsonSerializerOptions Options = CreateOptions();
+    static readonly JsonSerializerOptions Options = AssuranceJson.Options;
 
-    static JsonSerializerOptions CreateOptions()
+    internal TraceEvaluation(ClaimDocument claim, TraceObservationBatch batch, TraceEvaluationLimits limits,
+        AssuranceAttemptStatus status, ClaimVerdict verdict, ImmutableArray<TraceAlternativeResult> alternatives,
+        ImmutableArray<TraceEvaluationDiagnostic> diagnostics)
     {
-        var options = StrictDocumentJson.CreateOptions();
-        options.Converters.Insert(0, PortableValueJsonConverter.TaggedObservationValues);
-        return options;
+        Claim = claim; Batch = batch; Limits = limits; Status = status; Verdict = verdict;
+        Alternatives = alternatives; Diagnostics = diagnostics;
     }
 
-    /// <summary>Versioned reference evaluation method; not a proof-system identity.</summary>
+    /// <summary>Exact derived claim and authoring provenance.</summary>
+    public ClaimDocument Claim { get; }
+    /// <summary>Retained immutable observations and completeness declarations.</summary>
+    public TraceObservationBatch Batch { get; }
+    /// <summary>Effective evaluation bounds.</summary>
+    public TraceEvaluationLimits Limits { get; }
+    /// <summary>Attempt status independent of semantic verdict.</summary>
+    public AssuranceAttemptStatus Status { get; }
+    /// <summary>Verdict over every compatible alternative under declared completeness.</summary>
+    public ClaimVerdict Verdict { get; }
+    /// <summary>Per-alternative witnesses, coverage and outcomes.</summary>
+    public ImmutableArray<TraceAlternativeResult> Alternatives { get; }
+    /// <summary>Gaps, unsupported behavior and invalid observations.</summary>
+    public ImmutableArray<TraceEvaluationDiagnostic> Diagnostics { get; }
+    /// <summary>Versioned reference method, unchanged by the ownership boundary.</summary>
     public const string MethodId = "cohesive.assurance.batch/v2";
-
-    /// <summary>Versioned method identity retained in each evaluation.</summary>
+    /// <summary>Versioned method retained in evidence.</summary>
     public string Method => MethodId;
 
-    /// <summary>Serializes the complete retained evaluation into canonical JSON.</summary>
-    /// <returns>Portable result and input evidence, suitable for independent re-evaluation.</returns>
-    /// <exception cref="System.Text.Json.JsonException">An observation cannot be encoded portably.</exception>
-    /// <exception cref="NotSupportedException">An observation representation is unsupported by canonical JSON.</exception>
-    public string Serialize() => Encoding.UTF8.GetString(StrictDocumentJson.GetCanonicalBytes(this, Options));
+    // Wire data is untrusted. This private DTO is never the public evaluator-owned result.
+    sealed record Retained(ClaimDocument Claim, TraceObservationBatch Batch, TraceEvaluationLimits Limits,
+        AssuranceAttemptStatus Status, ClaimVerdict Verdict, ImmutableArray<TraceAlternativeResult> Alternatives,
+        ImmutableArray<TraceEvaluationDiagnostic> Diagnostics, string Method);
+    Retained Payload() => new(Claim, Batch, Limits, Status, Verdict, Alternatives, Diagnostics, Method);
 
-    /// <summary>Reads retained canonical evidence and independently recomputes its result.</summary>
-    /// <param name="json">Canonical evidence produced by this evaluator version.</param>
-    /// <returns>The recomputed result, after exact agreement with retained verdicts and provenance.</returns>
-    /// <exception cref="JsonException">The evidence is malformed, noncanonical, incompatible or disagrees with re-evaluation.</exception>
-    /// <exception cref="ArgumentOutOfRangeException">Retained evaluation limits are invalid.</exception>
+    /// <summary>Serializes retained evidence canonically.</summary>
+    /// <returns>Portable input and output evidence for independent evaluation.</returns>
+    /// <exception cref="JsonException">An observation cannot be encoded.</exception>
+    /// <exception cref="NotSupportedException">A representation is unsupported.</exception>
+    public string Serialize() => Encoding.UTF8.GetString(StrictDocumentJson.GetCanonicalBytes(Payload(), Options));
+
+    /// <summary>Independently evaluates retained inputs and requires exact canonical agreement.</summary>
+    /// <param name="json">Canonical evidence from this method version.</param>
+    /// <returns>An evaluator-owned result, never an unchecked deserialized record.</returns>
+    /// <exception cref="JsonException">Evidence is malformed or disagrees with evaluation.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">Retained limits are nonpositive.</exception>
     public static TraceEvaluation Reevaluate(string json)
     {
-        if (!StrictDocumentJson.TryReadCanonicalObject(json, Options, "trace evaluation", out TraceEvaluation? retained, out var error)
-            || retained is null)
-            throw new JsonException($"{error.Failure} at {error.Location}: {error.Message}");
-        if (retained.Claim is null || retained.Batch is null || retained.Limits is null)
-            throw new JsonException("Retained evidence must include the claim, observation batch and effective limits.");
-        var recomputed = TraceClaimEvaluator.Evaluate(retained.Claim, retained.Batch, retained.Limits);
-        if (!string.Equals(json, recomputed.Serialize(), StringComparison.Ordinal))
-            throw new JsonException("Retained evidence does not agree with the reference evaluation of its inputs.");
-        return recomputed;
+        using var document = JsonDocument.Parse(json);
+        return ReadVerified(document.RootElement, exactJson: json);
     }
 
-    /// <summary>Hashes the complete evaluation evidence, including inputs, limits and diagnostics.</summary>
-    /// <returns>SHA-256 of canonical evidence bytes; integrity identity, not a signature.</returns>
-    /// <exception cref="System.Text.Json.JsonException">An observation cannot be encoded portably.</exception>
-    /// <exception cref="NotSupportedException">An observation representation is unsupported.</exception>
-    public string Fingerprint() => Convert.ToHexString(StrictDocumentJson.ComputeCanonicalSha256(this, Options));
+    internal static TraceEvaluation ReadVerified(JsonElement element, string? exactJson = null)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+            throw new JsonException("Retained evaluation must be an object.");
+        // Compare the input directly with the recomputed result. This simultaneously checks
+        // the closed wire projection and derived outcomes, without serializing an unchecked DTO.
+        string expected;
+        try
+        {
+            expected = exactJson ?? CanonicalJsonWriter.GetCanonicalSequenceText(element,
+                CanonicalJsonSequenceProfile.ExactDecimalRational,
+                new JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        }
+        catch (ArgumentException exception)
+        {
+            throw new JsonException("Retained evaluation contains duplicate or invalid properties.", exception);
+        }
+        var retained = element.Deserialize<Retained>(Options)
+            ?? throw new JsonException("Retained evaluation cannot be null.");
+        if (retained.Claim is null || retained.Batch is null || retained.Limits is null)
+            throw new JsonException("Retained evaluation requires claim, batch and limits.");
+        var result = TraceClaimEvaluator.Evaluate(retained.Claim, retained.Batch, retained.Limits);
+        if (!string.Equals(expected, result.Serialize(), StringComparison.Ordinal))
+            throw new JsonException("Retained evidence disagrees with the canonical reference evaluation.");
+        return result;
+    }
+
+    // The portable wire profile is invariant even when the enclosing serializer has other options.
+    internal void Write(Utf8JsonWriter writer) =>
+        JsonSerializer.Serialize(writer, Payload(), Options);
+
+    /// <summary>Hashes the complete evidence through the shared canonical fingerprint helper.</summary>
+    /// <returns>SHA-256 integrity identity, not a signature.</returns>
+    /// <exception cref="JsonException">An observation cannot be encoded.</exception>
+    /// <exception cref="NotSupportedException">A representation is unsupported.</exception>
+    public string Fingerprint() => Convert.ToHexString(StrictDocumentJson.ComputeCanonicalSha256(Payload(), Options));
+}
+
+// The serializer cannot bypass evaluation by invoking a result constructor.
+internal sealed class TraceEvaluationJsonConverter : JsonConverter<TraceEvaluation>
+{
+    public override TraceEvaluation Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        using var document = JsonDocument.ParseValue(ref reader);
+        return TraceEvaluation.ReadVerified(document.RootElement);
+    }
+    public override void Write(Utf8JsonWriter writer, TraceEvaluation value, JsonSerializerOptions options) => value.Write(writer);
 }
