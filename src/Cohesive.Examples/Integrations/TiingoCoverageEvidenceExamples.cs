@@ -159,8 +159,14 @@ public sealed class TiingoCoverageEvidenceExamples
     /// <summary>Creates an offline daily-price response.</summary>
     /// <param name="sessions">Number of consecutive fixture sessions starting September 1.</param>
     /// <returns>Synthetic JSON response bytes.</returns>
-    internal static byte[] Response(int sessions) => JsonSerializer.SerializeToUtf8Bytes(Enumerable.Range(0, sessions)
-        .Select(day => new DailyBar(new(2026, 9, day + 1, 0, 0, 0, TimeSpan.Zero), 100, 110, 90, 105, 1000)).ToArray());
+    internal static byte[] Response(int sessions) => Response(Enumerable.Range(0, sessions)
+        .Select(day => new DateOnly(2026, 9, day + 1)));
+
+    /// <summary>Creates offline daily-price bytes for explicit fixture dates.</summary>
+    /// <param name="dates">Synthetic session dates in response order; no calendar facts are inferred.</param>
+    /// <returns>Synthetic JSON response bytes.</returns>
+    internal static byte[] Response(IEnumerable<DateOnly> dates) => JsonSerializer.SerializeToUtf8Bytes(dates.Select(date =>
+        new DailyBar(new DateTimeOffset(date.ToDateTime(TimeOnly.MinValue), TimeSpan.Zero), 100, 110, 90, 105, 1000)));
 
     /// <summary>Minimal raw daily-price wire payload used by the offline fixture.</summary>
     /// <param name="Date">UTC-midnight session date.</param>

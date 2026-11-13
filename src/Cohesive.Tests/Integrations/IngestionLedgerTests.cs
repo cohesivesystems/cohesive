@@ -22,6 +22,44 @@ public class IngestionLedgerTests
     static ExecutionDefinitionDocument Document(IngestionLedgerAdvance advance) => IngestionLedgerDocuments.Create(advance, Provenance);
 
     [Fact]
+    public void SelectionAndCommitShareProgressRulesWithoutInventingPublicationEvidence()
+    {
+        var initial = Advance();
+        var entry = IngestionLedgerReduction.Evaluate(null, null, Document(initial)).Receipt!.Entry;
+        IngestionLedgerAdvance[] proposals = [Advance("next", 1, 2), Advance("rewind", 1, 1),
+            Advance("skip", 1, 3), Advance("stale", 0, 2),
+            Advance("foreign", 1, 2, Address with { Flow = "other" }),
+            Advance("migration", 1, 2) with { Definition = new(Definition().DefinitionId, new("v2"), Definition().Fingerprint) }];
+        foreach (var proposal in proposals)
+        {
+            var selection = IngestionLedgerReduction.ValidateSelection(entry, proposal.Address, proposal.Definition,
+                proposal.ExpectedRevision, proposal.Position);
+            var commit = IngestionLedgerReduction.Evaluate(entry, null, Document(proposal));
+            Assert.Equal(commit.Disposition == IngestionLedgerDisposition.Advanced, selection.IsValid);
+            Assert.Equal(commit.DiagnosticCode, selection.Diagnostics.FirstOrDefault()?.Code);
+        }
+        Assert.True(IngestionLedgerReduction.ValidateSelection(null, Address, Definition(), 0, initial.Position).IsValid);
+        Assert.False(IngestionLedgerReduction.ValidateSelection(null, Address, Definition(), 0,
+            new IngestionDateRangePosition(new(2026, 9, 2), new(2026, 9, 1))).IsValid);
+        Assert.False(IngestionLedgerReduction.ValidateSelection(null, Address, Definition(), 0,
+            new IngestionCursorPosition("v1", "")).IsValid);
+    }
+
+    [Fact]
+    public void SelectionObservationDoesNotReserveProgressOrBlockOriginalReceiptReplay()
+    {
+        var first = Document(Advance());
+        var receipt = IngestionLedgerReduction.Evaluate(null, null, first).Receipt!;
+        var selected = Advance("selected", 1, 2);
+        Assert.True(IngestionLedgerReduction.ValidateSelection(receipt.Entry, Address, Definition(), 1, selected.Position).IsValid);
+        var competitor = IngestionLedgerReduction.Evaluate(receipt.Entry, null, Document(Advance("competitor", 1, 2))).Receipt!;
+        Assert.Equal("integrations.ledger.revision-conflict",
+            IngestionLedgerReduction.Evaluate(competitor.Entry, null, Document(selected)).DiagnosticCode);
+        Assert.Equal(IngestionLedgerDisposition.Replayed,
+            IngestionLedgerReduction.Evaluate(competitor.Entry, receipt, first).Disposition);
+    }
+
+    [Fact]
     public void ResultsRoundTripForDurableRequestOutcomesWithoutLosingReceiptOrDisposition()
     {
         var document = Document(Advance());
