@@ -162,3 +162,10 @@ No production Cohesive observation adapter, ARI integration, or ITO integration 
 explicit method acceptance, exact model/encoding/realization boundaries, dependency reassessment,
 and authority-recorded dispositions. Sampled success remains unknown; a waiver never changes proof
 state. Trace and external methods share `AssuranceAttemptStatus` (renamed from `TraceEvaluationStatus`).
+
+## Complete finite catalogs
+
+[Finite-domain guard checking](../../docs/assurance/finite-checking.md) describes typed source
+for explicit finite catalogs, assumptions and guards; exhaustive implication/non-vacuity checks;
+validated counterexamples; and bounded model evidence. The checker uses the same predicate
+semantics as trace evaluation and introduces no Simulation or solver dependency.
