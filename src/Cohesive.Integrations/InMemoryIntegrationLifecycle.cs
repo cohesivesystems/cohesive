@@ -101,8 +101,7 @@ public sealed class InMemoryIntegrationLifecycle
     public IntegrationLifecycleResult<IntegrationAdmissionOutcome, IntegrationAdmission> Admit(IntegrationAdmissionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Binding); ArgumentNullException.ThrowIfNull(request.Continuation);
-        Validate(request.Authorization, request.AtUtc);
-        if (request.ExpectedRevision < 0) throw new ArgumentException("Revision cannot be negative.", nameof(request));
+        IntegrationDesiredStateControl.ValidateEnvelope(request.Authorization, request.ExpectedRevision, request.AtUtc);
         if (!authorize(IntegrationLifecycleAction.Admit, request.Authorization)) return new(IntegrationAdmissionOutcome.Unauthorized);
         if (!ReferenceEquals(request.Binding.Owner, this)) return new(IntegrationAdmissionOutcome.BindingMismatch);
         lock (sync)
@@ -119,7 +118,7 @@ public sealed class InMemoryIntegrationLifecycle
             if (control.Revision != request.ExpectedRevision) return new(IntegrationAdmissionOutcome.RevisionConflict);
             if (control.Desired != IntegrationDesiredState.Active) return new(IntegrationAdmissionOutcome.AdmissionStopped);
             var receipt = new IntegrationAdmission(consumer, request.Continuation, request.Binding.Binding, request.Binding.Process,
-                request.ExpectedRevision, request.Authorization, request.AtUtc, group?.Revision, group?.Id);
+                request.ExpectedRevision, request.Authorization, request.AtUtc, group is null ? null : new(group.Id, group.Revision));
             pending.Add(request.Continuation, receipt);
             return new(IntegrationAdmissionOutcome.Applied, receipt);
         }
@@ -172,9 +171,9 @@ public sealed class InMemoryIntegrationLifecycle
     {
         ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Admission);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Id); ArgumentException.ThrowIfNullOrWhiteSpace(request.EvidenceReference);
-        Validate(request.Authorization, request.AtUtc);
-        if (request.ExpectedRevision < 0 || request.AtUtc < request.Admission.AtUtc)
-            throw new ArgumentException("Resolution requires a nonnegative revision and cannot predate admission.", nameof(request));
+        IntegrationDesiredStateControl.ValidateEnvelope(request.Authorization, request.ExpectedRevision, request.AtUtc);
+        if (request.AtUtc < request.Admission.AtUtc)
+            throw new ArgumentException("Resolution cannot predate admission.", nameof(request));
         if (!authorize(IntegrationLifecycleAction.ResolveFailure, request.Authorization))
             return new(IntegrationFailureResolutionOutcome.Unauthorized);
         lock (sync)
@@ -247,11 +246,6 @@ public sealed class InMemoryIntegrationLifecycle
     IntegrationLifecycleSnapshot Snapshot() => new(consumer, control.Revision, control.Desired, control.LastChange,
         [.. pending.Values
             .OrderBy(a => a.Continuation.ProcessInstanceId.Value, StringComparer.Ordinal).ThenBy(a => a.Continuation.ProcessAttemptId.Value, StringComparer.Ordinal)], group?.Snapshot());
-    static void Validate(ProcessControlAuthorizationContext authorization, DateTimeOffset atUtc)
-    {
-        ArgumentNullException.ThrowIfNull(authorization);
-        if (atUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Lifecycle observation must use UTC.", nameof(atUtc));
-    }
     static DocumentValidationResult Valid() => new([]);
     static DocumentValidationResult Error(string code, string message) => new([new("integrations.lifecycle." + code, DiagnosticSeverity.Error, message)]);
 }

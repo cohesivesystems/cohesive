@@ -10,7 +10,7 @@ public sealed partial class IntegrationModelTests
     static readonly IngestionLedgerAddress GroupForward = new("forward", "source", "store", "SPY");
     static readonly IngestionLedgerAddress GroupBackfill = GroupForward with { Flow = "backfill" };
     static InMemoryIntegrationAdmissionGroup Group() => new InMemoryIntegrationLifecycleScope().CreateGroup("tenant/source/SPY",
-        (_, actor) => actor == LifecycleActor, (_, _, actor) => actor == LifecycleActor);
+        (_, _, actor) => actor == LifecycleActor);
     static IntegrationGroupRegistration Register(IngestionLedgerAddress address, long revision) => new(address, revision, LifecycleActor, AdmissionTime);
     static IntegrationAdmissionBinding BindGroupMember(InMemoryIntegrationLifecycle member, IngestionLedgerAddress address) =>
         member.Bind(Connected(Profile()).ForConsumer(address).Compile(new ConnectionBindings().Bind(MarketData, Connection())));
@@ -29,8 +29,8 @@ public sealed partial class IntegrationModelTests
         Assert.Equal(IntegrationAdmissionOutcome.GroupAdmissionStopped, forward.Admit(request).Outcome);
         group.Change(Change("active", 2, IntegrationDesiredState.Active));
         var admitted = forward.Admit(request).Receipt;
-        Assert.Equal(group.Inspect().Id, admitted.GroupId);
-        Assert.Equal(3, admitted.GroupRevision);
+        Assert.Equal(group.Inspect().Id, admitted.Group!.Id);
+        Assert.Equal(3, admitted.Group!.Revision);
         group.Change(Change("pause", 3, IntegrationDesiredState.Paused));
         Assert.True(forward.Inspect().Draining);
         Assert.Equal(IntegrationDesiredState.Active, forward.Inspect().Desired);
@@ -119,11 +119,15 @@ public sealed partial class IntegrationModelTests
     [Fact]
     public void GroupPolicyAndMemberPolicyAreBothRequiredForRegistration()
     {
-        var group = new InMemoryIntegrationLifecycleScope().CreateGroup("restricted", (_, _) => true,
-            (consumer, _, _) => consumer == GroupForward);
+        var group = new InMemoryIntegrationLifecycleScope().CreateGroup("restricted",
+            (consumer, _, _) => consumer is null || consumer == GroupForward);
         Assert.Equal(IntegrationChangeOutcome.Unauthorized, group.Register(Register(GroupBackfill, 0)).Outcome);
         Assert.True(group.Register(Register(GroupForward, 0)).IsAccepted);
         Assert.Equal(1, group.Inspect().MemberCount);
+        var groupDenied = new InMemoryIntegrationLifecycleScope().CreateGroup("denied",
+            (consumer, _, _) => consumer is not null);
+        Assert.Equal(IntegrationChangeOutcome.Unauthorized, groupDenied.Register(Register(GroupForward, 0)).Outcome);
+        Assert.Equal(0, groupDenied.Inspect().MemberCount);
     }
     [Fact]
     public async Task MembershipChangeAndPauseShareTheGroupRevisionFence()
@@ -185,7 +189,10 @@ public sealed partial class IntegrationModelTests
         group.Register(Register(GroupBackfill, 2));
         var accepted = member.Admit(request);
         Assert.Equal(IntegrationAdmissionOutcome.Applied, accepted.Outcome);
-        Assert.Equal(3, accepted.Receipt.GroupRevision);
+        Assert.Equal(new IntegrationAdmissionGroupReference(group.Inspect().Id, 3), accepted.Receipt.Group);
+        var options = InteractionEnvelopeJsonSerializer.CreateOptions();
+        var reopened = JsonSerializer.Deserialize<IntegrationAdmission>(JsonSerializer.Serialize(accepted.Receipt, options), options);
+        Assert.Equal(accepted.Receipt, reopened);
         group.Change(Change("pause", 3, IntegrationDesiredState.Paused));
         Assert.Same(accepted.Receipt, member.Admit(request).Receipt);
     }
@@ -194,17 +201,17 @@ public sealed partial class IntegrationModelTests
     public void OwnershipScopePreventsStandaloneAndCrossGroupBypass()
     {
         var scope = new InMemoryIntegrationLifecycleScope();
-        var group = scope.CreateGroup("first", (_, _) => true, (_, _, _) => true);
+        var group = scope.CreateGroup("first", (_, _, _) => true);
         var member = group.Register(Register(GroupForward, 0)).Receipt.Controller;
-        Assert.Throws<InvalidOperationException>(() => scope.CreateConsumer(GroupForward, (_, _) => true));
-        var otherGroup = scope.CreateGroup("second", (_, _) => true, (_, _, _) => true);
-        Assert.Equal(IntegrationChangeOutcome.IdentityConflict, otherGroup.Register(Register(GroupForward, 0)).Outcome);
+        Assert.Equal(IntegrationChangeOutcome.AlreadyOwned, scope.CreateConsumer(GroupForward, (_, _) => true).Outcome);
+        var otherGroup = scope.CreateGroup("second", (_, _, _) => true);
+        Assert.Equal(IntegrationChangeOutcome.AlreadyOwned, otherGroup.Register(Register(GroupForward, 0)).Outcome);
         Assert.Equal(0, otherGroup.Inspect().Revision);
         Assert.Equal(0, otherGroup.Inspect().MemberCount);
         scope.CreateConsumer(GroupBackfill, (_, _) => true);
-        Assert.Equal(IntegrationChangeOutcome.IdentityConflict, group.Register(Register(GroupBackfill, 1)).Outcome);
+        Assert.Equal(IntegrationChangeOutcome.AlreadyOwned, group.Register(Register(GroupBackfill, 1)).Outcome);
         Assert.Equal(1, group.Inspect().Revision);
-        Assert.Throws<InvalidOperationException>(() => scope.CreateGroup("first", (_, _) => true, (_, _, _) => true));
+        Assert.Throws<InvalidOperationException>(() => scope.CreateGroup("first", (_, _, _) => true));
         Assert.Empty(typeof(InMemoryIntegrationLifecycle).GetConstructors());
         Assert.Empty(typeof(InMemoryIntegrationAdmissionGroup).GetConstructors());
         member.Change(Change("active", 0, IntegrationDesiredState.Active));
@@ -215,18 +222,17 @@ public sealed partial class IntegrationModelTests
     public async Task ConcurrentStandaloneAndGroupedCreationHaveOneOwner()
     {
         var scope = new InMemoryIntegrationLifecycleScope();
-        var group = scope.CreateGroup("group", (_, _) => true, (_, _, _) => true);
+        var group = scope.CreateGroup("group", (_, _, _) => true);
         using var barrier = new Barrier(2);
         var standalone = Task.Run(() =>
         {
             barrier.SignalAndWait();
-            try { scope.CreateConsumer(GroupForward, (_, _) => true); return true; }
-            catch (InvalidOperationException) { return false; }
+            return scope.CreateConsumer(GroupForward, (_, _) => true).IsAccepted;
         });
         var registration = Task.Run(() => { barrier.SignalAndWait(); return group.Register(Register(GroupForward, 0)); });
         await Task.WhenAll(standalone, registration);
         Assert.NotEqual((await standalone), (await registration).IsAccepted);
-        Assert.Throws<InvalidOperationException>(() => scope.CreateConsumer(GroupForward, (_, _) => true));
+        Assert.Equal(IntegrationChangeOutcome.AlreadyOwned, scope.CreateConsumer(GroupForward, (_, _) => true).Outcome);
     }
 
     [Fact]

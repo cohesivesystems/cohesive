@@ -45,11 +45,15 @@ public sealed record IntegrationLifecycleChange(string Id, long ExpectedRevision
 /// <param name="LifecycleRevision">Admission revision, preserved across lifecycle changes.</param>
 /// <param name="Authorization">Host-authenticated admission evidence.</param>
 /// <param name="AtUtc">Original UTC admission time.</param>
-/// <param name="GroupRevision">Original group admission fence, or null for a standalone consumer.</param>
-/// <param name="GroupId">Owning group identity, or null for a standalone consumer.</param>
+/// <param name="Group">Observed group identity and revision, or null for a standalone consumer.</param>
 public sealed record IntegrationAdmission(IngestionLedgerAddress Consumer, ProcessContinuationIdentity Continuation,
     ExecutionDefinitionReference Binding, ExecutionDefinitionReference Process, long LifecycleRevision,
-    ProcessControlAuthorizationContext Authorization, DateTimeOffset AtUtc, long? GroupRevision = null, string? GroupId = null);
+    ProcessControlAuthorizationContext Authorization, DateTimeOffset AtUtc, IntegrationAdmissionGroupReference? Group = null);
+
+/// <summary>Group authority observed when a session was admitted.</summary>
+/// <param name="Id">Owning group identity.</param>
+/// <param name="Revision">Group revision observed atomically at admission.</param>
+public sealed record IntegrationAdmissionGroupReference(string Id, long Revision);
 
 /// <summary>Immutable lifecycle inspection; execution health and accepted data coverage are separate observations.</summary>
 /// <param name="Consumer">Controlled consumer.</param>
@@ -87,6 +91,8 @@ public enum IntegrationChangeOutcome
     RevisionConflict,
     /// <summary>The command identity was reused with changed intent.</summary>
     IdentityConflict,
+    /// <summary>The consumer already has an owner in this lifecycle scope.</summary>
+    AlreadyOwned,
     /// <summary>The control revision cannot advance further.</summary>
     RevisionExhausted
 }

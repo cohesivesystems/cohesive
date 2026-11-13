@@ -570,7 +570,7 @@ locations and evidence), and its message includes all reported codes and message
 so new coverage scopes or provider revisions do not reset the admission fence or history.
 
 ```csharp
-var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(consumer, authorizeLifecycleAction);
+var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(consumer, authorizeLifecycleAction).Receipt;
 var binding = control.Bind(compiled); // Validate catalogs, exact binding and Process lowering once.
 var activated = control.Change(new(
     "activate/1", ExpectedRevision: 0, IntegrationDesiredState.Active, authorization, now));
@@ -797,14 +797,14 @@ Process runtime is not claimed by this API; that runtime does not own domain req
 
 `InMemoryIntegrationAdmissionGroup` supplies one local control scope for independently progressing
 consumers. Create grouped members through `Register`; do not create separate standalone controllers
-for those consumers. Both the group and each new member start Paused. The group policy and consumer
-policy must authorize registration. A consumer may be registered once; exact registration replay
+for those consumers. Both the group and each new member start Paused. One authorization policy receives null for group commands and a consumer identity for member actions.
+Registration requires approval for both targets. A consumer may be registered once; exact registration replay
 returns the original controller and attribution. Changing registration intent cannot replace it.
 
 ```csharp
 var ownership = new InMemoryIntegrationLifecycleScope();
 var group = ownership.CreateGroup(
-    "research/tiingo/SPY", authorizeGroup, authorizeConsumer);
+    "research/tiingo/SPY", authorize); // authorize(consumerOrNull, action, actor)
 var forward = group.Register(new(forwardAddress, 0, actor, now)).Receipt.Controller;
 var backfill = group.Register(new(backfillAddress, 1, actor, now)).Receipt.Controller;
 forward.Change(new("forward-active", 0, IntegrationDesiredState.Active, actor, now));
@@ -827,8 +827,8 @@ policy freshness and must authorize membership for the intended tenant/source/pa
 
 Admission requires only the local expected revision. Under the shared admission lock the member reads
 current group policy itself; a paused group returns `GroupAdmissionStopped`. Registration of unrelated
-members cannot invalidate an in-flight admission request. The accepted receipt retains the group ID and
-the group revision actually observed at admission. Group and membership commands remain revision-fenced
+members cannot invalidate an in-flight admission request. The accepted receipt retains one optional `IntegrationAdmissionGroupReference` containing the group ID and
+revision actually observed at admission. Group and membership commands remain revision-fenced
 for operators. Exact admission replay remains available after group changes and rechecks consumer
 authorization; replay retrieves evidence and never authorizes repeated effects.
 
@@ -842,7 +842,9 @@ The implementation retains membership and replay receipts for its lifetime. Memb
 no detach, controller transfer, nested groups or distributed/durable coordination is implemented.
 Public construction is through `InMemoryIntegrationLifecycleScope.CreateConsumer/CreateGroup`; controller
 constructors are internal. The scope rejects duplicate standalone creation and cross-group membership,
-including concurrent attempts, so a grouped consumer cannot acquire a second unfenced controller in that
+including concurrent attempts. `CreateConsumer` and `Register` both return `AlreadyOwned` when another
+controller owns the consumer; `IdentityConflict` remains reserved for changed replay intent. Successful
+`CreateConsumer` returns an `Applied` result whose `Receipt` is the controller. A grouped consumer cannot acquire a second unfenced controller in that
 host scope. Use one scope per host control namespace; independent scopes intentionally represent separate
 authorities. No process-global registry or cross-host exclusivity is claimed.
 This is runtime control intent over existing canonical bindings, not a new integration authoring IR.

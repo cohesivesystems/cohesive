@@ -18,7 +18,7 @@ public sealed partial class HistoricalQualificationExamples
         ProcessActivationDecision? failed = null;
         var verificationCalls = 0;
         var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, actor) => actor == Operator,
-            request => { verificationCalls++; return request.EvidenceReference == AccountedFailure ? failed : null; });
+            request => { verificationCalls++; return request.EvidenceReference == AccountedFailure ? failed : null; }).Receipt;
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admissionRequest = new IntegrationAdmissionRequest(control.Bind(fixture.Compilation), Session, 1, Operator, At);
         var admission = control.Admit(admissionRequest).Receipt;
@@ -95,7 +95,7 @@ public sealed partial class HistoricalQualificationExamples
                 decision = fixture.Reply(decision, await fixture.Handle(Request(decision)));
         var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, _) => true,
             evidence == "missing-verifier" ? null : _ => evidence == "verifier-failure"
-                ? throw new IOException("Evidence store unavailable.") : decision);
+                ? throw new IOException("Evidence store unavailable.") : decision).Receipt;
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admission = control.Admit(new(control.Bind(fixture.Compilation), Session, 1, Operator, At)).Receipt;
         control.Change(new("pause", 1, IntegrationDesiredState.Paused, Operator, At));
@@ -123,7 +123,7 @@ public sealed partial class HistoricalQualificationExamples
             entered.Set();
             if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
             return failed;
-        });
+        }).Receipt;
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admission = control.Admit(new(control.Bind(fixture.Compilation), Session, 1, Operator, At)).Receipt;
         var command = new IntegrationFailureResolutionRequest("resolve", admission, 1, AccountedFailure, Operator, At);
@@ -155,7 +155,7 @@ public sealed partial class HistoricalQualificationExamples
         {
             if (!verifying.SignalAndWait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
             return failed;
-        });
+        }).Receipt;
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admission = control.Admit(new(control.Bind(fixture.Compilation), Session, 1, Operator, At)).Receipt;
         var command = new IntegrationFailureResolutionRequest("resolve", admission, 1, AccountedFailure, Operator, At);

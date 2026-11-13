@@ -19,7 +19,7 @@ public sealed partial class HistoricalQualificationExamples
     public async Task StoppedHistoricalIntegrationDrainsExistingProcess(int boundary)
     {
         var original = new ProcessFixture(2);
-        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(original.Address, (_, actor) => actor == Operator);
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(original.Address, (_, actor) => actor == Operator).Receipt;
         Assert.False(control.Inspect().Accepting);
         var active = control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At)).Receipt;
         var admissionRequest = new IntegrationAdmissionRequest(control.Bind(original.Compilation), Session, active.Revision, Operator, At);
@@ -71,7 +71,7 @@ public sealed partial class HistoricalQualificationExamples
     public async Task CompletedHistoryPreservesReceiptsAndOriginalRecorder()
     {
         var first = new ProcessFixture(2);
-        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(first.Address, (_, _) => true);
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(first.Address, (_, _) => true).Receipt;
         var binding = control.Bind(first.Compilation);
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var survivor = control.Admit(new(binding, new(new("pending"), new("attempt/1")), 1, Operator, At)).Receipt;
@@ -103,7 +103,7 @@ public sealed partial class HistoricalQualificationExamples
     public async Task FailedHistoricalSessionRequiresExplicitResolution()
     {
         var fixture = new ProcessFixture(1);
-        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, actor) => actor == Operator);
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, actor) => actor == Operator).Receipt;
         var active = control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At)).Receipt;
         var admitted = control.Admit(new(control.Bind(fixture.Compilation), Session, active.Revision, Operator, At)).Receipt;
         var waiting = fixture.Start();

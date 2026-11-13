@@ -17,11 +17,10 @@ public sealed class InMemoryIntegrationLifecycleScope
     /// <param name="consumer">Stable consumer identity.</param>
     /// <param name="authorize">Host authorization policy for this consumer.</param>
     /// <param name="verifyFailureResolution">Optional trusted verifier with the controller's effect-accounting obligations.</param>
-    /// <returns>The newly owned controller, initially paused.</returns>
+    /// <returns>Applied with the newly owned paused controller, or AlreadyOwned without an existing controller handle.</returns>
     /// <exception cref="ArgumentNullException">Consumer or authorization policy is null.</exception>
     /// <exception cref="ArgumentException">Consumer identity is invalid.</exception>
-    /// <exception cref="InvalidOperationException">The consumer already belongs to this scope, including through a group.</exception>
-    public InMemoryIntegrationLifecycle CreateConsumer(IngestionLedgerAddress consumer,
+    public IntegrationLifecycleResult<IntegrationChangeOutcome, InMemoryIntegrationLifecycle> CreateConsumer(IngestionLedgerAddress consumer,
         Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize,
         Func<IntegrationFailureResolutionRequest, ProcessActivationDecision?>? verifyFailureResolution = null)
     {
@@ -29,33 +28,31 @@ public sealed class InMemoryIntegrationLifecycleScope
         consumer.Validate();
         lock (sync)
         {
-            if (consumers.ContainsKey(consumer)) throw new InvalidOperationException("This scope already owns the consumer.");
+            if (consumers.ContainsKey(consumer)) return new(IntegrationChangeOutcome.AlreadyOwned);
             var controller = new InMemoryIntegrationLifecycle(consumer, authorize, verifyFailureResolution);
             consumers.Add(consumer, controller);
-            return controller;
+            return new(IntegrationChangeOutcome.Applied, controller);
         }
     }
 
     /// <summary>Creates one exclusively named admission group in this ownership scope.</summary>
     /// <param name="id">Stable group identity.</param>
-    /// <param name="authorize">Authorization policy for group commands.</param>
-    /// <param name="authorizeMember">Consumer-specific authorization, including membership admission.</param>
+    /// <param name="authorize">Policy for group commands (null consumer) and member actions (identified consumer). Registration requires both decisions.</param>
     /// <param name="verifyFailureResolution">Optional trusted per-consumer failure verifier.</param>
     /// <returns>The newly owned group, initially paused.</returns>
     /// <exception cref="ArgumentNullException">A required policy is null.</exception>
     /// <exception cref="ArgumentException">Group identity is invalid.</exception>
     /// <exception cref="InvalidOperationException">The group identity already exists in this scope.</exception>
     public InMemoryIntegrationAdmissionGroup CreateGroup(string id,
-        Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize,
-        Func<IngestionLedgerAddress, IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorizeMember,
+        Func<IngestionLedgerAddress?, IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize,
         Func<IngestionLedgerAddress, IntegrationFailureResolutionRequest, ProcessActivationDecision?>? verifyFailureResolution = null)
     {
         IngestionLedgerAddress.Require(id);
-        ArgumentNullException.ThrowIfNull(authorize); ArgumentNullException.ThrowIfNull(authorizeMember);
+        ArgumentNullException.ThrowIfNull(authorize);
         lock (sync)
         {
             if (groups.ContainsKey(id)) throw new InvalidOperationException("This scope already owns the group identity.");
-            var group = new InMemoryIntegrationAdmissionGroup(this, id, authorize, authorizeMember, verifyFailureResolution);
+            var group = new InMemoryIntegrationAdmissionGroup(this, id, authorize, verifyFailureResolution);
             groups.Add(id, group);
             return group;
         }

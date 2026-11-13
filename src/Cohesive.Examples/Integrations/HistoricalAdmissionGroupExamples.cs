@@ -18,7 +18,7 @@ public sealed partial class HistoricalQualificationExamples
             QualifyLocalHistorical(SingleSession(new(2026, 9, 1)), BackfillConsumer).Compilation!, 1, destination));
         var ownership = new InMemoryIntegrationLifecycleScope();
         var group = ownership.CreateGroup("research/tiingo/SPY",
-            (_, actor) => actor == Operator, (_, _, actor) => actor == Operator);
+            (_, _, actor) => actor == Operator);
         var forwardControl = group.Register(new(ForwardConsumer, 0, Operator, At)).Receipt.Controller;
         var backfillControl = group.Register(new(BackfillConsumer, 1, Operator, At)).Receipt.Controller;
         forwardControl.Change(new("active", 0, IntegrationDesiredState.Active, Operator, At));
