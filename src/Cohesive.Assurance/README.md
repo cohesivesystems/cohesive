@@ -152,5 +152,6 @@ Source instances use reference identity; compare derived document fingerprints f
 comparison. Execution-reference text uses the shared `ToCanonicalString()` formatter owned
 by the fingerprint type, with colon/percent escaping rather than URI component encoding.
 
-Current consumers are the transition reference-model integration test and the benchmark.
+Current consumers include the optional [Simulation bridge](../Cohesive.Simulation.Assurance/README.md),
+reference-model integration tests and the benchmark.
 No production Cohesive observation adapter, ARI integration, or ITO integration ships here.
