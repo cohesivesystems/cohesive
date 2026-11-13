@@ -129,15 +129,15 @@ create an empty ledger and restart ingestion. Position and expected revision are
 selection and must not be refreshed because an acknowledgment was lost.
 
 - `IngestionCursorPosition` retains an exact opaque next token, its source format/revision and optional
-  expiry. Null token explicitly means source exhaustion. No entry means no committed progress. Values
-  are neither trimmed nor sorted; the source handles cycles, token validity, resumption and completeness.
+ expiry. Null token explicitly means source exhaustion. No entry means no committed progress. Values
+ are neither trimmed nor sorted; the source handles cycles, token validity, resumption and completeness.
 - `IngestionDateRangePosition` records a half-open forward date window. Its exclusive end is the next
-  forward boundary. Successive windows must abut; calendar coverage, confirmed gaps, source date-range
-  conversion, overlap reads and historical backfill are not inferred. Use a separately scoped flow for
-  a backfill. This first range representation uses dates, not arbitrary intraday timestamp windows.
+ forward boundary. Successive windows must abut; calendar coverage, confirmed gaps, source date-range
+ conversion, overlap reads and historical backfill are not inferred. Use a separately scoped flow for
+ a backfill. This first range representation uses dates, not arbitrary intraday timestamp windows.
 - The sink retains acquired evidence, domain coverage and original publication receipts. The ingestion
-  ledger records source progress. The Process owns outstanding work and recovery. These contracts do
-  not require separate physical databases.
+ ledger records source progress. The Process owns outstanding work and recovery. These contracts do
+ not require separate physical databases.
 
 `IngestionLedgerAdvance` is immutable control data, not a second envelope for application payloads.
 It binds the ledger address, exact flow definition, original expected revision, next position and
@@ -162,12 +162,12 @@ commit the new entry **and an independent original-result receipt atomically**. 
 owns the decision rules so adapters need not independently implement another replay/CAS algorithm:
 
 1. Check the original receipt under `(ledger address, publication ID)` **before** inspecting current
-   progress. Exact input returns that receipt, even after later work; different input is identity conflict.
+  progress. Exact input returns that receipt, even after later work; different input is identity conflict.
 2. Require the originally captured revision (zero means initial absence).
 3. Require the pinned definition and supported position transition; no implicit migration, skipped date
-   windows, cursor-format change or reset after source exhaustion.
+  windows, cursor-format change or reset after source exhaustion.
 4. Propose the next revision and original result. A physical interpreter must atomically persist both
-   before exposing `Advanced`. It must never apply that result on `Replayed` or `Conflict`.
+  before exposing `Advanced`. It must never apply that result on `Replayed` or `Conflict`.
 
 The reducer requires a definitive, atomic view. Weak visibility with an absent receipt is inconclusive:
 return `Unknown` without treating it as a precondition conflict. The storage adapter must serialize the
@@ -209,10 +209,10 @@ compensation, scheduling and native broker transports are outside this PR.
 container. It separates three immutable facts:
 
 1. `IngestionAcquisitionRequest`: flow scope, original operation and attempt, exact flow and transformation
-   references, source-selection content, original optional ledger revision, and selection observation.
+  references, source-selection content, original optional ledger revision, and selection observation.
 2. `IngestionAcquisitionReceipt`: exact request reference, acquired content and receipt observation time.
 3. `IngestionPreparedPublication`: exact acquisition and transformation references, authoritative sink
-   input, proposed optional source position, and preparation observation.
+  input, proposed optional source position, and preparation observation.
 
 `IngestionContentReference` binds an opaque locator, exact SHA-256, byte length and media type. `Describe`
 does not store bytes. `Matches` checks exact bytes after resolution; it does not infer metadata, parse
@@ -242,3 +242,315 @@ ambiguous acquisition reconciliation and application recovery parity still need 
 [the extraction plan](../../docs/architecture/ingestion-acquisition-extraction.md). The existing unqualified
 realization diagnostic remains in force. Records are draft producers; their persisted, validated documents
 are the inspectable authority. A fluent projection is unnecessary for these data-only boundaries.
+
+## Authoring contract properties and provider bindings
+
+`Cohesive.Contracts` implements the structural property coordinates from the
+[System Model §§3.5–3.5.1](https://app.notion.com/p/4098cf7881f981aeb90acf6750031641).
+A `ContractPropertyDefinition` declares kind, overlapping predicate classifications,
+exact domain predicate, structured scope, parameters and assumptions. A quantitative
+bound can reference an application context describing its limit, units, measurement
+interval and time basis. Property and context interpretation belongs to the declaring
+language and its qualified interpreters.
+
+`ContractProperty` supplies a role and an exact assertion reference. Requires, Provides,
+Effects, Coeffects, Guarantees, Assumptions and Evidence reuse this one assertion model.
+Property kinds use an open stable vocabulary. The built-in vocabulary includes temporal,
+resource, authority, epistemic and data-integrity kinds. Classifications support Safety,
+Liveness, Invariant, Aggregate and Hyperproperty. Invariants also declare Safety.
+
+```csharp
+var coverage = ContractPropertyDocuments.Declare(new("historical/accepted-coverage"), revision,
+    new(Kind: ContractPropertyKinds.DataIntegrity,
+        Classification: [ContractPredicateClassification.Safety, ContractPredicateClassification.Invariant],
+        Predicate: coveragePredicate.Reference,
+        Scope: new(["instrument/SPY"], "instrument/session-date", "publication-commit",
+            interval.Reference, "exchange-session valid time"),
+        Parameters: selection.Reference,
+        Assumptions: assumptions.Reference), provenance);
+
+var contract = new IngestionContract(ingestion.Reference,
+    [new(ContractRole.Requires, coverage.Reference)]);
+var source = contract.Bind(provider.Reference, resource: "tiingo/research-account",
+    consumer: new("research/eod", "tiingo", "research/bars", "SPY"));
+var binding = IngestionProviderBindingDocuments.DeclareBinding(
+    new("research/spy"), revision, source, provenance);
+```
+
+`DeclarePredicate` materializes a domain-owned structural predicate. `DeclareContext`
+materializes parameters, intervals, assumptions or bound annotations. `Declare` normalizes
+subject and classification ordering and persists source maps through the shared execution
+document envelope. Inspection resolves every exact reference and validates classification,
+role and scope structure. Domain predicate evaluation, implication between differing
+assertions, evidence admissibility and contract discharge require subsequent interpreters.
+
+The provider profile's `Properties` uses the same `ContractProperty` references. The example
+requires both accepted coverage and retained response bytes. Its acquisition handler offers
+retained bytes. The publication Request owns the coverage obligation. The binding's inspected
+properties retain these roles and the source predicate references for explanation and planning.
+
+The consumer address scopes independent progress. The resource identifies the external
+account and quota binding. Canonical documents carry all declared semantics across reopening.
+Physical runtime qualification remains explicit in the ingestion inspection diagnostics.
+This draft replaces the earlier coverage-specific binding schema; existing retained draft
+bindings require their original interpreter or an explicit migration.
+
+### Executable historical-data example
+
+[HistoricalMarketDataExamples](../Cohesive.Examples/Integrations/HistoricalMarketDataExamples.cs)
+authors a two-session SPY scope, the acquire/publish/ledger/settle Requests, the two properties,
+and a Tiingo binding shared by independent consumers. It persists and reopens the entire
+dependency closure, then inspects the exact property uses. The calendar, normalizer and
+predicate declarations are illustrative domain fixtures. The example exercises structural
+inspection and leaves predicate execution and physical qualification to domain interpreters.
+
+```sh
+dotnet test src/Cohesive.Examples/Cohesive.Examples.csproj \
+ --filter FullyQualifiedName~HistoricalMarketDataExamples
+```
+
+### Fluent application authoring
+
+`Cohesive.Integrations.Authoring.IntegrationModel<TSelection>` is the C# source surface.
+An application subclasses it, declares typed Requests, properties and an ingestion interaction
+in its constructor, and exposes the handles it wants callers to bind. The historical example's
+`HistoricalMarketData` class demonstrates the full declaration without manually assembling
+execution documents, reference catalogs or fingerprints.
+
+```csharp
+var model = new HistoricalMarketData();
+var tiingo = model.Collect
+    .Provider("tiingo-daily", operation: "GET /tiingo/daily/{symbol}/prices", medium: "HTTPS")
+    .Provides(model.RetainedResponse);
+
+var compiled = model.Collect.For(selection)
+    .Use(tiingo)
+    .WithAccount("tiingo/research-account")
+    .ForConsumer(new("research/eod", "tiingo", "research/bars", "SPY"))
+    .Compile();
+```
+
+Inside the model the composition is:
+
+```csharp
+Collect = Ingestion("collect")
+    .Acquire(acquire).Publish(publish).AdvanceProgress(advance).Settle(settle)
+    .Requires(AcceptedCoverage).Requires(RetainedResponse);
+```
+
+The base class owns source identity and lifecycle. Existing Request authoring, Contract property
+documents, binding inspection and ingestion-to-Process lowering remain the semantic authorities.
+`Compile()` returns the complete canonical document closure and structured diagnostics. Applications
+should check `IsSuccessful` and inspect `Validation` before using its binding or Process.
+
+The model is authored on one thread. `For(selection)` snapshots the selection and freezes all model
+builders. Predicate and assumption values are snapshotted when declared. Provider and consumer
+refinements return independent immutable source values. A frozen instance can be compiled repeatedly
+or concurrently, with identical documents for identical inputs. Agents can inspect persisted documents,
+compare exact references and fingerprints, and revise the C# source. A separate portable unbound
+source projection or patch protocol is not implemented yet.
+
+Conventions are deliberately small and explicit:
+
+- Declaration identities are model-relative; semantic revision comes from the base constructor.
+- Payload schema identities default to the CLR full name and model revision. `Payload<T>(id, revision)`
+ supplies stable application-owned identities; the historical example uses these overrides.
+- Selection-scoped property and provider identities incorporate the selection fingerprint. The full
+ selection becomes property parameters, retaining calendar, normalizer and expected-session evidence.
+- Direct and nested property selectors use the canonical JSON naming convention and `JsonPropertyName`.
+ Selectors lower to field paths and resolved values; executable selector expressions are rejected.
+- The current interval convenience supports `DateOnly` boundaries, with explicit end inclusion.
+ `Boundary(request)` identifies that exact Request's successful result.
+- The bounded Request profile observes late results, rejects stale results, escalates unresolved
+ outcomes and does not declare timeout or cancellation outcomes. Stable retry identity, ambiguity
+ reconciliation, duplicate disposition reuse and positive retention are explicit required choices.
+
+`.Requires(...)` and `.Provides(...)` retain distinct contract roles. Account/provider choices and
+naming conventions cannot remove requirements. This increment uses explicit provider selection;
+hierarchical defaults and enforced selection policy resolution remain separate future work.
+
+This first fluent surface supports the existing bounded ingestion profile. It performs structural
+validation and preserves the physical-realization warning. Predicate evaluation, offer implication,
+adapter execution and evidence qualification still require their owning interpreters. In particular,
+`.Provides(...)` records a claim; it does not establish that the provider has satisfied it.
+
+### Referencing an existing ingestion protocol
+
+An `IntegrationModel<TSelection>` may call `Ingestion(name, definition, dependencies)` to declare
+properties and provider bindings around a pinned protocol. The original Request/Reply documents and
+Process identities are preserved, and protocol-step mutation on this handle is rejected. Its
+`AcquisitionRequest` and `PublicationRequest` handles identify exact property boundaries.
+
+This supports incremental adoption by durable applications such as Ito, whose existing Requests
+carry retained-work locators while the model selection carries domain configuration. The dependency
+closure must validate under the existing ingestion compiler. It is a reference to existing authority,
+not a second reconstruction of its protocol. Requirements and binding are authored normally.
+
+Subject selectors accept custom scalar identity types whose canonical JSON representation is a
+string. Select the identity itself (for example `s => s.InstrumentId`); CLR members hidden by a
+custom JSON converter do not become portable nested field paths.
+
+### Offline coverage and evidence walkthrough
+
+[TiingoCoverageEvidenceExamples](../Cohesive.Examples/Integrations/TiingoCoverageEvidenceExamples.cs)
+reuses the fluent historical-data model and demonstrates source coverage, retained-byte integrity,
+publication receipt attribution and replayable ledger advancement. Complete, partial, empty and
+invalid responses are executable cases. See the [examples guide](../Cohesive.Examples/Integrations/README.md)
+for the run command and the explicit simulated source/sink boundaries.
+
+### Operation profiles, connections and runtime implementations
+
+`ProviderOperationProfile` describes a versioned provider operation and its medium, supported
+authentication, required entitlements, batch default and hard batch bound. `IntegrationConnection`
+describes configured access: provider, shared resource/account identity, endpoint, authentication
+reference, declared entitlements and hard connection bound. A resource can have several connections;
+one connection can serve several compatible profiles. These are immutable authoring sources lowering
+to exact canonical documents, with source maps and fingerprints. Secret values never belong in them.
+
+```csharp
+var logical = ConnectionReference.Named("market-data");
+var connections = new ConnectionBindings().Bind(logical, connection);
+var compiled = model.Collect.For(selection)
+    .Use(model.Collect.Provider(profile).Provides(model.RetainedResponse))
+    .Through(logical)
+    .ForConsumer(consumer)
+    .Compile(connections);
+
+// Host composition: the adapter constructs its client from the configured connection.
+var runtime = new IntegrationRuntime().Register(profile, connection, handler);
+var selectedHandler = runtime.Resolve<IMarketDataProvider>(compiled);
+```
+
+`IMarketDataProvider` above denotes an application-owned port. See the executable
+[HTTP runtime example](../Cohesive.Examples/Integrations/ConnectionRuntimeExamples.cs) for a concrete
+client and offline request. The host owns clients, lifetimes and secret resolution. The registry
+returns an implementation; Requests and Processes still own interaction execution and recovery.
+Registration is an explicit implementation claim, not automatic proof of adapter conformance.
+
+Compilation checks provider and medium identity, authentication compatibility, entitlement inclusion,
+and both batch bounds. `.WithBatchSize(n)` overrides the profile default but cannot exceed either
+hard limit. No clamping or provider fallback occurs. The resolution retains the exact profile and
+connection plus whether the effective batch value came from an explicit choice or the profile default.
+Hosts/interpreters must realize that admitted value; the registry itself does not batch requests.
+
+Runtime lookup uses exact references from the validated canonical closure, never a new lookup of the
+logical name. A changed connection requires a new admission; retained work needs its original binding
+or explicit migration. Rotating a secret value behind an unchanged reference does not alter semantic
+configuration. Host authorization/revocation checks remain separate from semantic fingerprinting.
+
+Explicit binding remains available. The scoped resolver below adds bounded hierarchical defaults and
+enforced policy checks. COH-135 owns broader offer qualification and physical capability proof.
+Authentication and medium names are open adapter identifiers, compared ordinally. Declaring FTP, Kafka,
+RPC or OAuth does not install an interpreter. The current concrete application path is Tiingo HTTPS
+with an API-key locator. Entitlements are host assertions; a matching label is not remote attestation.
+Legacy account-only declarations remain supported, without connection-backed runtime resolution.
+
+The source builders are the edit surface and canonical IR is derived. Agents can inspect and compare
+persisted revisions and structured diagnostics; a portable unbound authoring/patch surface remains
+explicitly deferred. Shared Configuration factories contain executable host behavior and are not copied
+into this semantic model. Contract properties continue to own behavioral requirements and evidence.
+
+### Scoped defaults and mandatory policy
+
+See [ScopedHistoricalDataExamples](../Cohesive.Examples/Integrations/ScopedHistoricalDataExamples.cs).
+The example starts with a system default, adds a tenant premium connection and an analyst preference,
+and keeps inherited provider, account, entitlement and batch restrictions enforced throughout.
+
+```csharp
+using Layer = Cohesive.Configuration.SelectionLayer<IntegrationChoice, IntegrationSelectionPolicy>;
+
+var system = Layer.Define("system/market-data", "v1", "platform-admin", new())
+    .Prefer(IntegrationChoice.Select(profile, standardConnection))
+    .Enforce(new(AllowedProviders: ["tiingo"], MaximumBatchSize: 8));
+var tenant = Layer.Define("research/market-data", "v1", "research-admin", new("research"))
+    .Prefer(IntegrationChoice.Select(profile, premiumConnection, batchSize: 4))
+    .Enforce(new(MaximumBatchSize: 6));
+
+var selected = IntegrationSelection.Resolve(logical, new("research", "analyst"),
+    [system.Document, tenant.Document], authenticatedGrants, profiles, connections);
+// Check selected.Resolution.Validation before using the selected source.
+var compiled = model.Collect.For(selection)
+    .Use(model.Collect.Provider(selected.Profile!).Provides(model.RetainedResponse))
+    .Through(logical).ForConsumer(consumer).Compile(selected.Bindings!);
+```
+
+The canonical connection resolution references the admitted configuration snapshot, and its dependency
+closure retains applicable layers and available profile/connection documents. Changing the profile or
+batch after scoped admission fails; express a different local choice through an authorized Local layer.
+Allowed sets intersect by conjunction, required entitlements accumulate, and every numeric bound holds.
+Null allowed sets are unrestricted; an empty set denies all choices. Sets normalize deterministically.
+A disallowed preference fails rather than falling back to a different provider. Contract requirements
+remain independent; entitlement labels are not evidence that historical coverage has been satisfied.
+
+At each new external-effect boundary use `runtime.ResolveForDispatch<THandler>(compiled, currentLayers,
+grants)`. It validates the original binding and current restrictions before returning the original
+handler. The host owns policy freshness and synchronization with actual dispatch. Ordinary `Resolve`
+is available for composition and reconciliation; it does not grant permission for new effects.
+Later defaults never select a replacement connection for retained work. Revocation can block new effects
+without invalidating the identity needed to reconcile prior outcomes.
+
+The policy vocabulary is deliberately bounded: provider/resource allow-lists, required entitlements and
+batch bounds. Authentication, medium and profile/connection physical limits still use the original
+eligibility validator. No authorized policy-exception mechanism is implemented; all ordinary local
+choices remain subject to policy. Hosts supply authenticated publication grants rather than allowing
+an untrusted request to grant itself permission. No secret values enter contribution or snapshot data.
+
+### Capability qualification and runtime evidence
+
+`IntegrationQualification.Qualify` consumes an existing configured compilation, an exact resource offer,
+a versioned domain interpreter and an explicit UTC assessment time. It reuses binding inspection,
+Contract properties and the existing ingestion-to-Process compiler. It does not discover providers,
+reconstruct Requests, or invent another workflow engine.
+
+```csharp
+var admission = IntegrationQualification.Qualify(compiled, resourceOffer, evaluator, atUtc);
+if (!admission.IsAdmissible)
+    return; // Report admission.Validation and its per-property Decisions.
+
+var plan = admission.Compilation!;
+var handler = runtime.ResolveQualifiedForDispatch<IMarketDataProvider>(plan, dispatchAtUtc);
+```
+
+For a scoped configuration use `ResolveForDispatch(plan, currentPolicies, grants, dispatchAtUtc)` instead;
+that path requires both current mandatory policy and fresh qualification. Reconciliation can resolve
+an original handler after an offer expires; that does not authorize a new effect. The host remains
+responsible for clock/policy freshness and synchronizing checks with actual dispatch.
+
+An offer pins the actual profile and connection, a domain capability schema and declaration, supporting
+evidence, and a half-open UTC validity interval. Capability data and evidence remain attributable source
+artifacts. Missing/expired evidence, a changed connection, an unknown schema, incomplete decisions or
+unsupported requirements prevent admission. Interpreter implementation stays outside IR; its exact
+semantic identity/revision is retained. Hosts must trust the selected interpreter and evidence issuer.
+A structurally valid evidence document is not automatically a remote attestation or proof.
+
+The admission plan references the original binding and Process, exact offer/evidence and evaluator
+revision, and every required Contract property. It is attached to `IntegrationCompilation.Qualification`
+and retained in that compilation's canonical closure. The original binding stays unchanged, avoiding a
+circular reference between binding and qualification. Native/composed/constrained classification reuses
+`CapabilityRealizationKind`. Status separately distinguishes Supported, RequiresRuntimeEvidence and
+Unsupported. Plans preserve existing physical-realization warnings. Structural reopening validates
+lineage and complete decisions; it does not reconstruct unavailable interpreter code or certify an
+arbitrarily supplied evaluator's correctness.
+
+`IntegrationCandidateSelection` implements Exactly, ExactlyOne and All over explicitly supplied,
+already configured candidates. Exactly never substitutes another binding. ExactlyOne diagnoses zero
+or multiple admissible candidates. All preserves every result and fails if any instance is unsupported;
+it does not silently drop failures. No preference ranking or authorization is inferred by the selector.
+
+The [historical qualification example](../Cohesive.Examples/Integrations/HistoricalQualificationExamples.cs)
+uses two offline resource offers for the same scoped predicates, including an incompatible adjusted-only
+fixture. Its bounded evaluator checks instrument/symbol, venue, currency, date envelope, raw/adjusted
+basis, exact calendar/normalizer, Request evidence retention, complete-response support and recovery.
+Both accepted coverage and retained-response properties remain RequiresRuntimeEvidence. The existing
+coverage example now starts from this admission and still blocks partial/empty results and requires a
+confirmed publication receipt before ledger progress.
+
+The capability and evidence records in the example belong to that domain fixture, not to the reusable
+Integrations vocabulary. The fixture's availability interval, 400-day limit and conformance evidence
+are declared test inputs, not live Tiingo service/account guarantees. Production resource discovery,
+remote evidence adapters and evidence trust policy remain follow-up work. Ito's durable Tiingo path
+now supplies an adapter-owned offer/evaluator from its actual client and normalizer, retaining the
+qualification closure at original admission. Its existing acquisition handler checks freshness before
+HTTP and retains a local rejection on expiry; reconciliation reuses original results after expiry.
+This is implementation qualification, not a live access or physical durability attestation. See
+[COH-135](https://linear.app/cohesive-ari/issue/COH-135) for cross-repository validation.
