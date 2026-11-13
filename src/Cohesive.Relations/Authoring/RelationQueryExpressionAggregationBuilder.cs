@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Relations.IR;
@@ -49,7 +50,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
     /// The target is not a property path, or a key binding belongs to another session, has a mismatched
     /// CLR type, or is not visible in the aggregate input.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The key cannot be lowered exactly or returns a raw CLR temporal carrier instead of an explicitly normalized
     /// canonical scalar grouping key.
     /// </exception>
@@ -98,7 +99,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
     /// The target is not a property path, or the binding belongs to another session, has a mismatched CLR
     /// type, or is not visible in the aggregate input.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// The key cannot be lowered exactly or returns a raw CLR temporal carrier instead of an explicitly normalized
     /// canonical scalar grouping key.
     /// </exception>
@@ -146,7 +147,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
     /// The target is not a property path, or a filter binding belongs to another session, has a mismatched
     /// CLR type, or is not visible in the aggregate input.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The filter cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The filter cannot be lowered exactly.</exception>
     public RelationQueryExpressionAggregateBuilder<TResult> Count<TTarget>(
         Expression<Func<TResult, TTarget>> target,
         LambdaExpression filter,
@@ -185,7 +186,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
     /// The target is not an Int64 property, or <paramref name="binding"/> belongs to another session, has a
     /// mismatched CLR type, or is not visible in the aggregate input.
     /// </exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The value cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The value cannot be lowered exactly.</exception>
     public RelationQueryExpressionAggregateBuilder<TResult> Count<TTarget, TBinding, TValue>(
         Expression<Func<TResult, TTarget>> target,
         Expression<Func<TBinding, TValue>> value,
@@ -235,7 +236,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
     /// is not visible in the aggregate input; or value and target types do not satisfy the exact aggregate contract.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="operation"/> is unsupported.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The value or filter cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The value or filter cannot be lowered exactly.</exception>
     public RelationQueryExpressionAggregateBuilder<TResult> Value<TTarget>(
         Expression<Func<TResult, TTarget>> target,
         AggregateOperator operation,
@@ -273,7 +274,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
         RequireBindingsVisible(valueHandles, nameof(valueBindings));
         var lowerer = owner.ExpressionLowerer;
         var loweredValue = lowerer.LowerValue(value, valueHandles, reference + "/value").RequireValue();
-        RelationQueryExpressionLowering? loweredFilter = null;
+        ExpressionLowering? loweredFilter = null;
         if (filter is not null)
         {
             var handles = owner.RequireBindings(filter, filterBindings!);
@@ -395,7 +396,7 @@ public sealed class RelationQueryExpressionAggregateBuilder<TResult>
     /// types do not satisfy the exact aggregate contract.
     /// </exception>
     /// <exception cref="ArgumentOutOfRangeException"><paramref name="operation"/> is unsupported.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The value or filter cannot be lowered exactly.</exception>
+    /// <exception cref="ExpressionAuthoringException">The value or filter cannot be lowered exactly.</exception>
     public RelationQueryExpressionAggregateBuilder<TResult> Value<TTarget, TBinding, TValue>(
         Expression<Func<TResult, TTarget>> target,
         AggregateOperator operation,
@@ -425,7 +426,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <returns>Typed aggregate-node and result-binding handles.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="configure"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException">No aggregate assignment was declared.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// A grouping, value, or filter expression cannot be lowered exactly.
     /// </exception>
     /// <exception cref="InvalidOperationException">
@@ -451,7 +452,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <paramref name="resultShape"/> or <paramref name="configure"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException">No aggregate assignment was declared.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">
+    /// <exception cref="ExpressionAuthoringException">
     /// A grouping, value, or filter expression cannot be lowered exactly.
     /// </exception>
     /// <exception cref="InvalidOperationException">
@@ -459,7 +460,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// </exception>
     public RelationQueryExpressionBoundNode<AggregateQueryNode, TResult> Aggregate<TInput, TResult>(
         RelationQueryNodeHandle<TInput> input,
-        RelationQueryClrShape<TResult> resultShape,
+        ClrAuthoringShape<TResult> resultShape,
         Action<RelationQueryExpressionAggregateBuilder<TResult>> configure,
         string? sourceReference = null)
         where TInput : LogicalQueryNode
@@ -495,6 +496,6 @@ public sealed partial class RelationQueryExpressionAuthoring
                 resultShape.Id,
                 resultShape.ResolveMemberPath,
                 resultShape.ResolveType,
-                resultShape.IdentityOrigin == RelationQueryClrIdentityOrigin.Imported));
+                resultShape.IdentityOrigin == ClrIdentityOrigin.Imported));
     }
 }

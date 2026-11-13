@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using Cohesive.Model.Authoring;
 using Cohesive.Machines;
@@ -32,7 +33,7 @@ public sealed class MachineDiscriminatorBinding<TEntity, TValue> where TEntity :
         this.machine = machine;
         var author = new RelationQueryExpressionAuthoring();
         var source = author.Source<TEntity>().Binding;
-        var lowered = new RelationQueryExpressionLowerer(author.Clr.ResolveMemberPath)
+        var lowered = new ExpressionLowerer(author.Clr.ResolveMemberPath)
             .LowerValue(selector, [source], "machine/discriminator").RequireValue().Value;
         path = lowered is FieldExpr field ? field.Path : throw new ArgumentException("Select one entity field.", nameof(selector));
         contract = new((typeRefMapper ?? new DefaultClrTypeRefMapper()).Map(typeof(TValue), nullability: null));

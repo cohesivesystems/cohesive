@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -27,8 +28,8 @@ public sealed partial class RelationQueryExpressionAuthoring
     public const string Producer = "cohesive.relations.csharp-expression/v1";
 
     readonly RelationQueryAuthoringCore structural = new();
-    readonly RelationQueryClrAuthoringContext clr;
-    readonly RelationQueryExpressionLowerer lowerer;
+    readonly ClrAuthoringContext clr;
+    readonly ExpressionLowerer lowerer;
     readonly Dictionary<Type, ClrPathRegistration> clrPaths = [];
     readonly Dictionary<RelationshipId, RelationshipDefinition> relationships = [];
     readonly HashSet<RelationQueryDefinitionFingerprint> builtDefinitionFingerprints = [];
@@ -40,10 +41,10 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// Optional deterministic CLR shape/member context. A context using the default metadata profile
     /// is created when this value is <see langword="null"/>.
     /// </param>
-    public RelationQueryExpressionAuthoring(RelationQueryClrAuthoringContext? clr = null)
+    public RelationQueryExpressionAuthoring(ClrAuthoringContext? clr = null)
     {
-        this.clr = clr ?? new RelationQueryClrAuthoringContext();
-        lowerer = new(ResolveMemberPath, this);
+        this.clr = clr ?? new ClrAuthoringContext();
+        lowerer = new(ResolveMemberPath, this, clr);
     }
 
     /// <summary>
@@ -56,7 +57,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     public RelationQueryAuthoringCore Structural => structural;
 
     /// <summary>Deterministic CLR shape and member-binding context used by this session.</summary>
-    public RelationQueryClrAuthoringContext Clr => clr;
+    public ClrAuthoringContext Clr => clr;
 
     /// <summary>
     /// Exact deterministic shape-graph documents discovered by the session, ordered by graph identity.
@@ -135,7 +136,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             planReference);
     }
 
-    internal RelationQueryExpressionLowerer ExpressionLowerer => lowerer;
+    internal ExpressionLowerer ExpressionLowerer => lowerer;
 
     /// <summary>Declares a source using deterministic CLR shape conventions.</summary>
     /// <typeparam name="T">CLR source type.</typeparam>
@@ -174,7 +175,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// This session already binds <typeparamref name="T"/> to another semantic shape.
     /// </exception>
     public RelationQueryExpressionBoundNode<SourceQueryNode, T> Source<T>(
-        RelationQueryClrShape<T> shape,
+        ClrAuthoringShape<T> shape,
         string? sourceReference = null)
         where T : notnull
     {
@@ -192,7 +193,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             shape.Id,
             shape.ResolveMemberPath,
             shape.ResolveType,
-            shape.IdentityOrigin == RelationQueryClrIdentityOrigin.Imported);
+            shape.IdentityOrigin == ClrIdentityOrigin.Imported);
         return new(source.Node, binding, relationRoot: binding);
     }
 
@@ -329,7 +330,7 @@ public sealed partial class RelationQueryExpressionAuthoring
         var type = ResolveMetadataIndependentParameterType(typeof(T));
 
         var observedDefault = ObservationValue.FromObject(defaultValue);
-        if (RelationQueryPortableObservationValueSemantics.TryGetCanonicalJsonIssue(
+        if (PortableObservationValueSemantics.TryGetCanonicalJsonIssue(
                 observedDefault,
                 out _,
                 out var message))
@@ -464,7 +465,7 @@ public sealed partial class RelationQueryExpressionAuthoring
                 relatedShape.Id,
                 relatedShape.ResolveMemberPath,
                 relatedShape.ResolveType,
-                relatedShape.IdentityOrigin == RelationQueryClrIdentityOrigin.Imported));
+                relatedShape.IdentityOrigin == ClrIdentityOrigin.Imported));
     }
 
     /// <summary>Traverses a typed expression-authored relationship from its source endpoint.</summary>
@@ -1207,7 +1208,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     static RelationQueryAuthoringResult<RelationDefinition> WithConventionRelationRoot(
         RelationQueryAuthoringResult<RelationDefinition> result,
         RelationQueryExpressionValueBinding root,
-        RelationQueryAuthoringSource source) =>
+        AuthoringSource source) =>
         new(
             result.Definition,
             result.Validation,
@@ -1254,7 +1255,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             ? registration.Resolve(members)
             : clr.ResolveMemberPath(rootType, members);
 
-    internal RelationQueryClrShape<T> TrackShape<T>(RelationQueryClrShape<T> shape)
+    internal ClrAuthoringShape<T> TrackShape<T>(ClrAuthoringShape<T> shape)
         where T : notnull
     {
         ArgumentNullException.ThrowIfNull(shape);
@@ -1285,7 +1286,7 @@ public sealed partial class RelationQueryExpressionAuthoring
     internal FieldPath ResolveSelectorPath<T, TValue>(Expression<Func<T, TValue>> selector) =>
         FieldPath.Capture(selector, ResolveMemberPath);
 
-    internal static RelationQueryAuthoringSource Source(
+    internal static AuthoringSource Source(
         string reference,
         string? description = null) =>
         new(Producer, Guard.RequireNotNullOrWhiteSpace(reference), description);
@@ -1294,8 +1295,8 @@ public sealed partial class RelationQueryExpressionAuthoring
         Expression<Func<TSource, TReference>> sourceReference,
         RelationshipId? id,
         SourceReferenceUniqueness sourceReferenceUniqueness,
-        out RelationQueryClrShape<TSource> sourceShape,
-        out RelationQueryClrShape<TTarget> targetShape)
+        out ClrAuthoringShape<TSource> sourceShape,
+        out ClrAuthoringShape<TTarget> targetShape)
         where TSource : notnull
         where TTarget : notnull
     {
@@ -1382,7 +1383,7 @@ public sealed partial class RelationQueryExpressionAuthoring
         RelationId Id,
         RelationName Name,
         string Reference,
-        RelationQueryAuthoringSource Source,
+        AuthoringSource Source,
         RelationQueryAuthoringIdentityOrigin IdOrigin,
         RelationQueryAuthoringValueOrigin NameOrigin,
         RelationQueryAuthoringValueOrigin SourceReferenceOrigin);

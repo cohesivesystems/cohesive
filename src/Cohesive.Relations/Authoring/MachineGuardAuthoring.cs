@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using Cohesive.Model.Authoring;
 using System.Linq.Expressions;
 using Cohesive.Relations.Authoring;
@@ -18,7 +19,7 @@ public static class MachineGuardAuthoring
     /// <returns>The same movement with its lowered guard.</returns>
     /// <exception cref="ArgumentNullException">The movement or predicate is null.</exception>
     /// <exception cref="InvalidOperationException">Machine source is frozen.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The expression is unsupported.</exception>
+    /// <exception cref="ExpressionAuthoringException">The expression is unsupported.</exception>
     public static MachineMovement When<TFacts, TInput>(this MachineMovement movement,
         Expression<Func<TFacts, TInput, bool>> predicate, IClrTypeRefMapper? typeRefMapper = null)
         where TFacts : notnull where TInput : notnull

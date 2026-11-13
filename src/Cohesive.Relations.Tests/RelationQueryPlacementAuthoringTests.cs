@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Reflection;
 using System.Text.Json;
@@ -737,7 +738,7 @@ public sealed class RelationQueryPlacementAuthoringTests
                         new FieldDefinition(new("wire_status"), new ScalarTypeRef(ScalarTypeKind.String))
                     ])
             ]));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         var sourceShape = CreateImportedShape(context, document, qualifiedShape);
         var author = RelationQuery.Expression(context);
         var loads = author.Source(sourceShape);
@@ -752,13 +753,13 @@ public sealed class RelationQueryPlacementAuthoringTests
         return new(sourceShape, Compile(query.CreateDocument(), author.ShapeDocuments));
     }
 
-    static RelationQueryClrShape<ImportedLoad> CreateImportedShape(
+    static ClrAuthoringShape<ImportedLoad> CreateImportedShape(
         ShapeGraphDocument document,
         QualifiedShapeId qualifiedShape) =>
-        CreateImportedShape(new RelationQueryClrAuthoringContext(), document, qualifiedShape);
+        CreateImportedShape(new ClrAuthoringContext(), document, qualifiedShape);
 
-    static RelationQueryClrShape<ImportedLoad> CreateImportedShape(
-        RelationQueryClrAuthoringContext context,
+    static ClrAuthoringShape<ImportedLoad> CreateImportedShape(
+        ClrAuthoringContext context,
         ShapeGraphDocument document,
         QualifiedShapeId qualifiedShape) =>
         context.Shape<ImportedLoad>(
@@ -846,10 +847,10 @@ public sealed class RelationQueryPlacementAuthoringTests
     }
 
     sealed record PortableFixture(
-        RelationQueryClrShape<PortableLoad> SourceShape,
+        ClrAuthoringShape<PortableLoad> SourceShape,
         CompiledRelationQueryPlan Plan);
 
     sealed record ImportedFixture(
-        RelationQueryClrShape<ImportedLoad> SourceShape,
+        ClrAuthoringShape<ImportedLoad> SourceShape,
         CompiledRelationQueryPlan Plan);
 }

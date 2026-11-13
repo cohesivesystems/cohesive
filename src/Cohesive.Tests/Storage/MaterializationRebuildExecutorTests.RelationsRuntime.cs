@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -13,7 +14,7 @@ public sealed partial class MaterializationRebuildExecutorTests
     [Fact]
     public async Task ProductionHydration_assembles_nested_values_with_the_same_live_mapping()
     {
-        var shape = new Cohesive.Relations.Authoring.RelationQueryClrAuthoringContext().Shape<NestedLoad>();
+        var shape = new ClrAuthoringContext().Shape<NestedLoad>();
         var original = (Cohesive.Relations.IR.RelationDefinition)FederatedLoadRelationFixture.RelationDocument.Definition;
         var identity = FederatedLoadRelationFixture.SearchIdPath;
         var customer = FederatedLoadRelationFixture.SearchCustomerNamePath;
@@ -52,7 +53,7 @@ public sealed partial class MaterializationRebuildExecutorTests
 
     static Cohesive.Relations.Compilation.RelationQueryCompilationRequest NestedRequest()
     {
-        var shape = new Cohesive.Relations.Authoring.RelationQueryClrAuthoringContext().Shape<NestedLoad>();
+        var shape = new ClrAuthoringContext().Shape<NestedLoad>();
         var original = (Cohesive.Relations.IR.RelationDefinition)FederatedLoadRelationFixture.RelationDocument.Definition;
         var identity = FederatedLoadRelationFixture.SearchIdPath;
         var customer = FederatedLoadRelationFixture.SearchCustomerNamePath;

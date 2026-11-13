@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using Cohesive.Adapters.Sql;
 using System.Collections.Immutable;
 using System.Text.Json;
@@ -1931,7 +1932,7 @@ public sealed class PostgresRelationQueryCompilerTests
         }
     }
 
-    static RelationQueryClrShape<LoadVersion> RegisterTemporalVersionShape(
+    static ClrAuthoringShape<LoadVersion> RegisterTemporalVersionShape(
         RelationQueryExpressionAuthoring author)
     {
         GraphId graph = new("tests/postgres/temporal-shapes/v1");

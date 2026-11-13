@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
 
@@ -44,7 +45,7 @@ public sealed class RelationQueryFluentWhereTests
     {
         var query = RelationQuery.Expression();
         var foreign = RelationQuery.Expression().Parameter<string>("id");
-        Assert.Throws<RelationQueryExpressionAuthoringException>(() =>
+        Assert.Throws<ExpressionAuthoringException>(() =>
             query.Source<Row>().Where(row => row.Id == foreign.Value));
     }
 

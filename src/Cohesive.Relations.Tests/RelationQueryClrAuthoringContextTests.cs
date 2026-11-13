@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text.Json.Nodes;
@@ -19,7 +20,7 @@ public sealed class RelationQueryClrAuthoringContextTests
         var document = ShapeGraphDocument.FromGraph(new ShapeGraph(graphId,
             [new Shape(id.ShapeId, [new FieldDefinition(new("Status"),
                 new EnumTypeRef("Lifecycle", mismatch ? ["ready", "other"] : ["ready", "done"]))])]));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         if (mismatch)
             Assert.Throws<InvalidOperationException>(() => context.Shape<ImportedLifecycleRoot>(document, id));
         else
@@ -70,7 +71,7 @@ public sealed class RelationQueryClrAuthoringContextTests
     [Fact]
     public void ConventionRegistration_UsesOneDeterministicMetadataSnapshotForIdsTypesAndNestedPaths()
     {
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         var load = context.Shape<Load>();
         _ = context.Shape<AnotherRoot>();
 
@@ -86,7 +87,7 @@ public sealed class RelationQueryClrAuthoringContextTests
             [Property<Customer>(nameof(Customer.Name))]);
         var firstDocuments = context.ShapeDocuments;
         var secondDocuments = context.ShapeDocuments;
-        var reverseContext = new RelationQueryClrAuthoringContext();
+        var reverseContext = new ClrAuthoringContext();
         _ = reverseContext.Shape<AnotherRoot>();
         _ = reverseContext.Shape<Load>();
         var reverseDocument = Assert.Single(reverseContext.ShapeDocuments);
@@ -95,10 +96,10 @@ public sealed class RelationQueryClrAuthoringContextTests
         Assert.Equal(FieldPath.FromField("display_name"), nestedItemPath);
         Assert.Equal(ClrShapeIdentityConvention.GetTypeId(typeof(Customer)), customerType.TypeId);
         Assert.Equal(
-            ClrRelationshipShapeConvention.GraphIdPrefix + typeof(Load).Assembly.GetName().Name,
+            ClrAuthoringShapeConvention.GraphIdPrefix + typeof(Load).Assembly.GetName().Name,
             load.Id.GraphId.Value);
         Assert.Equal(ClrShapeIdentityConvention.GetShapeId(typeof(Load)), load.Id.ShapeId);
-        Assert.Equal(RelationQueryClrIdentityOrigin.Convention, load.IdentityOrigin);
+        Assert.Equal(ClrIdentityOrigin.Convention, load.IdentityOrigin);
         var resolution = load.ResolveMemberPathWithProvenance(
         [
             Property<Load>(nameof(Load.Customer)),
@@ -106,7 +107,7 @@ public sealed class RelationQueryClrAuthoringContextTests
         ]);
         Assert.Equal(path, resolution.Path);
         Assert.Equal(
-            [RelationQueryClrIdentityOrigin.Metadata, RelationQueryClrIdentityOrigin.Metadata],
+            [ClrIdentityOrigin.Metadata, ClrIdentityOrigin.Metadata],
             resolution.SegmentOrigins.ToArray());
         Assert.Single(firstDocuments);
         Assert.Same(firstDocuments[0].Graph, secondDocuments[0].Graph);
@@ -127,13 +128,13 @@ public sealed class RelationQueryClrAuthoringContextTests
     [Fact]
     public void ExplicitQualifiedId_OverridesAttributeShapeIdentity()
     {
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         var explicitId = new QualifiedShapeId(new("domain/shapes/v2"), new("load.explicit"));
 
         var load = context.Shape<AttributedLoad>(explicitId);
 
         Assert.Equal(explicitId, load.Id);
-        Assert.Equal(RelationQueryClrIdentityOrigin.Explicit, load.IdentityOrigin);
+        Assert.Equal(ClrIdentityOrigin.Explicit, load.IdentityOrigin);
         Assert.Equal(explicitId, context.Shape<AttributedLoad>().Id);
         Assert.NotNull(load.Document.Graph.GetShape(explicitId));
         Assert.Null(load.Document.Graph.TryGetShape(new ShapeId("load.attribute")));
@@ -154,7 +155,7 @@ public sealed class RelationQueryClrAuthoringContextTests
             ]));
         var customer = Property<ImportedLoad>(nameof(ImportedLoad.Customer));
         var name = Property<ImportedCustomer>(nameof(ImportedCustomer.Name));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
 
         var load = context.Shape<ImportedLoad>(
             document,
@@ -166,15 +167,15 @@ public sealed class RelationQueryClrAuthoringContextTests
             });
 
         Assert.Equal(qualified, load.Id);
-        Assert.Equal(RelationQueryClrIdentityOrigin.Imported, load.IdentityOrigin);
+        Assert.Equal(ClrIdentityOrigin.Imported, load.IdentityOrigin);
         Assert.Equal(
             FieldPath.Parse("joined.customer.display_name"),
             load.ResolveMemberPath([customer, name]));
         Assert.Equal(
             [
-                RelationQueryClrIdentityOrigin.Explicit,
-                RelationQueryClrIdentityOrigin.Explicit,
-                RelationQueryClrIdentityOrigin.Explicit
+                ClrIdentityOrigin.Explicit,
+                ClrIdentityOrigin.Explicit,
+                ClrIdentityOrigin.Explicit
             ],
             load.ResolveMemberPathWithProvenance([customer, name]).SegmentOrigins.ToArray());
         Assert.Equal(
@@ -211,7 +212,7 @@ public sealed class RelationQueryClrAuthoringContextTests
                     ])
             ]));
         var values = Property<ImportedInlineCollectionRoot>(nameof(ImportedInlineCollectionRoot.Values));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
 
         var root = context.Shape<ImportedInlineCollectionRoot>(
             document,
@@ -250,7 +251,7 @@ public sealed class RelationQueryClrAuthoringContextTests
                     ])
             ]));
         var name = Property<ImportedInlineRequiredRoot>(nameof(ImportedInlineRequiredRoot.Name));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
             context.Shape<ImportedInlineRequiredRoot>(
@@ -280,7 +281,7 @@ public sealed class RelationQueryClrAuthoringContextTests
                             new ObjectTypeRef([]))
                     ])
             ]));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
 
         var root = context.Shape<ImportedEmptyRoot>(document, qualified);
 
@@ -314,7 +315,7 @@ public sealed class RelationQueryClrAuthoringContextTests
             [customer] = FieldPath.FromField("customer"),
             [name] = FieldPath.FromField("display_name")
         };
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
 
         var load = context.Shape<ImportedLoad>(document, qualified, overrides);
 
@@ -339,7 +340,7 @@ public sealed class RelationQueryClrAuthoringContextTests
                     customerType,
                     [new StructuralField(new("display_name"), new ScalarTypeRef(ScalarTypeKind.Int64))])
             ]));
-        var invalidContext = new RelationQueryClrAuthoringContext();
+        var invalidContext = new ClrAuthoringContext();
 
         Assert.Throws<InvalidOperationException>(() => invalidContext.Shape<ImportedLoad>(
             invalidDocument,
@@ -350,11 +351,11 @@ public sealed class RelationQueryClrAuthoringContextTests
     [Fact]
     public void MetadataProfiles_AreIsolatedAcrossContexts()
     {
-        var left = new RelationQueryClrAuthoringContext(new RelationQueryClrMetadataProfile(
+        var left = new ClrAuthoringContext(new ClrMetadataProfile(
             "test/left",
             "v1",
             [new PrefixFieldMetadataProvider("left_")]));
-        var right = new RelationQueryClrAuthoringContext(new RelationQueryClrMetadataProfile(
+        var right = new ClrAuthoringContext(new ClrMetadataProfile(
             "test/right",
             "v1",
             [new PrefixFieldMetadataProvider("right_")]));
@@ -375,7 +376,7 @@ public sealed class RelationQueryClrAuthoringContextTests
     [Fact]
     public void ContextCache_IsSafeForConcurrentIdempotentRegistration()
     {
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         ConcurrentBag<QualifiedShapeId> ids = [];
 
         Parallel.For(0, 16, _ => ids.Add(context.Shape<Load>().Id));
@@ -387,14 +388,14 @@ public sealed class RelationQueryClrAuthoringContextTests
     [Fact]
     public void RepeatedInferredRegistration_RejectsConflictingSemanticRole()
     {
-        var conventional = new RelationQueryClrAuthoringContext();
+        var conventional = new ClrAuthoringContext();
         _ = conventional.Shape<AnotherRoot>(ShapeRoles.Entity);
 
         var conventionalException = Assert.Throws<ArgumentException>(() =>
             conventional.Shape<AnotherRoot>(ShapeRoles.ValueObject));
         Assert.Contains("semantic role", conventionalException.Message, StringComparison.Ordinal);
 
-        var explicitContext = new RelationQueryClrAuthoringContext();
+        var explicitContext = new ClrAuthoringContext();
         var explicitId = new QualifiedShapeId(
             new GraphId("test/explicit-role/v1"),
             new ShapeId("another-root"));
@@ -433,7 +434,7 @@ public sealed class RelationQueryClrAuthoringContextTests
     [Fact]
     public void BytesProperty_RemainsOneScalarBytesField()
     {
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
 
         var shape = context.Shape<BinaryRoot>().Document.Graph.GetShape(
             context.Shape<BinaryRoot>().Id);
@@ -455,7 +456,7 @@ public sealed class RelationQueryClrAuthoringContextTests
             graphId,
             [new Shape(id.ShapeId, [field])],
             [.. namedTypes]));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
 
         var exception = Assert.Throws<InvalidOperationException>(() => context.Shape<T>(document, id));
 

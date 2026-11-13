@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using Cohesive.Examples.TenderAcceptance;
 using Cohesive.Execution;
 using Cohesive.Model;
@@ -92,7 +93,7 @@ public sealed class MachineReactionTests
         var ready = machine.State("ready").Initial();
         var edge = machine.Edge("record").From(ready).To(ready);
         Assert.Throws<ArgumentException>(() => MachineReaction.On<TenderState>(model.Tender.Entity, edge, "invalid", "1"));
-        Assert.Throws<RelationQueryExpressionAuthoringException>(() =>
+        Assert.Throws<ExpressionAuthoringException>(() =>
             MachineReaction.On<TenderState>(model.Tender.Entity, model.Tender.Machine.SendPending, "impure", "1")
                 .Request(model.MarkPending, tender => Guid.NewGuid().ToString(), tender => new AcknowledgeLoad(false)));
     }

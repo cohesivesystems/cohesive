@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Linq.Expressions;
@@ -97,7 +98,7 @@ public sealed class RelationQueryPlacedInput<T> : RelationQueryPlacedInput
         RelationQuerySourcePlacementBinding binding,
         RelationQuerySourceInstance source,
         ImmutableArray<RelationQueryFieldInputContract> fields,
-        RelationQueryClrShape<T> clrShape)
+        ClrAuthoringShape<T> clrShape)
         : base(plan, placement, binding, source, fields)
     {
         ClrShape = Guard.RequireNotNull(clrShape);
@@ -108,7 +109,7 @@ public sealed class RelationQueryPlacedInput<T> : RelationQueryPlacedInput
     }
 
     /// <summary>Authoritative CLR metadata mapping used by typed field selectors.</summary>
-    public RelationQueryClrShape<T> ClrShape { get; }
+    public ClrAuthoringShape<T> ClrShape { get; }
 
     /// <summary>Resolves a typed CLR property selector to its authoritative semantic path.</summary>
     /// <typeparam name="TValue">CLR value selected by the property chain.</typeparam>

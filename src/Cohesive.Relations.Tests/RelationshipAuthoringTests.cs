@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections;
 using System.Linq.Expressions;
 using System.Reflection;
@@ -92,13 +93,13 @@ public sealed class RelationshipAuthoringTests
             .To<Customer>();
 
         Assert.Equal(first, second);
-        Assert.Equal(ClrRelationshipShapeConvention.GetQualifiedShapeId<Load>(), first.SourceShape);
-        Assert.Equal(ClrRelationshipShapeConvention.GetQualifiedShapeId<Customer>(), first.TargetShape);
+        Assert.Equal(ClrAuthoringShapeConvention.GetQualifiedShapeId<Load>(), first.SourceShape);
+        Assert.Equal(ClrAuthoringShapeConvention.GetQualifiedShapeId<Customer>(), first.TargetShape);
         Assert.Equal(
-            ClrRelationshipShapeConvention.GraphIdPrefix + typeof(Load).Assembly.GetName().Name,
+            ClrAuthoringShapeConvention.GraphIdPrefix + typeof(Load).Assembly.GetName().Name,
             first.SourceShape.GraphId.Value);
         Assert.Equal(
-            $"{ClrRelationshipShapeConvention.ShapeIdPrefix}{typeof(Load).FullName}",
+            $"{ClrAuthoringShapeConvention.ShapeIdPrefix}{typeof(Load).FullName}",
             first.SourceShape.ShapeId.Value);
 
         var graph = new ClrShapeGraphBuilder()

@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 namespace Cohesive.Relations.Authoring;
 
 /// <summary>Entry point for structural and typed expression authoring of canonical relation/query definitions.</summary>
@@ -18,6 +19,6 @@ public static class RelationQuery
     /// </param>
     /// <returns>An empty expression-authoring session.</returns>
     public static RelationQueryExpressionAuthoring Expression(
-        RelationQueryClrAuthoringContext? clr = null) =>
+        ClrAuthoringContext? clr = null) =>
         new(clr);
 }

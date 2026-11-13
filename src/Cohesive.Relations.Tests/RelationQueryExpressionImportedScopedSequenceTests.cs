@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Reflection;
 using System.Linq.Expressions;
 using Cohesive.Model.Serialization;
@@ -41,7 +42,7 @@ public sealed class RelationQueryExpressionImportedScopedSequenceTests
                     [new StructuralField(new("display_name_b"), new ScalarTypeRef(ScalarTypeKind.String))])
             ]));
         var customerName = Property<Customer>(nameof(Customer.Name));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         _ = context.Shape<Customer>(
             customerDocument,
             new(customerGraphId, customerShapeId),
@@ -102,7 +103,7 @@ public sealed class RelationQueryExpressionImportedScopedSequenceTests
                     customerType,
                     [new StructuralField(new("display_name"), new ScalarTypeRef(ScalarTypeKind.String))])
             ]));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         var imported = context.Shape<ConditionalLoad>(
             document,
             new(graphId, shapeId),
@@ -132,14 +133,14 @@ public sealed class RelationQueryExpressionImportedScopedSequenceTests
             otherLoads.Binding);
         Expression<Func<ConditionalLoad, ConditionalLoad, IEnumerable<Customer>>> ambiguous =
             (left, right) => left.UsePrimary ? left.PrimaryCustomers : right.PrimaryCustomers;
-        var provenanceFailure = Assert.Throws<RelationQueryExpressionAuthoringException>(() =>
+        var provenanceFailure = Assert.Throws<ExpressionAuthoringException>(() =>
             author.Expand<JoinQueryNode, Customer>(
                 joined,
                 ambiguous,
                 [loads.Binding, otherLoads.Binding],
                 sourceReference: "conditional/retry"));
         Assert.Equal(
-            RelationQueryExpressionDiagnosticCodes.MemberPathUnavailable,
+            ExpressionDiagnosticCodes.MemberPathUnavailable,
             Assert.Single(provenanceFailure.Diagnostics).Code);
         var expanded = author.Expand<JoinQueryNode, Customer>(
             joined,
@@ -194,7 +195,7 @@ public sealed class RelationQueryExpressionImportedScopedSequenceTests
             ]));
         var customers = Property<ImportedLoad>(nameof(ImportedLoad.Customers));
         var customerName = Property<Customer>(nameof(Customer.Name));
-        var context = new RelationQueryClrAuthoringContext();
+        var context = new ClrAuthoringContext();
         var importedLoad = context.Shape<ImportedLoad>(
             document,
             qualified,

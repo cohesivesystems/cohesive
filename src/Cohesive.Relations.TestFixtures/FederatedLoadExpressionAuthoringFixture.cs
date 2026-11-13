@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Text.Json.Serialization;
 using Cohesive.Relations.Authoring;
 using Cohesive.Relations.IR;
@@ -153,10 +154,10 @@ static class FederatedLoadExpressionAuthoringFixture
 
     internal sealed record Scenario(
         RelationQueryExpressionAuthoring Author,
-        RelationQueryClrShape<FederatedLoad> LoadShape,
-        RelationQueryClrShape<FederatedCustomer> CustomerShape,
-        RelationQueryClrShape<FederatedEquipment> EquipmentShape,
-        RelationQueryClrShape<FederatedLoadSearchRow> OutputShape,
+        ClrAuthoringShape<FederatedLoad> LoadShape,
+        ClrAuthoringShape<FederatedCustomer> CustomerShape,
+        ClrAuthoringShape<FederatedEquipment> EquipmentShape,
+        ClrAuthoringShape<FederatedLoadSearchRow> OutputShape,
         RelationQueryAuthoringResult<RelationDefinition> Relation,
         RelationshipCatalogDocument RelationshipCatalog);
 }

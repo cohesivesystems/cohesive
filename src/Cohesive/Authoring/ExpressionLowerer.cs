@@ -1,3 +1,4 @@
+using Cohesive.Model;
 using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Immutable;
@@ -8,18 +9,17 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Cohesive.Model.Authoring;
 using Cohesive.Model.Expressions;
-using Cohesive.Relations.IR;
 
-namespace Cohesive.Relations.Authoring;
+namespace Cohesive.Authoring;
 
 /// <summary>Immutable canonical value and source attribution lowered from one C# value expression.</summary>
-public sealed record RelationQueryExpressionLowering
+public sealed record ExpressionLowering
 {
     /// <summary>Creates a lowered expression value.</summary>
     /// <param name="value">Canonical semantic expression.</param>
     /// <param name="source">Source attribution for the complete value expression.</param>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> or <paramref name="source"/> is <see langword="null"/>.</exception>
-    public RelationQueryExpressionLowering(Expr value, RelationQueryAuthoringSource source)
+    public ExpressionLowering(Expr value, AuthoringSource source)
     {
         Value = Guard.RequireNotNull(value);
         Source = Guard.RequireNotNull(source);
@@ -29,11 +29,11 @@ public sealed record RelationQueryExpressionLowering
     public Expr Value { get; }
 
     /// <summary>Source attribution for the complete value expression.</summary>
-    public RelationQueryAuthoringSource Source { get; }
+    public AuthoringSource Source { get; }
 }
 
 /// <summary>Immutable projection assignments and source attribution lowered from one C# object projection.</summary>
-public sealed record RelationQueryExpressionProjection
+public sealed record ExpressionProjection
 {
     /// <summary>Creates a lowered object projection.</summary>
     /// <param name="assignments">Canonical structural projection assignments.</param>
@@ -43,10 +43,10 @@ public sealed record RelationQueryExpressionProjection
     /// <paramref name="assignments"/> is empty or contains a <see langword="null"/> entry.
     /// </exception>
     /// <exception cref="ArgumentNullException"><paramref name="nodeSource"/> or <paramref name="bindingSource"/> is <see langword="null"/>.</exception>
-    public RelationQueryExpressionProjection(
-        ImmutableArray<RelationQueryProjectionAssignment> assignments,
-        RelationQueryAuthoringSource nodeSource,
-        RelationQueryAuthoringSource bindingSource)
+    public ExpressionProjection(
+        ImmutableArray<ExpressionProjectionAssignment> assignments,
+        AuthoringSource nodeSource,
+        AuthoringSource bindingSource)
     {
         if (assignments.IsDefaultOrEmpty || assignments.Any(static assignment => assignment is null))
         {
@@ -61,13 +61,13 @@ public sealed record RelationQueryExpressionProjection
     }
 
     /// <summary>Canonical structural projection assignments.</summary>
-    public ImmutableArray<RelationQueryProjectionAssignment> Assignments { get; }
+    public ImmutableArray<ExpressionProjectionAssignment> Assignments { get; }
 
     /// <summary>Source attribution for the projection operation.</summary>
-    public RelationQueryAuthoringSource NodeSource { get; }
+    public AuthoringSource NodeSource { get; }
 
     /// <summary>Source attribution for the projected result binding.</summary>
-    public RelationQueryAuthoringSource BindingSource { get; }
+    public AuthoringSource BindingSource { get; }
 }
 
 /// <summary>
@@ -80,7 +80,7 @@ public sealed record RelationQueryExpressionProjection
 /// associated with top-level lambda parameters by position. Nested sequence lambdas lower to canonical
 /// current-item scopes while retaining access to outer semantic bindings.
 /// </remarks>
-public sealed class RelationQueryExpressionLowerer
+public sealed class ExpressionLowerer
 {
     /// <summary>Lowers a standalone value lambda against explicit portable binding identities.</summary>
     /// <param name="expression">Pure lambda; parameter CLR types supply member-path conventions.</param>
@@ -89,7 +89,7 @@ public sealed class RelationQueryExpressionLowerer
     /// <returns>Portable expression or structured lowering diagnostics. The consumer must validate contracts.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">Binding count, identities or source reference are invalid.</exception>
-    public RelationQueryExpressionLoweringResult<RelationQueryExpressionLowering> LowerBoundValue(
+    public ExpressionLoweringResult<ExpressionLowering> LowerBoundValue(
         LambdaExpression expression, IReadOnlyList<ValueBindingId> bindings, string sourceReference)
     {
         ArgumentNullException.ThrowIfNull(expression);
@@ -105,22 +105,22 @@ public sealed class RelationQueryExpressionLowerer
                 parameters.Add(expression.Parameters[i], ParameterTarget.ForBinding(bindings[i],
                     expression.Parameters[i].Type, memberPathResolver, usesImportedMapping: false));
             var value = Translate(expression.Body, new(parameters, activeCurrentItem: null), sourceReference, "body");
-            return Success(new RelationQueryExpressionLowering(value,
+            return Success(new ExpressionLowering(value,
                 Source(sourceReference + "/body", "Standalone bound value expression.")));
         }
         catch (LoweringFailure failure)
         {
-            return Failure<RelationQueryExpressionLowering>(failure.Diagnostic);
+            return Failure<ExpressionLowering>(failure.Diagnostic);
         }
     }
 
     /// <summary>Stable producer identity used for source attribution emitted by this translator.</summary>
-    public const string Producer = "cohesive.relations.csharp-expression/v1";
+    public const string Producer = "cohesive.csharp-expression/v1";
 
     readonly ClrMemberPathResolver memberPathResolver;
     readonly Func<Type, TypeRef> literalTypeResolver;
-    readonly RelationQueryExpressionAuthoring? expectedParameterOwner;
-    static readonly RelationQueryClrAuthoringContext DefaultLiteralTypeContext = new();
+    readonly object? expectedParameterOwner;
+    static readonly ClrAuthoringContext DefaultLiteralTypeContext = new();
     static readonly IClrTypeRefMapper DefaultLiteralTypeMapper = new DefaultClrTypeRefMapper();
     static readonly ConcurrentDictionary<PropertyInfo, bool> NonNullProperties = [];
     static readonly ConcurrentDictionary<PropertyInfo, bool> NonNullSequenceElementProperties = [];
@@ -130,19 +130,19 @@ public sealed class RelationQueryExpressionLowerer
     /// Metadata-aware resolver that maps complete source and projection member chains to canonical paths.
     /// </param>
     /// <exception cref="ArgumentNullException"><paramref name="memberPathResolver"/> is <see langword="null"/>.</exception>
-    public RelationQueryExpressionLowerer(
+    public ExpressionLowerer(
         ClrMemberPathResolver memberPathResolver)
         : this(memberPathResolver, expectedParameterOwner: null)
     {
     }
 
-    internal RelationQueryExpressionLowerer(
+    internal ExpressionLowerer(
         ClrMemberPathResolver memberPathResolver,
-        RelationQueryExpressionAuthoring? expectedParameterOwner)
+        object? expectedParameterOwner, ClrAuthoringContext? context = null)
     {
         this.memberPathResolver = Guard.RequireNotNull(memberPathResolver);
         this.expectedParameterOwner = expectedParameterOwner;
-        literalTypeResolver = (expectedParameterOwner?.Clr ?? DefaultLiteralTypeContext).GetTypeRef;
+        literalTypeResolver = (context ?? DefaultLiteralTypeContext).GetTypeRef;
     }
 
     /// <summary>Lowers a value lambda with no source-binding parameters.</summary>
@@ -151,7 +151,7 @@ public sealed class RelationQueryExpressionLowerer
     /// <returns>A fail-closed result containing either a canonical value or structured diagnostics.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="expression"/> or <paramref name="sourceReference"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="sourceReference"/> is empty or white space.</exception>
-    public RelationQueryExpressionLoweringResult<RelationQueryExpressionLowering> LowerValue(
+    public ExpressionLoweringResult<ExpressionLowering> LowerValue(
         LambdaExpression expression,
         string sourceReference) =>
         LowerValue(expression, bindings: [], sourceReference);
@@ -165,9 +165,9 @@ public sealed class RelationQueryExpressionLowerer
     /// <paramref name="expression"/>, <paramref name="bindings"/>, or <paramref name="sourceReference"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="sourceReference"/> is empty or white space.</exception>
-    public RelationQueryExpressionLoweringResult<RelationQueryExpressionLowering> LowerValue(
+    public ExpressionLoweringResult<ExpressionLowering> LowerValue(
         LambdaExpression expression,
-        IReadOnlyList<RelationQueryExpressionValueBinding> bindings,
+        IReadOnlyList<ExpressionBinding> bindings,
         string sourceReference)
     {
         ArgumentNullException.ThrowIfNull(expression);
@@ -179,13 +179,13 @@ public sealed class RelationQueryExpressionLowerer
             var scope = CreateRootScope(expression, bindings, sourceReference);
             var value = Translate(expression.Body, scope, sourceReference, expressionPath: "body");
             return Success(
-                new RelationQueryExpressionLowering(
+                new ExpressionLowering(
                     value,
                     Source(sourceReference + "/body", $"Value expression returning '{Display(expression.ReturnType)}'.")));
         }
         catch (LoweringFailure failure)
         {
-            return Failure<RelationQueryExpressionLowering>(failure.Diagnostic);
+            return Failure<ExpressionLowering>(failure.Diagnostic);
         }
     }
 
@@ -195,7 +195,7 @@ public sealed class RelationQueryExpressionLowerer
     /// <returns>A fail-closed result containing either structural assignments or structured diagnostics.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="expression"/> or <paramref name="sourceReference"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="sourceReference"/> is empty or white space.</exception>
-    public RelationQueryExpressionLoweringResult<RelationQueryExpressionProjection> LowerProjection(
+    public ExpressionLoweringResult<ExpressionProjection> LowerProjection(
         LambdaExpression expression,
         string sourceReference) =>
         LowerProjection(expression, bindings: [], sourceReference);
@@ -209,9 +209,9 @@ public sealed class RelationQueryExpressionLowerer
     /// <paramref name="expression"/>, <paramref name="bindings"/>, or <paramref name="sourceReference"/> is <see langword="null"/>.
     /// </exception>
     /// <exception cref="ArgumentException"><paramref name="sourceReference"/> is empty or white space.</exception>
-    public RelationQueryExpressionLoweringResult<RelationQueryExpressionProjection> LowerProjection(
+    public ExpressionLoweringResult<ExpressionProjection> LowerProjection(
         LambdaExpression expression,
-        IReadOnlyList<RelationQueryExpressionValueBinding> bindings,
+        IReadOnlyList<ExpressionBinding> bindings,
         string sourceReference)
     {
         ArgumentNullException.ThrowIfNull(expression);
@@ -221,7 +221,7 @@ public sealed class RelationQueryExpressionLowerer
         try
         {
             var scope = CreateRootScope(expression, bindings, sourceReference);
-            List<RelationQueryProjectionAssignment> assignments = [];
+            List<ExpressionProjectionAssignment> assignments = [];
             HashSet<FieldPath> targets = [];
             LowerProjectionObject(
                 StripExactConversions(expression.Body, sourceReference, "body"),
@@ -237,7 +237,7 @@ public sealed class RelationQueryExpressionLowerer
             if (assignments.Count == 0)
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                    ExpressionDiagnosticCodes.ProjectionInvalid,
                     "The projection does not produce any canonical field assignments.",
                     "body",
                     sourceReference,
@@ -246,26 +246,26 @@ public sealed class RelationQueryExpressionLowerer
             }
 
             return Success(
-                new RelationQueryExpressionProjection(
+                new ExpressionProjection(
                     [.. assignments],
                     Source(sourceReference, $"Projection operation producing '{Display(expression.ReturnType)}'."),
                     Source(sourceReference + "/body", $"Projected '{Display(expression.ReturnType)}' result binding.")));
         }
         catch (LoweringFailure failure)
         {
-            return Failure<RelationQueryExpressionProjection>(failure.Diagnostic);
+            return Failure<ExpressionProjection>(failure.Diagnostic);
         }
     }
 
     RootScope CreateRootScope(
         LambdaExpression expression,
-        IReadOnlyList<RelationQueryExpressionValueBinding> bindings,
+        IReadOnlyList<ExpressionBinding> bindings,
         string sourceReference)
     {
         if (expression.Parameters.Count != bindings.Count)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.LambdaBindingCountMismatch,
+                ExpressionDiagnosticCodes.LambdaBindingCountMismatch,
                 $"The lambda declares {expression.Parameters.Count} top-level parameter(s), but {bindings.Count} semantic binding(s) were supplied.",
                 "parameters",
                 sourceReference,
@@ -275,26 +275,26 @@ public sealed class RelationQueryExpressionLowerer
 
         Dictionary<ParameterExpression, ParameterTarget> parameters =
             new(expression.Parameters.Count, ReferenceEqualityComparer.Instance);
-        RelationQueryAuthoringCore? owner = null;
+        object? owner = null;
         for (var index = 0; index < bindings.Count; index++)
         {
             var binding = bindings[index];
             if (binding is null || string.IsNullOrWhiteSpace(binding.Id.Value))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.BindingInvalid,
-                    $"Semantic binding {index} is not owned by a structural authoring core.",
+                    ExpressionDiagnosticCodes.BindingInvalid,
+                    $"Semantic binding {index} is not owned by a authoring session.",
                     $"parameters/{index}",
                     sourceReference,
                     symbol: expression.Parameters[index].Name,
-                    suggestion: "Use a binding returned by the same relation/query authoring session.");
+                    suggestion: "Use a binding returned by the same expression authoring session.");
             }
 
             if (expectedParameterOwner is not null
                 && !ReferenceEquals(binding.Owner, expectedParameterOwner))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.BindingInvalid,
+                    ExpressionDiagnosticCodes.BindingInvalid,
                     "A semantic binding belongs to another expression-authoring session.",
                     $"parameters/{index}",
                     sourceReference,
@@ -302,22 +302,22 @@ public sealed class RelationQueryExpressionLowerer
                     suggestion: "Use bindings created by the expression-authoring session that owns this translator.");
             }
 
-            var structuralOwner = binding.Structural.Owner;
+            var structuralOwner = binding.Owner;
             if (owner is not null && !ReferenceEquals(owner, structuralOwner))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.BindingInvalid,
-                    "All semantic bindings supplied to one lambda must belong to the same structural authoring core.",
+                    ExpressionDiagnosticCodes.BindingInvalid,
+                    "All semantic bindings supplied to one lambda must belong to the same authoring session.",
                     $"parameters/{index}",
                     sourceReference,
                     symbol: binding.Id.Value,
-                    suggestion: "Use bindings created by one relation/query authoring session.");
+                    suggestion: "Use bindings created by one expression authoring session.");
             }
 
             if (expression.Parameters[index].Type != binding.ClrType)
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.BindingInvalid,
+                    ExpressionDiagnosticCodes.BindingInvalid,
                     $"Lambda parameter type '{Display(expression.Parameters[index].Type)}' does not match "
                     + $"binding CLR type '{Display(binding.ClrType)}'.",
                     $"parameters/{index}",
@@ -362,8 +362,8 @@ public sealed class RelationQueryExpressionLowerer
             NewExpression or MemberInitExpression => TranslateObject(current, scope, sourceReference, expressionPath),
             NewArrayExpression array => TranslateArray(array, scope, sourceReference, expressionPath),
             _ => throw Fail(
-                RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
-                $"Expression node '{current.NodeType}' has no exact canonical relation/query lowering.",
+                ExpressionDiagnosticCodes.NodeUnsupported,
+                $"Expression node '{current.NodeType}' has no exact canonical expression lowering.",
                 expressionPath,
                 sourceReference,
                 symbol: current.NodeType.ToString(),
@@ -380,7 +380,7 @@ public sealed class RelationQueryExpressionLowerer
         if (!scope.Parameters.TryGetValue(parameter, out var target))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                ExpressionDiagnosticCodes.NodeUnsupported,
                 "The lambda parameter is not visible in the current expression-authoring scope.",
                 expressionPath,
                 sourceReference,
@@ -398,7 +398,7 @@ public sealed class RelationQueryExpressionLowerer
             ? "An outer sequence item cannot be referenced from a nested current-item scope because the canonical expression has no depth-qualified item reference."
             : "A complete bound object cannot be embedded as a scalar expression; select one or more of its fields.";
         throw Fail(
-            RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+            ExpressionDiagnosticCodes.NodeUnsupported,
             message,
             expressionPath,
             sourceReference,
@@ -420,7 +420,7 @@ public sealed class RelationQueryExpressionLowerer
             if (!TryGetGuardableMemberAccess(nullableOperand, scope, out _))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                    ExpressionDiagnosticCodes.NodeUnsupported,
                     "Nullable HasValue can be lowered only for a required convention-inferred CLR field.",
                     expressionPath,
                     sourceReference,
@@ -436,7 +436,7 @@ public sealed class RelationQueryExpressionLowerer
         if (IsCollectionCountMember(member))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                ExpressionDiagnosticCodes.NodeUnsupported,
                 "CLR collection Count/Length returns Int32 and can overflow where canonical count returns Int64.",
                 expressionPath,
                 sourceReference,
@@ -474,7 +474,7 @@ public sealed class RelationQueryExpressionLowerer
             && !target.IsProvablyNonNull)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                ExpressionDiagnosticCodes.NodeUnsupported,
                 $"Member path navigation dereferences sequence item '{Display(target.RootType)}', which may be null; "
                 + "C# throws for a null item while canonical current-item navigation preserves null/missing.",
                 expressionPath + "/root",
@@ -495,7 +495,7 @@ public sealed class RelationQueryExpressionLowerer
             ParameterTargetKind.CurrentItem when ReferenceEquals(rootParameter, scope.ActiveCurrentItem) =>
                 new FieldExpr(new FieldPath([FieldPathSegment.ForField(ExprFieldRoots.CurrentItem), .. path.Segments])),
             ParameterTargetKind.CurrentItem => throw Fail(
-                RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                ExpressionDiagnosticCodes.NodeUnsupported,
                 "A member of an outer sequence item cannot be referenced from a nested current-item scope.",
                 expressionPath,
                 sourceReference,
@@ -529,7 +529,7 @@ public sealed class RelationQueryExpressionLowerer
         if (unary.NodeType == ExpressionType.ArrayLength)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                ExpressionDiagnosticCodes.NodeUnsupported,
                 "CLR array Length returns Int32 and can overflow where canonical count returns Int64.",
                 expressionPath,
                 sourceReference,
@@ -540,7 +540,7 @@ public sealed class RelationQueryExpressionLowerer
         if (unary.IsLifted || unary.IsLiftedToNull)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+                ExpressionDiagnosticCodes.OperatorUnsupported,
                 "Lifted nullable unary operators do not have the same missing/null contract as canonical operators.",
                 expressionPath,
                 sourceReference,
@@ -550,7 +550,7 @@ public sealed class RelationQueryExpressionLowerer
         if (unary.Method is not null)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+                ExpressionDiagnosticCodes.OperatorUnsupported,
                 "User-defined unary operators are not executed or inferred by expression authoring.",
                 expressionPath,
                 sourceReference,
@@ -564,7 +564,7 @@ public sealed class RelationQueryExpressionLowerer
                 UnaryOperator.Not,
                 Translate(unary.Operand, scope, sourceReference, expressionPath + "/operand")),
             _ => throw Fail(
-                RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+                ExpressionDiagnosticCodes.OperatorUnsupported,
                 $"Unary operator '{unary.NodeType}' has no exact canonical lowering.",
                 expressionPath,
                 sourceReference,
@@ -605,7 +605,7 @@ public sealed class RelationQueryExpressionLowerer
         if (binary.IsLifted || binary.IsLiftedToNull)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+                ExpressionDiagnosticCodes.OperatorUnsupported,
                 "Lifted nullable binary operators do not have the same missing/null contract as canonical operators.",
                 expressionPath,
                 sourceReference,
@@ -622,7 +622,7 @@ public sealed class RelationQueryExpressionLowerer
                 || binary.Method is not null && !IsExactStringConcatOperator(binary.Method))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+                    ExpressionDiagnosticCodes.OperatorUnsupported,
                     "Only the built-in string + string operator has an exact canonical concat lowering.",
                     expressionPath,
                     sourceReference,
@@ -642,7 +642,7 @@ public sealed class RelationQueryExpressionLowerer
         if (binary.Method is not null && !IsCanonicalFrameworkOperator(binary))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+                ExpressionDiagnosticCodes.OperatorUnsupported,
                 "User-defined binary operators are not executed or inferred by expression authoring.",
                 expressionPath,
                 sourceReference,
@@ -665,7 +665,7 @@ public sealed class RelationQueryExpressionLowerer
             ExpressionType.Multiply => BinaryOperator.Mul,
             ExpressionType.Divide => BinaryOperator.Div,
             _ => throw Fail(
-                RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+                ExpressionDiagnosticCodes.OperatorUnsupported,
                 $"Binary operator '{binary.NodeType}' has no exact canonical lowering.",
                 expressionPath,
                 sourceReference,
@@ -786,7 +786,7 @@ public sealed class RelationQueryExpressionLowerer
         if (!TryGetUnambiguousEnumMember(value, out _))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
+                ExpressionDiagnosticCodes.LiteralUnsupported,
                 $"Enum value '{constant.Value}' is not one exact, unambiguous named member of '{Display(enumType)}'.",
                 expressionPath,
                 sourceReference,
@@ -830,7 +830,7 @@ public sealed class RelationQueryExpressionLowerer
         }
 
         throw Fail(
-            RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+            ExpressionDiagnosticCodes.OperatorUnsupported,
             "General null-coalescing has no exact canonical lowering because the shared expression IR does not currently expose a presence/null test.",
             expressionPath,
             sourceReference,
@@ -861,7 +861,7 @@ public sealed class RelationQueryExpressionLowerer
         if (IsStringEndsWith(call))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                ExpressionDiagnosticCodes.MethodUnsupported,
                 "Only the ordinal, case-sensitive EndsWith overload has the same semantics as the canonical endsWith function.",
                 expressionPath,
                 sourceReference,
@@ -879,7 +879,7 @@ public sealed class RelationQueryExpressionLowerer
         if (IsStringStartsWith(call))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                ExpressionDiagnosticCodes.MethodUnsupported,
                 "Only the ordinal, case-sensitive StartsWith overload has the same semantics as the canonical startsWith function.",
                 expressionPath,
                 sourceReference,
@@ -897,7 +897,7 @@ public sealed class RelationQueryExpressionLowerer
         if (IsStringContains(call))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                ExpressionDiagnosticCodes.MethodUnsupported,
                 "Only the ordinal, case-sensitive string Contains overload has the same semantics as the canonical textContains function.",
                 expressionPath,
                 sourceReference,
@@ -910,7 +910,7 @@ public sealed class RelationQueryExpressionLowerer
             if (call.Arguments.Any(static argument => !IsProvablyNonNullString(argument)))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                    ExpressionDiagnosticCodes.MethodUnsupported,
                     "C# string concatenation treats null as empty, while canonical concat requires present strings.",
                     expressionPath,
                     sourceReference,
@@ -929,7 +929,7 @@ public sealed class RelationQueryExpressionLowerer
             if (!HasGuaranteedDefaultMembershipEquality(collection.Type))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                    ExpressionDiagnosticCodes.MethodUnsupported,
                     "Collection membership requires an array or List<T> whose Contains operation uses default element equality.",
                     expressionPath,
                     sourceReference,
@@ -941,7 +941,7 @@ public sealed class RelationQueryExpressionLowerer
                 || !HasExactCanonicalMembershipEquality(elementType))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                    ExpressionDiagnosticCodes.MethodUnsupported,
                     "Canonical collection membership is currently authored only for scalar element types with portable value equality.",
                     expressionPath,
                     sourceReference,
@@ -972,7 +972,7 @@ public sealed class RelationQueryExpressionLowerer
         if (IsSequenceMethod(call, nameof(Enumerable.Select)))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                ExpressionDiagnosticCodes.MethodUnsupported,
                 "Enumerable.Select is lazy, while the canonical select function materializes every selector result eagerly.",
                 expressionPath,
                 sourceReference,
@@ -990,7 +990,7 @@ public sealed class RelationQueryExpressionLowerer
         if (IsSequenceMethod(call, nameof(Enumerable.Count)) && call.Arguments.Count == 1)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                ExpressionDiagnosticCodes.MethodUnsupported,
                 "Enumerable.Count returns Int32 and can overflow where canonical count returns Int64.",
                 expressionPath,
                 sourceReference,
@@ -1002,7 +1002,7 @@ public sealed class RelationQueryExpressionLowerer
             if (call.Arguments.Count != 1)
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                    ExpressionDiagnosticCodes.MethodUnsupported,
                     "Only predicate-free LongCount has the exact semantics of canonical count.",
                     expressionPath,
                     sourceReference,
@@ -1020,8 +1020,8 @@ public sealed class RelationQueryExpressionLowerer
         }
 
         throw Fail(
-            RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
-            $"Method '{Display(call.Method)}' is not in the exact relation/query expression allowlist.",
+            ExpressionDiagnosticCodes.MethodUnsupported,
+            $"Method '{Display(call.Method)}' is not in the exact expression allowlist.",
             expressionPath,
             sourceReference,
             symbol: Display(call.Method),
@@ -1033,7 +1033,7 @@ public sealed class RelationQueryExpressionLowerer
         string sourceReference,
         string expressionPath) =>
         Fail(
-            RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+            ExpressionDiagnosticCodes.MethodUnsupported,
             $"Enumerable.{call.Method.Name} throws for an empty non-nullable sequence, while the canonical function returns undefined.",
             expressionPath,
             sourceReference,
@@ -1052,7 +1052,7 @@ public sealed class RelationQueryExpressionLowerer
             || (requireSelector && call.Arguments.Count != 2))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                ExpressionDiagnosticCodes.MethodUnsupported,
                 $"The selected '{call.Method.Name}' overload does not match canonical function '{function}'.",
                 expressionPath,
                 sourceReference,
@@ -1065,8 +1065,8 @@ public sealed class RelationQueryExpressionLowerer
         if (!TryGetSequenceElementType(call.Arguments[0].Type, out var elementType))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
-                "The sequence source is not a supported semantic collection. String and byte-array scalars are not relation/query collections.",
+                ExpressionDiagnosticCodes.MethodUnsupported,
+                "The sequence source is not a supported semantic collection. String and byte-array scalars are not semantic collections.",
                 expressionPath + "/collection",
                 sourceReference,
                 symbol: Display(call.Arguments[0].Type),
@@ -1084,7 +1084,7 @@ public sealed class RelationQueryExpressionLowerer
         if (selectorExpression is not LambdaExpression { Parameters.Count: 1 } selector)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                ExpressionDiagnosticCodes.MethodUnsupported,
                 "The sequence predicate or selector must be represented by one inline single-parameter lambda.",
                 expressionPath + "/selector",
                 sourceReference,
@@ -1135,7 +1135,7 @@ public sealed class RelationQueryExpressionLowerer
         if (!TryGetSequenceElementType(call.Arguments[0].Type, out var elementType))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+                ExpressionDiagnosticCodes.MethodUnsupported,
                 "The sequence element type cannot be established for exact aggregate lowering.",
                 expressionPath,
                 sourceReference,
@@ -1159,7 +1159,7 @@ public sealed class RelationQueryExpressionLowerer
             return;
 
         throw Fail(
-            RelationQueryExpressionDiagnosticCodes.MethodUnsupported,
+            ExpressionDiagnosticCodes.MethodUnsupported,
             $"Sequence function '{call.Method.Name}' over CLR value type '{Display(valueType)}' does not "
             + "have the exact numeric, overflow, empty-sequence, or ordering contract of the canonical function.",
             expressionPath,
@@ -1186,7 +1186,7 @@ public sealed class RelationQueryExpressionLowerer
                 || !target.Segments[0].TryGetFieldIdentity(out var key))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                    ExpressionDiagnosticCodes.ProjectionInvalid,
                     "An inline object member must resolve to one direct canonical field.",
                     path + "/member",
                     sourceReference,
@@ -1196,7 +1196,7 @@ public sealed class RelationQueryExpressionLowerer
             if (!keys.Add(key))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                    ExpressionDiagnosticCodes.ProjectionInvalid,
                     $"Inline object construction produces duplicate canonical field '{key}'.",
                     path + "/member",
                     sourceReference,
@@ -1220,7 +1220,7 @@ public sealed class RelationQueryExpressionLowerer
         if (array.NodeType != ExpressionType.NewArrayInit)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                ExpressionDiagnosticCodes.NodeUnsupported,
                 "An array-bounds expression allocates default elements and is not an array literal.",
                 expressionPath,
                 sourceReference,
@@ -1239,7 +1239,7 @@ public sealed class RelationQueryExpressionLowerer
             if (lowered is not ConstantExpr constant)
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                    ExpressionDiagnosticCodes.NodeUnsupported,
                     "Canonical array literals may contain only portable literal values.",
                     $"{expressionPath}/elements/{index}",
                     sourceReference,
@@ -1261,7 +1261,7 @@ public sealed class RelationQueryExpressionLowerer
         RootScope scope,
         string sourceReference,
         string expressionPath,
-        List<RelationQueryProjectionAssignment> assignments,
+        List<ExpressionProjectionAssignment> assignments,
         HashSet<FieldPath> targets,
         bool topLevel)
     {
@@ -1315,7 +1315,7 @@ public sealed class RelationQueryExpressionLowerer
                 return;
             default:
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                    ExpressionDiagnosticCodes.ProjectionInvalid,
                     $"A top-level projection must construct an object or record, but found '{current.NodeType}'.",
                     expressionPath,
                     sourceReference,
@@ -1331,7 +1331,7 @@ public sealed class RelationQueryExpressionLowerer
         RootScope scope,
         string sourceReference,
         string expressionPath,
-        List<RelationQueryProjectionAssignment> assignments,
+        List<ExpressionProjectionAssignment> assignments,
         HashSet<FieldPath> targets)
     {
         var members = ResolveConstructorMembers(created, sourceReference, expressionPath);
@@ -1375,7 +1375,7 @@ public sealed class RelationQueryExpressionLowerer
         RootScope scope,
         string sourceReference,
         string expressionPath,
-        List<RelationQueryProjectionAssignment> assignments,
+        List<ExpressionProjectionAssignment> assignments,
         HashSet<FieldPath> targets)
     {
         for (var index = 0; index < bindings.Count; index++)
@@ -1418,7 +1418,7 @@ public sealed class RelationQueryExpressionLowerer
                     }
                 case MemberMemberBinding:
                     throw Fail(
-                        RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                        ExpressionDiagnosticCodes.ProjectionInvalid,
                         "Nested member mutation invokes the containing CLR getter and has no exact declarative projection lowering.",
                         bindingPath,
                         sourceReference,
@@ -1426,7 +1426,7 @@ public sealed class RelationQueryExpressionLowerer
                         suggestion: "Assign a newly constructed nested DTO, for example Nested = new NestedDto { Value = ... }.");
                 default:
                     throw Fail(
-                        RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                        ExpressionDiagnosticCodes.ProjectionInvalid,
                         $"Projection member binding '{binding.BindingType}' has no canonical structural lowering.",
                         bindingPath,
                         sourceReference,
@@ -1443,14 +1443,14 @@ public sealed class RelationQueryExpressionLowerer
         RootScope scope,
         string sourceReference,
         string expressionPath,
-        List<RelationQueryProjectionAssignment> assignments,
+        List<ExpressionProjectionAssignment> assignments,
         HashSet<FieldPath> targets)
     {
         var target = ResolveMemberPath(outputRootType, members, expressionPath + "/member", sourceReference);
         if (!targets.Add(target))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                ExpressionDiagnosticCodes.ProjectionInvalid,
                 $"Projection target '{target}' is assigned more than once.",
                 expressionPath + "/member",
                 sourceReference,
@@ -1462,7 +1462,7 @@ public sealed class RelationQueryExpressionLowerer
             ? expressionPath
             : expressionPath + "/expression";
         assignments.Add(
-            new RelationQueryProjectionAssignment(
+            new ExpressionProjectionAssignment(
                 target,
                 Translate(value, scope, sourceReference, valuePath),
                 assignmentSource: Source(
@@ -1510,7 +1510,7 @@ public sealed class RelationQueryExpressionLowerer
                     if (initializer.Bindings[index] is not MemberAssignment assignment)
                     {
                         throw Fail(
-                            RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                            ExpressionDiagnosticCodes.ProjectionInvalid,
                             "Inline object expressions support only direct member assignments.",
                             $"{expressionPath}/bindings/{index}",
                             sourceReference,
@@ -1551,7 +1551,7 @@ public sealed class RelationQueryExpressionLowerer
         }
         catch (LoweringFailure failure)
         {
-            throw new RelationQueryExpressionAuthoringException([failure.Diagnostic]);
+            throw new ExpressionAuthoringException([failure.Diagnostic]);
         }
     }
 
@@ -1568,7 +1568,7 @@ public sealed class RelationQueryExpressionLowerer
             if (explicitMembers.Count != created.Arguments.Count)
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                    ExpressionDiagnosticCodes.ProjectionInvalid,
                     "The expression tree exposes a constructor/member mapping with inconsistent arity.",
                     expressionPath,
                     sourceReference,
@@ -1591,7 +1591,7 @@ public sealed class RelationQueryExpressionLowerer
         if (created.Constructor is null)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                ExpressionDiagnosticCodes.ProjectionInvalid,
                 "Constructor projection metadata is unavailable.",
                 expressionPath,
                 sourceReference,
@@ -1603,7 +1603,7 @@ public sealed class RelationQueryExpressionLowerer
         if (parameters.Length != created.Arguments.Count)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+                ExpressionDiagnosticCodes.ProjectionInvalid,
                 "Constructor parameter metadata does not match the projected argument count.",
                 expressionPath,
                 sourceReference,
@@ -1625,7 +1625,7 @@ public sealed class RelationQueryExpressionLowerer
             if (string.IsNullOrWhiteSpace(name))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.ProjectionMemberAmbiguous,
+                    ExpressionDiagnosticCodes.ProjectionMemberAmbiguous,
                     $"Constructor parameter {index} has no stable name for member matching.",
                     $"{expressionPath}/arguments/{index}",
                     sourceReference,
@@ -1640,7 +1640,7 @@ public sealed class RelationQueryExpressionLowerer
             if (matching.Length != 1)
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.ProjectionMemberAmbiguous,
+                    ExpressionDiagnosticCodes.ProjectionMemberAmbiguous,
                     matching.Length == 0
                         ? $"Constructor parameter '{name}' does not match a public result member."
                         : $"Constructor parameter '{name}' matches more than one public result member.",
@@ -1672,7 +1672,7 @@ public sealed class RelationQueryExpressionLowerer
         }
 
         throw Fail(
-            RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+            ExpressionDiagnosticCodes.ProjectionInvalid,
             "A constructor projection is supported only when metadata proves that every argument is "
             + $"assigned directly to its matched auto-property. {reason}",
             expressionPath,
@@ -1728,7 +1728,7 @@ public sealed class RelationQueryExpressionLowerer
         }
 
         throw Fail(
-            RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+            ExpressionDiagnosticCodes.ProjectionInvalid,
             "An object-initializer projection requires a behavior-free parameterless constructor; "
             + $"inert defaults are allowed only when the initializer overwrites their auto-properties. {reason}",
             expressionPath + "/new",
@@ -2073,7 +2073,7 @@ public sealed class RelationQueryExpressionLowerer
         }
 
         throw Fail(
-            RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+            ExpressionDiagnosticCodes.ProjectionInvalid,
             "CLR reflection shape authoring supports projected properties, not fields, indexers, or other member kinds.",
             expressionPath,
             sourceReference,
@@ -2100,7 +2100,7 @@ public sealed class RelationQueryExpressionLowerer
         }
 
         throw Fail(
-            RelationQueryExpressionDiagnosticCodes.ProjectionInvalid,
+            ExpressionDiagnosticCodes.ProjectionInvalid,
             "An object-initializer projection target must be a compiler-generated auto-property so assigning it cannot run transforming user code.",
             expressionPath,
             sourceReference,
@@ -2131,7 +2131,7 @@ public sealed class RelationQueryExpressionLowerer
                 ? Display(rootType)
                 : string.Join(".", members.Select(static member => member.Name));
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MemberPathUnavailable,
+                ExpressionDiagnosticCodes.MemberPathUnavailable,
                 $"The selected CLR metadata profile could not resolve member chain '{symbol}': {exception.Message}",
                 expressionPath,
                 sourceReference,
@@ -2151,7 +2151,7 @@ public sealed class RelationQueryExpressionLowerer
         if (!TryConvertPortableLiteral(constant.Value, out var value))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.LiteralUnsupported,
+                ExpressionDiagnosticCodes.LiteralUnsupported,
                 $"Literal CLR type '{Display(constant.Value.GetType())}' cannot be represented without executing user code or losing value semantics.",
                 expressionPath,
                 sourceReference,
@@ -2192,7 +2192,7 @@ public sealed class RelationQueryExpressionLowerer
         switch (value)
         {
             case ObservationValue observation
-                when !RelationQueryPortableObservationValueSemantics.TryGetCanonicalJsonIssue(
+                when !PortableObservationValueSemantics.TryGetCanonicalJsonIssue(
                     observation,
                     out _,
                     out _):
@@ -2302,44 +2302,44 @@ public sealed class RelationQueryExpressionLowerer
         if (!TryGetParameterMarker(member, out var markerField, out var marker))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.ParameterMarkerInvalid,
+                ExpressionDiagnosticCodes.ParameterMarkerInvalid,
                 "A query-parameter marker must be captured directly by the compiler-generated lambda closure.",
                 expressionPath,
                 sourceReference,
                 symbol: Display(member.Member),
                 suggestion: "Assign the declared parameter handle to a local variable and reference parameter.Value directly inside the lambda.");
         }
-        if (marker is null || string.IsNullOrWhiteSpace(marker.ParameterId.Value))
+        if (marker is null || string.IsNullOrWhiteSpace(marker.ParameterId))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.ParameterMarkerInvalid,
+                ExpressionDiagnosticCodes.ParameterMarkerInvalid,
                 "The captured query-parameter marker is null or has no canonical parameter identity.",
                 expressionPath,
                 sourceReference,
                 symbol: markerField.Name,
-                suggestion: "Use a parameter handle returned by the active relation/query authoring session.");
+                suggestion: "Use a parameter handle returned by the active expression authoring session.");
         }
 
         if (expectedParameterOwner is not null
             && !ReferenceEquals(marker.Owner, expectedParameterOwner))
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.ParameterMarkerInvalid,
+                ExpressionDiagnosticCodes.ParameterMarkerInvalid,
                 "The query-parameter marker belongs to another expression-authoring session.",
                 expressionPath,
                 sourceReference,
-                symbol: marker.ParameterId.Value,
-                suggestion: "Declare and reference the parameter through the same relation/query authoring session as this expression.");
+                symbol: marker.ParameterId,
+                suggestion: "Declare and reference the parameter through the same expression authoring session as this expression.");
         }
 
-        expression = Expr.Param(marker.ParameterId.Value);
+        expression = Expr.Param(marker.ParameterId);
         return true;
     }
 
     static bool TryGetParameterMarker(
         MemberExpression member,
         out FieldInfo markerField,
-        out IRelationQueryExpressionParameterMarker? marker)
+        out IExpressionParameterMarker? marker)
     {
         markerField = null!;
         marker = null;
@@ -2352,7 +2352,7 @@ public sealed class RelationQueryExpressionLowerer
         }
 
         markerField = field;
-        marker = field.GetValue(closure.Value) as IRelationQueryExpressionParameterMarker;
+        marker = field.GetValue(closure.Value) as IExpressionParameterMarker;
         return true;
     }
 
@@ -2363,7 +2363,7 @@ public sealed class RelationQueryExpressionLowerer
         if (string.Equals(member.Member.Name, "Value", StringComparison.Ordinal)
             && member.Expression is MemberExpression access
             && access.Member is FieldInfo field
-            && typeof(IRelationQueryExpressionParameterMarker).IsAssignableFrom(field.FieldType))
+            && typeof(IExpressionParameterMarker).IsAssignableFrom(field.FieldType))
         {
             markerAccess = access;
             return true;
@@ -2440,7 +2440,7 @@ public sealed class RelationQueryExpressionLowerer
             if (!IsExactErasableConversion(unary.Operand.Type, unary.Type))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.ConversionUnsupported,
+                    ExpressionDiagnosticCodes.ConversionUnsupported,
                     $"Conversion from '{Display(unary.Operand.Type)}' to '{Display(unary.Type)}' cannot be erased while preserving exact semantics.",
                     expressionPath,
                     sourceReference,
@@ -2496,7 +2496,7 @@ public sealed class RelationQueryExpressionLowerer
             return;
 
         throw Fail(
-            RelationQueryExpressionDiagnosticCodes.OperatorUnsupported,
+            ExpressionDiagnosticCodes.OperatorUnsupported,
             $"C# operator '{binary.NodeType}' over '{Display(binary.Left.Type)}' and "
             + $"'{Display(binary.Right.Type)}' does not have the exact value, overflow, or null contract "
             + "of the canonical operator.",
@@ -2693,7 +2693,7 @@ public sealed class RelationQueryExpressionLowerer
         if (provenance.IsAmbiguous)
         {
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.MemberPathUnavailable,
+                ExpressionDiagnosticCodes.MemberPathUnavailable,
                 "The collection expression combines items from different semantic bindings, so one authoritative current-item member mapping cannot be proven.",
                 expressionPath,
                 sourceReference,
@@ -2780,7 +2780,7 @@ public sealed class RelationQueryExpressionLowerer
                 || !scope.IsKnownNonNull(root, guardedPath))
             {
                 throw Fail(
-                    RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                    ExpressionDiagnosticCodes.NodeUnsupported,
                     "Nullable Value is safe only within control flow guarded by HasValue or an exact non-null test.",
                     $"{expressionPath}/members/{index}",
                     sourceReference,
@@ -2958,7 +2958,7 @@ public sealed class RelationQueryExpressionLowerer
                 continue;
 
             throw Fail(
-                RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                ExpressionDiagnosticCodes.NodeUnsupported,
                 $"Member path navigation crosses nullable receiver '{Display(property)}'; C# throws when it is null while canonical field navigation preserves null/missing.",
                 $"{expressionPath}/members/{index}",
                 sourceReference,
@@ -3352,10 +3352,10 @@ public sealed class RelationQueryExpressionLowerer
                        || member.Expression is MemberExpression;
         return Fail(
             captured
-                ? RelationQueryExpressionDiagnosticCodes.CapturedValueUnsupported
-                : RelationQueryExpressionDiagnosticCodes.NodeUnsupported,
+                ? ExpressionDiagnosticCodes.CapturedValueUnsupported
+                : ExpressionDiagnosticCodes.NodeUnsupported,
             captured
-                ? "Captured CLR state is not evaluated by relation/query expression authoring."
+                ? "Captured CLR state is not evaluated by expression authoring."
                 : "The member access is not rooted at a visible semantic binding or current-item parameter.",
             expressionPath,
             sourceReference,
@@ -3365,14 +3365,14 @@ public sealed class RelationQueryExpressionLowerer
                 : "Select a member rooted at a top-level source binding or nested sequence item.");
     }
 
-    static RelationQueryAuthoringSource Source(string reference, string description) =>
+    static AuthoringSource Source(string reference, string description) =>
         new(Producer, reference, description);
 
-    static RelationQueryExpressionLoweringResult<T> Success<T>(T value)
+    static ExpressionLoweringResult<T> Success<T>(T value)
         where T : class =>
         new(value, []);
 
-    static RelationQueryExpressionLoweringResult<T> Failure<T>(RelationQueryExpressionDiagnostic diagnostic)
+    static ExpressionLoweringResult<T> Failure<T>(ExpressionDiagnostic diagnostic)
         where T : class =>
         new(value: null, [diagnostic]);
 
@@ -3384,7 +3384,7 @@ public sealed class RelationQueryExpressionLowerer
         string? symbol = null,
         string? suggestion = null) =>
         new(
-            new RelationQueryExpressionDiagnostic(
+            new ExpressionDiagnostic(
                 code,
                 DiagnosticSeverity.Error,
                 message,
@@ -3502,12 +3502,12 @@ public sealed class RelationQueryExpressionLowerer
 
     sealed class LoweringFailure : Exception
     {
-        public LoweringFailure(RelationQueryExpressionDiagnostic diagnostic)
+        public LoweringFailure(ExpressionDiagnostic diagnostic)
             : base(diagnostic.Message)
         {
             Diagnostic = diagnostic;
         }
 
-        public RelationQueryExpressionDiagnostic Diagnostic { get; }
+        public ExpressionDiagnostic Diagnostic { get; }
     }
 }

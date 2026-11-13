@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
 using Cohesive.Prelude;
@@ -87,7 +88,7 @@ public sealed class DomainEntity<T> where T : notnull
     /// <returns>A typed query shape backed by the entity graph rather than a separately inferred schema.</returns>
     /// <exception cref="ArgumentNullException">The session is null.</exception>
     /// <exception cref="ArgumentException">The session already registers an incompatible shape.</exception>
-    public RelationQueryClrShape<T> QueryShape(RelationQueryExpressionAuthoring author)
+    public ClrAuthoringShape<T> QueryShape(RelationQueryExpressionAuthoring author)
     {
         ArgumentNullException.ThrowIfNull(author);
         return author.Clr.Shape<T>(queryDocument.Value, Definition.StateShape.QualifiedId);

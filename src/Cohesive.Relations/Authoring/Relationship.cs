@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 namespace Cohesive.Relations.Authoring;
 
 /// <summary>
@@ -18,7 +19,7 @@ public static class Relationship
     /// The source CLR type's assembly does not expose a stable name.
     /// </exception>
     public static RelationshipFromBuilder<TSource> From<TSource>() where TSource : notnull =>
-        new(ClrRelationshipShapeConvention.GetQualifiedShapeId<TSource>());
+        new(ClrAuthoringShapeConvention.GetQualifiedShapeId<TSource>());
 
     /// <summary>Starts a typed relationship from one exact CLR-derived shape-graph snapshot.</summary>
     /// <typeparam name="TSource">CLR root type containing the reference member.</typeparam>

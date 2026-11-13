@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Drafts;
@@ -67,9 +68,9 @@ public sealed partial class RelationQueryAuthoringCore
         RelationOutputMode outputMode = RelationOutputMode.OnePerRoot,
         Expr? outputKey = null,
         ImmutableArray<InvariantDefinition> invariants = default,
-        RelationQueryAuthoringSource? source = null,
-        RelationQueryAuthoringSource? keySource = null,
-        ImmutableArray<RelationQueryAuthoringSource?> invariantSources = default)
+        AuthoringSource? source = null,
+        AuthoringSource? keySource = null,
+        ImmutableArray<AuthoringSource?> invariantSources = default)
         where TInput : LogicalQueryNode
     {
         ArgumentNullException.ThrowIfNull(relationId);
@@ -157,7 +158,7 @@ public sealed record RelationQueryDraftAssignment
         ImmutableArray<Expr> candidates,
         ResolutionKind resolution,
         ImmutableArray<RelationDraftUnresolvedReason> reasons,
-        RelationQueryAuthoringSource? source)
+        AuthoringSource? source)
     {
         if (candidates.IsDefault)
             candidates = [];
@@ -178,7 +179,7 @@ public sealed record RelationQueryDraftAssignment
     public ImmutableArray<Expr> Candidates { get; }
 
     /// <summary>Optional producer-source attribution for this assignment.</summary>
-    public RelationQueryAuthoringSource? Source { get; }
+    public AuthoringSource? Source { get; }
 
     /// <summary>Creates an assignment whose candidate <paramref name="value"/> is selected.</summary>
     /// <param name="target">Target field path in the draft's result shape.</param>
@@ -195,7 +196,7 @@ public sealed record RelationQueryDraftAssignment
         FieldPath target,
         Expr value,
         ImmutableArray<Expr> alternatives = default,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
     {
         ArgumentNullException.ThrowIfNull(value);
         return new(target, [value, .. alternatives.IsDefault ? [] : alternatives], ResolutionKind.Selected, [], source);
@@ -213,7 +214,7 @@ public sealed record RelationQueryDraftAssignment
     public static RelationQueryDraftAssignment Ambiguous(
         FieldPath target,
         ImmutableArray<Expr> candidates,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
     {
         if (candidates.IsDefault || candidates.Length < 2)
         {
@@ -239,7 +240,7 @@ public sealed record RelationQueryDraftAssignment
         FieldPath target,
         ImmutableArray<RelationDraftUnresolvedReason> reasons,
         ImmutableArray<Expr> candidates = default,
-        RelationQueryAuthoringSource? source = null)
+        AuthoringSource? source = null)
     {
         if (reasons.IsDefaultOrEmpty)
             throw new ArgumentException($"An unresolved assignment to '{target}' needs at least one reason.", nameof(reasons));
@@ -261,7 +262,7 @@ public sealed record RelationQueryDraftAssignment
     public static RelationQueryDraftAssignment Omitted(
         FieldPath target,
         ImmutableArray<Expr> candidates = default,
-        RelationQueryAuthoringSource? source = null) =>
+        AuthoringSource? source = null) =>
         new(target, candidates, ResolutionKind.Omitted, [], source);
 
     // Two candidates are the same exactly when they would receive the same candidate identity, so duplicates are

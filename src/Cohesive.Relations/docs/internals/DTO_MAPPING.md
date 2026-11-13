@@ -166,7 +166,7 @@ var shapeDocuments = author.ShapeDocuments;
 The `Any` predicate preserves same-element correlation through canonical current-item scope; it is not
 flattened into independent collection tests. Typed parameters become declarations in the canonical query
 and only receive values in the evaluation. Captured application state is rejected with a
-`RelationQueryExpressionAuthoringException` containing stable diagnostics, expression paths, source
+`ExpressionAuthoringException` containing stable diagnostics, expression paths, source
 references, and suggested alternatives; arbitrary captured getters are never evaluated.
 
 The translator accepts sequence syntax only where its CLR behavior identifies the canonical behavior exactly:

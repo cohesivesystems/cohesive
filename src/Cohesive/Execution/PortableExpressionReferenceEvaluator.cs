@@ -83,7 +83,7 @@ internal readonly record struct PortableExpressionValue(
         _ => throw new ArgumentOutOfRangeException(nameof(State), State, "Unsupported runtime value state.")
     };
 
-    public PortableExpressionValue Project(FieldPath path, int startIndex = 0)
+    public PortableExpressionValue Project(FieldPath path, int startIndex = 0, PortableValueState missingFieldState = PortableValueState.Absent)
     {
         if (State is PortableValueState.Absent or PortableValueState.Null
             or PortableValueState.Unknown or PortableValueState.Failed or PortableValueState.Missing)
@@ -114,7 +114,7 @@ internal readonly record struct PortableExpressionValue(
             }
 
             if (!current.TryGetProperty(segment.Segment, out current))
-                return Absent;
+                return new(missingFieldState, default);
         }
 
         return FromObservation(current);
@@ -174,12 +174,16 @@ internal sealed class PortableExpressionEvaluationContext
 
     public PortableExpressionValue? CurrentItem { get; init; }
 
+    // Execution defaults to authoritative absence; observation interpreters may require missing evidence.
+    public PortableValueState MissingFieldState { get; init; } = PortableValueState.Absent;
+
     public PortableExpressionEvaluationContext WithCurrentItem(PortableExpressionValue item) => new()
     {
         ResolveBinding = ResolveBinding,
         ResolveField = ResolveField,
         ResolveParameter = ResolveParameter,
-        CurrentItem = item
+        CurrentItem = item,
+        MissingFieldState = MissingFieldState
     };
 }
 
@@ -323,7 +327,7 @@ internal sealed class PortableExpressionReferenceEvaluator
             return (context.CurrentItem ?? throw Failure(
                     PortableExpressionEvaluationError.EvaluationContextUnavailable,
                     "The expression requires a current-item scope that is not available."))
-                .Project(path, startIndex: 1);
+                .Project(path, startIndex: 1, missingFieldState: context.MissingFieldState);
         }
 
         return context.ResolveField(explicitBinding, path);

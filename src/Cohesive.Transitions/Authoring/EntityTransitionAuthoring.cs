@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
@@ -34,7 +35,7 @@ public sealed class EntityTransitionAuthoring<TEntity, TInput> where TEntity : n
     /// <param name="predicate">Portable typed predicate to pass to a movement's When method.</param>
     /// <returns>Derived guard IR; no delegate is retained.</returns>
     /// <exception cref="ArgumentNullException">The predicate is null.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">The expression cannot be lowered.</exception>
+    /// <exception cref="ExpressionAuthoringException">The expression cannot be lowered.</exception>
     public MachineGuard Guard(Expression<Func<TEntity, TInput, bool>> predicate) =>
         MachineGuardCompiler.Compile(predicate, mapper);
 

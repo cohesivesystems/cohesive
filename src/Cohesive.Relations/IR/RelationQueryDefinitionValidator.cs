@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Collections.Immutable;
 using Cohesive.Model.Serialization;
 using Cohesive.Relations.Model;
@@ -1290,7 +1291,7 @@ public static partial class RelationQueryDefinitionValidator
 
         void ValidatePortableObservationValue(ObservationValue value, string location)
         {
-            if (RelationQueryPortableObservationValueSemantics.TryGetCurrentNodeIssue(
+            if (PortableObservationValueSemantics.TryGetCurrentNodeIssue(
                     value,
                     out var code,
                     out var message))

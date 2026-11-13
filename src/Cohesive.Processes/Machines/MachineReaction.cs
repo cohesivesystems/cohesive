@@ -1,3 +1,4 @@
+using Cohesive.Authoring;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
 using Cohesive.Execution;
@@ -133,7 +134,7 @@ public sealed class MachineReactionSource<TSource> where TSource : notnull
     /// <returns>A validated portable reaction and its derived Process.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="InvalidOperationException">Contracts, binding or generated Process are invalid.</exception>
-    /// <exception cref="RelationQueryExpressionAuthoringException">A projection is outside the portable expression language.</exception>
+    /// <exception cref="ExpressionAuthoringException">A projection is outside the portable expression language.</exception>
     public MachineReaction Request<TTarget, TInput, TResult>(Transition<TTarget, TInput, TResult> target,
         Expression<Func<TSource, string>> subject, Expression<Func<TSource, TInput>> input,
         [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0)
@@ -145,7 +146,7 @@ public sealed class MachineReactionSource<TSource> where TSource : notnull
         var author = new RelationQueryExpressionAuthoring();
         _ = author.Clr.Shape<TSource>();
         if (target.Definition.Input.Type is ObjectTypeRef) _ = author.Clr.Shape<TInput>();
-        var lowerer = new RelationQueryExpressionLowerer(author.Clr.ResolveMemberPath);
+        var lowerer = new ExpressionLowerer(author.Clr.ResolveMemberPath);
         var subjectValue = lowerer.LowerBoundValue(subject, [ProcessBindingIds.Input], id + "/subject").RequireValue().Value;
         var inputValue = lowerer.LowerBoundValue(input, [ProcessBindingIds.Input], id + "/input").RequireValue().Value;
         // The target contract owns the top-level constructed command type; Process validation checks

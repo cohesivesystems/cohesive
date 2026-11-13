@@ -538,43 +538,44 @@ public sealed class StrictStringEnumJsonConverterFactory : JsonConverterFactory
     {
         static readonly SerializedEnumMemberCatalog Catalog = CreateCatalog();
 
-        public override TEnum Read(
-            ref Utf8JsonReader reader,
-            Type typeToConvert,
-            JsonSerializerOptions options)
+        public override TEnum Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
         {
             if (reader.TokenType != JsonTokenType.String)
-            {
                 throw new JsonException($"Enum '{typeToConvert.Name}' must be encoded as a string.");
-            }
+            return Parse(reader.GetString());
+        }
 
-            var text = reader.GetString();
+        public override TEnum ReadAsPropertyName(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+            Parse(reader.GetString());
+
+        static TEnum Parse(string? text)
+        {
             if (text is null
                 || !Catalog.TryGetClrName(text, out var clrName)
                 || !Enum.TryParse<TEnum>(clrName, ignoreCase: false, out var value)
                 || !string.Equals(value.ToString(), clrName, StringComparison.Ordinal))
-            {
-                throw new JsonException(
-                    $"'{text}' is not a canonical case-sensitive value of enum '{typeToConvert.Name}'.");
-            }
-
+                throw new JsonException($"'{text}' is not a canonical case-sensitive value of enum '{typeof(TEnum).Name}'.");
             return value;
         }
 
-        public override void Write(
-            Utf8JsonWriter writer,
-            TEnum value,
-            JsonSerializerOptions options)
+        public override void Write(Utf8JsonWriter writer, TEnum value, JsonSerializerOptions options)
         {
             ArgumentNullException.ThrowIfNull(writer);
+            writer.WriteStringValue(WireName(value));
+        }
+
+        public override void WriteAsPropertyName(Utf8JsonWriter writer, TEnum value, JsonSerializerOptions options)
+        {
+            ArgumentNullException.ThrowIfNull(writer);
+            writer.WritePropertyName(WireName(value));
+        }
+
+        static string WireName(TEnum value)
+        {
             var clrName = value.ToString();
             if (!Catalog.TryGetWireName(clrName, out var wireName))
-            {
-                throw new JsonException(
-                    $"Value '{clrName}' is not a declared value of enum '{typeof(TEnum).Name}'.");
-            }
-
-            writer.WriteStringValue(wireName);
+                throw new JsonException($"Value '{clrName}' is not a declared value of enum '{typeof(TEnum).Name}'.");
+            return wireName;
         }
 
         static SerializedEnumMemberCatalog CreateCatalog()
