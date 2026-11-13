@@ -493,6 +493,7 @@ public sealed class SemanticWorkspaceTests : IDisposable
         }), cancellationToken: timeout.Token);
         var tools = await client.ListToolsAsync(cancellationToken: timeout.Token);
         Assert.Equal(["check", "compare", "compatibility", "impact", "inspect", "learn", "references", "resolve", "workspace"], tools.Select(t => t.Name).Order());
+        Assert.Contains(Cohesive.Api.ApiContractCompatibility.Policy, tools.Single(tool => tool.Name == "compatibility").Description);
         var discovery = await client.CallToolAsync("workspace", cancellationToken: timeout.Token);
         Assert.False(discovery.IsError ?? false);
         var snapshot = discovery.StructuredContent!.Value.GetProperty("snapshotId").GetString()!;

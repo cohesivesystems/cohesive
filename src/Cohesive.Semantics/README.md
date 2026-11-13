@@ -14,8 +14,10 @@ It does not introduce another entity, transition, process, relation, or diagnost
 Execution documents use the existing shared reader. Additional schema-keyed readers project original domain JSON
 into a transient `WorkspaceDocument`; this is an inspection view, not another IR. The default MCP host also reads
 native relation/query documents and Application endpoint inspection projections. Core Semantics depends only on
-Cohesive, not those domains or MCP. Shape graphs, generated clients, target realization, cross-document type
-validation and runtime evidence remain outside coverage. Unknown execution kinds remain inspectable with
+Cohesive, not those domains or MCP. The default host also projects entities, qualified shape/field/type members,
+relationship catalogs, portable API contracts and recovery assessments. Dependency coverage remains partial,
+especially expression-level references. Generated-client execution, target realization, cross-document type
+validation and runtime conformance remain outside the workspace; recovery reports are inspectable evidence, not physical qualification. Unknown execution kinds remain inspectable with
 `domainValidationAvailable=false`.
 Registered validators supplement mandatory shared integrity findings; they cannot suppress them. Identical findings
 are deduplicated and ordered through the existing diagnostic authority; separately attributed evidence is retained.
@@ -98,7 +100,7 @@ asynchronous cancellation of in-progress inspection are intentionally deferred. 
 
 Add domain-specific indexing and authored source locations only where the owning domain can provide reliable
 evidence. Remaining opportunities include expression-level field provenance, additional wire policies, a CLI over the same API, version-matched
-knowledge retrieval, and then narrowly scoped source-edit recipes. The current `learn` guide is host-owned, versioned static guidance, not a general knowledge graph or a
+knowledge retrieval, and additional host-specific authoring recipes. The current `learn` guide is host-owned, versioned static guidance, not a general knowledge graph or a
 compatibility guarantee for any project.
 
 See [request cost measurements](../../docs/performance/development-mcp.md) for the warm-call probe,
