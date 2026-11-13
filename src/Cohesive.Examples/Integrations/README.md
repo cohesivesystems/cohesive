@@ -199,3 +199,11 @@ original admissions still replay, and exact sink evidence reconciles both public
 provider call or write. Each Process advances only its own ledger and completes; group policy remains
 Paused while local intent remains Active. This demonstrates local admission ordering and recovery,
 not physical crash durability, cross-process coordination or cancellation of admitted work.
+
+
+Admission-group ownership is supplied by an explicit `InMemoryIntegrationLifecycleScope`. Its factories
+prevent a second controller for the same consumer within that host scope. Admissions supply only the
+local revision; the member atomically reads current group policy and records its observed group revision.
+Unrelated membership additions do not invalidate admission requests. Group/member operator commands
+retain their own revision checks. Group inspection reuses an immutable published snapshot; the shared
+member-operation lock is still a local reference tradeoff, not a durable scalability claim.

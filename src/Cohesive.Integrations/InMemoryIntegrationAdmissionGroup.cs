@@ -36,14 +36,16 @@ public sealed class IntegrationGroupMember
 /// <summary>Local shared admission authority for independently progressing consumers.</summary>
 /// <remarks>Group changes, membership and member admissions use one lock. Group pause does not mutate local intent,
 /// cancel admitted work or stop reconciliation. Effective admission requires both local and group Active state.
-/// This is process-local, not durable/distributed. Hosts must route all grouped work through these controllers;
-/// constructing a separate standalone controller for the same consumer is outside this authority.
+/// This is process-local, not durable/distributed. The owning lifecycle scope prevents a second standalone
+/// or grouped controller for a registered consumer. Independent host scopes remain separate authorities.
 /// Membership is append-only: no detach/removal, nested groups or transfer of existing controllers is supported.
 /// Authorization runs outside the lock; authentication and policy freshness remain host-owned.</remarks>
 public sealed class InMemoryIntegrationAdmissionGroup
 {
     internal object Sync { get; } = new();
     readonly string id;
+    readonly InMemoryIntegrationLifecycleScope scope;
+    IntegrationAdmissionGroupSnapshot snapshot;
     readonly IntegrationDesiredStateControl control = new();
     readonly Dictionary<IngestionLedgerAddress, IntegrationGroupMember> members = new();
     readonly Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize;
@@ -54,27 +56,31 @@ public sealed class InMemoryIntegrationAdmissionGroup
     internal IntegrationDesiredState Desired => control.Desired;
 
     /// <summary>Creates a paused group with explicit group and consumer authorization policies.</summary>
+    /// <param name="scope">Host ownership authority.</param>
     /// <param name="id">Stable nonempty bounded control-scope identity.</param>
     /// <param name="authorize">Group authorization for Change and RegisterMember; exceptions propagate without mutation.</param>
     /// <param name="authorizeMember">Consumer-specific authorization, including RegisterMember and every member action.</param>
     /// <param name="verifyFailureResolution">Optional trusted per-consumer verifier with the lifecycle verifier's complete-effect-accounting obligations.</param>
     /// <exception cref="ArgumentException">Group identity is invalid.</exception>
     /// <exception cref="ArgumentNullException">A required policy is null.</exception>
-    public InMemoryIntegrationAdmissionGroup(string id,
+    internal InMemoryIntegrationAdmissionGroup(InMemoryIntegrationLifecycleScope scope, string id,
         Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize,
         Func<IngestionLedgerAddress, IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorizeMember,
         Func<IngestionLedgerAddress, IntegrationFailureResolutionRequest, ProcessActivationDecision?>? verifyFailureResolution = null)
     {
         IngestionLedgerAddress.Require(id);
         ArgumentNullException.ThrowIfNull(authorize); ArgumentNullException.ThrowIfNull(authorizeMember);
+        this.scope = scope;
         this.id = id; this.authorize = authorize; this.authorizeMember = authorizeMember;
         this.verifyFailureResolution = verifyFailureResolution;
+        snapshot = new(id, 0, IntegrationDesiredState.Paused, 0, null);
     }
 
     /// <summary>Observes group policy without scanning member admissions or constructing member snapshots.</summary>
-    /// <returns>Compact immutable group state; not permission to dispatch.</returns>
-    public IntegrationAdmissionGroupSnapshot Inspect() { lock (Sync) return Snapshot(); }
-    internal IntegrationAdmissionGroupSnapshot Snapshot() => new(id, Revision, Desired, members.Count, control.LastChange);
+    /// <returns>The latest cached immutable group state; no lock or allocation per read, and not permission to dispatch.</returns>
+    public IntegrationAdmissionGroupSnapshot Inspect() => Volatile.Read(ref snapshot);
+    internal IntegrationAdmissionGroupSnapshot Snapshot() => Inspect();
+    void PublishSnapshot() => Volatile.Write(ref snapshot, new(id, Revision, Desired, members.Count, control.LastChange));
 
     /// <summary>Changes group policy with authorization, exact command replay and a shared revision fence.</summary>
     /// <param name="request">Desired-state command using the group revision.</param>
@@ -85,7 +91,12 @@ public sealed class InMemoryIntegrationAdmissionGroup
     {
         IntegrationDesiredStateControl.Validate(request);
         if (!authorize(IntegrationLifecycleAction.Change, request.Authorization)) return new(IntegrationChangeOutcome.Unauthorized);
-        lock (Sync) return control.Apply(request);
+        lock (Sync)
+        {
+            var result = control.Apply(request);
+            if (result.Outcome == IntegrationChangeOutcome.Applied) PublishSnapshot();
+            return result;
+        }
     }
 
     /// <summary>Registers one unique locally paused consumer; new membership increments the group fence.</summary>
@@ -95,14 +106,13 @@ public sealed class InMemoryIntegrationAdmissionGroup
     /// <exception cref="ArgumentException">Consumer identity, revision or UTC time is invalid.</exception>
     /// <remarks>Registration is allowed while the group is paused. Such a member remains fenced by the pause,
     /// even after local activation or binding a new provider. An existing consumer with changed registration
-    /// intent is rejected rather than replacing its controller. Replay rechecks both authorization policies.</remarks>
+    /// intent is rejected rather than replacing its controller. A consumer already owned elsewhere in this host scope
+    /// returns IdentityConflict without advancing revision. Replay rechecks both authorization policies.</remarks>
     public IntegrationLifecycleResult<IntegrationChangeOutcome, IntegrationGroupMember> Register(IntegrationGroupRegistration request)
     {
         ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Consumer);
-        ArgumentNullException.ThrowIfNull(request.Authorization);
         request.Consumer.Validate();
-        if (request.ExpectedRevision < 0 || request.AtUtc.Offset != TimeSpan.Zero)
-            throw new ArgumentException("Invalid membership command.", nameof(request));
+        IntegrationDesiredStateControl.ValidateEnvelope(request.Authorization, request.ExpectedRevision, request.AtUtc);
         if (!authorize(IntegrationLifecycleAction.RegisterMember, request.Authorization)
             || !authorizeMember(request.Consumer, IntegrationLifecycleAction.RegisterMember, request.Authorization))
             return new(IntegrationChangeOutcome.Unauthorized);
@@ -112,13 +122,15 @@ public sealed class InMemoryIntegrationAdmissionGroup
                 return original.Command == request ? new(IntegrationChangeOutcome.Replayed, original)
                     : new(IntegrationChangeOutcome.IdentityConflict);
             if (request.ExpectedRevision != Revision) return new(IntegrationChangeOutcome.RevisionConflict);
-            if (Revision == long.MaxValue) return new(IntegrationChangeOutcome.RevisionExhausted);
-            var member = new InMemoryIntegrationLifecycle(request.Consumer,
+            if (!control.CanAdvance) return new(IntegrationChangeOutcome.RevisionExhausted);
+            if (!scope.TryClaim(request.Consumer, () => new InMemoryIntegrationLifecycle(request.Consumer,
                 (action, actor) => authorizeMember(request.Consumer, action, actor),
-                verifyFailureResolution is null ? null : resolution => verifyFailureResolution(request.Consumer, resolution), this);
-            control.Revision++;
-            var receipt = new IntegrationGroupMember(request, Revision, member);
+                verifyFailureResolution is null ? null : resolution => verifyFailureResolution(request.Consumer, resolution), this), out var member))
+                return new(IntegrationChangeOutcome.IdentityConflict);
+            control.AdvanceRevision();
+            var receipt = new IntegrationGroupMember(request, Revision, member!);
             members.Add(request.Consumer, receipt);
+            PublishSnapshot();
             return new(IntegrationChangeOutcome.Applied, receipt);
         }
     }

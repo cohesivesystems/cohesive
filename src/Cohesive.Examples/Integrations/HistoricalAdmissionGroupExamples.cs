@@ -16,7 +16,8 @@ public sealed partial class HistoricalQualificationExamples
             QualifyLocalHistorical(SingleSession(new(2026, 9, 2)), ForwardConsumer).Compilation!, 1, destination));
         var backfill = new ProcessFixture(new FixtureSetup(
             QualifyLocalHistorical(SingleSession(new(2026, 9, 1)), BackfillConsumer).Compilation!, 1, destination));
-        var group = new InMemoryIntegrationAdmissionGroup("research/tiingo/SPY",
+        var ownership = new InMemoryIntegrationLifecycleScope();
+        var group = ownership.CreateGroup("research/tiingo/SPY",
             (_, actor) => actor == Operator, (_, _, actor) => actor == Operator);
         var forwardControl = group.Register(new(ForwardConsumer, 0, Operator, At)).Receipt.Controller;
         var backfillControl = group.Register(new(BackfillConsumer, 1, Operator, At)).Receipt.Controller;
@@ -24,9 +25,9 @@ public sealed partial class HistoricalQualificationExamples
         backfillControl.Change(new("active", 0, IntegrationDesiredState.Active, Operator, At));
         group.Change(new("active", 2, IntegrationDesiredState.Active, Operator, At));
         var forwardRequest = new IntegrationAdmissionRequest(forwardControl.Bind(forward.Compilation),
-            new(new("group/forward"), new("attempt/1")), 1, Operator, At, ExpectedGroupRevision: 3);
+            new(new("group/forward"), new("attempt/1")), 1, Operator, At);
         var backfillRequest = new IntegrationAdmissionRequest(backfillControl.Bind(backfill.Compilation),
-            new(new("group/backfill"), new("attempt/1")), 1, Operator, At, ExpectedGroupRevision: 3);
+            new(new("group/backfill"), new("attempt/1")), 1, Operator, At);
         var forwardAdmission = forwardControl.Admit(forwardRequest).Receipt;
         var backfillAdmission = backfillControl.Admit(backfillRequest).Receipt;
         var forwardWaiting = forward.Start(forwardRequest.Continuation);
@@ -42,9 +43,9 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Same(forwardAdmission, forwardControl.Admit(forwardRequest).Receipt);
         Assert.Same(backfillAdmission, backfillControl.Admit(backfillRequest).Receipt);
         Assert.Equal(IntegrationAdmissionOutcome.GroupAdmissionStopped, forwardControl.Admit(forwardRequest with
-            { Continuation = new(new("new-forward"), new("attempt/1")), ExpectedGroupRevision = 4 }).Outcome);
+            { Continuation = new(new("new-forward"), new("attempt/1"))}).Outcome);
         Assert.Equal(IntegrationAdmissionOutcome.GroupAdmissionStopped, backfillControl.Admit(backfillRequest with
-            { Continuation = new(new("new-backfill"), new("attempt/1")), ExpectedGroupRevision = 4 }).Outcome);
+            { Continuation = new(new("new-backfill"), new("attempt/1"))}).Outcome);
 
         // These are retained-effect reconciliations, not new admission or replacement provider calls.
         foreach (var (original, waiting, control, admission) in new[]

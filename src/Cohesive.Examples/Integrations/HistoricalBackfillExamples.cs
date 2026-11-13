@@ -21,7 +21,7 @@ public sealed partial class HistoricalQualificationExamples
         var forward = SingleSession(new(2026, 9, 2));
         var backfill = SingleSession(new(2026, 9, 1));
         var forwardWorker = new ProcessFixture(new FixtureSetup(QualifyLocalHistorical(forward, ForwardConsumer).Compilation!, 1, destination));
-        var forwardControl = new InMemoryIntegrationLifecycle(ForwardConsumer, (_, actor) => actor == Operator);
+        var forwardControl = new InMemoryIntegrationLifecycleScope().CreateConsumer(ForwardConsumer, (_, actor) => actor == Operator);
         forwardControl.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var forwardSession = new ProcessContinuationIdentity(new("forward/september-2"), new("attempt/1"));
         var forwardAdmission = forwardControl.Admit(new(forwardControl.Bind(forwardWorker.Compilation), forwardSession, 1, Operator, At)).Receipt;
@@ -36,7 +36,7 @@ public sealed partial class HistoricalQualificationExamples
             Capabilities(backfill) with { MaximumRangeDays = 1 });
         Assert.True(qualified.IsAdmissible);
         var worker = new ProcessFixture(new FixtureSetup(qualified.Compilation!, 1, destination));
-        var control = new InMemoryIntegrationLifecycle(BackfillConsumer, (_, actor) => actor == Operator);
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(BackfillConsumer, (_, actor) => actor == Operator);
         var binding = control.Bind(worker.Compilation);
         var identity = new ProcessContinuationIdentity(new("backfill/september-1"), new("attempt/1"));
         var intent = new IntegrationAdmissionRequest(binding, identity, 0, Operator, At);
@@ -101,7 +101,7 @@ public sealed partial class HistoricalQualificationExamples
             Capabilities(selection) with { MaximumRangeDays = 1 });
         var original = new ProcessFixture(new FixtureSetup(qualified.Compilation!, sessions, destination));
         var worker = new ProcessFixture(original, change);
-        var control = new InMemoryIntegrationLifecycle(BackfillConsumer, (_, actor) => actor == Operator);
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(BackfillConsumer, (_, actor) => actor == Operator);
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admitted = control.Admit(new(control.Bind(worker.Compilation), Session, 1, Operator, At)).Receipt;
         var decision = await RunHistorical(worker, Session);

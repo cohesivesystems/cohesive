@@ -35,7 +35,7 @@ public sealed class InMemoryIntegrationLifecycle
     /// may run concurrently. Exceptions propagate without controller mutation. This callback must not dispatch effects.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">A consumer identity is invalid.</exception>
-    public InMemoryIntegrationLifecycle(IngestionLedgerAddress consumer,
+    internal InMemoryIntegrationLifecycle(IngestionLedgerAddress consumer,
         Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize,
         Func<IntegrationFailureResolutionRequest, ProcessActivationDecision?>? verifyFailureResolution = null)
         : this(consumer, authorize, verifyFailureResolution, null) { }
@@ -102,7 +102,7 @@ public sealed class InMemoryIntegrationLifecycle
     {
         ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Binding); ArgumentNullException.ThrowIfNull(request.Continuation);
         Validate(request.Authorization, request.AtUtc);
-        if (request.ExpectedRevision < 0 || request.ExpectedGroupRevision is < 0) throw new ArgumentException("Revision cannot be negative.", nameof(request));
+        if (request.ExpectedRevision < 0) throw new ArgumentException("Revision cannot be negative.", nameof(request));
         if (!authorize(IntegrationLifecycleAction.Admit, request.Authorization)) return new(IntegrationAdmissionOutcome.Unauthorized);
         if (!ReferenceEquals(request.Binding.Owner, this)) return new(IntegrationAdmissionOutcome.BindingMismatch);
         lock (sync)
@@ -112,16 +112,14 @@ public sealed class InMemoryIntegrationLifecycle
             if (prior is not null)
             {
                 var matches = prior.Binding == request.Binding.Binding && prior.Process == request.Binding.Process
-                    && prior.GroupRevision == request.ExpectedGroupRevision
                     && prior.LifecycleRevision == request.ExpectedRevision && prior.Authorization == request.Authorization && prior.AtUtc == request.AtUtc;
                 return matches ? new(IntegrationAdmissionOutcome.Replayed, prior) : new(IntegrationAdmissionOutcome.IdentityConflict);
             }
-            if (group?.Revision != request.ExpectedGroupRevision) return new(IntegrationAdmissionOutcome.GroupRevisionConflict);
             if (group is not null && group.Desired != IntegrationDesiredState.Active) return new(IntegrationAdmissionOutcome.GroupAdmissionStopped);
             if (control.Revision != request.ExpectedRevision) return new(IntegrationAdmissionOutcome.RevisionConflict);
             if (control.Desired != IntegrationDesiredState.Active) return new(IntegrationAdmissionOutcome.AdmissionStopped);
             var receipt = new IntegrationAdmission(consumer, request.Continuation, request.Binding.Binding, request.Binding.Process,
-                request.ExpectedRevision, request.Authorization, request.AtUtc, request.ExpectedGroupRevision, group?.Id);
+                request.ExpectedRevision, request.Authorization, request.AtUtc, group?.Revision, group?.Id);
             pending.Add(request.Continuation, receipt);
             return new(IntegrationAdmissionOutcome.Applied, receipt);
         }
@@ -194,7 +192,7 @@ public sealed class InMemoryIntegrationLifecycle
                 || decision.State.Definition != request.Admission.Process
                 || decision.State.Continuation != request.Admission.Continuation)
                 return new(IntegrationFailureResolutionOutcome.DecisionMismatch);
-            control.Revision++;
+            control.AdvanceRevision();
             var receipt = new IntegrationFailureResolution(request, decision, control.Revision);
             resolutionCommands.Add(request.Id, receipt);
             resolvedFailures.Add(request.Admission.Continuation, receipt);
@@ -225,7 +223,7 @@ public sealed class InMemoryIntegrationLifecycle
             return new(IntegrationFailureResolutionOutcome.AlreadyClosed);
         if (pending.GetValueOrDefault(request.Admission.Continuation) != request.Admission)
             return new(IntegrationFailureResolutionOutcome.AdmissionMismatch);
-        if (control.Revision == long.MaxValue) return new(IntegrationFailureResolutionOutcome.RevisionExhausted);
+        if (!control.CanAdvance) return new(IntegrationFailureResolutionOutcome.RevisionExhausted);
         return null;
     }
 

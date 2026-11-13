@@ -17,7 +17,7 @@ public sealed partial class HistoricalQualificationExamples
         var fixture = new ProcessFixture(1);
         ProcessActivationDecision? failed = null;
         var verificationCalls = 0;
-        var control = new InMemoryIntegrationLifecycle(fixture.Address, (_, actor) => actor == Operator,
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, actor) => actor == Operator,
             request => { verificationCalls++; return request.EvidenceReference == AccountedFailure ? failed : null; });
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admissionRequest = new IntegrationAdmissionRequest(control.Bind(fixture.Compilation), Session, 1, Operator, At);
@@ -93,7 +93,7 @@ public sealed partial class HistoricalQualificationExamples
         if (evidence != "unresolved")
             while (decision.Disposition == ProcessActivationDisposition.DurableCut)
                 decision = fixture.Reply(decision, await fixture.Handle(Request(decision)));
-        var control = new InMemoryIntegrationLifecycle(fixture.Address, (_, _) => true,
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, _) => true,
             evidence == "missing-verifier" ? null : _ => evidence == "verifier-failure"
                 ? throw new IOException("Evidence store unavailable.") : decision);
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
@@ -118,7 +118,7 @@ public sealed partial class HistoricalQualificationExamples
         var failed = fixture.Reply(waiting, await fixture.Handle(Request(waiting)));
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
-        var control = new InMemoryIntegrationLifecycle(fixture.Address, (_, _) => true, _ =>
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, _) => true, _ =>
         {
             entered.Set();
             if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
@@ -151,7 +151,7 @@ public sealed partial class HistoricalQualificationExamples
         var waiting = fixture.Start();
         var failed = fixture.Reply(waiting, await fixture.Handle(Request(waiting)));
         using var verifying = new Barrier(2);
-        var control = new InMemoryIntegrationLifecycle(fixture.Address, (_, _) => true, _ =>
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, _) => true, _ =>
         {
             if (!verifying.SignalAndWait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
             return failed;

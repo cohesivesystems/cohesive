@@ -108,8 +108,6 @@ public enum IntegrationAdmissionOutcome
     AdmissionStopped,
     /// <summary>The bound token belongs to a different controller.</summary>
     BindingMismatch,
-    /// <summary>The group fence is missing, unexpected or stale.</summary>
-    GroupRevisionConflict,
     /// <summary>The admission group is paused; a local resume cannot bypass it.</summary>
     GroupAdmissionStopped
 }
@@ -183,9 +181,8 @@ public sealed class IntegrationAdmissionBinding
 /// <param name="ExpectedRevision">Original expected lifecycle revision.</param>
 /// <param name="Authorization">Host-authenticated actor and authority.</param>
 /// <param name="AtUtc">Original UTC admission observation.</param>
-/// <param name="ExpectedGroupRevision">Exact observed group revision; required for grouped consumers, null for standalone consumers.</param>
 public sealed record IntegrationAdmissionRequest(IntegrationAdmissionBinding Binding, ProcessContinuationIdentity Continuation,
-    long ExpectedRevision, ProcessControlAuthorizationContext Authorization, DateTimeOffset AtUtc, long? ExpectedGroupRevision = null);
+    long ExpectedRevision, ProcessControlAuthorizationContext Authorization, DateTimeOffset AtUtc);
 
 /// <summary>Intent to record successful completion of an admitted session.</summary>
 /// <param name="Admission">Original admission receipt.</param>
