@@ -68,3 +68,6 @@ The legacy trace host intentionally preserves observed partial commits.
 
 [Causal coordination](coordination.md) declares the acceptance prerequisite and demonstrates confirmation
 arriving first, durable waiting, independent guards, and acknowledgement-loss recovery.
+
+[Reaction lifecycle](lifecycle.md) shows authorized inspection, dependent discovery, explicit abandonment,
+and the distinction between replaying uncertain delivery and requesting new business work.

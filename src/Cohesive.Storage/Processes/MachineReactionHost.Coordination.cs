@@ -59,11 +59,23 @@ public sealed partial class MachineReactionHost
     async Task<MachineReactionProgress> InspectPrerequisiteAsync(OperationContext context, MachineReactionInvocation invocation)
     {
         var required = MachineReactionInvocation.InstanceFor(prerequisite!.Policy, invocation.Source, invocation.MovementNode);
-        var predecessor = await store.LoadAsync(context, required).ConfigureAwait(false);
-        if (predecessor is null) return Waiting(required);
-        if (!await prerequisite.recovery!.Authorize(context, predecessor.Checkpoint.Start.Request).ConfigureAwait(false))
-            throw new UnauthorizedAccessException("Prerequisite recovery evidence access is denied.");
-        var progress = await prerequisite.InspectSnapshot(context, predecessor).ConfigureAwait(false);
+        return PrerequisiteDisposition(required, await ReadPrerequisiteAsync(context, required).ConfigureAwait(false));
+    }
+
+    async Task<MachineReactionProgress?> ReadPrerequisiteAsync(OperationContext context, ProcessInstanceId required)
+    {
+        var predecessor = await prerequisite!.LoadOwnedAsync(context, required).ConfigureAwait(false);
+        if (predecessor is null) return null;
+        await prerequisite.AuthorizeRecoveryAsync(context, predecessor).ConfigureAwait(false);
+        return await prerequisite.InspectSnapshot(context, predecessor).ConfigureAwait(false);
+    }
+
+    static MachineReactionProgress PrerequisiteDisposition(ProcessInstanceId required, MachineReactionProgress? progress)
+    {
+        if (progress is null) return Waiting(required);
+        if (progress.Status == MachineReactionStatus.Abandoned)
+            return new(MachineReactionStatus.Failed, Diagnostic: new("machine.reaction.prerequisite.abandoned", DiagnosticSeverity.Error,
+                $"Prerequisite '{required.Value}' was abandoned; explicitly abandon this dependent or reconcile the business intent."), Attempts: [], Prerequisite: required);
         if (progress.Status is MachineReactionStatus.Rejected or MachineReactionStatus.Failed)
             return new(MachineReactionStatus.Failed, Diagnostic: new(progress.Status == MachineReactionStatus.Rejected
                 ? "machine.reaction.prerequisite.rejected" : "machine.reaction.prerequisite.failed",

@@ -20,7 +20,9 @@ public enum MachineReactionStatus
     /// <summary>Explicit terminal failure proves the target did not commit.</summary>
     Failed,
     /// <summary>Target commitment is uncertain and requires reconciliation.</summary>
-    Indeterminate
+    Indeterminate,
+    /// <summary>Canonical cancellation stopped the reaction before any target dispatch.</summary>
+    Abandoned
 }
 
 /// <summary>Inspection projection retaining the evidence behind its classification.</summary>
