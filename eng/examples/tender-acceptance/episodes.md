@@ -27,7 +27,10 @@ same exact source entity shape and authority. A prerequisite in episode 1 cannot
 
 ## Identity and source authority
 
-The episode selector lowers to a canonical `FieldPath` in the reaction document. The source shape owns
+The episode selector lowers to a canonical `FieldPath` in the reaction document. The decoded identity is
+a closed `MachineReactionIdentity` with `Occurrence`, `Entity`, and `Episode(Key)` cases; an episode cannot
+be constructed without its field selector. A private persistence projection retains the v1 wire shape
+and validates legacy scope/key combinations at the decoding boundary. The source shape owns
 its type. No CLR expression, delegate, closure, clock or source repository lookup survives into the IR.
 This initial profile supports a direct, required, non-null property of type `string`, `Guid`, `int` or
 `long`. Computations, nested paths, optional fields and compound keys are rejected explicitly. A domain
@@ -104,3 +107,32 @@ The new example uses new declaration identities. Do not reinterpret existing onc
 history as episode work: retain the exact old policy until it drains or is explicitly abandoned. This
 change does not provide migration of already admitted instances, cross-entity episode mapping,
 multiple-prerequisite joins or a force-retry mechanism for conclusively rejected work.
+
+## Preparation and allocation evidence
+
+Episode selection is internal to the storage interpretation. Source and episode contracts are prepared
+once per immutable policy. Successful scalar selections are cached by immutable input identity with
+weak ownership; failed selections are not cached. Inspection restores one invocation and reuses its
+selected episode. Host prerequisite calls accept that invocation rather than a nullable episode argument.
+The existing `FieldPath.Capture` convention path handles authoring without constructing a Relations
+query author. Scalar compatibility uses the same helper as portable value validation.
+
+The JSON fingerprint writer canonicalizes structure and numeric syntax, but has no declared scalar
+type with which to interpret a Guid string. Internal episode preparation therefore retains Guid-aware
+canonicalization. It constructs only the final PortableValue and does not run whole-document validation
+for that scalar. Ordinary source/start validation remains in place.
+
+An allocation-only probe against the real pre-refactor commit `58fb3a44` and the revised code used the
+same retained acceptance input, 100 warmup calls and 1,000 measured calls in Release on .NET 10:
+
+| Operation | Before | After |
+|---|---:|---:|
+| Repeated episode selection | 688 B/call | 0 B/call |
+| Restore exact reaction invocation | 6,851 B/call | 6,163 B/call |
+
+These are allocation observations, not timing claims. Permanent regression tests bound cold selection
+to 512 B/input, warm reuse to 16 B/input, and restoration to 6,656 B/call. The warm path measured zero;
+the bounds leave small runtime latitude without allowing another PortableValue allocation per call.
+Compatibility tests compare canonical documents against an independent v1 wire fixture. Retained documents
+keep their exact references; fresh authoring still includes compiler/source provenance, which can change
+fingerprints when source locations change.

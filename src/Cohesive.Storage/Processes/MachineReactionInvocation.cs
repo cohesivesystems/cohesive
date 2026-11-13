@@ -43,16 +43,36 @@ public sealed record MachineReactionProgress(MachineReactionStatus Status, Proce
 /// Process start admission and durable runtime. Transport acceptance alone never proves completion.</remarks>
 public sealed class MachineReactionInvocation
 {
-    internal static ProcessInstanceId InstanceFor(MachineReaction policy, EntityTransitionOperationReference source,
-        ExecutionNodeId movementNode, PortableValue? episode = null) =>
-        new("reaction/" + (policy.Payload.IdentityScope switch
+    // The complete retained input is mandatory. No caller can forget to thread an optional episode key.
+    static (ProcessInstanceId Instance, PortableValue? Episode) PrepareIdentity(MachineReaction policy,
+        EntityTransitionOperationReference source, ExecutionNodeId movementNode, PortableValue input)
+    {
+        switch (policy.Payload.Identity)
         {
-            MachineReactionIdentityScope.SourceEpisode => ProcessStorageContentFingerprints.Value(new EpisodeIdentity(
-                new(policy.Document.Reference, source.AuthorityScope, source.Subject),
-                episode ?? throw new InvalidOperationException("Episode identity requires a selected source key."))).Value,
-            MachineReactionIdentityScope.SourceEntity => ProcessStorageContentFingerprints.Value(new ScopedIdentity(policy.Document.Reference, source.AuthorityScope, source.Subject)).Value,
-            _ => ProcessStorageContentFingerprints.Value(new Identity(policy.Document.Reference, source, movementNode)).Value
-        }));
+            case MachineReactionIdentity.Episode:
+                var episode = MachineReactionInputs.For(policy).SelectEpisode(input);
+                return (new("reaction/" + ProcessStorageContentFingerprints.Value(new EpisodeIdentity(new(policy.Document.Reference, source.AuthorityScope, source.Subject), episode)).Value), episode);
+            case MachineReactionIdentity.Entity:
+                return (new("reaction/" + ProcessStorageContentFingerprints.Value(new ScopedIdentity(policy.Document.Reference, source.AuthorityScope, source.Subject)).Value), null);
+            case MachineReactionIdentity.Occurrence:
+                return (new("reaction/" + ProcessStorageContentFingerprints.Value(new Identity(policy.Document.Reference, source, movementNode)).Value), null);
+            default: throw new InvalidOperationException("Unknown reaction identity.");
+        }
+    }
+
+    internal ProcessInstanceId PrerequisiteInstance(MachineReaction prerequisite)
+    {
+        if (Policy.Payload.Prerequisite?.Reference != prerequisite.Document.Reference)
+            throw new InvalidOperationException("Expected the exact declared prerequisite.");
+        var scoped = new ScopedIdentity(prerequisite.Document.Reference, Source.AuthorityScope, Source.Subject);
+        return prerequisite.Payload.Identity switch
+        {
+            MachineReactionIdentity.Episode when Episode is { } key =>
+                new("reaction/" + ProcessStorageContentFingerprints.Value(new EpisodeIdentity(scoped, key)).Value),
+            MachineReactionIdentity.Entity => new("reaction/" + ProcessStorageContentFingerprints.Value(scoped).Value),
+            _ => throw new InvalidOperationException("Prerequisite identity is incompatible with this invocation.")
+        };
+    }
 
     internal static ProcessContinuationIdentity ContinuationFor(ProcessInstanceId instance) => new(instance, new(instance.Value + "/attempt/1"));
 
@@ -101,8 +121,7 @@ public sealed class MachineReactionInvocation
         if (!PortableExecutionValidator.Validate(input).IsValid)
             throw new InvalidOperationException("Committed source snapshot does not satisfy the reaction input contract.");
         var identity = new Identity(policy.Document.Reference, occurrence.Source, occurrence.Movement.Node);
-        var episode = policy.SelectEpisode(input);
-        var instance = InstanceFor(policy, occurrence.Source, occurrence.Movement.Node, episode);
+        var (instance, episode) = PrepareIdentity(policy, occurrence.Source, occurrence.Movement.Node, input);
         var key = instance.Value;
         var context = new ProcessControlCommandContext(new(key), new(key), instance, authorization,
             issuedAtUtc, policy.Document.Metadata.Provenance);
@@ -133,8 +152,8 @@ public sealed class MachineReactionInvocation
         var identity = cause.Value!.Value.Deserialize<Identity>()
             ?? throw new InvalidOperationException("Reaction origin evidence is absent.");
         if (start.Input is null) throw new InvalidOperationException("Reaction start requires retained source input.");
-        var episode = policy.SelectEpisode(start.Input);
-        var key = InstanceFor(policy, identity.Source, identity.MovementNode, episode).Value;
+        var prepared = PrepareIdentity(policy, identity.Source, identity.MovementNode, start.Input);
+        var key = prepared.Instance.Value;
         if (identity.Policy != policy.Document.Reference || start.Definition != policy.Payload.Process.Reference
             || identity.Source.AuthorityScope != start.Context.Authorization.AuthorityScope
             || start.InitialContinuation != ContinuationFor(new(key))
@@ -142,7 +161,7 @@ public sealed class MachineReactionInvocation
             || start.Input?.Contract != policy.Payload.Process.GetDefinition<ProcessDefinition>().Input
             || !PortableExecutionValidator.Validate(start.Input).IsValid)
             throw new InvalidOperationException("Reaction start does not match its exact policy, identity or input.");
-        return new(policy, identity.Source, identity.MovementNode, start, episode);
+        return new(policy, identity.Source, identity.MovementNode, start, prepared.Episode);
     }
 
     /// <summary>Inspects durable Process evidence and, optionally, its authorized resolved target receipt.</summary>

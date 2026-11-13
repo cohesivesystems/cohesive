@@ -18,7 +18,7 @@ public sealed partial class MachineReactionHost
     {
         if (prerequisite is null) return null;
         var invocation = MachineReactionInvocation.Restore(Policy, start);
-        return MachineReactionInvocation.InstanceFor(prerequisite.Policy, invocation.Source, invocation.MovementNode, invocation.Episode);
+        return invocation.PrerequisiteInstance(prerequisite.Policy);
     }
 
     /// <summary>Explains a reaction and its immediate prerequisite without executing either target.</summary>
@@ -40,12 +40,13 @@ public sealed partial class MachineReactionHost
     internal async Task<MachineReactionInspection> InspectLifecycleSnapshotAsync(OperationContext context, ProcessDurableStoreSnapshot snapshot)
     {
         await AuthorizeRecoveryAsync(context, snapshot).ConfigureAwait(false);
-        var progress = await InspectOwnSnapshot(context, snapshot).ConfigureAwait(false);
+        var invocation = MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request);
+        var progress = await InspectOwnSnapshot(context, snapshot, invocation).ConfigureAwait(false);
         MachineReactionProgress? dependency = null;
         if (prerequisite is not null && progress.Prerequisite is { } required)
         {
             dependency = await ReadPrerequisiteAsync(context, required).ConfigureAwait(false);
-            if (RequiresPrerequisiteEvidence(snapshot, progress))
+            if (RequiresPrerequisiteEvidence(snapshot, progress, invocation))
             {
                 var disposition = PrerequisiteDisposition(required, dependency);
                 if (disposition.Status != MachineReactionStatus.Completed)
@@ -53,7 +54,7 @@ public sealed partial class MachineReactionHost
             }
         }
         return new(snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId, progress, snapshot.Checkpoint.Control, dependency,
-            Policy.SelectEpisode(snapshot.Checkpoint.Start.Request.Input!));
+            invocation.Episode);
     }
 
     /// <summary>Abandons future reaction execution using canonical cooperative Process cancellation.</summary>

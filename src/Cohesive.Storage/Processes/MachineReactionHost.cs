@@ -217,23 +217,23 @@ public sealed partial class MachineReactionHost
 
     async Task<MachineReactionProgress> InspectSnapshot(OperationContext context, ProcessDurableStoreSnapshot snapshot)
     {
-        var progress = await InspectOwnSnapshot(context, snapshot).ConfigureAwait(false);
-        if (RequiresPrerequisiteEvidence(snapshot, progress))
+        var invocation = MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request);
+        var progress = await InspectOwnSnapshot(context, snapshot, invocation).ConfigureAwait(false);
+        if (RequiresPrerequisiteEvidence(snapshot, progress, invocation))
         {
-            var dependency = await InspectPrerequisiteAsync(context, MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request)).ConfigureAwait(false);
+            var dependency = await InspectPrerequisiteAsync(context, invocation).ConfigureAwait(false);
             if (dependency.Status != MachineReactionStatus.Completed)
                 progress = dependency with { Attempts = progress.Attempts, Prerequisite = progress.Prerequisite };
         }
         return progress;
     }
 
-    bool RequiresPrerequisiteEvidence(ProcessDurableStoreSnapshot snapshot, MachineReactionProgress progress) =>
+    bool RequiresPrerequisiteEvidence(ProcessDurableStoreSnapshot snapshot, MachineReactionProgress progress, MachineReactionInvocation invocation) =>
         progress.Status == MachineReactionStatus.Pending && prerequisite is not null && progress.Attempts.IsEmpty
-        && !HasPrerequisiteProof(snapshot, MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request));
+        && !HasPrerequisiteProof(snapshot, invocation);
 
-    async Task<MachineReactionProgress> InspectOwnSnapshot(OperationContext context, ProcessDurableStoreSnapshot snapshot)
+    async Task<MachineReactionProgress> InspectOwnSnapshot(OperationContext context, ProcessDurableStoreSnapshot snapshot, MachineReactionInvocation invocation)
     {
-        var invocation = MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request);
         var attempts = ProcessTransitionAttempt.Read(snapshot);
         var progress = await InspectCheckpoint(context, invocation, snapshot.Checkpoint).ConfigureAwait(false);
         if (progress.Status == MachineReactionStatus.Pending && attempts.LastOrDefault() is { } last)
@@ -259,7 +259,7 @@ public sealed partial class MachineReactionHost
                     "Process execution was cancelled. Retained target evidence still governs commitment; cancellation does not undo effects or authorize a new request.")
             };
         return progress with { Attempts = attempts, Prerequisite = prerequisite is null ? null
-            : MachineReactionInvocation.InstanceFor(prerequisite.Policy, invocation.Source, invocation.MovementNode, invocation.Episode) };
+            : invocation.PrerequisiteInstance(prerequisite.Policy) };
     }
 
     async Task<MachineReactionProgress> InspectCheckpoint(OperationContext context, MachineReactionInvocation invocation, ProcessDurableCheckpoint checkpoint)

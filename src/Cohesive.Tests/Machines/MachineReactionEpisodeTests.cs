@@ -99,7 +99,7 @@ public sealed class MachineReactionEpisodeTests
         Assert.Equal(TransitionDecisionKind.AdmissionRejected, staleSource.Kind);
         var restored = MachineReaction.Deserialize(ExecutionDefinitionJsonSerializer.Serialize(model.Confirmation.Document));
         Assert.Equal(model.Confirmation.Document.Reference, restored.Document.Reference);
-        Assert.Equal(model.Acceptance.Payload.EpisodeKey, restored.Payload.EpisodeKey);
+        Assert.Equal(model.Acceptance.Payload.Identity, restored.Payload.Identity);
         Assert.Equal(model.Confirmation.Document.Reference, new TenderEpisodeModel().Confirmation.Document.Reference);
         Assert.Throws<ArgumentException>(() => MachineReaction.On<EpisodeTender>(model.Tender, model.Confirmed, "mismatch", "1")
             .OncePerEpisode(state => state.LoadId).After(model.Acceptance));
@@ -107,21 +107,14 @@ public sealed class MachineReactionEpisodeTests
             .OncePerEpisode(state => state.AcceptanceEpisode + 1));
         Assert.Throws<InvalidOperationException>(() => MachineReaction.On<EpisodeTender>(model.Tender, model.Confirmed, "overwrite", "1")
             .After(model.Acceptance).OncePerSourceEntity());
-        var malformed = model.Confirmation.Payload with { EpisodeKey = FieldPath.FromField(nameof(EpisodeTender.LoadId)) };
-        var document = ExecutionDefinitionDocument.Create(MachineReaction.Kind, new("malformed"), new("1"), malformed,
-            model.Confirmation.Document.Metadata.Provenance);
+        var malformed = model.Confirmation.Payload with { Identity = new MachineReactionIdentity.Episode(FieldPath.FromField(nameof(EpisodeTender.LoadId))) };
+        var document = MachineReactionTests.Persist(model.Confirmation, malformed);
         Assert.Throws<InvalidOperationException>(() => MachineReaction.Deserialize(ExecutionDefinitionJsonSerializer.Serialize(document)));
-        foreach (var invalid in new[]
-        {
-            model.Acceptance.Payload with { EpisodeKey = null },
-            model.Acceptance.Payload with { IdentityScope = MachineReactionIdentityScope.SourceOccurrence },
-            model.Acceptance.Payload with { EpisodeKey = FieldPath.FromField("missing") }
-        })
-        {
-            var invalidDocument = ExecutionDefinitionDocument.Create(MachineReaction.Kind, new("invalid-episode"), new("1"), invalid,
-                model.Acceptance.Document.Metadata.Provenance);
-            Assert.Throws<InvalidOperationException>(() => MachineReaction.Deserialize(ExecutionDefinitionJsonSerializer.Serialize(invalidDocument)));
-        }
+        Assert.Throws<ArgumentException>(() => new MachineReactionIdentity.Episode(default));
+        var invalid = model.Acceptance.Payload with { Identity = new MachineReactionIdentity.Episode(FieldPath.FromField("missing")) };
+        var invalidDocument = MachineReactionTests.Persist(model.Acceptance, invalid);
+        Assert.Throws<InvalidOperationException>(() => MachineReaction.Deserialize(ExecutionDefinitionJsonSerializer.Serialize(invalidDocument)));
+
     }
 
     [Fact]
@@ -169,7 +162,7 @@ public sealed class MachineReactionEpisodeTests
         var stringPolicy = KeyPolicy<string>();
         Assert.NotEqual(Select(stringPolicy, ObservationValue.FromString("A")), Select(stringPolicy, ObservationValue.FromString("a")));
         Assert.Throws<InvalidOperationException>(() => Select(stringPolicy, ObservationValue.FromString(" ")));
-        Assert.Throws<InvalidOperationException>(() => stringPolicy.SelectEpisode(PortableValue.Concrete(
+        Assert.Throws<InvalidOperationException>(() => MachineReactionInputs.For(stringPolicy).SelectEpisode(PortableValue.Concrete(
             ValueContract.FromShape(stringPolicy.Payload.Source), ObservationValue.EmptyObject)));
         Assert.Throws<InvalidOperationException>(() => KeyPolicy<bool>());
         Assert.Equal(long.MaxValue, Select(KeyPolicy<long>(), ObservationValue.FromInt64(long.MaxValue))!.Value!.Value.GetInt64());
@@ -229,7 +222,7 @@ public sealed class MachineReactionEpisodeTests
         Assert.Equal(2, (await f.Confirmation().InspectLifecycleAsync(f.Context, next))!.Episode!.Value!.Value.GetInt32());
     }
 
-    static PortableValue? Select(MachineReaction policy, ObservationValue key) => policy.SelectEpisode(PortableValue.Concrete(
+    static PortableValue? Select(MachineReaction policy, ObservationValue key) => MachineReactionInputs.For(policy).SelectEpisode(PortableValue.Concrete(
         ValueContract.FromShape(policy.Payload.Source), ObservationValue.FromFieldAssignments([
             new(FieldPath.FromField(nameof(KeyFacts<int>.Episode)), key),
             new(FieldPath.FromField(nameof(KeyFacts<int>.LoadId)), ObservationValue.FromString("load-1"))])));
