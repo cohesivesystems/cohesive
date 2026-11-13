@@ -119,7 +119,7 @@ public sealed partial class HistoricalQualificationExamples
 
     // Local host adapter: the canonical Process decides order and branching. This fixture supplies only
     // Request handlers and reply admission. Shared retained state models storage, not physical durability.
-    sealed class ProcessFixture : IProcessReferenceHost
+    sealed partial class ProcessFixture : IProcessReferenceHost
     {
         readonly ProcessFixture retained;
         readonly IntegrationCompilation compilation;
