@@ -13,6 +13,7 @@ the application uses, and pin one exact prerelease version across the family.
 | Define populations, exemplars, artifacts, and scenarios | `Cohesive.Simulation` |
 | Complete references between generated populations | `Cohesive.Simulation.Relations` |
 | Seed generic Cohesive entity repositories | `Cohesive.Simulation.Storage` |
+| Check atomic actor traces, then replay candidate operations | `Cohesive.Simulation.Assurance` |
 | Execute scenario actions through canonical Transitions | `Cohesive.Simulation.Transitions` |
 | Provision and verify portable JSONL from scripts or Playwright | `Cohesive.Simulation.Cli` (`cohesive-sim`) |
 | Snapshot Bogus or Mimesis data into a retained catalog | `Cohesive.Adapters.Bogus` or `Cohesive.Adapters.Mimesis` |
@@ -108,3 +109,14 @@ The following constraints are explicit in the current packages:
 The complete package family is installed and exercised from packed NuGet artifacts by
 [`eng/test-simulation-tool.sh`](../../../eng/test-simulation-tool.sh) in pull-request and release workflows. Current
 wire identities and consumer upgrade rules are listed in [alpha compatibility](compatibility.md).
+
+
+## Assurance bridge
+
+The optional [Simulation / Assurance bridge](../../Cohesive.Simulation.Assurance/README.md)
+projects a declared single actor's reference-model state boundaries into Assurance. It uses
+existing generated property cases, shrinking, trace serialization and scenario replay. Its
+Motion DQ-style fixture finds a two-blocker failure, removes irrelevant activity, rechecks
+retained observations, reproduces the failure through candidate operations, and evaluates a
+repair against the unchanged claim. Event claims and real transaction interleavings require
+richer trace contracts and remain explicitly unsupported by this initial profile.

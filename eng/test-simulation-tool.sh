@@ -33,6 +33,8 @@ for excluded_package in \
   Cohesive.Adapters.Mimesis \
   Cohesive.Cli \
   Cohesive.Relations \
+  Cohesive.Simulation.Assurance \
+  Cohesive.Assurance \
   Cohesive.Simulation.Cli \
   Cohesive.Simulation.ExternalProcess \
   Cohesive.Simulation.Relations \
