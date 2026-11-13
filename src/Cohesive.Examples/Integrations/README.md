@@ -81,7 +81,7 @@ external effect. They do not retry ambiguous effects or claim production storage
 [HistoricalLifecycleExamples.cs](HistoricalLifecycleExamples.cs) adds the COH-136 local admission-control
 loop around that same Process. Revision-aware pause rejects a new session while the
 admitted session finishes from its retained result through a fresh worker. Successful exact Process
-completion ends draining. Failed work stays visible until an explicit resolution protocol exists;
+completion ends draining. Failed work stays visible until an explicit verified resolution is accepted;
 these tests do not infer resolved external effects from a failure status.
 
 [HistoricalHealthExamples.cs](HistoricalHealthExamples.cs) uses the internal experimental `IntegrationInspectionHost` for evidence retrieval, clock sampling and JSON export. This is test/example infrastructure, not a production hosting contract.
@@ -108,5 +108,16 @@ journal. The simulated sink retains its receipt and exact Request association to
 post-handler interruption. A production adapter must establish that atomic evidence boundary, authenticate
 the operator, fence concurrent workers and retrieve trustworthy evidence. Existing Process controls and
 distribution reconciliation remain the execution authorities; this example adds neither a workflow engine
-nor a durable-store abstraction. Known terminal failure resolution, operator revision fencing, bounded
-backfill and the production control projection remain follow-up work. Ito is unchanged.
+nor a durable-store abstraction. The separate failure-resolution example below exercises terminal failure resolution and operator revision
+fencing. Bounded backfill and the production control projection remain follow-up work. Ito is unchanged.
+
+
+[HistoricalFailureResolutionExamples.cs](HistoricalFailureResolutionExamples.cs) uses the library's
+`ResolveFailure` operation to close a fully accounted coverage failure while admission is paused.
+A trusted host verifier checks the evidence locator and supplies the exact failed Process decision;
+the fixture establishes that the source read answered and no publication or ledger effect began.
+The controller retains the original command, decision and resulting control revision. Successful
+completion remains absent and the ledger remains unchanged. Failure status alone never authorizes
+resolution. Tests cover malformed/stale/unauthorized commands, missing and mismatched evidence,
+verifier exceptions, serialized command replay, concurrent exact retries and revision changes during
+verification. Production evidence authentication and durable storage remain outside this local fixture.
