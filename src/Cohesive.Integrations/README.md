@@ -564,7 +564,9 @@ revision, UTC observation and host-authenticated authorization evidence. The hos
 and authorizes each lifecycle action; `ProcessControlAuthorizationContext` records that decision.
 
 Bind each immutable compilation once. The resulting controller-owned token is reused across admissions
-and cannot be used with another controller. Multiple validated bindings can share one consumer's lifecycle,
+and cannot be used with another controller. A rejected binding throws `IntegrationBindingException`;
+its `Validation` property preserves every diagnostic from the failing validation stage (including
+locations and evidence), and its message includes all reported codes and messages. Multiple validated bindings can share one consumer's lifecycle,
 so new coverage scopes or provider revisions do not reset the admission fence or history.
 
 ```csharp
@@ -579,10 +581,10 @@ var request = new IntegrationAdmissionRequest(
 var admitted = control.Admit(request);
 switch (admitted.Outcome)
 {
-    case IntegrationLifecycleOutcome.RevisionConflict:
+    case IntegrationAdmissionOutcome.RevisionConflict:
         // Inspect current control revision and reconcile intent before retrying.
         return;
-    case IntegrationLifecycleOutcome.AdmissionStopped:
+    case IntegrationAdmissionOutcome.AdmissionStopped:
         // A fresh revision alone is insufficient; await an authorized resume.
         return;
 }
@@ -593,7 +595,9 @@ var admission = admitted.Receipt;
 var completed = control.Complete(new(admission, decision, authorization));
 ```
 
-All lifecycle methods take one request and return `IntegrationLifecycleResult<TReceipt>`. Applied and
+All lifecycle methods take one request and return `IntegrationLifecycleResult<TOutcome, TReceipt>`.
+Change, Admit and Complete use `IntegrationChangeOutcome`, `IntegrationAdmissionOutcome` and
+`IntegrationCompletionOutcome` respectively; each enum contains only that operation's reachable cases. Applied and
 replay outcomes carry a non-null `Receipt`; rejection has a typed outcome. Accessing Receipt on rejection
 throws rather than returning null. Change receipts contain only original command and resulting revision;
 call `Inspect()` separately for a current pending-work snapshot. Exact command retries return their

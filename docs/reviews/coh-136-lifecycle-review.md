@@ -47,8 +47,30 @@ hash-table resizing. Immutable compilation validation remains explicit work at B
 
 ## Verification and limits
 
-254 selected integration/contract tests and 40 integration examples pass. Tests cover typed stopped
+257 selected integration/contract tests and 40 integration examples pass. Tests cover typed stopped
 versus stale rejection, exact/conflicting replay, foreign binding tokens, concurrent pause/admission,
 actual Process draining, completed-history admission replay and changed-recorder completion replay.
 Failed/unresolved Processes intentionally remain pending. Physical durability, distributed fencing,
 retention cleanup, health projection and explicit failure resolution remain outside this slice.
+
+
+## Repeatable allocation regression coverage
+
+`IntegrationLifecycleTests.AdmissionReplayHasBoundedAllocationIndependentOfPendingWork` now locks in
+an allocation budget: 1,024 warm-up replays followed by 4,096 measured replays, using a prebuilt binding
+and request. It runs with zero and 1,000 other pending sessions and checks the original receipt identity
+and replay disposition. `GC.GetAllocatedBytesForCurrentThread` must stay at or below 256 B/call, leaving
+runtime/object-layout headroom while rejecting compilation or snapshot work on the replay path.
+There is deliberately no wall-clock assertion; the one-off timings above remain illustrative only.
+
+```sh
+dotnet test src/Cohesive.Tests/Cohesive.Tests.csproj -c Release \
+  --filter FullyQualifiedName~AdmissionReplayHasBoundedAllocationIndependentOfPendingWork -m:1
+```
+
+The outcome vocabulary is now operation-specific: IntegrationChangeOutcome, IntegrationAdmissionOutcome
+and IntegrationCompletionOutcome. The shared generic receipt carrier retains one implementation of
+acceptance/receipt behavior without making a Change caller handle completion-only cases. Bind throws
+IntegrationBindingException with the complete reported DocumentValidationResult; later validation stages
+are still conditional on earlier prerequisites. Retained history remains unbounded for the controller's
+lifetime, with cleanup explicitly deferred rather than silently discarding replay evidence.

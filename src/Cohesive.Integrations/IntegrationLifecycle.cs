@@ -67,42 +67,69 @@ public sealed record IntegrationLifecycleSnapshot(IngestionLedgerAddress Consume
 public sealed record IntegrationCompletion(IntegrationAdmission Admission, ProcessActivationDecision Decision,
     ProcessControlAuthorizationContext Authorization);
 
-/// <summary>Typed lifecycle disposition; hosts never need to parse diagnostic strings.</summary>
-public enum IntegrationLifecycleOutcome
+/// <summary>Possible dispositions of a desired-state change.</summary>
+public enum IntegrationChangeOutcome
 {
-    /// <summary>New intent was accepted.</summary>
+    /// <summary>New desired state was accepted.</summary>
     Applied,
-    /// <summary>The original receipt was returned without another mutation.</summary>
+    /// <summary>The original change receipt was returned without mutation.</summary>
     Replayed,
-    /// <summary>Completion already existed; the returned receipt retains its original authorization.</summary>
-    ReplayedWithOriginalRecorder,
-    /// <summary>Host authorization denied the operation.</summary>
+    /// <summary>Host authorization denied the change.</summary>
     Unauthorized,
     /// <summary>Inspect current revision and reconcile intent before retrying.</summary>
     RevisionConflict,
-    /// <summary>A stable identity was reused with changed intent.</summary>
+    /// <summary>The command identity was reused with changed intent.</summary>
+    IdentityConflict,
+    /// <summary>The lifecycle revision cannot advance further.</summary>
+    RevisionExhausted
+}
+
+/// <summary>Possible dispositions of session admission.</summary>
+public enum IntegrationAdmissionOutcome
+{
+    /// <summary>A new session was admitted.</summary>
+    Applied,
+    /// <summary>The original admission receipt was returned without another admission.</summary>
+    Replayed,
+    /// <summary>Host authorization denied admission.</summary>
+    Unauthorized,
+    /// <summary>Inspect current revision and reconcile intent before retrying.</summary>
+    RevisionConflict,
+    /// <summary>The session identity was reused with changed intent.</summary>
     IdentityConflict,
     /// <summary>New sessions are stopped; a fresh revision alone will not permit admission.</summary>
     AdmissionStopped,
     /// <summary>The bound token belongs to a different controller.</summary>
-    BindingMismatch,
+    BindingMismatch
+}
+
+/// <summary>Possible dispositions of recording Process completion.</summary>
+public enum IntegrationCompletionOutcome
+{
+    /// <summary>Successful completion was recorded.</summary>
+    Applied,
+    /// <summary>The original completion receipt was returned without mutation.</summary>
+    Replayed,
+    /// <summary>Completion already existed; the receipt retains a different original recorder.</summary>
+    ReplayedWithOriginalRecorder,
+    /// <summary>Host authorization denied completion recording.</summary>
+    Unauthorized,
     /// <summary>Completion does not match an admitted session.</summary>
     CompletionMismatch,
     /// <summary>The Process has not confirmed successful completion.</summary>
-    Unresolved,
-    /// <summary>The revision cannot advance further.</summary>
-    RevisionExhausted
+    Unresolved
 }
 
 /// <summary>Typed operation result with a receipt only for accepted outcomes.</summary>
+/// <typeparam name="TOutcome">Operation-specific disposition enum.</typeparam>
 /// <typeparam name="TReceipt">Original immutable receipt returned on acceptance or replay.</typeparam>
-public sealed class IntegrationLifecycleResult<TReceipt> where TReceipt : class
+public sealed class IntegrationLifecycleResult<TOutcome, TReceipt> where TOutcome : struct, Enum where TReceipt : class
 {
     readonly TReceipt? receipt;
-    internal IntegrationLifecycleResult(IntegrationLifecycleOutcome outcome, TReceipt? receipt = null)
+    internal IntegrationLifecycleResult(TOutcome outcome, TReceipt? receipt = null)
     { Outcome = outcome; this.receipt = receipt; }
     /// <summary>Machine-readable disposition.</summary>
-    public IntegrationLifecycleOutcome Outcome { get; }
+    public TOutcome Outcome { get; }
     /// <summary>Whether this result carries an accepted original receipt.</summary>
     public bool IsAccepted => receipt is not null;
     /// <summary>Accepted original receipt; check IsAccepted or Outcome before accessing it.</summary>

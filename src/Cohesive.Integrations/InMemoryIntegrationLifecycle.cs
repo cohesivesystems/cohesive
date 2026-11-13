@@ -54,12 +54,12 @@ public sealed class InMemoryIntegrationLifecycle
     /// <param name="compilation">Exact closure for this consumer; qualification and dispatch policy remain independent.</param>
     /// <returns>A controller-owned token reusable across admissions, retries and stopped-state checks.</returns>
     /// <exception cref="ArgumentNullException">Compilation is null.</exception>
-    /// <exception cref="ArgumentException">The compilation, consumer or lowered Process is invalid.</exception>
+    /// <exception cref="IntegrationBindingException">The compilation, consumer or lowered Process is invalid; Validation retains every reported diagnostic.</exception>
     public IntegrationAdmissionBinding Bind(IntegrationCompilation compilation)
     {
         ArgumentNullException.ThrowIfNull(compilation);
         var validation = ValidateCompilation(compilation);
-        if (!validation.IsValid) throw new ArgumentException(validation.Diagnostics[0].Message, nameof(compilation));
+        if (!validation.IsValid) throw new IntegrationBindingException(validation);
         return new(this, compilation.Binding!.Reference, compilation.Process!.Reference);
     }
 
@@ -68,22 +68,22 @@ public sealed class InMemoryIntegrationLifecycle
     /// <returns>A typed disposition and original compact receipt on acceptance; never constructs a pending snapshot.</returns>
     /// <exception cref="ArgumentNullException">Request or authorization is null.</exception>
     /// <exception cref="ArgumentException">Identity, desired state, revision or UTC timestamp is invalid.</exception>
-    public IntegrationLifecycleResult<IntegrationLifecycleChangeReceipt> Change(IntegrationLifecycleChange request)
+    public IntegrationLifecycleResult<IntegrationChangeOutcome, IntegrationLifecycleChangeReceipt> Change(IntegrationLifecycleChange request)
     {
         ArgumentNullException.ThrowIfNull(request); ArgumentException.ThrowIfNullOrWhiteSpace(request.Id);
         Validate(request.Authorization, request.AtUtc);
         if (request.ExpectedRevision < 0 || !Enum.IsDefined(request.Desired)) throw new ArgumentException("Invalid lifecycle command.");
-        if (!authorize(IntegrationLifecycleAction.Change, request.Authorization)) return new(IntegrationLifecycleOutcome.Unauthorized);
+        if (!authorize(IntegrationLifecycleAction.Change, request.Authorization)) return new(IntegrationChangeOutcome.Unauthorized);
         lock (sync)
         {
             if (changes.TryGetValue(request.Id, out var prior))
-                return prior.Command == request ? new(IntegrationLifecycleOutcome.Replayed, prior) : new(IntegrationLifecycleOutcome.IdentityConflict);
-            if (request.ExpectedRevision != revision) return new(IntegrationLifecycleOutcome.RevisionConflict);
-            if (revision == long.MaxValue) return new(IntegrationLifecycleOutcome.RevisionExhausted);
+                return prior.Command == request ? new(IntegrationChangeOutcome.Replayed, prior) : new(IntegrationChangeOutcome.IdentityConflict);
+            if (request.ExpectedRevision != revision) return new(IntegrationChangeOutcome.RevisionConflict);
+            if (revision == long.MaxValue) return new(IntegrationChangeOutcome.RevisionExhausted);
             desired = request.Desired; revision++; lastChange = request;
             var receipt = new IntegrationLifecycleChangeReceipt(request, revision);
             changes.Add(request.Id, receipt);
-            return new(IntegrationLifecycleOutcome.Applied, receipt);
+            return new(IntegrationChangeOutcome.Applied, receipt);
         }
     }
 
@@ -94,13 +94,13 @@ public sealed class InMemoryIntegrationLifecycle
     /// <returns>Typed disposition with the original receipt on acceptance or replay.</returns>
     /// <exception cref="ArgumentNullException">A required request field is null.</exception>
     /// <exception cref="ArgumentException">Revision or UTC timestamp is invalid.</exception>
-    public IntegrationLifecycleResult<IntegrationAdmission> Admit(IntegrationAdmissionRequest request)
+    public IntegrationLifecycleResult<IntegrationAdmissionOutcome, IntegrationAdmission> Admit(IntegrationAdmissionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Binding); ArgumentNullException.ThrowIfNull(request.Continuation);
         Validate(request.Authorization, request.AtUtc);
         if (request.ExpectedRevision < 0) throw new ArgumentException("Revision cannot be negative.", nameof(request));
-        if (!authorize(IntegrationLifecycleAction.Admit, request.Authorization)) return new(IntegrationLifecycleOutcome.Unauthorized);
-        if (!ReferenceEquals(request.Binding.Owner, this)) return new(IntegrationLifecycleOutcome.BindingMismatch);
+        if (!authorize(IntegrationLifecycleAction.Admit, request.Authorization)) return new(IntegrationAdmissionOutcome.Unauthorized);
+        if (!ReferenceEquals(request.Binding.Owner, this)) return new(IntegrationAdmissionOutcome.BindingMismatch);
         lock (sync)
         {
             var prior = pending.GetValueOrDefault(request.Continuation) ?? completed.GetValueOrDefault(request.Continuation)?.Admission;
@@ -108,14 +108,14 @@ public sealed class InMemoryIntegrationLifecycle
             {
                 var matches = prior.Binding == request.Binding.Binding && prior.Process == request.Binding.Process
                     && prior.LifecycleRevision == request.ExpectedRevision && prior.Authorization == request.Authorization && prior.AtUtc == request.AtUtc;
-                return matches ? new(IntegrationLifecycleOutcome.Replayed, prior) : new(IntegrationLifecycleOutcome.IdentityConflict);
+                return matches ? new(IntegrationAdmissionOutcome.Replayed, prior) : new(IntegrationAdmissionOutcome.IdentityConflict);
             }
-            if (revision != request.ExpectedRevision) return new(IntegrationLifecycleOutcome.RevisionConflict);
-            if (desired != IntegrationDesiredState.Active) return new(IntegrationLifecycleOutcome.AdmissionStopped);
+            if (revision != request.ExpectedRevision) return new(IntegrationAdmissionOutcome.RevisionConflict);
+            if (desired != IntegrationDesiredState.Active) return new(IntegrationAdmissionOutcome.AdmissionStopped);
             var receipt = new IntegrationAdmission(consumer, request.Continuation, request.Binding.Binding, request.Binding.Process,
                 request.ExpectedRevision, request.Authorization, request.AtUtc);
             pending.Add(request.Continuation, receipt);
-            return new(IntegrationLifecycleOutcome.Applied, receipt);
+            return new(IntegrationAdmissionOutcome.Applied, receipt);
         }
     }
 
@@ -125,31 +125,32 @@ public sealed class InMemoryIntegrationLifecycle
     /// <param name="request">Exact admission, trusted completion evidence and authenticated recorder.</param>
     /// <returns>A typed disposition and original completion receipt on acceptance or replay.</returns>
     /// <exception cref="ArgumentNullException">A required request field is null.</exception>
-    public IntegrationLifecycleResult<IntegrationCompletion> Complete(IntegrationCompletionRequest request)
+    public IntegrationLifecycleResult<IntegrationCompletionOutcome, IntegrationCompletion> Complete(IntegrationCompletionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Admission);
         ArgumentNullException.ThrowIfNull(request.Decision); ArgumentNullException.ThrowIfNull(request.Authorization);
-        if (!authorize(IntegrationLifecycleAction.Complete, request.Authorization)) return new(IntegrationLifecycleOutcome.Unauthorized);
+        if (!authorize(IntegrationLifecycleAction.Complete, request.Authorization)) return new(IntegrationCompletionOutcome.Unauthorized);
         var admission = request.Admission;
         var decision = request.Decision;
         lock (sync)
         {
             var prior = pending.GetValueOrDefault(admission.Continuation) ?? completed.GetValueOrDefault(admission.Continuation)?.Admission;
             if (prior != admission || decision.State.Definition != admission.Process || decision.State.Continuation != admission.Continuation)
-                return new(IntegrationLifecycleOutcome.CompletionMismatch);
-            if (decision.Disposition != ProcessActivationDisposition.Completed) return new(IntegrationLifecycleOutcome.Unresolved);
+                return new(IntegrationCompletionOutcome.CompletionMismatch);
+            if (decision.Disposition != ProcessActivationDisposition.Completed) return new(IntegrationCompletionOutcome.Unresolved);
             if (completed.TryGetValue(admission.Continuation, out var original))
-                return new(original.Authorization == request.Authorization ? IntegrationLifecycleOutcome.Replayed
-                    : IntegrationLifecycleOutcome.ReplayedWithOriginalRecorder, original);
+                return new(original.Authorization == request.Authorization ? IntegrationCompletionOutcome.Replayed
+                    : IntegrationCompletionOutcome.ReplayedWithOriginalRecorder, original);
             var receipt = new IntegrationCompletion(admission, decision, request.Authorization);
             completed.Add(admission.Continuation, receipt);
             pending.Remove(admission.Continuation);
-            return new(IntegrationLifecycleOutcome.Applied, receipt);
+            return new(IntegrationCompletionOutcome.Applied, receipt);
         }
     }
 
     DocumentValidationResult ValidateCompilation(IntegrationCompilation compilation)
     {
+        if (!compilation.Validation.IsValid) return compilation.Validation;
         if (!compilation.IsSuccessful) return Error("binding", "A successful integration compilation is required.");
         var validation = ExecutionDefinitionDocumentCatalog.TryCreate(compilation.Documents, out var catalog);
         if (!validation.IsValid) return validation;

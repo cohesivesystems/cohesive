@@ -36,11 +36,11 @@ public sealed partial class HistoricalQualificationExamples
                 var stopped = control.Inspect();
                 Assert.True(stopped.Draining);
                 Assert.False(stopped.Accepting);
-                Assert.Equal(IntegrationLifecycleOutcome.AdmissionStopped, control.Admit(admissionRequest with
+                Assert.Equal(IntegrationAdmissionOutcome.AdmissionStopped, control.Admit(admissionRequest with
                     { Continuation = new(new("new-session"), new("attempt/1")), ExpectedRevision = stop.Revision }).Outcome);
                 // Retrieving an existing admission is not a new admission or permission to repeat a source call.
                 var replay = control.Admit(admissionRequest);
-                Assert.Equal(IntegrationLifecycleOutcome.Replayed, replay.Outcome);
+                Assert.Equal(IntegrationAdmissionOutcome.Replayed, replay.Outcome);
                 Assert.Same(admitted, replay.Receipt);
                 Assert.False(control.Complete(new(admitted, decision, Operator)).IsAccepted);
                 worker = new ProcessFixture(original, "policy");
@@ -85,13 +85,13 @@ public sealed partial class HistoricalQualificationExamples
             while (decision.Disposition == ProcessActivationDisposition.DurableCut)
                 decision = fixture.Reply(decision, await fixture.Handle(Assert.IsType<RequestEnvelope>(Assert.Single(decision.Emissions))));
             var completed = control.Complete(new(admitted, decision, Operator));
-            Assert.Equal(IntegrationLifecycleOutcome.Applied, completed.Outcome);
+            Assert.Equal(IntegrationCompletionOutcome.Applied, completed.Outcome);
             var otherRecorder = new ProcessControlAuthorizationContext("second-operator", Operator.AuthorityScope, "authorization/2");
             var replay = control.Complete(new(admitted, decision, otherRecorder));
-            Assert.Equal(IntegrationLifecycleOutcome.ReplayedWithOriginalRecorder, replay.Outcome);
+            Assert.Equal(IntegrationCompletionOutcome.ReplayedWithOriginalRecorder, replay.Outcome);
             Assert.Same(completed.Receipt, replay.Receipt);
             Assert.Equal(Operator, replay.Receipt.Authorization);
-            Assert.Equal(IntegrationLifecycleOutcome.Replayed, control.Complete(new(admitted, decision, Operator)).Outcome);
+            Assert.Equal(IntegrationCompletionOutcome.Replayed, control.Complete(new(admitted, decision, Operator)).Outcome);
             Assert.Same(admitted, control.Admit(request).Receipt);
             Assert.Equal(survivor, Assert.Single(control.Inspect().Pending));
         }

@@ -1,5 +1,7 @@
 using Cohesive.Execution;
 using Cohesive.Integrations;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.Integrations;
 
@@ -19,20 +21,20 @@ public sealed partial class IntegrationModelTests
         var control = Lifecycle();
         var binding = control.Bind(Candidate());
         var stopped = control.Admit(Admission(binding, revision: 0));
-        Assert.Equal(IntegrationLifecycleOutcome.AdmissionStopped, stopped.Outcome);
+        Assert.Equal(IntegrationAdmissionOutcome.AdmissionStopped, stopped.Outcome);
         Assert.False(stopped.IsAccepted);
         Assert.Throws<InvalidOperationException>(() => stopped.Receipt);
         var activate = Change("activate", 0, IntegrationDesiredState.Active);
-        Assert.Equal(IntegrationLifecycleOutcome.Unauthorized, control.Change(activate with
+        Assert.Equal(IntegrationChangeOutcome.Unauthorized, control.Change(activate with
             { Authorization = new("intruder", new("test", "tenant"), "forged") }).Outcome);
         Assert.Equal(0, control.Inspect().Revision);
         var active = control.Change(activate).Receipt;
         Assert.True(control.Change(Change("pause", 1, IntegrationDesiredState.Paused)).IsAccepted);
         var paused = control.Inspect();
-        Assert.Equal(IntegrationLifecycleOutcome.RevisionConflict, control.Change(Change("stale-resume", 1, IntegrationDesiredState.Active)).Outcome);
-        Assert.Equal(IntegrationLifecycleOutcome.IdentityConflict, control.Change(activate with { Desired = IntegrationDesiredState.Paused }).Outcome);
+        Assert.Equal(IntegrationChangeOutcome.RevisionConflict, control.Change(Change("stale-resume", 1, IntegrationDesiredState.Active)).Outcome);
+        Assert.Equal(IntegrationChangeOutcome.IdentityConflict, control.Change(activate with { Desired = IntegrationDesiredState.Paused }).Outcome);
         var replay = control.Change(activate);
-        Assert.Equal(IntegrationLifecycleOutcome.Replayed, replay.Outcome);
+        Assert.Equal(IntegrationChangeOutcome.Replayed, replay.Outcome);
         Assert.Same(active, replay.Receipt);
         Assert.Equal(paused, control.Inspect());
         var resumed = control.Change(Change("resume", 2, IntegrationDesiredState.Active)).Receipt;
@@ -50,10 +52,10 @@ public sealed partial class IntegrationModelTests
         Assert.True(control.Change(Change("pause", 1, IntegrationDesiredState.Paused)).IsAccepted);
         Assert.True(control.Inspect().Draining);
         var replay = control.Admit(request);
-        Assert.Equal(IntegrationLifecycleOutcome.Replayed, replay.Outcome);
+        Assert.Equal(IntegrationAdmissionOutcome.Replayed, replay.Outcome);
         Assert.Same(admitted, replay.Receipt);
-        Assert.Equal(IntegrationLifecycleOutcome.IdentityConflict, control.Admit(request with { Binding = control.Bind(Candidate("v2")) }).Outcome);
-        Assert.Equal(IntegrationLifecycleOutcome.AdmissionStopped, control.Admit(request with
+        Assert.Equal(IntegrationAdmissionOutcome.IdentityConflict, control.Admit(request with { Binding = control.Bind(Candidate("v2")) }).Outcome);
+        Assert.Equal(IntegrationAdmissionOutcome.AdmissionStopped, control.Admit(request with
             { Continuation = new(new("session/2"), new("attempt/1")), ExpectedRevision = 2 }).Outcome);
         Assert.Single(control.Inspect().Pending);
     }
@@ -74,7 +76,7 @@ public sealed partial class IntegrationModelTests
         Assert.Equal(IntegrationDesiredState.Paused, state.Desired);
         Assert.Equal(admitted.IsAccepted ? 1 : 0, state.Pending.Length);
         Assert.Equal(admitted.IsAccepted, state.Draining);
-        Assert.Equal(IntegrationLifecycleOutcome.AdmissionStopped, control.Admit(request with
+        Assert.Equal(IntegrationAdmissionOutcome.AdmissionStopped, control.Admit(request with
             { Continuation = new(new("after-pause"), new("attempt/1")), ExpectedRevision = state.Revision }).Outcome);
     }
 
@@ -83,11 +85,11 @@ public sealed partial class IntegrationModelTests
     {
         var control = Lifecycle();
         var candidate = Candidate();
-        Assert.Throws<ArgumentException>(() => control.Bind(candidate with { Process = candidate.Binding }));
+        Assert.Throws<IntegrationBindingException>(() => control.Bind(candidate with { Process = candidate.Binding }));
         var other = new InMemoryIntegrationLifecycle(new("other", "source", "sink", "partition"), (_, _) => true);
-        Assert.Throws<ArgumentException>(() => other.Bind(candidate));
+        Assert.Throws<IntegrationBindingException>(() => other.Bind(candidate));
         var sameConsumer = Lifecycle();
-        Assert.Equal(IntegrationLifecycleOutcome.BindingMismatch, sameConsumer.Admit(Admission(control.Bind(candidate))).Outcome);
+        Assert.Equal(IntegrationAdmissionOutcome.BindingMismatch, sameConsumer.Admit(Admission(control.Bind(candidate))).Outcome);
         Assert.Empty(control.Inspect().Pending);
     }
 
@@ -104,4 +106,47 @@ public sealed partial class IntegrationModelTests
         Assert.Same(start, control.Change(Change("start", 0, IntegrationDesiredState.Active)).Receipt);
         Assert.Equal(200, control.Inspect().Pending.Length);
     }
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1_000)]
+    public void AdmissionReplayHasBoundedAllocationIndependentOfPendingWork(int pendingSessions)
+    {
+        var control = Lifecycle();
+        var binding = control.Bind(Candidate());
+        control.Change(Change("start", 0, IntegrationDesiredState.Active));
+        var request = Admission(binding);
+        var original = control.Admit(request).Receipt;
+        for (var i = 0; i < pendingSessions; i++)
+            control.Admit(request with { Continuation = new(new("pending/" + i), new("attempt/1")) });
+
+        // Warm the exact path before measuring; fixture creation and binding are deliberately excluded.
+        for (var i = 0; i < 1_024; i++) control.Admit(request);
+        const int repetitions = 4_096;
+        var incorrect = 0;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < repetitions; i++)
+        {
+            var result = control.Admit(request);
+            if (result.Outcome != IntegrationAdmissionOutcome.Replayed || !ReferenceEquals(original, result.Receipt)) incorrect++;
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(0, incorrect);
+        // Allows substantial object-layout/runtime headroom over one result allocation. Revalidation or
+        // a pending snapshot would exceed this budget by orders of magnitude. No wall-clock assertion.
+        Assert.True(allocated <= repetitions * 256L, $"Replay allocated {allocated / repetitions} B/call; budget is 256 B/call.");
+    }
+
+    [Fact]
+    public void BindPreservesEveryReportedDiagnostic()
+    {
+        var first = new DocumentValidationDiagnostic("fixture.first", DiagnosticSeverity.Error, "First problem.");
+        var second = new DocumentValidationDiagnostic("fixture.second", DiagnosticSeverity.Error, "Second problem.");
+        var validation = new DocumentValidationResult([first, second]);
+        var exception = Assert.Throws<IntegrationBindingException>(() => Lifecycle().Bind(Candidate() with { Validation = validation }));
+        Assert.Same(validation, exception.Validation);
+        Assert.Equal(new[] { first, second }, exception.Validation.Diagnostics);
+        Assert.Contains(first.Code, exception.Message);
+        Assert.Contains(second.Code, exception.Message);
+    }
+
 }
