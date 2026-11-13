@@ -17,19 +17,6 @@ public enum ClaimVerdict
     Inconclusive
 }
 
-/// <summary>Outcome of the interpretation attempt, separate from its semantic verdict.</summary>
-public enum TraceEvaluationStatus
-{
-    /// <summary>The supported batch was evaluated; its semantic verdict may still be inconclusive.</summary>
-    Completed,
-    /// <summary>The supplied observations or mappings are contradictory or malformed.</summary>
-    InvalidObservations,
-    /// <summary>The required interpretation or arithmetic cannot be evaluated.</summary>
-    Unsupported,
-    /// <summary>An explicit evaluation bound prevented complete evaluation.</summary>
-    BudgetExceeded
-}
-
 /// <summary>Reference evaluator limits; exhaustion never produces a definitive aggregate verdict.</summary>
 /// <param name="MaxAlternatives">Maximum joint alternatives evaluated.</param>
 /// <param name="MaxObservations">Maximum total observation/frontier records accepted, including duplicate deliveries.</param>
@@ -74,7 +61,7 @@ public sealed record TraceAlternativeResult(ClaimReference Alternative, ClaimVer
 /// <param name="Alternatives">Per-alternative witnesses, coverage and obligation outcomes.</param>
 /// <param name="Diagnostics">Missing evidence, unsupported semantics or invalid observation details.</param>
 public sealed record TraceEvaluation(ClaimDocument Claim, TraceObservationBatch Batch, TraceEvaluationLimits Limits,
-    TraceEvaluationStatus Status, ClaimVerdict Verdict, ImmutableArray<TraceAlternativeResult> Alternatives,
+    AssuranceAttemptStatus Status, ClaimVerdict Verdict, ImmutableArray<TraceAlternativeResult> Alternatives,
     ImmutableArray<TraceEvaluationDiagnostic> Diagnostics)
 {
     static readonly JsonSerializerOptions Options = CreateOptions();
@@ -87,7 +74,10 @@ public sealed record TraceEvaluation(ClaimDocument Claim, TraceObservationBatch 
     }
 
     /// <summary>Versioned reference evaluation method; not a proof-system identity.</summary>
-    public string Method => "cohesive.assurance.batch/v2";
+    public const string MethodId = "cohesive.assurance.batch/v2";
+
+    /// <summary>Versioned method identity retained in each evaluation.</summary>
+    public string Method => MethodId;
 
     /// <summary>Serializes the complete retained evaluation into canonical JSON.</summary>
     /// <returns>Portable result and input evidence, suitable for independent re-evaluation.</returns>

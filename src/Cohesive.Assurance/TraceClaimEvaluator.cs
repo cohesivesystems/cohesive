@@ -39,7 +39,7 @@ public static class TraceClaimEvaluator
         readonly List<TraceEvaluationDiagnostic> diagnostics = [];
         readonly List<TraceAlternativeResult> results = [];
         readonly PortableExpressionReferenceEvaluator expressions = new(AssurancePredicates.Capabilities, "Assurance reference evaluator");
-        TraceEvaluationStatus status = TraceEvaluationStatus.Completed;
+        AssuranceAttemptStatus status = AssuranceAttemptStatus.Completed;
         long predicateEvaluations;
         long candidateVisits;
         readonly Dictionary<ValueBindingId, int> inputIndices = document.Definition.Inputs
@@ -57,11 +57,11 @@ public static class TraceClaimEvaluator
             {
                 cancellation.ThrowIfCancellationRequested();
                 var observations = ValidateAlternative(alternative, out var duplicates);
-                if (status == TraceEvaluationStatus.InvalidObservations) return Finish(ClaimVerdict.Inconclusive);
+                if (status == AssuranceAttemptStatus.InvalidObservations) return Finish(ClaimVerdict.Inconclusive);
                 results.Add(EvaluateAlternative(alternative, observations, duplicates));
-                if (status == TraceEvaluationStatus.BudgetExceeded) return Finish(ClaimVerdict.Inconclusive);
+                if (status == AssuranceAttemptStatus.BudgetExceeded) return Finish(ClaimVerdict.Inconclusive);
             }
-            if (status != TraceEvaluationStatus.Completed) return Finish(ClaimVerdict.Inconclusive);
+            if (status != AssuranceAttemptStatus.Completed) return Finish(ClaimVerdict.Inconclusive);
             if (batch.Enumeration != EnumerationCompleteness.Complete)
             {
                 Gap(TraceEvaluationCodes.EnumerationIncomplete, "/alternatives", "Additional compatible joint assignments or trace mappings may exist.");
@@ -99,7 +99,7 @@ public static class TraceClaimEvaluator
             if (!declaredRequirements.Any(x => x.Selector == claim.Selection)
                 || claim.Witness is not null && !declaredRequirements.Any(x => x.Selector == claim.Witness))
             {
-                status = TraceEvaluationStatus.Unsupported;
+                status = AssuranceAttemptStatus.Unsupported;
                 Gap(TraceEvaluationCodes.MappingUnsupported, "/contract/requirements", "The contract does not map every exact selector needed by this claim.");
                 return false;
             }
@@ -218,7 +218,7 @@ public static class TraceClaimEvaluator
                         ? Obligation(observation, Predicate(observation, null), TraceEvaluationCodes.Predicate)
                         : Match(alternative, observation, candidates);
                 obligations.Add(result);
-                if (status == TraceEvaluationStatus.BudgetExceeded) break;
+                if (status == AssuranceAttemptStatus.BudgetExceeded) break;
             }
             var closed = Covers(claim.Selection, frontier => frontier.Closure == ObservationClosure.Closed);
             var verdict = obligations.Any(x => x.Verdict == ClaimVerdict.Violated) ? ClaimVerdict.Violated
@@ -245,7 +245,7 @@ public static class TraceClaimEvaluator
                 try { deadline = checked(trigger.Ticks + claim.DeadlineTicks!.Value); }
                 catch (OverflowException)
                 {
-                    status = TraceEvaluationStatus.Unsupported;
+                    status = AssuranceAttemptStatus.Unsupported;
                     Gap(TraceEvaluationCodes.DeadlineOverflow, trigger.Occurrence, "The inclusive deadline exceeds the supported clock domain.");
                     return Obligation(trigger, ClaimVerdict.Inconclusive, TraceEvaluationCodes.DeadlineOverflow);
                 }
@@ -271,7 +271,7 @@ public static class TraceClaimEvaluator
                     return new(trigger.Occurrence, trigger.Partition, trigger.Step, verdict,
                         candidate.Occurrence, candidate.Partition, TraceEvaluationCodes.WitnessMatched);
                 unknown |= verdict == ClaimVerdict.Inconclusive;
-                if (status == TraceEvaluationStatus.BudgetExceeded) break;
+                if (status == AssuranceAttemptStatus.BudgetExceeded) break;
             }
             var complete = claim.Form == ClaimForm.HistoricalRequirement
                 ? Covers(claim.Witness!, frontier => frontier.ThroughStep >= Math.Max(0, trigger.Step - 1))
@@ -349,7 +349,7 @@ public static class TraceClaimEvaluator
             catch (PortableExpressionEvaluationException error)
             {
                 if (error.Error != PortableExpressionEvaluationError.RuntimeInputUnavailable)
-                    status = TraceEvaluationStatus.Unsupported;
+                    status = AssuranceAttemptStatus.Unsupported;
                 Gap(TraceEvaluationCodes.Expression(error.Error), trigger.Occurrence + "/predicate", error.Message);
                 return ClaimVerdict.Inconclusive;
             }
@@ -358,13 +358,13 @@ public static class TraceClaimEvaluator
         void Gap(string code, string location, string message) => diagnostics.Add(new(code, location, message));
         bool Invalid(string location, string message)
         {
-            status = TraceEvaluationStatus.InvalidObservations;
+            status = AssuranceAttemptStatus.InvalidObservations;
             Gap(TraceEvaluationCodes.InvalidObservation, location, message);
             return false;
         }
         bool Exhausted(string location, string message)
         {
-            status = TraceEvaluationStatus.BudgetExceeded;
+            status = AssuranceAttemptStatus.BudgetExceeded;
             Gap(TraceEvaluationCodes.BudgetExceeded, location, message);
             return false;
         }

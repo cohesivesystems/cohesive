@@ -200,8 +200,8 @@ public class TraceClaimEvaluatorTests
     {
         var original = Stock("same", 1, 1);
         var conflicting = Stock("same", 1, 12);
-        Assert.Equal(TraceEvaluationStatus.InvalidObservations, Evaluate(Invariant(), Batch([original, conflicting])).Status);
-        Assert.Equal(TraceEvaluationStatus.InvalidObservations, Evaluate(Invariant(), Batch([Stock("later", 2, 1), original])).Status);
+        Assert.Equal(AssuranceAttemptStatus.InvalidObservations, Evaluate(Invariant(), Batch([original, conflicting])).Status);
+        Assert.Equal(AssuranceAttemptStatus.InvalidObservations, Evaluate(Invariant(), Batch([Stock("later", 2, 1), original])).Status);
     }
 
     [Fact]
@@ -272,7 +272,7 @@ public class TraceClaimEvaluatorTests
     public void EmptyAlternativeDomainIsADiagnosticNotProof()
     {
         var result = Evaluate(Invariant(), Batch([]) with { Alternatives = [] });
-        Assert.Equal(TraceEvaluationStatus.InvalidObservations, result.Status);
+        Assert.Equal(AssuranceAttemptStatus.InvalidObservations, result.Status);
         Assert.Equal(ClaimVerdict.Inconclusive, result.Verdict);
     }
 
@@ -281,13 +281,13 @@ public class TraceClaimEvaluatorTests
     {
         var batch = Batch([]);
         batch = batch with { Contract = batch.Contract with { Reference = R("contract", "2") } };
-        Assert.Equal(TraceEvaluationStatus.InvalidObservations, Evaluate(Invariant(), batch).Status);
+        Assert.Equal(AssuranceAttemptStatus.InvalidObservations, Evaluate(Invariant(), batch).Status);
     }
 
     [Fact]
     public void MissingSelectorMappingIsUnsupported()
     {
-        Assert.Equal(TraceEvaluationStatus.Unsupported, Evaluate(Events(), Batch([])).Status);
+        Assert.Equal(AssuranceAttemptStatus.Unsupported, Evaluate(Events(), Batch([])).Status);
     }
 
     [Fact]
@@ -295,11 +295,11 @@ public class TraceClaimEvaluatorTests
     {
         var result = Evaluate(Invariant(), Batch([Stock("one", 1, 1), Stock("two", 2, 12)], [Frontier(Selection, ObservationClosure.Closed)]),
             new(MaxPredicateEvaluations: 1));
-        Assert.Equal(TraceEvaluationStatus.BudgetExceeded, result.Status);
+        Assert.Equal(AssuranceAttemptStatus.BudgetExceeded, result.Status);
         Assert.Equal(ClaimVerdict.Inconclusive, result.Verdict);
         Assert.Equal(2, result.Alternatives[0].Obligations.Length);
         var alternatives = Evaluate(Invariant(), FlagAlternatives(), new(MaxAlternatives: 1));
-        Assert.Equal(TraceEvaluationStatus.BudgetExceeded, alternatives.Status);
+        Assert.Equal(AssuranceAttemptStatus.BudgetExceeded, alternatives.Status);
     }
 
     [Fact]
@@ -307,7 +307,7 @@ public class TraceClaimEvaluatorTests
     {
         var result = Evaluate(Events(), Batch([Event("early1", 0, 0, witness: true), Event("early2", 1, 1, witness: true), Event("cancel", 2, 2)],
             includeWitness: true), new(MaxEventCandidateVisits: 1));
-        Assert.Equal(TraceEvaluationStatus.Completed, result.Status);
+        Assert.Equal(AssuranceAttemptStatus.Completed, result.Status);
         Assert.Equal(ClaimVerdict.Inconclusive, result.Verdict);
     }
 
@@ -324,7 +324,7 @@ public class TraceClaimEvaluatorTests
             [Frontier(Selection, ObservationClosure.Closed, count * 20, count * 2),
              Frontier(Witness, ObservationClosure.Closed, count * 20, count * 2)], includeWitness: true),
             new(MaxEventCandidateVisits: count));
-        Assert.Equal(TraceEvaluationStatus.Completed, result.Status);
+        Assert.Equal(AssuranceAttemptStatus.Completed, result.Status);
         Assert.Equal(ClaimVerdict.Satisfied, result.Verdict);
         Assert.Equal(count, result.Alternatives[0].Obligations.Length);
     }
@@ -336,7 +336,7 @@ public class TraceClaimEvaluatorTests
             Event("wrong1", 1, 1, witness: true, order: "other"),
             Event("wrong2", 2, 2, witness: true, order: "other")], includeWitness: true),
             new(MaxEventCandidateVisits: 1));
-        Assert.Equal(TraceEvaluationStatus.BudgetExceeded, result.Status);
+        Assert.Equal(AssuranceAttemptStatus.BudgetExceeded, result.Status);
         Assert.Equal(ClaimVerdict.Inconclusive, result.Verdict);
     }
 
@@ -365,7 +365,7 @@ public class TraceClaimEvaluatorTests
                 .Add(ClaimInputRole.Trigger, ObservationValue.FromObject(new OrderEvent("o1"))),
             EventPayload = null
         };
-        Assert.Equal(TraceEvaluationStatus.InvalidObservations,
+        Assert.Equal(AssuranceAttemptStatus.InvalidObservations,
             Evaluate(Events(), Batch([legacy], includeWitness: true)).Status);
     }
 
@@ -401,9 +401,9 @@ public class TraceClaimEvaluatorTests
         var input = new ExpressionAuthoring().Input<Inventory>("stock");
         var claim = Start().AtEveryCommittedState(Selection, InitialStateSelection.Include)
             .Require(input, ClaimInputRole.State, x => x.OnHand / x.Reserved > 0m).Build();
-        Assert.Equal(TraceEvaluationStatus.Unsupported, Evaluate(claim, Batch([Stock("zero", 1, 0)])).Status);
+        Assert.Equal(AssuranceAttemptStatus.Unsupported, Evaluate(claim, Batch([Stock("zero", 1, 0)])).Status);
         var overflow = Evaluate(Events(duration: 1), Batch([Event("cancel", 1, long.MaxValue)], includeWitness: true));
-        Assert.Equal(TraceEvaluationStatus.Unsupported, overflow.Status);
+        Assert.Equal(AssuranceAttemptStatus.Unsupported, overflow.Status);
         Assert.Equal(ClaimVerdict.Inconclusive, overflow.Verdict);
     }
 
@@ -491,14 +491,14 @@ public class TraceClaimEvaluatorTests
     {
         var batch = Batch([]);
         batch = batch with { Alternatives = [batch.Alternatives[0] with { Observations = default }] };
-        Assert.Equal(TraceEvaluationStatus.InvalidObservations, Evaluate(Invariant(), batch).Status);
+        Assert.Equal(AssuranceAttemptStatus.InvalidObservations, Evaluate(Invariant(), batch).Status);
     }
 
     [Fact]
     public void WrongObservationKindCannotBecomeVacuousSuccess()
     {
         var result = Evaluate(Invariant(), Batch([Event("wrong-kind", 1, 1)], [Frontier(Selection, ObservationClosure.Closed)]));
-        Assert.Equal(TraceEvaluationStatus.InvalidObservations, result.Status);
+        Assert.Equal(AssuranceAttemptStatus.InvalidObservations, result.Status);
         Assert.Equal(ClaimVerdict.Inconclusive, result.Verdict);
     }
 

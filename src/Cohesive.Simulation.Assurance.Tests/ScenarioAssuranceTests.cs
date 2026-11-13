@@ -115,6 +115,20 @@ public sealed class ScenarioAssuranceTests
         Assert.NotEqual(first.Trace.Fingerprint, corrected.Trace.Fingerprint);
         Assert.Equal(first.Evaluation.Claim.Fingerprint, corrected.Evaluation.Claim.Fingerprint);
         Assert.Equal(ClaimVerdict.Violated, reevaluated.Evaluation.Verdict);
+
+        // The general evidence model preserves the target boundary and never promotes sampled success to proof.
+        ClaimAssessment AssessRun(ScenarioAssuranceResult run)
+        {
+            var subject = new EvidenceSubject(EvidenceTargetKind.Implementation, run.Binding.Target,
+                R("candidate-configuration"), R("all-reactivation-inputs"), ProofObligation.Realization);
+            var evidence = ClaimEvidence.FromTrace(run.Evaluation, subject, R("atomic-mapping-config"),
+                dependenciesComplete: true);
+            return ClaimAssessment.Evaluate(claim, subject, R("review-policy"),
+                [new(evidence.Kind, evidence.Method, evidence.Configuration)], [evidence], DateTimeOffset.UnixEpoch);
+        }
+        Assert.Equal(ProofState.Disproven, AssessRun(first).State);
+        Assert.Equal(ProofState.Unknown, AssessRun(corrected).State);
+        Assert.Equal(ProofState.Unknown, ClaimAssessment.Reassess(AssessRun(corrected).Serialize()).State);
     }
 
     [Theory]
@@ -145,7 +159,7 @@ public sealed class ScenarioAssuranceTests
         var result = await ScenarioAssurance.ExecuteAsync(Safety(), world, new Candidate(shape), Binding(),
             limits: new TraceEvaluationLimits(MaxObservations: 1));
         var restored = ScenarioAssuranceArtifact.Reevaluate(ScenarioAssuranceArtifact.Serialize(result));
-        Assert.Equal(TraceEvaluationStatus.BudgetExceeded, restored.Evaluation.Status);
+        Assert.Equal(AssuranceAttemptStatus.BudgetExceeded, restored.Evaluation.Status);
         Assert.Equal(ClaimVerdict.Inconclusive, restored.Evaluation.Verdict);
         Assert.Equal(PropertyCaseDisposition.Discarded, restored.ToPropertyEvaluation().Disposition);
         Assert.Equal(result.Evaluation.Serialize(), restored.Evaluation.Serialize());

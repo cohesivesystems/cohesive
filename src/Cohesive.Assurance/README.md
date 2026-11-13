@@ -155,3 +155,10 @@ by the fingerprint type, with colon/percent escaping rather than URI component e
 Current consumers include the optional [Simulation bridge](../Cohesive.Simulation.Assurance/README.md),
 reference-model integration tests and the benchmark.
 No production Cohesive observation adapter, ARI integration, or ITO integration ships here.
+
+## Evidence and proof state
+
+[Evidence and proof state](../../docs/assurance/evidence.md) describes the common immutable report,
+explicit method acceptance, exact model/encoding/realization boundaries, dependency reassessment,
+and authority-recorded dispositions. Sampled success remains unknown; a waiver never changes proof
+state. Trace and external methods share `AssuranceAttemptStatus` (renamed from `TraceEvaluationStatus`).
