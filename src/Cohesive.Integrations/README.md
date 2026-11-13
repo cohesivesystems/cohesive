@@ -554,3 +554,79 @@ qualification closure at original admission. Its existing acquisition handler ch
 HTTP and retains a local rejection on expiry; reconciliation reuses original results after expiry.
 This is implementation qualification, not a live access or physical durability attestation. See
 [COH-135](https://linear.app/cohesive-ari/issue/COH-135) for cross-repository validation.
+
+## Local lifecycle admission and draining (COH-136 first slice)
+
+`InMemoryIntegrationLifecycle` controls admission for one stable `IngestionLedgerAddress`. It starts
+Paused. Active permits new sessions; Paused stops them and drains existing work. There is no separate
+Deactivated state until a distinct behavior requires one. Commands include a stable identity, expected
+revision, UTC observation and host-authenticated authorization evidence. The host callback authenticates
+and authorizes each lifecycle action; `ProcessControlAuthorizationContext` records that decision.
+
+Bind each immutable compilation once. The resulting controller-owned token is reused across admissions
+and cannot be used with another controller. A rejected binding throws `IntegrationBindingException`;
+its `Validation` property preserves every diagnostic from the failing validation stage (including
+locations and evidence), and its message includes all reported codes and messages. Multiple validated bindings can share one consumer's lifecycle,
+so new coverage scopes or provider revisions do not reset the admission fence or history.
+
+```csharp
+var control = new InMemoryIntegrationLifecycle(consumer, authorizeLifecycleAction);
+var binding = control.Bind(compiled); // Validate catalogs, exact binding and Process lowering once.
+var activated = control.Change(new(
+    "activate/1", ExpectedRevision: 0, IntegrationDesiredState.Active, authorization, now));
+if (!activated.IsAccepted) return;
+
+var request = new IntegrationAdmissionRequest(
+    binding, continuation, activated.Receipt.Revision, authorization, now);
+var admitted = control.Admit(request);
+switch (admitted.Outcome)
+{
+    case IntegrationAdmissionOutcome.RevisionConflict:
+        // Inspect current control revision and reconcile intent before retrying.
+        return;
+    case IntegrationAdmissionOutcome.AdmissionStopped:
+        // A fresh revision alone is insufficient; await an authorized resume.
+        return;
+}
+if (!admitted.IsAccepted) return;
+var admission = admitted.Receipt;
+// Start/resume the exact Process; still check current policy and qualification at new effects.
+// After a trusted successful Process decision:
+var completed = control.Complete(new(admission, decision, authorization));
+```
+
+All lifecycle methods take one request and return `IntegrationLifecycleResult<TOutcome, TReceipt>`.
+Change, Admit and Complete use `IntegrationChangeOutcome`, `IntegrationAdmissionOutcome` and
+`IntegrationCompletionOutcome` respectively; each enum contains only that operation's reachable cases. Applied and
+replay outcomes carry a non-null `Receipt`; rejection has a typed outcome. Accessing Receipt on rejection
+throws rather than returning null. Change receipts contain only original command and resulting revision;
+call `Inspect()` separately for a current pending-work snapshot. Exact command retries return their
+original receipt, never a historical pending array. Changed intent under the same identity is rejected.
+
+Admission and pause use the same lock. A race either retains an already-admitted session or rejects the
+new one. Admission uses the bound token and constant-time identity/fence checks, with no catalog rebuilding
+or lowering. Retrieving an existing admission after pause or completion returns the original receipt and
+never permits repeating external effects. Pause stops **new sessions**, not steps of an admitted Process.
+Existing work drains and remains subject to dispatch policy. Individual Process suspension/cancellation
+still belongs to the existing Process control APIs. A new Process attempt needs a new admission.
+
+`Inspect()` visits and sorts only pending sessions, independent of completed history. Completion moves an
+admission from the pending index into retained completion history. `InspectCompletion` returns original
+execution and authorization evidence. A second authorized recorder receives
+`ReplayedWithOriginalRecorder` and the original receipt; attribution is never overwritten. Neither Active
+nor Draining claims execution liveness, provider health or complete data coverage. Failure, cancellation
+or ambiguity remains pending because terminal status alone cannot prove external effects are resolved.
+This also conservatively leaves known effect-free failures pending until explicit resolution is implemented.
+
+This is a **local reference controller**, not a durable/distributed fence. Hosts must route new sessions
+through it and protect inspection at their API boundary. Authorization freshness remains host-owned.
+Binding tokens are local validated handles, not portable authoring documents. Runtime lifecycle intent
+and observations remain separate from immutable integration/Process IR. Original change and completion
+receipts are retained for the controller lifetime: memory is linear in changes + admissions, not changes
+× pending sessions. Persistent storage, cleanup, health evidence/expiry, operator resolution, bounded
+backfill and API/CLI projection remain follow-up work. Do not reset forward progress for backfill.
+
+Runbook: inspect → issue an authorized revision-checked pause → inspect pending sessions → let their
+Processes finish/reconcile → record exact successful completion → inspect until Draining is false.
+Leave unresolved work visible; do not clear it or blindly retry. Resume with an authorized Active command
+at the current revision.
