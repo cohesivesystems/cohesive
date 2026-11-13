@@ -89,3 +89,24 @@ A synthetic source can be operationally Healthy while returning zero or only one
 The view separates source coverage, digest-checked accepted publication, source ledger progress and
 consumer-wide versus exact-binding pending sessions. Expiry changes provider health/readiness to Unknown without deleting accepted evidence.
 The example exercises the real compiled Process with the existing local handlers and performs no live I/O.
+
+
+[HistoricalRecoveryExamples.cs](HistoricalRecoveryExamples.cs) exercises the next COH-136 recovery boundary:
+a publication reaches the local sink but its Request outcome is lost before reply retention. The local
+host keeps the exact claimed Request fingerprint, blocks repeat dispatch and leaves lifecycle draining
+while paused. An authorized operator can reconstruct only the publication reply whose retained sink
+receipt, Request fingerprint and destination content digest agree. The canonical Process then decides
+ledger advancement and settlement; reconciliation neither activates admission nor restarts acquisition.
+
+The negative cases cover a lost worker before the effect, corrupted destination bytes, a changed reply
+target under the same dispatch identity, unauthorized resolution (including replay), and acquisition
+with no retained reply. None guesses an outcome or performs another provider call. Missing evidence
+is not evidence of absence: it cannot authorize a retry. A healthy provider would not change this rule.
+
+This is a single-threaded, in-memory executable policy experiment, not a public recovery API or durable
+journal. The simulated sink retains its receipt and exact Request association together before the injected
+post-handler interruption. A production adapter must establish that atomic evidence boundary, authenticate
+the operator, fence concurrent workers and retrieve trustworthy evidence. Existing Process controls and
+distribution reconciliation remain the execution authorities; this example adds neither a workflow engine
+nor a durable-store abstraction. Known terminal failure resolution, operator revision fencing, bounded
+backfill and the production control projection remain follow-up work. Ito is unchanged.
