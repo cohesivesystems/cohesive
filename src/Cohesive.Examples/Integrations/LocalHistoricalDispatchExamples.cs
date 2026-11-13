@@ -54,9 +54,10 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Equal(0, second.Calls);
     }
 
-    static IntegrationQualificationResult QualifyLocalHistorical()
+    static IntegrationQualificationResult QualifyLocalHistorical(HistoricalCoverageScope? selection = null,
+        IngestionLedgerAddress? consumer = null, HistoricalAcquisitionCapabilities? capabilities = null)
     {
-        var scope = CreateSelection();
+        var scope = selection ?? CreateSelection();
         var original = Connection("v1");
         var replacement = Connection("v2");
         var logical = ConnectionReference.Named("market-data");
@@ -69,14 +70,13 @@ public sealed partial class HistoricalQualificationExamples
         var model = new HistoricalMarketData();
         var candidate = model.Collect.For(scope)
             .Use(model.Collect.Provider(selected.Profile!).Provides(model.RetainedResponse))
-            .Through(logical).ForConsumer(new("research/eod", "tiingo", "research/bars", "SPY"))
+            .Through(logical).ForConsumer(consumer ?? new("research/eod", "tiingo", "research/bars", "SPY"))
             .Compile(selected.Bindings!);
         var evidence = ContractPropertyDocuments.DeclareContext(new("example/local-conformance"), new("v1"),
             new HistoricalOfferEvidence("offline/raw-adapter-fixture/v1", "tiingo/research-account"), Profile.Document.Metadata.Provenance);
         var offer = IntegrationCapabilityOffer.Declare("example/local-offer", "v1", Profile, original, Schema,
-            Capabilities(scope), evidence, At.AddDays(-1), At.AddDays(1));
+            capabilities ?? Capabilities(scope), evidence, At.AddDays(-1), At.AddDays(1));
         var qualified = IntegrationQualification.Qualify(candidate, offer, Evaluator, At);
-        Assert.True(qualified.IsAdmissible);
         return qualified;
     }
 

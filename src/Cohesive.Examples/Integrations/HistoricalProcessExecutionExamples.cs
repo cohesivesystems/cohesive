@@ -117,6 +117,15 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Null(await original.Ledger.ReadAsync(original.Address, default));
     }
 
+    // One physical in-memory destination shared by both flows. Receipt objects and bytes are not crash durable.
+    sealed class HistoricalDestination
+    {
+        internal readonly InMemoryIngestionLedger Ledger = new();
+        internal readonly Dictionary<string, byte[]> Publications = new(StringComparer.Ordinal);
+        internal DateOnly[] AcceptedDates => Publications.Values.SelectMany(bytes => JsonSerializer.Deserialize<DailyBar[]>(bytes)!)
+            .Select(bar => DateOnly.FromDateTime(bar.Date.UtcDateTime)).Distinct().Order().ToArray();
+    }
+
     // Local host adapter: the canonical Process decides order and branching. This fixture supplies only
     // Request handlers and reply admission. Shared retained state models storage, not physical durability.
     sealed partial class ProcessFixture : IProcessReferenceHost
@@ -128,34 +137,43 @@ public sealed partial class HistoricalQualificationExamples
         readonly IngestionDefinition definition;
         readonly string change;
         readonly int sessions;
+        readonly long expectedLedgerRevision;
+        internal IngestionLedgerResult? LastAdvance;
         readonly Dictionary<RequestContractReference, Func<RequestEnvelope, ValueTask<RequestTerminalOutcome>>> handlers;
         readonly IntegrationRuntime runtime;
         readonly HistoricalCoverageScope scope;
         byte[]? publicationBytes;
-        readonly Dictionary<string, byte[]> sink = new();
+        readonly HistoricalDestination destination;
+        Dictionary<string, byte[]> sink => destination.Publications;
         ExecutionDefinitionDocument? requested, acquired, prepared;
         IngestionPublicationReceipt? receipt;
         ProgressReceipt? progress;
         internal CoverageEvidence? Coverage;
         readonly LocalAcquisition first = new(), second = new();
-        internal byte[]? PublishedBytes => sink.Values.SingleOrDefault();
+        internal byte[]? PublishedBytes => retained.prepared is null ? null
+            : sink.GetValueOrDefault(((IngestionPreparedPublication)retained.prepared.GetDefinition<IngestionWorkItem>()).Content.Locator);
         internal IngestionPublicationReceipt? Publication => receipt;
-        internal int PublishedSessions => sink.Values.Sum(bytes => JsonSerializer.Deserialize<DailyBar[]>(bytes)!.Length);
+        internal int PublishedSessions => PublishedBytes is { } bytes ? JsonSerializer.Deserialize<DailyBar[]>(bytes)!.Length : 0;
         internal int ProviderCalls => first.Calls;
         internal int ReplacementCalls => second.Calls;
         internal int Publications, Settlements;
-        internal InMemoryIngestionLedger Ledger = new();
+        internal InMemoryIngestionLedger Ledger => destination.Ledger;
         internal IngestionLedgerAddress Address => compilation.Binding!.GetDefinition<IngestionProviderBinding>().Consumer;
         ExecutionProvenance Origin => plan.Document.Metadata.Provenance;
 
         internal ProcessFixture(int sessions) : this(null, "unchanged", sessions) { }
         internal ProcessFixture(ProcessFixture original, string change) : this(original, change, original.sessions) { }
-        ProcessFixture(ProcessFixture? original, string change, int sessions)
+        internal ProcessFixture(IntegrationCompilation selected, int sessions, HistoricalDestination destination, long expectedLedgerRevision = 0)
+            : this(null, "unchanged", sessions, selected, destination, expectedLedgerRevision) { }
+        ProcessFixture(ProcessFixture? original, string change, int sessions,
+            IntegrationCompilation? selected = null, HistoricalDestination? destination = null, long expectedLedgerRevision = 0)
         {
             retained = original?.retained ?? this;
             this.change = change;
             this.sessions = sessions;
-            compilation = Reopen(original?.compilation ?? QualifyLocalHistorical().Compilation!);
+            this.expectedLedgerRevision = original?.expectedLedgerRevision ?? expectedLedgerRevision;
+            this.destination = original?.destination ?? destination ?? new HistoricalDestination();
+            compilation = Reopen(original?.compilation ?? selected ?? QualifyLocalHistorical().Compilation!);
             Assert.True(InteractionContractCatalog.TryCreate(compilation.Documents.Where(d => d.Kind == InteractionContractDocuments.Kind), out var contracts).IsValid);
             var compiled = ProcessStaticCompiler.Compile(compilation.Process!, new(interactionContracts: contracts));
             Assert.True(compiled.Validation.IsValid, string.Join(";", compiled.Validation.Diagnostics.Select(d => d.Message)));
@@ -199,7 +217,7 @@ public sealed partial class HistoricalQualificationExamples
                 return ValueTask.FromResult(Outcome(request, new IntegrationFailure("dispatch-denied"), success: false));
             }
             provider.Acquire();
-            var bytes = Response(sessions);
+            var bytes = Response(scope.ExpectedSessions.Take(sessions));
             var content = IngestionContentReference.Describe("response.json", bytes, "application/json");
             retained.Coverage = TiingoCoverageEvidenceExamples.Evaluate(scope, content, bytes);
             if (!retained.Coverage.IsComplete)
@@ -207,11 +225,11 @@ public sealed partial class HistoricalQualificationExamples
             var transformation = ContractPropertyDocuments.DeclareContext(new("example/process-normalizer"), new("v1"), scope.Normalizer, Origin);
             retained.requested = IngestionWorkDocuments.Create(new IngestionAcquisitionRequest(Address,
                 compilation.Binding!.GetDefinition<IngestionProviderBinding>().Contract.Ingestion, transformation.Reference,
-                "historical/1", "attempt/1", IngestionContentReference.Describe("selection.json", JsonSerializer.SerializeToUtf8Bytes(scope), "application/json"), 0, At), Origin);
+                request.Context.EmissionId.Value, "attempt/1", IngestionContentReference.Describe("selection.json", JsonSerializer.SerializeToUtf8Bytes(scope), "application/json"), expectedLedgerRevision, At), Origin);
             retained.acquired = IngestionWorkDocuments.Create(new IngestionAcquisitionReceipt(retained.requested.Reference, content, At.AddSeconds(1)), Origin);
             retained.publicationBytes = Prepare(retained.Coverage);
             retained.prepared = IngestionWorkDocuments.Create(new IngestionPreparedPublication(retained.acquired.Reference, transformation.Reference,
-                IngestionContentReference.Describe("publication.json", retained.publicationBytes, "application/json"),
+                IngestionContentReference.Describe("publication/" + request.Context.EmissionId.Value + ".json", retained.publicationBytes, "application/json"),
                 new IngestionDateRangePosition(scope.StartDate, scope.EndDateInclusive.AddDays(1)), At.AddSeconds(2)), Origin);
             return ValueTask.FromResult(Outcome(request, new PreparedPublication(retained.prepared.Reference.DefinitionId.Value)));
         }
@@ -224,7 +242,8 @@ public sealed partial class HistoricalQualificationExamples
             Assert.True(prepared.Content.Matches(retained.publicationBytes!));
             retained.sink.Add(prepared.Content.Locator, retained.publicationBytes!);
             retained.Publications++;
-            retained.receipt = new("historical/1", prepared.Content.Sha256, "local-sink/receipt/1");
+            var acquisition = (IngestionAcquisitionRequest)retained.requested!.GetDefinition<IngestionWorkItem>();
+            retained.receipt = new(acquisition.OperationId, prepared.Content.Sha256, "local-sink/receipt/" + acquisition.OperationId);
             return ValueTask.FromResult(Outcome(request, new PublicationReceipt(retained.receipt.ReceiptReference)));
         }
 
@@ -233,7 +252,11 @@ public sealed partial class HistoricalQualificationExamples
             Assert.Equal(Value(Request(request).Payload.Contract, new PublicationReceipt(retained.receipt!.ReceiptReference)), request.Payload);
             var advance = IngestionWorkDocuments.CreateLedgerAdvance(retained.requested!, retained.acquired!, retained.prepared!, retained.receipt!, Origin);
             var result = await retained.Ledger.AdvanceAsync(advance, default);
-            Assert.Equal(IngestionLedgerDisposition.Advanced, result.Disposition);
+            retained.LastAdvance = result;
+            if (result.Disposition == IngestionLedgerDisposition.Conflict)
+                return Outcome(request, new IntegrationFailure(result.DiagnosticCode!), success: false);
+            if (result.Disposition is not (IngestionLedgerDisposition.Advanced or IngestionLedgerDisposition.Replayed))
+                throw new InvalidOperationException("Unknown ledger outcome requires exact reconciliation.");
             retained.progress = new ProgressReceipt(result.Receipt!.Advance.DefinitionId.Value);
             return Outcome(request, retained.progress);
         }

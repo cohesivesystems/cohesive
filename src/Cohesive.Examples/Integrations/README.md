@@ -109,7 +109,8 @@ post-handler interruption. A production adapter must establish that atomic evide
 the operator, fence concurrent workers and retrieve trustworthy evidence. Existing Process controls and
 distribution reconciliation remain the execution authorities; this example adds neither a workflow engine
 nor a durable-store abstraction. The separate failure-resolution example below exercises terminal failure resolution and operator revision
-fencing. Bounded backfill and the production control projection remain follow-up work. Ito is unchanged.
+fencing. The bounded-window example below covers independent backfill progress; automatic planning and
+the production control projection remain follow-up work. Ito is unchanged.
 
 
 [HistoricalFailureResolutionExamples.cs](HistoricalFailureResolutionExamples.cs) uses the library's
@@ -121,3 +122,53 @@ completion remains absent and the ledger remains unchanged. Failure status alone
 resolution. Tests cover malformed/stale/unauthorized commands, missing and mismatched evidence,
 verifier exceptions, serialized command replay, concurrent exact retries and revision changes during
 verification. Production evidence authentication and durable storage remain outside this local fixture.
+
+
+[HistoricalBackfillExamples.cs](HistoricalBackfillExamples.cs) authors a fixed one-session historical
+backfill using the existing model. Forward and backfill consumers share source, destination and partition,
+but use distinct stable flow identities. Both execute the same canonical Process against one local
+publication store and one `InMemoryIngestionLedger`. Provider evidence limits each call to one calendar
+day; the backfill's selected interval and expected session are pinned in its compiled binding.
+
+```csharp
+var backfillConsumer = forwardConsumer with
+{
+    Flow = "research/backfill/september-1"
+};
+var backfillScope = requestedScope with
+{
+    StartDate = new DateOnly(2026, 9, 1),
+    EndDateInclusive = new DateOnly(2026, 9, 1),
+    ExpectedSessions = [new DateOnly(2026, 9, 1)]
+};
+var candidate = model.Collect.For(backfillScope)
+    .Use(model.Collect.Provider(profile).Provides(model.RetainedResponse))
+    .Through(connection)
+    .ForConsumer(backfillConsumer)
+    .Compile(bindings);
+// Qualify the bounded candidate, then bind and admit it through its own controller.
+```
+
+The application must derive `ExpectedSessions` from its pinned calendar; this fixture uses the existing
+synthetic two-session calendar. Narrowing the interval never changes the required coverage semantics.
+Separate flows also mean separate lifecycle controllers: pausing forward admission does not implicitly
+pause backfill. A host wanting a shared stop must enforce that policy explicitly; this example pauses
+backfill itself and verifies that an admitted window drains while another is rejected.
+
+The successful case first publishes September 2 through the forward flow, then September 1 through
+backfill. Both dates appear in the same destination, but the original forward entry remains exactly
+unchanged. Missing sessions and current provider-policy denial publish nothing. A two-day request is
+rejected against the one-day offer instead of silently widening its bound. Admission replay after
+completion returns the original receipt without creating another pending session.
+
+The negative flow-reuse case deliberately supplies a fresh forward revision for an older window.
+The ledger rejects the noncontiguous position after publication; the Process fails without settlement,
+and already-published bytes remain visible. Hosts should select the independent backfill flow before
+dispatch, since ledger rejection cannot undo an external write. Selection freezes the expected ledger
+revision; it is never reread and silently substituted after publication.
+
+These tests qualify one explicitly bounded window, not an automatic multi-window planner, bulk work
+budget or scheduled backfill service. Local publication identities now derive from exact acquisition
+Request emissions, allowing separate sessions to share the destination without colliding on fixture
+constants. The sink and receipts are still in-memory; cross-flow concurrent writes, correction/upsert
+policy, durable storage and a production operator API remain unqualified. No Ito changes.
