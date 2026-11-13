@@ -190,11 +190,12 @@ uncertain commitment remains Indeterminate with a recovery-stopped diagnostic. A
 is conclusive Rejected and is never retried automatically. Operator investigation must retain the same
 operation identity; this example does not add a retry/abandon command or dead-letter subsystem.
 
-The tender episode first requests pending load acceptance, then confirms the load acknowledgement.
-Tests exercise both policies and recovery of confirmation after a lost response. Separate policies do
-not impose delivery order: instance enumeration is not causal ordering. If a later command arrives
-before its prerequisite, the target guard remains authoritative and its rejection is conclusive.
-Cross-policy ordering, cross-authority dispatch, fan-out and new-attempt restarts need additional semantics.
+The tender episode first requests pending load acceptance, then confirms acknowledgement. Its confirmation
+reaction now declares `.After(PendingAcceptance)` with one-shot source-entity identity. Register its host
+with `prerequisite: host` and include both hosts in recovery; see [causal coordination](coordination.md).
+Out-of-order confirmation waits durably. A rejected prerequisite blocks dispatch with an explicit
+diagnostic; a successful prerequisite still does not bypass the confirmation target's guard.
+Cross-authority dispatch, multi-prerequisite joins and new-attempt restarts need additional semantics.
 
 The regression suite covers outages, source checkpointing before target execution, serialized worker
 replacement, interrupted calls, bounded retries, authorization, guard rejection and unchanged target

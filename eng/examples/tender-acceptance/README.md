@@ -65,3 +65,6 @@ observation with durable admission and independently recoverable attempts. The f
 `MachineReactionRecovery` pages the Process authority; see
 [infrastructure hosting](hosting.md) for retry and authorization boundaries.
 The legacy trace host intentionally preserves observed partial commits.
+
+[Causal coordination](coordination.md) declares the acceptance prerequisite and demonstrates confirmation
+arriving first, durable waiting, independent guards, and acknowledgement-loss recovery.

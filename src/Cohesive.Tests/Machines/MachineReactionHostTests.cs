@@ -129,7 +129,7 @@ public sealed class MachineReactionHostTests
         var target = MachineReactionTarget.Local(new(f.Model.Confirm.Compile().Plan!, f.Repository, contracts!),
             f.Target.Authority, (_, _) => throw new InvalidOperationException("Unrelated target must not authorize"));
         var host = new MachineReactionHost(f.Model.ReceiptConfirmation, f.Store, target,
-            (_, _) => throw new InvalidOperationException("Unrelated source must not authorize"), new("worker", TimeSpan.FromMinutes(5)));
+            (_, _) => throw new InvalidOperationException("Unrelated source must not authorize"), new("worker", TimeSpan.FromMinutes(5)), prerequisite: f.Host());
         Assert.Empty(await host.DeliverAsync(f.Context, f.Receipt));
     }
 
@@ -256,7 +256,7 @@ public sealed class MachineReactionHostTests
         {
             var f = new Fixture { Model = new() };
             var (source, context, commit) = await EntityMachineOccurrenceTests.Prepare(f.Model.Tender.Entity,
-                f.Model.Tender.AcceptPending, new TenderState(loadId, false, false, false, ""), new SendResult(false), processId);
+                f.Model.Tender.AcceptPending, new TenderState(loadId, false, false, false, ""), new SendResult(false), processId, sourceId: loadId == "load-1" ? "tender-1" : "tender-" + loadId);
             f.Context = context;
             f.Receipt = (await source.CommitTransitionOperation(context, commit)).Receipt!;
             f.Repository = new(f.Model.Load, EntityPartitionKeyPolicy.Fixed("test"));

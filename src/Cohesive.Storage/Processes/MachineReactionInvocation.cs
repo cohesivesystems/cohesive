@@ -30,15 +30,24 @@ public enum MachineReactionStatus
 /// <param name="Failure">Explicit attempt failure evidence when supplied by the execution host.</param>
 /// <param name="Attempts">Retained physical attempt evidence, when inspected through a host.</param>
 /// <param name="Diagnostic">Explanation when no conclusive target receipt is available.</param>
+/// <param name="Prerequisite">Exact prerequisite Process instance when this reaction is coordinated.</param>
 public sealed record MachineReactionProgress(MachineReactionStatus Status, ProcessOperationOccurrence? Operation = null,
     EntityTransitionOperationReceipt? Receipt = null, DurableOperationFailure? Failure = null,
-    DocumentValidationDiagnostic? Diagnostic = null, ImmutableArray<ProcessTransitionAttempt> Attempts = default);
+    DocumentValidationDiagnostic? Diagnostic = null, ImmutableArray<ProcessTransitionAttempt> Attempts = default,
+    ProcessInstanceId? Prerequisite = null);
 
 /// <summary>Deterministic reaction start intent and evidence inspection for the atomic entity/Process interpretation.</summary>
 /// <remarks>Preparing does not admit, persist, authorize or dispatch a start. Supply Start to the existing
 /// Process start admission and durable runtime. Transport acceptance alone never proves completion.</remarks>
 public sealed class MachineReactionInvocation
 {
+    internal static ProcessInstanceId InstanceFor(MachineReaction policy, EntityTransitionOperationReference source, ExecutionNodeId movementNode) =>
+        new("reaction/" + (policy.Payload.IdentityScope == MachineReactionIdentityScope.SourceEntity
+            ? ProcessStorageContentFingerprints.Value(new ScopedIdentity(policy.Document.Reference, source.AuthorityScope, source.Subject)).Value
+            : ProcessStorageContentFingerprints.Value(new Identity(policy.Document.Reference, source, movementNode)).Value));
+
+    internal static ProcessContinuationIdentity ContinuationFor(ProcessInstanceId instance) => new(instance, new(instance.Value + "/attempt/1"));
+
     static readonly Lazy<ValueContract> OriginContract = new(() =>
         new(new Cohesive.Model.Authoring.DefaultClrTypeRefMapper().Map(typeof(Identity), null)));
     MachineReactionInvocation(MachineReaction policy, EntityTransitionOperationReference source,
@@ -82,12 +91,12 @@ public sealed class MachineReactionInvocation
         if (!PortableExecutionValidator.Validate(input).IsValid)
             throw new InvalidOperationException("Committed source snapshot does not satisfy the reaction input contract.");
         var identity = new Identity(policy.Document.Reference, occurrence.Source, occurrence.Movement.Node);
-        var key = "reaction/" + ProcessStorageContentFingerprints.Value(identity).Value;
-        var instance = new ProcessInstanceId(key);
+        var instance = InstanceFor(policy, occurrence.Source, occurrence.Movement.Node);
+        var key = instance.Value;
         var context = new ProcessControlCommandContext(new(key), new(key), instance, authorization,
             issuedAtUtc, policy.Document.Metadata.Provenance);
         var start = new ProcessStartRequest(ProcessStartRequest.CurrentSchemaVersion, payload.Process.Reference,
-            context, new(instance, new(key + "/attempt/1")), input,
+            context, ContinuationFor(instance), input,
             PortableValue.Concrete(OriginContract.Value, ObservationValue.FromObject(identity)));
         return new(policy, occurrence.Source, occurrence.Movement.Node, start);
     }
@@ -112,10 +121,10 @@ public sealed class MachineReactionInvocation
             throw new InvalidOperationException("Reaction start has no valid origin evidence.");
         var identity = cause.Value!.Value.Deserialize<Identity>()
             ?? throw new InvalidOperationException("Reaction origin evidence is absent.");
-        var key = "reaction/" + ProcessStorageContentFingerprints.Value(identity).Value;
+        var key = InstanceFor(policy, identity.Source, identity.MovementNode).Value;
         if (identity.Policy != policy.Document.Reference || start.Definition != policy.Payload.Process.Reference
             || identity.Source.AuthorityScope != start.Context.Authorization.AuthorityScope
-            || start.InitialContinuation != new ProcessContinuationIdentity(new(key), new(key + "/attempt/1"))
+            || start.InitialContinuation != ContinuationFor(new(key))
             || start.Context.IdempotencyKey.Value != key
             || start.Input?.Contract != policy.Payload.Process.GetDefinition<ProcessDefinition>().Input
             || !PortableExecutionValidator.Validate(start.Input).IsValid)
@@ -178,9 +187,11 @@ public sealed class MachineReactionInvocation
 
     void RequireOperation(ProcessOperationOccurrence operation)
     {
-        if (operation.Continuation != Start.InitialContinuation || operation.Node != MachineReaction.InvocationNode || operation.Occurrence != 0)
+        if (operation.Continuation != Start.InitialContinuation || operation.Node != MachineReaction.InvocationNode || operation.Occurrence != (Policy.Payload.Prerequisite is null ? 0 : 1))
             throw new InvalidOperationException("Operation belongs to another reaction or unsupported restarted attempt.");
     }
+
+    sealed record ScopedIdentity(ExecutionDefinitionReference Policy, InteractionAuthorityScope Authority, InteractionEntityReference Subject);
 
     sealed record Identity(ExecutionDefinitionReference Policy, EntityTransitionOperationReference Source, ExecutionNodeId MovementNode);
 }

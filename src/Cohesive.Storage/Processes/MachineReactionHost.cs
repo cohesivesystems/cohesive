@@ -9,13 +9,14 @@ namespace Cohesive.Storage.Processes;
 /// <summary>Registers one reaction against existing durable Process and target infrastructure.</summary>
 /// <remarks>Sources checkpoint after AdmitAsync confirms a discoverable Process start. Recovery workers
 /// execute the retained activation independently; uncertain calls replay the same target operation identity.</remarks>
-public sealed class MachineReactionHost
+public sealed partial class MachineReactionHost
 {
     readonly IProcessDurableStore store;
     readonly MachineReactionTarget target;
     readonly ProcessDurableRuntime runtime;
     readonly ProcessDurableRuntime recoveryRuntime;
     readonly MachineReactionRecoveryPolicy? recovery;
+    readonly MachineReactionHost? prerequisite;
     readonly CompiledProcessPlan plan;
     readonly Func<OperationContext, EntityTransitionOperationReceipt, ValueTask<ProcessControlAuthorizationContext?>> authorize;
 
@@ -26,15 +27,17 @@ public sealed class MachineReactionHost
     /// <param name="authorizeSource">Fresh source-resource and reaction-start authorization; null denies delivery.</param>
     /// <param name="options">Existing runtime worker, lease and bounded commit-retry policy.</param>
     /// <param name="recovery">Validated background recovery policy, or null for synchronous delivery only.</param>
+    /// <param name="prerequisite">Exact prerequisite host over the same store and authority; required for coordinated policies.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
-    /// <exception cref="ArgumentException">Target revision does not match the policy or the store lacks discovery.</exception>
+    /// <exception cref="ArgumentException">Target revision does not match the policy, the store lacks discovery, or the prerequisite host has incompatible policy, store, authority or recovery authorization.</exception>
     /// <exception cref="InvalidOperationException">The policy cannot compile.</exception>
     public MachineReactionHost(MachineReaction policy, IProcessDurableStore store, MachineReactionTarget target,
         Func<OperationContext, EntityTransitionOperationReceipt, ValueTask<ProcessControlAuthorizationContext?>> authorizeSource,
         ProcessDurableRuntimeOptions options,
-        MachineReactionRecoveryPolicy? recovery = null)
+        MachineReactionRecoveryPolicy? recovery = null, MachineReactionHost? prerequisite = null)
     {
         this.recovery = recovery;
+        this.prerequisite = prerequisite;
         ArgumentNullException.ThrowIfNull(store);
         if (store is not IProcessInstanceSource) throw new ArgumentException("Reaction admission requires discovery on its Process store.", nameof(store));
         Policy = policy ?? throw new ArgumentNullException(nameof(policy));
@@ -42,6 +45,9 @@ public sealed class MachineReactionHost
         this.target = target ?? throw new ArgumentNullException(nameof(target));
         authorize = authorizeSource ?? throw new ArgumentNullException(nameof(authorizeSource));
         if (target.Transition != policy.Payload.Target.Reference) throw new ArgumentException("Target revision differs from the policy.", nameof(target));
+        if (policy.Payload.Prerequisite?.Reference != prerequisite?.Policy.Document.Reference
+            || prerequisite is not null && (!ReferenceEquals(prerequisite.Store, store) || prerequisite.Authority != target.Authority || !prerequisite.SupportsRecovery))
+            throw new ArgumentException("A coordinated reaction requires its exact authorized prerequisite host on the same store and authority.", nameof(prerequisite));
         var compiled = policy.Compile();
         plan = compiled.Plan ?? throw new InvalidOperationException(string.Join("; ", compiled.Validation.Diagnostics.Select(d => d.Message)));
         runtime = new(store, new NoOtherOperations(), options, transitionOperationAdapter: target);
@@ -172,11 +178,28 @@ public sealed class MachineReactionHost
         ProcessDurableRuntime? executionRuntime = null)
     {
         var retained = MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request);
-        var activation = new ProcessActivation(new(retained.Start.InitialContinuation.ProcessInstanceId.Value + "/activation/1"),
-            ProcessActivationCause.Start, snapshot.Checkpoint.Start.AcceptedAtUtc,
+        if (snapshot.Checkpoint.Continuation.Terminal.Kind != ExecutionTerminalOutcomeKind.None)
+            return await InspectSnapshot(context, snapshot).ConfigureAwait(false);
+        if (prerequisite is not null && snapshot.Checkpoint.Continuation.Waits.Any(wait => wait.Active && wait.Node == MachineReaction.PrerequisiteNode))
+        {
+            var coordinated = await AdmitPrerequisiteAsync(context, snapshot, retained).ConfigureAwait(false);
+            if (coordinated.Blocked is { } blocked) return blocked;
+            snapshot = coordinated.Snapshot;
+        }
+        if (prerequisite is not null) _ = HasPrerequisiteProof(snapshot, retained);
+        var inputs = snapshot.Checkpoint.Inbox.Where(entry => entry.Receipt is null).ToArray();
+        var sequence = snapshot.Checkpoint.Continuation.CompletedActivationCount + 1;
+        // Registration and signal consumption have separate stable activations; physical retries reuse each one.
+        var activation = new ProcessActivation(new(retained.Start.InitialContinuation.ProcessInstanceId.Value + "/activation/" + sequence.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+            inputs.Length == 0 ? ProcessActivationCause.Start : ProcessActivationCause.Interaction,
+            inputs.Length == 0 ? snapshot.Checkpoint.Start.AcceptedAtUtc : inputs.Max(entry => entry.AdmittedAtUtc),
             new(retained.Source.AuthorityScope, new(retained.Start.InitialContinuation.ProcessInstanceId.Value),
-                new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), retained.Start.Context.Provenance));
+                new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), retained.Start.Context.Provenance),
+            [.. inputs.Select(entry => entry.Input)]);
         var activated = await (executionRuntime ?? runtime).ActivateAsync(context, plan, retained.Start.InitialContinuation, activation).ConfigureAwait(false);
+        if (activated.Snapshot is null && activated.Disposition == ProcessDurableRuntimeDisposition.Terminal)
+            return await InspectSnapshot(context, await store.LoadAsync(context, retained.Start.InitialContinuation.ProcessInstanceId).ConfigureAwait(false)
+                ?? throw new InvalidOperationException("Admitted reaction disappeared.")).ConfigureAwait(false);
         if (activated.Snapshot is null) throw new InvalidOperationException($"Reaction recovery failed: {activated.Disposition}.");
         return await InspectSnapshot(context, activated.Snapshot).ConfigureAwait(false);
     }
@@ -209,7 +232,13 @@ public sealed class MachineReactionHost
                     Diagnostic = new("machine.reaction.recovery.stopped", DiagnosticSeverity.Warning,
                     "Automatic recovery stopped; retain this identity and investigate the target receipt before operator recovery.") };
         }
-        return progress with { Attempts = attempts };
+        if (progress.Status == MachineReactionStatus.Pending && prerequisite is not null && attempts.IsEmpty && !HasPrerequisiteProof(snapshot, invocation))
+        {
+            var dependency = await InspectPrerequisiteAsync(context, invocation).ConfigureAwait(false);
+            if (dependency.Status != MachineReactionStatus.Completed) progress = dependency;
+        }
+        return progress with { Attempts = attempts, Prerequisite = prerequisite is null ? null
+            : MachineReactionInvocation.InstanceFor(prerequisite.Policy, invocation.Source, invocation.MovementNode) };
     }
 
     async Task<MachineReactionProgress> InspectCheckpoint(OperationContext context, MachineReactionInvocation invocation, ProcessDurableCheckpoint checkpoint)

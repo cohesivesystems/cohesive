@@ -44,10 +44,12 @@ internal sealed class TenderReactionModel
                 .Return(new("result"), TransitionOutcomeDisposition.Applied, "Confirmed"));
 
         PendingAcceptance = MachineReaction.On<TenderState>(Tender.Entity, Tender.Machine.SendPending,
-                id: "tender-to-load.pending", revision: "1")
+                id: "tender-to-load.pending", revision: "2")
+            .OncePerSourceEntity()
             .Request(MarkPending, subject: tender => tender.LoadId, input: tender => new AcknowledgeLoad(false));
         ReceiptConfirmation = MachineReaction.On<TenderState>(Tender.Entity, Tender.Machine.ReceiptConfirmed,
-                id: "tender-to-load.confirmed", revision: "1")
+                id: "tender-to-load.confirmed", revision: "2")
+            .After(PendingAcceptance)
             .Request(Confirm, subject: tender => tender.LoadId, input: tender => new AcknowledgeLoad(true));
     }
 }
