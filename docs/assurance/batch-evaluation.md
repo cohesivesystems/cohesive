@@ -23,7 +23,9 @@ Raw-history validation and general proof/readiness policy belong to their own in
 
 A `SemanticObservation` contains source occurrence identity, selector, source partition/epoch,
 semantic step, monotone time in 100 ns ticks, kind and input-role values. An event's payload
-uses the Trigger role; the evaluator binds it to Witness when comparing candidates.
+uses the role-neutral `EventPayload` field; `Values` must be empty for events. A missing
+payload remains missing evidence. The claim determines whether an occurrence supplies the
+Trigger or Witness input; adapters never relabel payloads. Non-events cannot carry EventPayload.
 Successful commit inputs describe the same atomic transition under the mapping contract.
 Known aborts do not trigger transition contracts; unknown commit outcomes remain inconclusive.
 Initial-state selection is explicit. State membership and complete boundary coverage are
@@ -116,7 +118,9 @@ These are integrity checks, not signatures or independent validation of provider
 ## Limits and follow-on work
 
 Limits bound alternatives, total observation/frontier records, predicate invocations and event
-candidate scans, including ineligible candidates. Exhaustion yields BudgetExceeded plus an
+eligible candidate comparisons. Binary search restricts matching to strictly earlier steps
+or the inclusive response window before charging visits. Arbitrary overlapping windows or
+nonmatching correlations can still require quadratic work and exhaust the explicit budget. Exhaustion yields BudgetExceeded plus an
 inconclusive aggregate verdict and retains original inputs. Cancellation throws and cannot
 produce partial success. These limits do not promise a hard time bound inside a single core
 expression evaluation; the inputs are already finite/materialized and nested collection costs
@@ -127,3 +131,37 @@ Next integrations: reconcile the absent A0 corpus; complete COH-147's cross-meth
 policies; implement COH-149's Simulation projection/search/shrink/replay bridge; add the
 incremental monitor and its batch-equivalence/protocol tests. No adapter, Simulation run,
 production monitor or formal proof has been executed by this implementation.
+
+
+## Authoring and integration boundary
+
+`Claim.Define` returns `Claim.Declaration`; choosing one form returns `Claim.Predicate`;
+`Require` returns the completed immutable `Claim`. Only the completed stage exposes `Build`,
+`Attach`, `Assuming` and `RequireEvidence`. Invalid form/predicate sequencing is unavailable
+in the source API, while semantic expression and contract validation still happens at lowering.
+
+`ClaimReference.FromExecution(transition.Reference)` reuses Cohesive's typed exact execution
+identity. Definition IDs are URI-escaped under `execution://`; fingerprint algorithm, profile
+and digest are individually escaped and colon-separated, preserving every component. This
+projection does not independently validate the referenced artifact. Other domain selectors
+and observation contracts still require explicit exact references; entity/event-specific
+bridges and production consumers are follow-on integration work.
+
+[TransitionAssuranceTests](../../src/Cohesive.Assurance.Tests/TransitionAssuranceTests.cs)
+authors and interprets an inventory reservation, then checks its candidate state under an
+explicit reference-model commit scope. An independent stock predicate accepts 3 reserved
+units out of 10 and rejects 12. A production adapter must supply actual commit evidence;
+a non-committing transition decision alone is insufficient.
+
+The evaluator indexes binding IDs once per invocation and lazily caches portable inputs
+and contract checks per observation/input within each alternative. Short-circuited inputs
+remain untouched. Cache storage is bounded by observed inputs × claim inputs and released
+between alternatives. This trades memory for avoiding repeated validation; it does not cache
+across batches or share mutable evaluation state. Input-contract diagnostics are emitted once
+per observed input, with occurrence attribution.
+
+Evidence method `cohesive.assurance.batch/v2` records the new event payload representation,
+eligible-comparison budget semantics and diagnostic deduplication. Earlier v1 evidence must
+be regenerated from its source observations; it is not silently reinterpreted. Claim schema
+and fingerprint bytes remain unchanged. Claim and result hashing use core's existing
+`StrictDocumentJson.ComputeCanonicalSha256`; each domain retains its payload/profile authority.

@@ -18,13 +18,26 @@ public class ClaimAuthoringTests
     static ClaimReference Ref(string name, string revision = "1") =>
         new(new SourceReference($"test://{name}"), revision, $"sha256:{name}-{revision}");
 
-    static Claim Start(string id = "inventory.safe", string sourceRevision = "1") =>
+    static Claim.Declaration Start(string id = "inventory.safe", string sourceRevision = "1") =>
         Claim.Define(id, "1", Ref("inventory"), Ref("observations"), Ref("source", sourceRevision), Ref("configuration"));
 
-    static Claim State() => Start().AtEveryCommittedState(Ref("population"), InitialStateSelection.Include);
+    static Claim.Predicate State() => Start().AtEveryCommittedState(Ref("population"), InitialStateSelection.Include);
 
     static ClaimInput Input(ExpressionBinding binding, ClaimInputRole role) =>
         new(binding.Id, role, new ValueContract(binding.Type));
+
+    [Fact]
+    public void SharedHashHelperPreservesCanonicalClaimDigests()
+    {
+        var input = new ClaimInput(new("state"), ClaimInputRole.State, new(new ScalarTypeRef(ScalarTypeKind.Bool)));
+        var document = State().Require(Expr.BoundValue(input.Id), [input]).Build();
+        var options = Cohesive.Model.Serialization.StrictDocumentJson.CreateOptions();
+        string PriorHash<T>(T payload) where T : class => Convert.ToHexStringLower(
+            System.Security.Cryptography.SHA256.HashData(Cohesive.Model.Serialization.StrictDocumentJson.GetCanonicalBytes(payload, options)));
+        Assert.Equal(PriorHash(new { document.Schema, document.PredicateProfile, document.Definition }), document.SemanticFingerprint);
+        Assert.Equal(PriorHash(new { document.Schema, document.Lowering, document.PredicateProfile,
+            document.Definition, document.Source, document.Configuration, document.Producer }), document.Fingerprint);
+    }
 
     [Fact]
     public void TypedAndStructuralSourcesHaveIdenticalSemanticIr()
@@ -235,11 +248,13 @@ public class ClaimAuthoringTests
     [Fact]
     public void InvalidFormsAndBindingsCannotProduceIr()
     {
-        Assert.Throws<InvalidOperationException>(() => Start().Build());
+        Assert.Null(typeof(Claim.Declaration).GetMethod("Build"));
+        Assert.Null(typeof(Claim.Predicate).GetMethod("Build"));
         Assert.Throws<ArgumentOutOfRangeException>(() => Start().RequireWithin(Ref("t"), Ref("w"), TimeSpan.FromTicks(-1)));
         var input = new ClaimInput(new("before"), ClaimInputRole.Before, new ValueContract(new ScalarTypeRef(ScalarTypeKind.Bool)));
         Assert.Throws<ArgumentException>(() => State().Require(Expr.BoundValue(input.Id), [input]).Build());
-        Assert.Throws<InvalidOperationException>(() => State().ForEachCommitted(Ref("transition")));
+        Assert.Null(typeof(Claim.Predicate).GetMethod("ForEachCommitted"));
+        Assert.Null(typeof(Claim).GetMethod("Require"));
     }
 
     [Fact]

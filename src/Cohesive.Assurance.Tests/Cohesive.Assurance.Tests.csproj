@@ -12,5 +12,6 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <Using Include="Xunit" />
     <ProjectReference Include="../Cohesive.Assurance/Cohesive.Assurance.csproj" />
+    <ProjectReference Include="../Cohesive.Transitions/Cohesive.Transitions.csproj" />
   </ItemGroup>
 </Project>

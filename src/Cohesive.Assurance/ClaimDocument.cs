@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -116,7 +115,7 @@ public sealed class ClaimDocument
                 definition, source, configuration, producer)));
 
     static string Hash<T>(T value) where T : class => Convert.ToHexStringLower(
-        SHA256.HashData(StrictDocumentJson.GetCanonicalBytes(value, Options)));
+        StrictDocumentJson.ComputeCanonicalSha256(value, Options));
 
     sealed record Payload(string Schema, string Lowering, string PredicateProfile, ClaimDefinition Definition,
         ClaimReference Source, ClaimReference Configuration, string Producer);

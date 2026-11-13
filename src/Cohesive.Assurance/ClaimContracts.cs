@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using Cohesive.Execution;
 using System.Text.Json.Serialization;
 using Cohesive.Model;
 
@@ -66,6 +67,19 @@ public sealed record ClaimReference
     public string Revision { get; }
     /// <summary>Owning domain's content fingerprint.</summary>
     public string Fingerprint { get; }
+
+    /// <summary>Attaches an exact Cohesive execution definition without hand-copying its identity or fingerprint.</summary>
+    /// <param name="reference">Owning model's typed reference, for example a compiled transition's DefinitionReference.</param>
+    /// <returns>An exact claim reference retaining the definition identity, revision, algorithm, canonicalization and digest.</returns>
+    /// <remarks>This projection does not validate the referenced document or establish execution/commit evidence.</remarks>
+    /// <exception cref="ArgumentNullException">Reference is null.</exception>
+    public static ClaimReference FromExecution(ExecutionDefinitionReference reference)
+    {
+        ArgumentNullException.ThrowIfNull(reference);
+        var fingerprint = reference.Fingerprint;
+        return new(SourceReference.Create("execution", Uri.EscapeDataString(reference.DefinitionId.Value)), reference.RevisionId.Value,
+            $"{Uri.EscapeDataString(fingerprint.Algorithm)}:{Uri.EscapeDataString(fingerprint.Canonicalization)}:{Uri.EscapeDataString(fingerprint.Value)}");
+    }
 
     internal static ImmutableArray<ClaimReference> NormalizeSet(ImmutableArray<ClaimReference> references)
     {

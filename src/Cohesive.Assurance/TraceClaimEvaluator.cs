@@ -42,6 +42,10 @@ public static class TraceClaimEvaluator
         TraceEvaluationStatus status = TraceEvaluationStatus.Completed;
         long predicateEvaluations;
         long candidateVisits;
+        readonly Dictionary<ValueBindingId, int> inputIndices = document.Definition.Inputs
+            .Select((input, index) => (input.Id, index)).ToDictionary(x => x.Id, x => x.index);
+        // Invocation-owned, bounded by observations × declared inputs; cleared between alternatives.
+        readonly Dictionary<SemanticObservation, PortableExpressionValue?[]> preparedInputs = new(ReferenceEqualityComparer.Instance);
         readonly Dictionary<ClaimReference, ObservationRequirement> requirements = [];
         readonly Dictionary<(ClaimReference, string), ObservationCompleteness> frontiers = [];
 
@@ -115,7 +119,9 @@ public static class TraceClaimEvaluator
                 if (observation is null || observation.Selector is null || observation.Values is null
                     || string.IsNullOrWhiteSpace(observation.Occurrence) || string.IsNullOrWhiteSpace(observation.Partition)
                     || observation.Step < 0 || observation.Ticks < 0 || !Enum.IsDefined(observation.Kind)
-                    || observation.Values.Keys.Any(x => !Enum.IsDefined(x)))
+                    || observation.Values.Keys.Any(x => !Enum.IsDefined(x))
+                    || observation.Kind == SemanticObservationKind.Event && observation.Values.Count != 0
+                    || observation.Kind != SemanticObservationKind.Event && observation.EventPayload is not null)
                 {
                     Invalid("/observations", "An observation has invalid identity, role, time, kind or selector.");
                     return observations;
@@ -193,11 +199,13 @@ public static class TraceClaimEvaluator
 
         static bool SameOccurrence(SemanticObservation a, SemanticObservation b) =>
             a.Step == b.Step && a.Ticks == b.Ticks && a.Kind == b.Kind && a.Selector == b.Selector
+            && Nullable.Equals(a.EventPayload, b.EventPayload)
             && a.Values.Count == b.Values.Count && a.Values.All(x => b.Values.TryGetValue(x.Key, out var value) && x.Value.Equals(value));
 
         TraceAlternativeResult EvaluateAlternative(TraceObservationAlternative alternative,
             List<SemanticObservation> observations, int duplicates)
         {
+            preparedInputs.Clear();
             List<ClaimObligationResult> obligations = [];
             var candidates = observations.Where(x => x.Kind == SemanticObservationKind.Event && x.Selector == claim.Witness).ToList();
             foreach (var observation in observations)
@@ -243,18 +251,21 @@ public static class TraceClaimEvaluator
                 }
             }
             var unknown = false;
-            foreach (var candidate in observations)
+            // Validation establishes monotone steps and ticks. Search the eligible half-open
+            // range before charging the comparison budget; same-step outcomes remain inclusive.
+            var start = claim.Form == ClaimForm.HistoricalRequirement ? 0 : Bound(observations, trigger.Step, byTime: false, inclusive: false);
+            var end = claim.Form == ClaimForm.HistoricalRequirement
+                ? Bound(observations, trigger.Step, byTime: false, inclusive: false)
+                : Bound(observations, deadline, byTime: true, inclusive: true);
+            for (var index = start; index < end; index++)
             {
+                var candidate = observations[index];
                 cancellation.ThrowIfCancellationRequested();
                 if (++candidateVisits > limits.MaxEventCandidateVisits)
                 {
                     Exhausted(trigger.Occurrence, "The event candidate scan budget is exhausted.");
                     return Obligation(trigger, ClaimVerdict.Inconclusive, TraceEvaluationCodes.BudgetExceeded);
                 }
-                var eligible = claim.Form == ClaimForm.HistoricalRequirement
-                    ? candidate.Step < trigger.Step
-                    : candidate.Step >= trigger.Step && candidate.Ticks >= trigger.Ticks && candidate.Ticks <= deadline;
-                if (!eligible) continue;
                 var verdict = Predicate(trigger, candidate);
                 if (verdict == ClaimVerdict.Satisfied)
                     return new(trigger.Occurrence, trigger.Partition, trigger.Step, verdict,
@@ -270,6 +281,20 @@ public static class TraceClaimEvaluator
                 : TraceEvaluationCodes.WitnessAbsent;
             if (unknown || !complete) Gap(reason, trigger.Occurrence, "No established witness; predicate evidence or source completeness is insufficient.");
             return Obligation(trigger, unknown || !complete ? ClaimVerdict.Inconclusive : ClaimVerdict.Violated, reason);
+        }
+
+        static int Bound(List<SemanticObservation> observations, long value, bool byTime, bool inclusive)
+        {
+            var low = 0;
+            var high = observations.Count;
+            while (low < high)
+            {
+                var middle = low + (high - low) / 2;
+                var key = byTime ? observations[middle].Ticks : observations[middle].Step;
+                if (key < value || inclusive && key == value) low = middle + 1;
+                else high = middle;
+            }
+            return low;
         }
 
         bool Covers(ClaimReference selector, Func<ObservationCompleteness, bool> sufficient)
@@ -291,17 +316,23 @@ public static class TraceClaimEvaluator
             cancellation.ThrowIfCancellationRequested();
             PortableExpressionValue Resolve(ValueBindingId id)
             {
-                var input = claim.Inputs.FirstOrDefault(x => x.Id == id);
-                if (input is null) return Missing;
+                if (!inputIndices.TryGetValue(id, out var index)) return Missing;
+                var input = claim.Inputs[index];
                 var observation = input.Role == ClaimInputRole.Witness ? witness : trigger;
-                var role = input.Role == ClaimInputRole.Witness ? ClaimInputRole.Trigger : input.Role;
-                if (observation is null || !observation.Values.TryGetValue(role, out var value)) return Missing;
-                if (!input.Contract.IsSatisfiedByConstant(value))
+                if (observation is null) return Missing;
+                if (!preparedInputs.TryGetValue(observation, out var values))
+                    preparedInputs.Add(observation, values = new PortableExpressionValue?[claim.Inputs.Length]);
+                if (values[index] is { } prepared) return prepared;
+                var value = input.Role is ClaimInputRole.Trigger or ClaimInputRole.Witness
+                    ? observation.EventPayload
+                    : observation.Values.TryGetValue(input.Role, out var observed) ? observed : (ObservationValue?)null;
+                if (value is null) return (values[index] = Missing).Value;
+                if (!input.Contract.IsSatisfiedByConstant(value.Value))
                 {
-                    Gap(TraceEvaluationCodes.InputContractGap, trigger.Occurrence, "The observed input is incomplete or does not satisfy its declared value contract.");
-                    return Missing;
+                    Gap(TraceEvaluationCodes.InputContractGap, observation.Occurrence, "The observed input is incomplete or does not satisfy its declared value contract.");
+                    return (values[index] = Missing).Value;
                 }
-                return PortableExpressionValue.FromObservation(value);
+                return (values[index] = PortableExpressionValue.FromObservation(value.Value)).Value;
             }
             try
             {

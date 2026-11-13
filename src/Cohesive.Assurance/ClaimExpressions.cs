@@ -19,7 +19,7 @@ public static class ClaimExpressions
     /// <returns>A new declaration containing only portable predicate source.</returns>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ExpressionAuthoringException">The expression is unsupported or captures host state.</exception>
-    public static Claim Require<T>(this Claim claim, IExpressionInput<T> input,
+    public static Claim Require<T>(this Claim.Predicate claim, IExpressionInput<T> input,
         ClaimInputRole role, Expression<Func<T, bool>> predicate) where T : notnull =>
         Lower(claim, predicate, [Binding(input)], [role]);
 
@@ -35,7 +35,7 @@ public static class ClaimExpressions
     /// <returns>A new portable source declaration.</returns>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ExpressionAuthoringException">The expression cannot be lowered faithfully.</exception>
-    public static Claim Require<TLeft, TRight>(this Claim claim,
+    public static Claim Require<TLeft, TRight>(this Claim.Predicate claim,
         IExpressionInput<TLeft> left, ClaimInputRole leftRole,
         IExpressionInput<TRight> right, ClaimInputRole rightRole,
         Expression<Func<TLeft, TRight, bool>> predicate) where TLeft : notnull where TRight : notnull =>
@@ -53,7 +53,7 @@ public static class ClaimExpressions
     /// <returns>A new portable source declaration.</returns>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
     /// <exception cref="ExpressionAuthoringException">The expression cannot be lowered faithfully.</exception>
-    public static Claim Require<TBefore, TCommand, TAfter>(this Claim claim,
+    public static Claim Require<TBefore, TCommand, TAfter>(this Claim.Predicate claim,
         IExpressionInput<TBefore> before,
         IExpressionInput<TCommand> command,
         IExpressionInput<TAfter> after,
@@ -68,7 +68,7 @@ public static class ClaimExpressions
         return input.Binding;
     }
 
-    static Claim Lower(Claim claim, LambdaExpression predicate,
+    static Claim Lower(Claim.Predicate claim, LambdaExpression predicate,
         ExpressionBinding[] bindings, ClaimInputRole[] roles)
     {
         ArgumentNullException.ThrowIfNull(claim);

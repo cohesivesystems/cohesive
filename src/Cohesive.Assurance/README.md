@@ -131,3 +131,18 @@ reference operations; no runtime throughput claim is made. No new external depen
 
 Run `dotnet test src/Cohesive.Assurance.Tests/Cohesive.Assurance.Tests.csproj` for the
 four-form authoring, trace semantics, evidence re-evaluation and persistence suite.
+
+
+## Staged source and typed execution references
+
+`Define → choose one form → Require → Build` is enforced by the authoring surface.
+`Claim.Declaration` exposes form selection, `Claim.Predicate` requires a predicate, and
+completed `Claim` source supports immutable metadata edits and lowering. Add attachments,
+assumptions and evidence requirements after `Require`.
+
+Use `ClaimReference.FromExecution(transition.Reference)` for an authored Cohesive transition
+(or another exact execution-definition reference). This preserves the owning model's revision
+and complete fingerprint profile without a parallel identity or hashing implementation.
+See [the executed inventory example](../Cohesive.Assurance.Tests/TransitionAssuranceTests.cs)
+and [the observation boundary](../../docs/assurance/batch-evaluation.md) for the distinction
+between an interpreted candidate and production commit evidence.

@@ -12,7 +12,7 @@ public enum SemanticObservationKind
     CommittedState,
     /// <summary>A successful atomic transition with before/command/after input roles.</summary>
     Commit,
-    /// <summary>A semantic event with its payload in the Trigger role.</summary>
+    /// <summary>A semantic event with a role-neutral payload.</summary>
     Event,
     /// <summary>A definitely aborted attempt, excluded from committed-transition obligations.</summary>
     AbortedAttempt,
@@ -57,11 +57,12 @@ public sealed record TraceObservationContract(ClaimReference Reference, ClaimRef
 /// <param name="Ticks">Nonnegative monotone contract time in 100 ns units; equal steps have equal time.</param>
 /// <param name="Selector">Exact selector matched by the adapter.</param>
 /// <param name="Kind">State, event, successful commit or attempt classification.</param>
-/// <param name="Values">Role-indexed observations. Event payload uses Trigger; absent keys mean missing evidence.
+/// <param name="Values">State/commit role-indexed observations; events require an empty dictionary. Absent keys mean missing evidence.
 /// Undefined values denote authoritative domain absence, and null denotes explicit domain null.</param>
+/// <param name="EventPayload">Role-neutral event payload; null means missing evidence. Must be null for non-events.</param>
 public sealed record SemanticObservation(string Occurrence, string Partition, long Step, long Ticks,
     ClaimReference Selector, SemanticObservationKind Kind,
-    ImmutableDictionary<ClaimInputRole, ObservationValue> Values);
+    ImmutableDictionary<ClaimInputRole, ObservationValue> Values, ObservationValue? EventPayload = null);
 
 /// <summary>Attributed completeness from scope origin through inclusive frontiers for one source and selector.</summary>
 /// <param name="Selector">Exact selector whose occurrences and population membership are complete.</param>

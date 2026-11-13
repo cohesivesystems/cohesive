@@ -1,6 +1,5 @@
-using System.Collections.Immutable;
-using System.Security.Cryptography;
 using System.Text;
+using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Execution;
 using Cohesive.Model.Serialization;
@@ -35,7 +34,7 @@ public enum TraceEvaluationStatus
 /// <param name="MaxAlternatives">Maximum joint alternatives evaluated.</param>
 /// <param name="MaxObservations">Maximum total observation/frontier records accepted, including duplicate deliveries.</param>
 /// <param name="MaxPredicateEvaluations">Maximum predicate evaluations, including event candidate comparisons.</param>
-/// <param name="MaxEventCandidateVisits">Maximum event candidates examined, including ineligible timestamps.</param>
+/// <param name="MaxEventCandidateVisits">Maximum eligible event candidates compared; binary-search skips outside the temporal window are not charged.</param>
 public sealed record TraceEvaluationLimits(int MaxAlternatives = 1024, int MaxObservations = 100_000,
     int MaxPredicateEvaluations = 1_000_000, int MaxEventCandidateVisits = 1_000_000);
 
@@ -88,7 +87,7 @@ public sealed record TraceEvaluation(ClaimDocument Claim, TraceObservationBatch 
     }
 
     /// <summary>Versioned reference evaluation method; not a proof-system identity.</summary>
-    public string Method => "cohesive.assurance.batch/v1";
+    public string Method => "cohesive.assurance.batch/v2";
 
     /// <summary>Serializes the complete retained evaluation into canonical JSON.</summary>
     /// <returns>Portable result and input evidence, suitable for independent re-evaluation.</returns>
@@ -118,5 +117,5 @@ public sealed record TraceEvaluation(ClaimDocument Claim, TraceObservationBatch 
     /// <returns>SHA-256 of canonical evidence bytes; integrity identity, not a signature.</returns>
     /// <exception cref="System.Text.Json.JsonException">An observation cannot be encoded portably.</exception>
     /// <exception cref="NotSupportedException">An observation representation is unsupported.</exception>
-    public string Fingerprint() => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(Serialize())));
+    public string Fingerprint() => Convert.ToHexString(StrictDocumentJson.ComputeCanonicalSha256(this, Options));
 }

@@ -15,7 +15,7 @@ public class TraceClaimEvaluatorTests
 
     static ClaimReference R(string name, string revision = "1") => new(new("test://" + name), revision, "hash:" + name + revision);
     static readonly ClaimReference Selection = R("selection"), Witness = R("witness"), Contract = R("contract");
-    static Claim Start() => Claim.Define("orders.claim", "1", R("orders"), Contract, R("source"), R("config"));
+    static Claim.Declaration Start() => Claim.Define("orders.claim", "1", R("orders"), Contract, R("source"), R("config"));
     static ClaimDocument Invariant(InitialStateSelection initial = InitialStateSelection.Include)
     {
         var stock = new ExpressionAuthoring().Input<Inventory>("stock");
@@ -37,7 +37,7 @@ public class TraceClaimEvaluatorTests
                 .Add(ClaimInputRole.State, ObservationValue.FromObject(new Inventory(10m, reserved))));
     static SemanticObservation Event(string id, long step, long time, bool witness = false, string order = "o1", string partition = "p1") =>
         new(id, partition, step, time, witness ? Witness : Selection, SemanticObservationKind.Event,
-            ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty.Add(ClaimInputRole.Trigger, ObservationValue.FromObject(new OrderEvent(order))));
+            ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty, EventPayload: ObservationValue.FromObject(new OrderEvent(order)));
     static ObservationCompleteness Frontier(ClaimReference selector, ObservationClosure closure = ObservationClosure.Open,
         long time = 100, long step = 100, string partition = "p1") => new(selector, partition, step, time, closure, R("frontier-" + partition));
     static TraceObservationBatch Batch(SemanticObservation[] observations, ObservationCompleteness[]? frontiers = null,
@@ -216,7 +216,7 @@ public class TraceClaimEvaluatorTests
     [Fact]
     public void MissingCorrelationCannotEstablishAbsenceEvenWithCompleteHistory()
     {
-        var witness = Event("capture", 0, 0, witness: true) with { Values = ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty };
+        var witness = Event("capture", 0, 0, witness: true) with { EventPayload = null };
         var result = Evaluate(Events(history: true), Batch([witness, Event("ship", 1, 1)], [Frontier(Witness)], includeWitness: true));
         Assert.Equal(ClaimVerdict.Inconclusive, Only(result).Verdict);
     }
@@ -303,12 +303,96 @@ public class TraceClaimEvaluatorTests
     }
 
     [Fact]
-    public void IneligibleCandidateScansAreAlsoBounded()
+    public void IneligibleCandidatesDoNotConsumeComparisonBudget()
     {
         var result = Evaluate(Events(), Batch([Event("early1", 0, 0, witness: true), Event("early2", 1, 1, witness: true), Event("cancel", 2, 2)],
             includeWitness: true), new(MaxEventCandidateVisits: 1));
+        Assert.Equal(TraceEvaluationStatus.Completed, result.Status);
+        Assert.Equal(ClaimVerdict.Inconclusive, result.Verdict);
+    }
+
+    [Fact]
+    public void TwoThousandNarrowWindowsNeedOnlyTwoThousandComparisons()
+    {
+        const int count = 2000;
+        var observations = Enumerable.Range(0, count).SelectMany(i => new[]
+        {
+            Event($"trigger-{i}", i * 2, i * 20, order: $"order-{i}"),
+            Event($"witness-{i}", i * 2 + 1, i * 20 + 1, witness: true, order: $"order-{i}")
+        }).ToArray();
+        var result = Evaluate(Events(duration: 1), Batch(observations,
+            [Frontier(Selection, ObservationClosure.Closed, count * 20, count * 2),
+             Frontier(Witness, ObservationClosure.Closed, count * 20, count * 2)], includeWitness: true),
+            new(MaxEventCandidateVisits: count));
+        Assert.Equal(TraceEvaluationStatus.Completed, result.Status);
+        Assert.Equal(ClaimVerdict.Satisfied, result.Verdict);
+        Assert.Equal(count, result.Alternatives[0].Obligations.Length);
+    }
+
+    [Fact]
+    public void EligibleNonmatchingCandidatesStillConsumeBudget()
+    {
+        var result = Evaluate(Events(), Batch([Event("trigger", 0, 0),
+            Event("wrong1", 1, 1, witness: true, order: "other"),
+            Event("wrong2", 2, 2, witness: true, order: "other")], includeWitness: true),
+            new(MaxEventCandidateVisits: 1));
         Assert.Equal(TraceEvaluationStatus.BudgetExceeded, result.Status);
         Assert.Equal(ClaimVerdict.Inconclusive, result.Verdict);
+    }
+
+    [Fact]
+    public void OneRoleNeutralEventCanSupplyBothSidesOfASameStepClaim()
+    {
+        var author = new ExpressionAuthoring();
+        var trigger = author.Input<OrderEvent>("trigger");
+        var witness = author.Input<OrderEvent>("witness");
+        var claim = Start().RequireWithin(Selection, Selection, TimeSpan.Zero)
+            .Require(trigger, ClaimInputRole.Trigger, witness, ClaimInputRole.Witness, (t, w) => t.OrderId == w.OrderId).Build();
+        var result = Evaluate(claim, Batch([Event("both", 1, 1)], [Frontier(Selection, ObservationClosure.Closed)]));
+        Assert.Equal(ClaimVerdict.Satisfied, result.Verdict);
+        Assert.Equal("both", Only(result).WitnessOccurrence);
+        Assert.Equal(result.Serialize(), TraceEvaluation.Reevaluate(result.Serialize()).Serialize());
+        Assert.Throws<JsonException>(() => TraceEvaluation.Reevaluate(
+            result.Serialize().Replace("cohesive.assurance.batch/v2", "cohesive.assurance.batch/v1")));
+    }
+
+    [Fact]
+    public void LegacyTriggerRolePayloadIsRejectedRatherThanSilentlyRemapped()
+    {
+        var legacy = Event("legacy", 1, 1) with
+        {
+            Values = ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty
+                .Add(ClaimInputRole.Trigger, ObservationValue.FromObject(new OrderEvent("o1"))),
+            EventPayload = null
+        };
+        Assert.Equal(TraceEvaluationStatus.InvalidObservations,
+            Evaluate(Events(), Batch([legacy], includeWitness: true)).Status);
+    }
+
+    [Fact]
+    public void UnusedMalformedInputDoesNotCreateAContractGap()
+    {
+        var input = new ClaimInput(new("state"), ClaimInputRole.State, new(new ScalarTypeRef(ScalarTypeKind.Bool)));
+        var claim = Start().AtEveryCommittedState(Selection, InitialStateSelection.Exclude)
+            .Require(Expr.Or(Expr.Const(true), Expr.BoundValue(input.Id)), [input]).Build();
+        var result = Evaluate(claim, Batch([Stock("unused", 1, 0)], [Frontier(Selection, ObservationClosure.Closed)]));
+        Assert.Equal(ClaimVerdict.Satisfied, result.Verdict);
+        Assert.DoesNotContain(result.Diagnostics, x => x.Code == TraceEvaluationCodes.InputContractGap);
+    }
+
+    [Fact]
+    public void SharedMalformedWitnessIsValidatedOnceAcrossTriggers()
+    {
+        var boolean = new ValueContract(new ScalarTypeRef(ScalarTypeKind.Bool));
+        var claim = Start().RequireEarlier(Selection, Witness)
+            .Require(Expr.Eq(Expr.BoundValue(new("t")), Expr.BoundValue(new("w"))),
+                [new(new("t"), ClaimInputRole.Trigger, boolean), new(new("w"), ClaimInputRole.Witness, boolean)]).Build();
+        var malformed = Event("malformed", 0, 0, witness: true) with { EventPayload = ObservationValue.FromString("invalid") };
+        var a = Event("a", 1, 1) with { EventPayload = ObservationValue.FromBool(true) };
+        var b = Event("b", 2, 2) with { EventPayload = ObservationValue.FromBool(true) };
+        var result = Evaluate(claim, Batch([malformed, a, b], [Frontier(Witness)], includeWitness: true));
+        Assert.Equal(ClaimVerdict.Inconclusive, result.Verdict);
+        Assert.Single(result.Diagnostics.Where(x => x.Code == TraceEvaluationCodes.InputContractGap));
     }
 
     [Fact]
@@ -342,6 +426,8 @@ public class TraceClaimEvaluatorTests
         Assert.Equal(result.Serialize(), Evaluate(claim, batch).Serialize());
         Assert.Equal(result.Serialize(), TraceEvaluation.Reevaluate(result.Serialize()).Serialize());
         Assert.Equal(result.Fingerprint(), Evaluate(claim, batch).Fingerprint());
+        Assert.Equal(Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(result.Serialize()))), result.Fingerprint());
         using var json = JsonDocument.Parse(result.Serialize());
         Assert.Contains(claim.Fingerprint, result.Serialize());
         Assert.Contains("test://candidate", result.Serialize());
