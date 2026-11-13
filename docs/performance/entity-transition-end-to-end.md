@@ -3,7 +3,7 @@
 ## What is measured
 
 One warm entity API transition, from request bytes to response bytes, through the real ASP.NET binding
-(`EntityApiOperationBinding.Transition`): body deserialization, repository read, reference decision,
+created by `BindTransition`. Includes body deserialization, repository read, reference decision,
 candidate preparation, commit and response writing. The fixture is a 13-field `Shipment` entity with
 string, decimal, Int64, Boolean and timestamp fields. The `Assign` transition has one admission guard and three
 field updates. Requests alternate between two carriers, so every invocation is an Applied, committed transition.
@@ -119,29 +119,51 @@ Deferred quick wins:
   construction. Removing the duplicates requires admission evidence on the observation storage rather than
   local skips.
 
-## Fused ordinal candidate writes
 
-An eligible transition with a complete root layout prepares a generated body once per plan and layout. Direct
-assignments write into one owned ordinal candidate during execution. Candidate preparation then reuses those
-slots and still validates entity fields and the governing shape. The reference interpreter continues to own
-the decision, patch evidence, invariants, and coherence checks. Rejected and conflicting decisions discard
-their working slots. Unsupported bodies and layouts use ordinary execution and patch projection.
+## Ordinal write experiments
 
-Two Release BenchmarkDotNet runs per revision on Apple M5 Max, macOS 27.0.1 and .NET 10.0.13 (SDK 10.0.402). The baseline is [`c495740f`](https://github.com/cohesivesystems/cohesive/commit/c495740f) and the candidate is [`a50e0ee8`](https://github.com/cohesivesystems/cohesive/commit/a50e0ee8). Run order was baseline, candidate, candidate, baseline.
+Both ordinal write experiments used the same
+13-field Shipment workload and BenchmarkDotNet settings on an Apple M5 Max, macOS 27.0.1, .NET 10.0.13
+(SDK 10.0.402). Each result below gives both warm run means. Managed allocation is per operation.
 
-Each operation reads a JSON request, runs the mapped ASP.NET endpoint, reads and conditionally commits state, and serializes the response. SQLite uses a real file, WAL, and FULL synchronization. The in-memory repository exercises dictionary fallback. Setup, first-use compilation, and network transport are outside the measurement.
+### Decision and candidate preparation
 
-| Store | Response | Main KiB/op | PR KiB/op | Allocation change | Main mean µs (two runs) | PR mean µs (two runs) |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| InMemory | ClrResource | 20.02 | 20.04 | +0.1% | 6.59 / 6.78 | 6.93 / 7.16 |
-| InMemory | Observation | 19.90 | 19.91 | +0.1% | 6.83 / 6.82 | 7.57 / 6.90 |
-| Sqlite | ClrResource | 45.46 | 42.12 / 42.11 | -7.4% | 776.90 / 791.58 | 951.09 / 847.97 |
-| Sqlite | Observation | 45.33 | 41.98 | -7.4% | 768.39 / 778.58 | 856.31 / 837.52 |
+On the original PR tip, [`15ffb61a`](https://github.com/cohesivesystems/cohesive/commit/15ffb61a), a stage
+benchmark loaded a SQLite snapshot before measurement and reused its plan, input, activation and snapshot.
+Setup confirmed that the optimized path produced a candidate, that both decisions serialized identically,
+and that the resulting observations were equal. This excludes request parsing, database I/O, response writing,
+and first-use compilation.
 
-Managed allocation fell about 7.4% on SQLite for both response projections and was effectively flat on the in-memory fallback. SQLite mean latency was higher in both comparisons (about 8–22% across response projections). The magnitude varied between runs.
+| Measured operation | Mean µs (run 1 / run 2) | KiB/op |
+| --- | ---: | ---: |
+| Reference decision | 2.685 / 2.627 | 10.53 |
+| Ordinal decision and slot writes | 2.659 / 2.639 | 10.07 |
+| Reference decision and entity preparation | 4.455 / 4.174 | 14.63 |
+| Ordinal decision and entity preparation | 4.073 / 3.553 | 11.31 |
 
-Run the same workload with the following arguments against each Release build.
+The first pair calls `DecideFullState` and `DecideForEntity`. The second pair also calls the respective
+`ApplyToEntity` overload, including normal entity validation. The decision timings are within 1.1% of
+one another. The candidate saves 0.38–0.62 µs once entity preparation is included. The original SQLite
+endpoint runs measured a 56–174 µs increase, whose cause remains unisolated. The specialized body also kept the interpreter's ordinary candidate
+writes and performed a second write into ordinal slots.
+
+### Endpoint with file-backed SQLite
+
+| Variant | CLR response KiB/op | Observation response KiB/op | CLR mean µs (run 1 / run 2) | Observation mean µs (run 1 / run 2) |
+| --- | ---: | ---: | ---: | ---: |
+| Main for the generated-body experiment | 45.46 | 45.33 | 776.90 / 791.58 | 768.39 / 778.58 |
+| Generated body with duplicate candidate writes | 42.12 / 42.11 | 41.98 | 951.09 / 847.97 | 856.31 / 837.52 |
+| Main for the projector experiment | 45.47 | 45.33 | 877.68 / 932.56 | 824.61 / 951.16 |
+| Canonical patch projected into ordinal slots | 43.11 / 43.10 | 42.98 / 42.97 | 996.52 / 827.36 | 1063.21 / 881.70 |
+
+Both main baselines used [`c495740f`](https://github.com/cohesivesystems/cohesive/commit/c495740f). The second
+experiment kept the reference interpreter and applied the canonical patch once into one owned slot vector.
+It reduced managed allocations by about 5.2%, with opposite SQLite latency results across the two comparisons.
+In-memory allocations stayed within 0.1% of main in both experiments. The endpoint benchmark includes JSON
+request reading and response writing and an actual conditional SQLite commit with WAL and FULL synchronization.
 
 ```sh
-dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- --filter '*EntityTransitionEndToEndBenchmarks.Transition*' --inProcess --launchCount 1 --warmupCount 5 --iterationCount 12 --iterationTime 250 --noForcedGCs
+dotnet run --project src/Cohesive.Relations.Benchmarks -c Release -- \
+  --filter '*EntityTransitionEndToEndBenchmarks.Transition*' --inProcess \
+  --launchCount 1 --warmupCount 5 --iterationCount 12 --iterationTime 250 --noForcedGCs
 ```

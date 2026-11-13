@@ -57,19 +57,23 @@ internal sealed class EntityTransitionEndToEnd : IDisposable
     int invocation;
 
     EntityTransitionEndToEnd(WebApplication app, RequestDelegate endpoint, byte[][] requests, string? databaseDirectory,
-        IEntityRepository repository, CompiledTransitionPlan plan, OperationContext context)
+        IEntityRepository repository, Transition<ShipmentEntity, ShipmentEntity.AssignInput, bool> assign, OperationContext context)
     {
         this.app = app;
         this.endpoint = endpoint;
         this.requests = requests;
         this.databaseDirectory = databaseDirectory;
         Repository = repository;
-        Plan = plan;
+        this.assign = assign;
         Context = context;
     }
 
     internal IEntityRepository Repository { get; }
-    internal CompiledTransitionPlan Plan { get; }
+    readonly Transition<ShipmentEntity, ShipmentEntity.AssignInput, bool> assign;
+    CompiledTransitionPlan? plan;
+
+    internal CompiledTransitionPlan Plan => plan ??= assign.Compile().Plan
+        ?? throw new InvalidOperationException("The benchmark transition must compile.");
     internal OperationContext Context { get; }
     internal static EntityDefinition Entity => ShipmentEntity.Instance.Definition;
 
@@ -105,22 +109,20 @@ internal sealed class EntityTransitionEndToEnd : IDisposable
         builder.Services.RegisterEntityRepository(entity.Definition, (_, _) => repository);
         var app = builder.Build();
 
-        var plan = CompileAssign(entity);
+        var assign = AuthorAssign(entity);
         var api = Cohesive.Api.Api.Define();
         var options = new EntityApiEndpointOptions { Entity = entity.Definition };
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult = responseKind == EntityTransitionResponse.ClrResource
             ? static (_, snapshot) => Results.Ok(ToResource(snapshot))
             : static (_, snapshot) => Results.Ok(snapshot.Entity.Observation.Value);
-        options.BindTransition(
-            api.Entity<ShipmentResource>().Command("Assign")
-                .Route("POST", Route)
-                .RouteParameter<string>("id")
-                .Body<AssignShipmentRequest>()
-                .Returns<ShipmentResource>(),
-            plan,
-            static (context, request) => new ShipmentEntity.AssignInput(
-                ((AssignShipmentRequest)request!).Carrier, context.OperationContext.UtcNow),
-            createResult);
+        api.Entity<ShipmentResource>().Command("Assign")
+            .Route("POST", Route)
+            .RouteParameter<string>("id")
+            .Returns<ShipmentResource>()
+            .BindTransition(options, assign,
+                static (EntityApiRequestContext context, AssignShipmentRequest request) => new ShipmentEntity.AssignInput(
+                    request.Carrier, context.OperationContext.UtcNow),
+                createResult);
         app.MapEntityApiDefinition(api.Build(), options);
 
         var routeEndpoint = ((IEndpointRouteBuilder)app).DataSources
@@ -132,7 +134,7 @@ internal sealed class EntityTransitionEndToEnd : IDisposable
             JsonSerializer.SerializeToUtf8Bytes(new AssignShipmentRequest("carrier-north")),
             JsonSerializer.SerializeToUtf8Bytes(new AssignShipmentRequest("carrier-south"))
         ];
-        return new(app, routeEndpoint.RequestDelegate!, requests, directory, repository, plan, context);
+        return new(app, routeEndpoint.RequestDelegate!, requests, directory, repository, assign, context);
     }
 
     /// <summary>Runs one request through the mapped endpoint and returns the response byte count.</summary>
@@ -176,9 +178,8 @@ internal sealed class EntityTransitionEndToEnd : IDisposable
         Destination: "Dallas, TX", Reference: "PO-2026-000123", WeightKg: 1234.5600m, Pieces: 24, Hazmat: false,
         PickupAtUtc: now.AddDays(1), DeliverByUtc: now.AddDays(3), UpdatedAtUtc: now);
 
-    static CompiledTransitionPlan CompileAssign(ShipmentEntity entity)
-    {
-        var authored = TransitionAuthoring.Create<ShipmentEntity, ShipmentEntity.AssignInput, bool>(
+    static Transition<ShipmentEntity, ShipmentEntity.AssignInput, bool> AuthorAssign(ShipmentEntity entity) =>
+        TransitionAuthoring.Create<ShipmentEntity, ShipmentEntity.AssignInput, bool>(
             entity.Definition.Shape,
             new(
                 definitionId: new("benchmarks/shipments/assign"),
@@ -192,12 +193,6 @@ internal sealed class EntityTransitionEndToEnd : IDisposable
                 .Set(new("assign/set-status"), shipment => shipment.Status, "Assigned")
                 .Set(new("assign/set-updated-at"), shipment => shipment.UpdatedAtUtc, (_, input) => input.UpdatedAtUtc)
                 .Return(new("assign/applied"), TransitionOutcomeDisposition.Applied, true));
-        var compilation = authored.Compile();
-        if (!compilation.IsSuccessful)
-            throw new InvalidOperationException(string.Join(Environment.NewLine,
-                compilation.Validation.Diagnostics.Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")));
-        return (CompiledTransitionPlan)compilation.Plan!;
-    }
 
     internal static ShipmentResource ToResource(EntitySnapshot snapshot)
     {

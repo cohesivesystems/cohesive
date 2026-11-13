@@ -363,7 +363,7 @@ public abstract class OperationBuilder<TParent>
 
     internal string OperationName => name;
 
-    internal ApiEndpoint BuildEntityTransition(ExecutionDefinitionReference reference)
+    internal ApiEndpoint BuildEntityTransition<TRequest>(ExecutionDefinitionReference reference)
     {
         if (kind != ApiOperationKind.Command || entity is null)
             throw new InvalidOperationException($"Operation '{name}' must be an entity command to bind an entity Transition.");
@@ -372,7 +372,12 @@ public abstract class OperationBuilder<TParent>
         if ((declared is not null || endpoint is not null) && declared != reference)
             throw new InvalidOperationException($"Operation '{name}' already declares a different Transition contract.");
 
-        return endpoint ?? BuildPrepared(FinalizeHttpBinding(body, query, requestType), requestType, primaryResult, reference);
+        ValidateRequestType<TRequest>();
+        if (query is not null || endpoint is not null && endpoint.Operation.Http?.Body?.BodyType != typeof(TRequest))
+            throw new ArgumentException($"Operation '{name}' requires a matching JSON request body.");
+
+        var http = FinalizeHttpBinding(new HttpBodyBinding(typeof(TRequest)), null, typeof(TRequest));
+        return endpoint ?? BuildPrepared(http, typeof(TRequest), primaryResult, reference);
     }
 
     /// <summary>

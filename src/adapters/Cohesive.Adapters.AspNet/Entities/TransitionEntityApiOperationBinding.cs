@@ -20,24 +20,6 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
     readonly Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy;
 
     internal TransitionEntityApiOperationBinding(
-        string operationName,
-        CompiledTransitionPlan plan,
-        Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
-        Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
-        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken,
-        InteractionContractCatalog? interactionContracts,
-        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy)
-        : base(operationName)
-    {
-        this.plan = plan ?? throw new ArgumentNullException(nameof(plan));
-        this.createTransitionInput = createTransitionInput;
-        this.createResult = createResult ?? throw new ArgumentNullException(nameof(createResult));
-        this.getExpectedConcurrencyToken = getExpectedConcurrencyToken;
-        this.interactionContracts = interactionContracts;
-        this.createEmissionPolicy = createEmissionPolicy;
-    }
-
-    internal TransitionEntityApiOperationBinding(
         ApiEndpoint endpoint,
         CompiledTransitionPlan plan,
         Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
@@ -94,20 +76,22 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
             var input = createTransitionInput is null
                 ? request
                 : createTransitionInput(requestContext, request);
-            var (decision, projected) = TransitionReferenceInterpreter.DecideForEntity(
+            var decision = TransitionReferenceInterpreter.DecideFullState(
                 plan,
                 options.CreateActivationId(httpContext, operation),
                 ToPortableValue(
                     input,
                     plan.Definition.Input,
                     isSupplied: createTransitionInput is not null || operation.RequestType != typeof(void)),
-                state.Observation);
+                PortableValue.Concrete(
+                    plan.Definition.Observation,
+                    ObservationValue.FromObject(state.Fields)));
 
             EntityState newState;
             try
             {
                 newState = decision.GuaranteeDemands.CommitRequired
-                    ? TransitionStateProjector.ApplyToEntity(options.Entity, entityId, decision, snapshot.Entity, projected)
+                    ? TransitionStateProjector.ApplyToEntity(options.Entity, entityId, decision, snapshot.Entity)
                     : state;
             }
             catch (TransitionStatePreparationException exception)

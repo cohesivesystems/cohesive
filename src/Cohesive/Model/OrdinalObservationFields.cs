@@ -33,22 +33,6 @@ internal sealed class OrdinalObservationFields(ObservationLayout layout, Immutab
         field = (uint)ordinal < (uint)values.Length ? values[ordinal] : default;
         return field.Kind != ObservationValueKind.Undefined;
     }
-
-    internal static ObservationValue[] CopySlots(IOrdinalObservationStorage source)
-    {
-        var slots = new ObservationValue[source.Layout.Count];
-        for (var index = 0; index < slots.Length; index++)
-            source.TryGetField(index, out slots[index]);
-        return slots;
-    }
-
-    internal static void SetSlot(ref ObservationValue slot, ObservationValue value, ref int count)
-    {
-        if (slot.Kind == ObservationValueKind.Undefined) count++;
-        if (value.Kind == ObservationValueKind.Undefined) count--;
-        slot = value;
-    }
-
     public Enumerator GetEnumerator() => new(this);
     internal Enumerator GetCanonicalEnumerator() => new(this, true);
     IEnumerator<KeyValuePair<string, ObservationValue>> IEnumerable<KeyValuePair<string, ObservationValue>>.GetEnumerator() => GetEnumerator();

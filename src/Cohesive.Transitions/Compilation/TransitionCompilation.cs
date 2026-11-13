@@ -798,44 +798,6 @@ public sealed class TransitionSemanticAnalysis
 /// <summary>Successful target-independent compilation plan for one exact Transition definition document.</summary>
 public sealed class CompiledTransitionPlan
 {
-    internal Action<Cohesive.Transitions.Execution.TransitionReferenceInterpreter.Engine>? SpecializedBody { get; private init; }
-    internal ObservationLayout? SpecializedWriteLayout { get; private init; }
-    readonly WeakPreparationCache<ObservationLayout, CompiledTransitionPlan> ordinalPlans = new();
-
-    internal CompiledTransitionPlan ForOrdinalWrites(ObservationLayout layout)
-    {
-        if (ReferenceEquals(SpecializedWriteLayout, layout) || !DerivedFields.IsEmpty)
-            return this;
-        if (ordinalPlans.TryGet(layout, out var prepared))
-            return prepared;
-        return ordinalPlans.Get(layout, owner => MatchesObservationLayout(owner) ? Specialize(owner) : this);
-    }
-
-    bool MatchesObservationLayout(ObservationLayout layout)
-    {
-        var shape = layout.Graph.GetShape(layout.ShapeId);
-        var matches = Definition.Observation.Shape is { } identity
-            ? ReferenceEquals(ShapeGraph, layout.Graph) && identity == layout.ShapeId
-            : Definition.Observation == ValueContract.FromShape(shape);
-        // An alias or omitted field has no exact ordinal at its shape-declaration index.
-        return matches && layout.Count == shape.Fields.Length && !layout.OrdinalsByShapeFieldIndex.Contains(-1);
-    }
-
-    CompiledTransitionPlan Specialize(ObservationLayout observationLayout)
-    {
-        var body = Cohesive.Transitions.Execution.TransitionReferenceInterpreter.CompileSpecializedBody(this, observationLayout);
-        return body is null ? this : new(this)
-        {
-            SpecializedBody = body,
-            SpecializedWriteLayout = observationLayout
-        };
-    }
-
-    CompiledTransitionPlan(CompiledTransitionPlan source)
-        : this(source.Document, source.Definition, source.Analysis, source.ShapeGraph, source.DerivedFields, source.MachineEdges)
-    {
-    }
-
     internal CompiledTransitionPlan(
         ExecutionDefinitionDocument document,
         TransitionDefinition definition,

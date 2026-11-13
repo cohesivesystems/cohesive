@@ -294,12 +294,30 @@ there is no hidden retry or result cache. The mapper adds no query execution alg
 
 ### Authored entity transitions
 
-`EntityApiOperationBinding.Transition(operationName, authoredTransition, createTransitionInput, createResult)`
-accepts a `Transition<TEntity, TInput, TOutcome>` directly. It compiles once at binding construction,
-fails registration with `TransitionApiPreparationException.Compilation` retaining canonical diagnostics on invalid declarations, and reuses the prepared plan
-for request execution. Declare the API operation with `authoredTransition.Reference` to retain exact
-identity/revision/fingerprint checks. Preparation lifetime is the binding, not a global cache.
-The compiled-plan overload remains available for explicit preparation or external shape graphs.
+Complete a JSON entity command with `BindTransition` before building the API definition.
+
+```csharp
+var options = new EntityApiEndpointOptions { Entity = entity.Definition };
+var api = Cohesive.Api.Api.Define();
+
+api.Entity<ShipmentResource>().Command("Assign")
+    .Route("POST", "/shipments/{id}/assign")
+    .RouteParameter<string>("id")
+    .Returns<ShipmentResource>()
+    .BindTransition(options, assign,
+        static (EntityApiRequestContext context, AssignShipmentRequest request) =>
+            new AssignInput(request.Carrier, context.OperationContext.UtcNow),
+        static (_, snapshot) => Results.Ok(ToResource(snapshot)));
+
+app.MapEntityApiDefinition(api.Build(), options);
+```
+
+The input projection declares the request type. The authored transition supplies the exact
+identity, revision, and fingerprint used by both the API definition and runtime binding. Compilation
+runs during registration, with structured diagnostics on `TransitionApiPreparationException`.
+Use `EntityTransitionCommandPolicy<TRequest>` for an external shape graph, a custom concurrency
+fence, or emission lowering. The name-based and untyped entity transition binding factories have
+been replaced by the command builder step. The typed session below still handles bodyless commands.
 
 ### Typed entity endpoint bindings
 
