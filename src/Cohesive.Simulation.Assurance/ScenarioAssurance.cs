@@ -49,14 +49,13 @@ public sealed class ScenarioAssuranceResult
     /// <summary>Projects a supported verdict to Simulation's existing property-case protocol.</summary>
     /// <returns>Failure for a supported violation, pass for non-vacuous satisfaction, otherwise discard.</returns>
     /// <remarks>Discard counts against Simulation's discard budget; uncertainty never becomes a successful case.</remarks>
-    public PropertyCaseEvaluation ToPropertyEvaluation() => Evaluation.Status != AssuranceAttemptStatus.Completed
-        || Evaluation.Verdict == ClaimVerdict.Inconclusive
-        ? PropertyCaseEvaluation.Discard("assurance.inconclusive-or-vacuous")
-        : Evaluation.Verdict == ClaimVerdict.Violated
-            ? PropertyCaseEvaluation.Fail("assurance.violation")
-            : Evaluation.Alternatives.Any(x => x.Vacuous)
-                ? PropertyCaseEvaluation.Discard("assurance.inconclusive-or-vacuous")
-                : PropertyCaseEvaluation.Pass("assurance.satisfied");
+    public PropertyCaseEvaluation ToPropertyEvaluation() => (Evaluation.Status, Evaluation.Verdict) switch
+    {
+        (AssuranceAttemptStatus.Completed, ClaimVerdict.Violated) => PropertyCaseEvaluation.Fail("assurance.violation"),
+        (AssuranceAttemptStatus.Completed, ClaimVerdict.Satisfied) when !Evaluation.Alternatives.Any(x => x.Vacuous)
+            => PropertyCaseEvaluation.Pass("assurance.satisfied"),
+        _ => PropertyCaseEvaluation.Discard("assurance.inconclusive-or-vacuous")
+    };
 
 }
 

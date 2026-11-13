@@ -72,14 +72,13 @@ public sealed class ClaimEvidence
             if (subject.Obligation != ProofObligation.Realization
                 || subject.Kind is not (EvidenceTargetKind.Implementation or EvidenceTargetKind.Deployment))
                 throw new ArgumentException("Trace evidence supports only realization obligations on implementation or deployment targets.", nameof(subject));
-            var checkedTrace = TraceEvaluation.Verify(trace);
-            trace = checkedTrace;
+            var checkedTrace = trace; // The sealed result can only originate from evaluation or verified restoration.
             if (checkedTrace.Claim.Fingerprint != claim.Fingerprint || checkedTrace.Batch.Target != subject.Target
                 || checkedTrace.Status != status || checkedTrace.Verdict != verdict
                 || method != ReferenceMethod || support != TraceSupport(status))
                 throw new ArgumentException("Trace provenance or outcome disagrees with its independently checked evaluation.");
             if (status == AssuranceAttemptStatus.Completed)
-                Dependencies = ClaimReference.NormalizeSet([.. Dependencies, .. TraceReferences(checkedTrace.Batch)]);
+                Dependencies = ClaimReference.NormalizeSet([.. Dependencies, .. TraceReferences(checkedTrace)]);
             else
                 DependenciesComplete = false; // A failed validation/bounded scan may not have inspected the entire mapping.
         }
@@ -126,7 +125,7 @@ public sealed class ClaimEvidence
         TraceEvaluation.MethodId, TraceEvaluation.MethodId);
 
     /// <summary>Captures a reference trace evaluation as sampled evidence.</summary>
-    /// <param name="evaluation">Reference-produced evaluation, reused by identity; caller-constructed copies are independently checked.</param>
+    /// <param name="evaluation">Evaluator-owned result, reused directly; its sealed type excludes caller-constructed or record-copy results.</param>
     /// <param name="subject">Implementation/deployment realization subject; scope and configuration remain explicit adapter attribution.</param>
     /// <param name="configuration">Exact adapter/mapping and evaluator configuration artifact.</param>
     /// <param name="dependenciesComplete">Whether all relevant realization and mapping dependencies are declared.</param>
@@ -177,8 +176,11 @@ public sealed class ClaimEvidence
         _ => InterpretationSupport.Supported
     };
 
-    static IEnumerable<ClaimReference> TraceReferences(TraceObservationBatch batch)
+    static IEnumerable<ClaimReference> TraceReferences(TraceEvaluation evaluation)
     {
+        System.Diagnostics.Debug.Assert(evaluation.Status == AssuranceAttemptStatus.Completed,
+            "Selector dependency shortcut requires fully validated completed observations.");
+        var batch = evaluation.Batch;
         yield return batch.Contract.Reference;
         yield return batch.Contract.Scope;
         yield return batch.Epoch;

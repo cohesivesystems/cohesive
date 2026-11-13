@@ -1,4 +1,5 @@
 using Cohesive.Authoring;
+using Cohesive.Assurance.Examples;
 
 namespace Cohesive.Assurance.Tests;
 
@@ -9,7 +10,7 @@ public sealed class ClaimReferenceFixtureTests
     [Fact]
     public void ArticleDeclarationsSupplyTheirOwnCompleteReferenceCatalog()
     {
-        var refs = ClaimReference.Fixtures("example://fulfillment", revision: "1");
+        var refs = new FixtureReferences("example://fulfillment", revision: "1");
         var inventory = refs.Define("subjects/inventory", "Inventory with decimal OnHand and Reserved quantities.");
         var observation = refs.Define("contracts/observations", "Inventory states bind State; source coverage and closure are explicit.");
         var source = refs.Define("sources/article-claims", "Inventory safety declaration in the fulfillment walkthrough.");
@@ -28,16 +29,16 @@ public sealed class ClaimReferenceFixtureTests
     [Fact]
     public void FingerprintsAreDeterministicTextSensitiveAndIndependentOfDeclarationOrder()
     {
-        var first = ClaimReference.Fixtures("example://fulfillment/", "1");
+        var first = new FixtureReferences("example://fulfillment/", "1");
         var b = first.Define("b", "Second definition");
         var a = first.Define("a", "First definition\nwith exact line endings.");
-        var second = ClaimReference.Fixtures("example://fulfillment", "1");
+        var second = new FixtureReferences("example://fulfillment", "1");
         Assert.Equal(a, second.Define("a", "First definition\nwith exact line endings."));
         Assert.Equal(b, second.Define("b", "Second definition"));
         Assert.Equal<ClaimReference>(first.References, second.References);
         Assert.Same(a, first.Define("a", "First definition\nwith exact line endings."));
         Assert.Throws<ArgumentException>(() => first.Define("a", "Changed definition"));
-        var next = ClaimReference.Fixtures("example://fulfillment", "2").Define("a", "Changed definition");
+        var next = new FixtureReferences("example://fulfillment", "2").Define("a", "Changed definition");
         Assert.NotEqual(a.Fingerprint, next.Fingerprint);
         Assert.Equal("2", next.Revision);
     }
@@ -45,9 +46,10 @@ public sealed class ClaimReferenceFixtureTests
     [Fact]
     public void CatalogsAreImmutableSnapshots()
     {
-        var refs = ClaimReference.Fixtures("example://fulfillment", "1");
+        var refs = new FixtureReferences("example://fulfillment", "1");
         refs.Define("a", "One");
         var retained = refs.References;
+        Assert.True(retained.Equals(refs.References)); // Unchanged reads reuse the same immutable storage.
         refs.Define("b", "Two");
         Assert.Single(retained);
         Assert.Equal(2, refs.References.Length);
@@ -66,7 +68,7 @@ public sealed class ClaimReferenceFixtureTests
     [InlineData("a b")]
     public void InvalidPathsCannotCreateAmbiguousFixtureReferences(string path)
     {
-        var refs = ClaimReference.Fixtures("example://fulfillment", "1");
+        var refs = new FixtureReferences("example://fulfillment", "1");
         Assert.Throws<ArgumentException>(() => refs.Define(path, "Definition"));
         Assert.Empty(refs.References);
     }

@@ -81,14 +81,6 @@ public sealed record ClaimReference
             fingerprint.ToCanonicalString());
     }
 
-    /// <summary>Creates an authoring scope for explicit fixture references used by examples, articles and tests.</summary>
-    /// <param name="sourceRoot">Canonical source namespace, for example example://fulfillment; a trailing slash is optional.</param>
-    /// <param name="revision">Explicit immutable fixture revision shared by its declarations.</param>
-    /// <returns>A single-threaded scope that fingerprints declaration text and collects exact references.</returns>
-    /// <exception cref="ArgumentNullException">Root or revision is null.</exception>
-    /// <exception cref="ArgumentException">Root or revision is invalid.</exception>
-    public static ClaimReferenceFixture Fixtures(string sourceRoot, string revision) => new(sourceRoot, revision);
-
     internal static IComparer<ClaimReference> CanonicalComparer { get; } = Comparer<ClaimReference>.Create((left, right) =>
     {
         var order = StringComparer.Ordinal.Compare(left.Source.Value, right.Source.Value);

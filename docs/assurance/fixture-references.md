@@ -1,11 +1,14 @@
 # Fixture references for articles and tests
 
-Use an explicit fixture scope to remove repeated URI, revision, fingerprint and catalog wiring:
+Copy or link the [source-only example helper](../../eng/examples/assurance/FixtureReferences.cs)
+into the article/test project. It is internal example code, not part of the shipped Assurance API.
+Use its explicit fixture scope to remove repeated URI, revision, fingerprint and catalog wiring:
 
 ```csharp
 using Cohesive.Assurance;
+using Cohesive.Assurance.Examples;
 
-var refs = ClaimReference.Fixtures("example://fulfillment", revision: "1");
+var refs = new FixtureReferences("example://fulfillment", revision: "1");
 
 var inventoryRef = refs.Define(
     "subjects/inventory",
@@ -63,7 +66,7 @@ var validation = claim.ValidateReferences(refs.References);
 
 The declaration text stays explicit because it supplies the fixture's meaning. The scope owns the
 namespace and revision, computes a versioned canonical content fingerprint through the core helper,
-and collects references. `References` returns an immutable, canonically ordered snapshot: take it
+and collects references. `References` returns a cached immutable, canonically ordered snapshot, rebuilt only when a new declaration is added: take it
 after the declarations you intend to validate. A reference added later does not alter old snapshots.
 
 Declaring the same path and exact text again is idempotent. Different text at an already-declared

@@ -3,7 +3,7 @@ using System.Text.Json;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
 
-namespace Cohesive.Assurance;
+namespace Cohesive.Assurance.Examples;
 
 /// <summary>Authoring-time scope for explicit content-addressed fixture declarations and their reference catalog.</summary>
 /// <remarks>
@@ -11,13 +11,14 @@ namespace Cohesive.Assurance;
 /// not a compiled entity, selector, policy or observation adapter. Use owning-model references for real definitions.
 /// A scope is single-threaded authoring state; returned references and catalog snapshots are immutable.
 /// </remarks>
-public sealed class ClaimReferenceFixture
+internal sealed class FixtureReferences
 {
     const string Profile = "cohesive-assurance-reference-fixture/v1";
     static readonly JsonSerializerOptions Options = StrictDocumentJson.CreateOptions();
+    ImmutableArray<ClaimReference> references = [];
     readonly Dictionary<string, (string Definition, ClaimReference Reference)> declarations = new(StringComparer.Ordinal);
 
-    internal ClaimReferenceFixture(string sourceRoot, string revision)
+    public FixtureReferences(string sourceRoot, string revision)
     {
         ArgumentNullException.ThrowIfNull(sourceRoot);
         SourceRoot = new SourceReference(sourceRoot.TrimEnd('/'));
@@ -31,8 +32,7 @@ public sealed class ClaimReferenceFixture
     /// <summary>Explicit immutable revision shared by this fixture.</summary>
     public string Revision { get; }
     /// <summary>Canonical immutable snapshot of declarations so far, suitable for ClaimDocument.ValidateReferences.</summary>
-    public ImmutableArray<ClaimReference> References => [.. declarations.Values.Select(x => x.Reference)
-        .OrderBy(x => x, ClaimReference.CanonicalComparer)];
+    public ImmutableArray<ClaimReference> References => references;
 
     /// <summary>Declares a fixture reference and records it in this scope's catalog.</summary>
     /// <param name="path">Relative slash-separated identity with no empty, dot, parent, query, fragment or escaped segments.</param>
@@ -56,6 +56,8 @@ public sealed class ClaimReferenceFixture
         var digest = Convert.ToHexStringLower(StrictDocumentJson.ComputeCanonicalSha256(new Declaration(Profile, definition), Options));
         var reference = new ClaimReference(source, Revision, FingerprintText.Format("sha256", Profile, digest));
         declarations.Add(path, (definition, reference));
+        // This fixture has one revision and one declaration per source; source order is sufficient.
+        references = [.. declarations.Values.Select(x => x.Reference).OrderBy(x => x.Source.Value, StringComparer.Ordinal)];
         return reference;
     }
 

@@ -34,8 +34,8 @@ public class AssuranceEvidenceBenchmarks
         evaluation = TraceClaimEvaluator.Evaluate(claim, batch);
         subject = new(EvidenceTargetKind.Implementation, batch.Target, R("configuration"), R("scope"), ProofObligation.Realization);
         var report = Capture();
-        assessment = ClaimAssessment.Evaluate(claim, subject, R("policy"),
-            [new(report.Kind, report.Method, report.Configuration)], [report], DateTimeOffset.UnixEpoch).Serialize();
+        assessment = ClaimAssessment.Evaluate(report, R("policy"),
+            [EvidenceAcceptance.Of(report)], DateTimeOffset.UnixEpoch).Serialize();
     }
 
     [Benchmark] public ClaimEvidence Capture() => ClaimEvidence.FromTrace(evaluation, subject, R("mapping"), dependenciesComplete: true);

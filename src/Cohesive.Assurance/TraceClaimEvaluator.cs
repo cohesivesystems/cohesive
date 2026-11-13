@@ -28,7 +28,7 @@ public static class TraceClaimEvaluator
         limits ??= new();
         if (limits.MaxAlternatives <= 0 || limits.MaxObservations <= 0 || limits.MaxPredicateEvaluations <= 0 || limits.MaxEventCandidateVisits <= 0)
             throw new ArgumentOutOfRangeException(nameof(limits), "Evaluation bounds must be positive.");
-        return new Evaluation(claim, batch, limits, cancellationToken).Run().MarkReferenceEvaluated();
+        return new Evaluation(claim, batch, limits, cancellationToken).Run();
     }
 
     sealed class Evaluation(ClaimDocument document, TraceObservationBatch batch,

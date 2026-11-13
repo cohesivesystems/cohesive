@@ -164,5 +164,5 @@ and authority-recorded dispositions. Sampled success remains unknown; a waiver n
 state. Trace and external methods share `AssuranceAttemptStatus` (renamed from `TraceEvaluationStatus`).
 
 For articles and tests, [fixture reference scopes](../../docs/assurance/fixture-references.md)
-provide `ClaimReference.Fixtures(root, revision).Define(path, definition)` and an automatically
-collected immutable reference catalog. They identify fixture prose, not compiled domain definitions.
+provide a source-only `FixtureReferences` helper to copy or link into the example project, with
+an automatically collected immutable reference catalog. This helper is not shipped in the library. Its references identify fixture prose, not compiled domain definitions.

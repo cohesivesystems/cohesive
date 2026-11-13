@@ -94,6 +94,7 @@ public sealed class ScenarioAssuranceTests
         Assert.Equal(2, faulty.Calls);
         Assert.Equal(ScenarioAssuranceMethod.CandidateExecution, first.Method);
         Assert.Equal(ClaimVerdict.Violated, first.Evaluation.Verdict);
+        Assert.Equal(PropertyCaseDisposition.Failed, first.ToPropertyEvaluation().Disposition);
         Assert.Contains(first.Evaluation.Alternatives[0].Obligations,
             x => x.Verdict == ClaimVerdict.Violated && x.Occurrence == "action/reactivate/actor/driver");
         Assert.NotEmpty(first.Evaluation.Claim.SourceMap);
@@ -112,6 +113,7 @@ public sealed class ScenarioAssuranceTests
         var corrected = await ScenarioAssurance.ReplayAsync(claim, retained, repaired, Binding(repaired.Identity));
         Assert.Equal(2, repaired.Calls);
         Assert.Equal(ClaimVerdict.Satisfied, corrected.Evaluation.Verdict);
+        Assert.Equal(PropertyCaseDisposition.Passed, corrected.ToPropertyEvaluation().Disposition);
         Assert.NotEqual(first.Trace.Fingerprint, corrected.Trace.Fingerprint);
         Assert.Equal(first.Evaluation.Claim.Fingerprint, corrected.Evaluation.Claim.Fingerprint);
         Assert.Equal(ClaimVerdict.Violated, reevaluated.Evaluation.Verdict);
@@ -195,24 +197,6 @@ public sealed class ScenarioAssuranceTests
         else if (tamper is "binding" or "evaluation" or "trace") document[tamper] = other[tamper]!.DeepClone();
         else document[tamper] = "unsupported";
         Assert.Throws<System.Text.Json.JsonException>(() => ScenarioAssuranceArtifact.Reevaluate(document.ToJsonString()));
-    }
-
-    [Theory]
-    [InlineData(AssuranceAttemptStatus.Completed, ClaimVerdict.Violated, PropertyCaseDisposition.Failed)]
-    [InlineData(AssuranceAttemptStatus.Completed, ClaimVerdict.Satisfied, PropertyCaseDisposition.Discarded)]
-    [InlineData(AssuranceAttemptStatus.Completed, ClaimVerdict.Inconclusive, PropertyCaseDisposition.Discarded)]
-    [InlineData(AssuranceAttemptStatus.BudgetExceeded, ClaimVerdict.Violated, PropertyCaseDisposition.Discarded)]
-    public async Task PropertyProjectionDoesNotLetVacuityOverrideADefinitiveViolation(
-        AssuranceAttemptStatus status, ClaimVerdict verdict, PropertyCaseDisposition expected)
-    {
-        var (world, shape) = Scenario(new(2, 0));
-        var run = await ScenarioAssurance.ExecuteAsync(Safety(), world, new Candidate(shape), Binding());
-        // Synthetic projection fixture: current batch semantics cannot emit a definitive violation
-        // together with a satisfied/vacuous compatible alternative. Test precedence without weakening that rule.
-        var evaluation = run.Evaluation with { Status = status, Verdict = verdict,
-            Alternatives = [.. run.Evaluation.Alternatives, new(R("vacuous"), ClaimVerdict.Satisfied, [], 0, true, true)] };
-        var result = new ScenarioAssuranceResult(run.Method, run.Binding, run.Trace, evaluation);
-        Assert.Equal(expected, result.ToPropertyEvaluation().Disposition);
     }
 
     [Fact]

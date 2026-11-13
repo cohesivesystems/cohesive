@@ -39,11 +39,13 @@ slice is complete. `true` is an assertion about dependency discovery, not proof 
 Trace evidence is restricted to realization obligations on implementation or deployment targets;
 it cannot be relabeled as a model or encoding proof. Scope and configuration remain explicit
 adapter attribution because the existing trace contract does not independently attest those facts.
-Trace capture reuses an unchanged in-memory reference-evaluator result by identity. Caller-created
-records and `with` copies are untrusted and independently checked; importing JSON also verifies
-its trace. A weak identity registry owned by the evaluator records provenance without retaining
-discarded evaluations or caching arbitrary external artifacts. It also
-records mapping, epoch, alternative, closure and enumeration references as dependencies. Failed
+Trace capture accepts the evaluator-owned `TraceEvaluation` sealed class directly. Its constructors
+are internal and properties are read-only; callers cannot create unchecked results or use record
+`with` copies. A JSON converter reads a private wire DTO, re-evaluates the inputs, and compares the
+complete result before returning the public type. No trust registry or global validation cache exists.
+Core observation factories snapshot ordinary CLR objects and caller-owned dictionaries before
+execution; the result retains those immutable portable snapshots, not the original objects.
+Evidence also records mapping, epoch, alternative, closure and enumeration references as dependencies. Failed
 or bounded validation cannot claim a fully inspected dependency slice. Original Simulation
 execution attribution and scheduled inputs can still be retained using `ScenarioAssuranceArtifact`;
 this core package neither depends on Simulation nor claims that re-evaluation executed a candidate.
@@ -148,3 +150,9 @@ error, and conflict interpretation is stricter. V1 envelopes are rejected rather
 new meaning. Keep old artifacts immutable and explicitly reconstruct v2 reports from retained
 reference evaluations with appropriate realization subjects. `ClaimEvidence.Trace` is now a
 `TraceEvaluation?`; the standalone reference trace format and method remain unchanged.
+
+`TraceEvaluation` is now an evaluator-owned sealed class rather than a publicly constructible record.
+Callers should obtain it from `TraceClaimEvaluator.Evaluate` or `TraceEvaluation.Reevaluate`.
+The persisted trace format remains unchanged; JSON restoration is verified even when invoked
+through the general serializer. A possible conflict between bounded evidence and a refutation is
+still visible in their separate contributions; no new flag infers overlap without domain evidence.

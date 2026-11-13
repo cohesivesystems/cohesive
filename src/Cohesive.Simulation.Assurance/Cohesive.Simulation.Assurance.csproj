@@ -4,5 +4,4 @@
     <ProjectReference Include="../Cohesive.Assurance/Cohesive.Assurance.csproj" />
     <ProjectReference Include="../Cohesive.Simulation/Cohesive.Simulation.csproj" />
   </ItemGroup>
-  <ItemGroup><InternalsVisibleTo Include="Cohesive.Simulation.Assurance.Tests" /></ItemGroup>
 </Project>

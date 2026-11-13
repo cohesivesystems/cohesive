@@ -228,18 +228,54 @@ public sealed class ClaimEvidenceTests
         Assert.Throws<ArgumentException>(() => Report(residuals: [R("hidden-assumption")]));
     }
 
-    static TraceEvaluation Trace(int reserved = 1, int count = 1)
+    static TraceEvaluation Trace(int reserved = 1, int count = 1, ObservationValue? value = null)
     {
         var claim = Claim();
         var observation = new SemanticObservation("state", "p", 0, 0, claim.Definition.Selection,
             SemanticObservationKind.InitialState,
             ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty.Add(ClaimInputRole.State,
-                ObservationValue.FromObject(new Stock(2, reserved))));
+                value ?? ObservationValue.FromObject(new Stock(2, reserved))));
         var batch = new TraceObservationBatch(new(claim.Definition.Observation, R("atomic"), [new(claim.Definition.Selection, ["p"])]),
             Subject.Target, R("epoch"), [new(R("alternative"), [.. Enumerable.Range(0, count).Select(i => observation with { Occurrence = "s" + i, Step = i, Ticks = i })],
                 [new(claim.Definition.Selection, "p", count, count, ObservationClosure.Closed, R("closure"))])],
             EnumerationCompleteness.Complete, R("enumeration"));
         return TraceClaimEvaluator.Evaluate(claim, batch);
+    }
+
+    public sealed class MutableStock
+    {
+        public decimal OnHand { get; set; }
+        public decimal Reserved { get; set; }
+    }
+
+    [Fact]
+    public void EvaluatorOwnedResultsRetainSnapshotsRatherThanCallerOwnedObjects()
+    {
+        var stock = new MutableStock { OnHand = 2m, Reserved = 1m };
+        var evaluation = Trace(value: ObservationValue.FromObject(stock));
+        stock.Reserved = 99m;
+        var fields = new Dictionary<string, ObservationValue>
+        {
+            ["OnHand"] = ObservationValue.FromObject(2m), ["Reserved"] = ObservationValue.FromObject(1m)
+        };
+        var dictionaryEvaluation = Trace(value: ObservationValue.FromObject(fields));
+        fields["Reserved"] = ObservationValue.FromObject(99m);
+        foreach (var result in new[] { evaluation, dictionaryEvaluation })
+        {
+            Assert.Equal(ClaimVerdict.Satisfied, result.Verdict);
+            Assert.Equal(1m, result.Batch.Alternatives[0].Observations[0].Values[ClaimInputRole.State].Deserialize<Stock>()!.Reserved);
+            var evidence = ClaimEvidence.FromTrace(result, Subject, Configuration, dependenciesComplete: true);
+            Assert.Same(result, evidence.Trace);
+            Assert.Equal(result.Serialize(), TraceEvaluation.Reevaluate(result.Serialize()).Serialize());
+        }
+    }
+
+    [Fact]
+    public void PublicResultTypeCannotBeConstructedOrModifiedOutsideTheEvaluator()
+    {
+        Assert.True(typeof(TraceEvaluation).IsSealed);
+        Assert.Empty(typeof(TraceEvaluation).GetConstructors());
+        Assert.All(typeof(TraceEvaluation).GetProperties(), property => Assert.Null(property.SetMethod));
     }
 
     [Fact]
@@ -273,8 +309,8 @@ public sealed class ClaimEvidenceTests
         Assert.Equal(expected, Assess(restored).State);
         Assert.Equal(evaluation.Serialize(), restored.Trace!.Serialize());
         Assert.Same(evaluation, report.Trace); // Trusted reference-produced results are reused, not re-evaluated.
-        var copied = evaluation with { };
-        Assert.NotSame(copied, ClaimEvidence.FromTrace(copied, Subject, Configuration, dependenciesComplete: true).Trace);
+        Assert.NotSame(evaluation, TraceEvaluation.Reevaluate(evaluation.Serialize()));
+        Assert.Equal(evaluation.Serialize(), JsonSerializer.Deserialize<TraceEvaluation>(evaluation.Serialize())!.Serialize());
         Assert.IsType<JsonObject>(JsonNode.Parse(report.Serialize())!["trace"]);
         Assert.Contains(R("atomic"), report.Dependencies);
         Assert.Contains(R("closure"), report.Dependencies);
@@ -302,7 +338,9 @@ public sealed class ClaimEvidenceTests
         var savedAssessment = JsonNode.Parse(Assess(report).Serialize())!;
         savedAssessment["evidence"]![0]!["trace"]!["verdict"] = "Inconclusive";
         Assert.Throws<JsonException>(() => ClaimAssessment.Reassess(savedAssessment.ToJsonString()));
-        var corrupted = evaluation with { Verdict = ClaimVerdict.Inconclusive };
-        Assert.Throws<JsonException>(() => ClaimEvidence.FromTrace(corrupted, Subject, Configuration, dependenciesComplete: true));
+        var corrupted = JsonNode.Parse(evaluation.Serialize())!;
+        corrupted["verdict"] = "Inconclusive";
+        Assert.Throws<JsonException>(() => TraceEvaluation.Reevaluate(corrupted.ToJsonString()));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<TraceEvaluation>(corrupted.ToJsonString()));
     }
 }
