@@ -42,11 +42,17 @@ adapter attribution because the existing trace contract does not independently a
 Trace capture accepts the evaluator-owned `TraceEvaluation` sealed class directly. Its constructors
 are internal and properties are read-only; callers cannot create unchecked results or use record
 `with` copies. A JSON converter reads a private wire DTO, re-evaluates the inputs, and compares the
-complete result before returning the public type. No trust registry or global validation cache exists.
+incoming document directly with the canonical recomputed result before returning the public type.
+The converter uses the same portable wire settings for reading and writing, including when called
+through the general JSON serializer. General serialization may retain caller indentation and property
+order; use `Serialize()` for the exact canonical text required by `Reevaluate()`. It deserializes the
+parsed element without a text/reparse round trip. No trust registry or global validation cache exists.
 Core observation factories snapshot ordinary CLR objects and caller-owned dictionaries before
 execution; the result retains those immutable portable snapshots, not the original objects.
 Evidence also records mapping, epoch, alternative, closure and enumeration references as dependencies. Failed
-or bounded validation cannot claim a fully inspected dependency slice. Original Simulation
+or bounded validation cannot claim a fully inspected dependency slice: only completed traces
+enumerate dependencies from the validated selector requirements. Incomplete attempts explicitly set
+`DependenciesComplete = false`; an assertion documents the completed-only helper precondition. Original Simulation
 execution attribution and scheduled inputs can still be retained using `ScenarioAssuranceArtifact`;
 this core package neither depends on Simulation nor claims that re-evaluation executed a candidate.
 

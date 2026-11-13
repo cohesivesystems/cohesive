@@ -106,28 +106,40 @@ public sealed class TraceEvaluation
     /// <exception cref="ArgumentOutOfRangeException">Retained limits are nonpositive.</exception>
     public static TraceEvaluation Reevaluate(string json)
     {
-        var result = ReadVerified(json);
-        if (!string.Equals(json, result.Serialize(), StringComparison.Ordinal))
-            throw new JsonException("Retained evaluation JSON is not the exact canonical reference output.");
-        return result;
+        using var document = JsonDocument.Parse(json);
+        return ReadVerified(document.RootElement, exactJson: json);
     }
 
-    internal static TraceEvaluation ReadVerified(string json)
+    internal static TraceEvaluation ReadVerified(JsonElement element, string? exactJson = null)
     {
-        if (!StrictDocumentJson.TryReadCanonicalObject(json, Options, "trace evaluation", out Retained? retained, out var error)
-            || retained is null)
-            throw new JsonException($"{error.Failure} at {error.Location}: {error.Message}");
+        if (element.ValueKind != JsonValueKind.Object)
+            throw new JsonException("Retained evaluation must be an object.");
+        // Compare the input directly with the recomputed result. This simultaneously checks
+        // the closed wire projection and derived outcomes, without serializing an unchecked DTO.
+        string expected;
+        try
+        {
+            expected = exactJson ?? CanonicalJsonWriter.GetCanonicalSequenceText(element,
+                CanonicalJsonSequenceProfile.ExactDecimalRational,
+                new JsonWriterOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        }
+        catch (ArgumentException exception)
+        {
+            throw new JsonException("Retained evaluation contains duplicate or invalid properties.", exception);
+        }
+        var retained = element.Deserialize<Retained>(Options)
+            ?? throw new JsonException("Retained evaluation cannot be null.");
         if (retained.Claim is null || retained.Batch is null || retained.Limits is null)
             throw new JsonException("Retained evaluation requires claim, batch and limits.");
         var result = TraceClaimEvaluator.Evaluate(retained.Claim, retained.Batch, retained.Limits);
-        var expected = StrictDocumentJson.GetCanonicalBytes(retained, Options);
-        var actual = StrictDocumentJson.GetCanonicalBytes(result.Payload(), Options);
-        if (!expected.AsSpan().SequenceEqual(actual))
-            throw new JsonException("Retained evidence disagrees with independent reference evaluation.");
+        if (!string.Equals(expected, result.Serialize(), StringComparison.Ordinal))
+            throw new JsonException("Retained evidence disagrees with the canonical reference evaluation.");
         return result;
     }
 
-    internal void Write(Utf8JsonWriter writer, JsonSerializerOptions options) => JsonSerializer.Serialize(writer, Payload(), options);
+    // The portable wire profile is invariant even when the enclosing serializer has other options.
+    internal void Write(Utf8JsonWriter writer) =>
+        JsonSerializer.Serialize(writer, Payload(), Options);
 
     /// <summary>Hashes the complete evidence through the shared canonical fingerprint helper.</summary>
     /// <returns>SHA-256 integrity identity, not a signature.</returns>
@@ -142,7 +154,7 @@ internal sealed class TraceEvaluationJsonConverter : JsonConverter<TraceEvaluati
     public override TraceEvaluation Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
     {
         using var document = JsonDocument.ParseValue(ref reader);
-        return TraceEvaluation.ReadVerified(document.RootElement.GetRawText());
+        return TraceEvaluation.ReadVerified(document.RootElement);
     }
-    public override void Write(Utf8JsonWriter writer, TraceEvaluation value, JsonSerializerOptions options) => value.Write(writer, options);
+    public override void Write(Utf8JsonWriter writer, TraceEvaluation value, JsonSerializerOptions options) => value.Write(writer);
 }

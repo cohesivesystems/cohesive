@@ -15,10 +15,15 @@ evaluation or the verifying JSON converter can create the sealed result.
 
 BenchmarkDotNet ShortRun, in-process emit, one warmup and three measurement iterations. These are
 indicative timings with wide confidence intervals, not production latency guarantees. The stable
-allocation difference is the stronger result. Restoration is slower in this run: the typed-result converter validates the complete nested wire
-DTO before producing an evaluator-owned result. At 2,000 observations the mean increases from
-24.9 ms to 34.3 ms, with allocation increasing from 13,572 KB to 14,082 KB (about 4%). This cost is
-reported explicitly; restoration is not claimed faster.
+allocation difference is the stronger result. The final restoration path compares the parsed input
+directly with one canonical recomputed result, without reserializing the unchecked DTO or reparsing
+its raw text. General serializer writes use the fixed wire profile without redundantly canonicalizing
+nested output; the enclosing persisted document owns canonicalization.
+
+At 2,000 observations, the final mean is 24.1 ms / 12,242 KB, versus 34.3 ms / 14,082 KB at
+reviewed tip `c0d0e7d5` (about 30% less time and 13% less allocation). Against the original
+#521 baseline of 24.9 ms / 13,572 KB, timing is roughly comparable and allocation is about 10%
+lower. No statistically established latency improvement over that original baseline is claimed.
 
 ## Before
 
@@ -55,10 +60,10 @@ LaunchCount=1  WarmupCount=1
 ```
 | Method            | Count | Mean          | Error         | StdDev      | Gen0      | Gen1     | Gen2     | Allocated   |
 |------------------ |------ |--------------:|--------------:|------------:|----------:|---------:|---------:|------------:|
-| **Capture**           | **100**   |      **1.295 μs** |     **0.2720 μs** |   **0.0149 μs** |    **0.4978** |        **-** |        **-** |     **4.08 KB** |
-| RestoreAssessment | 100   |  1,914.430 μs |   728.6591 μs |  39.9403 μs |   97.6563 |  27.3438 |        - |   811.42 KB |
-| **Capture**           | **2000**  |      **1.253 μs** |     **0.4985 μs** |   **0.0273 μs** |    **0.4978** |        **-** |        **-** |     **4.08 KB** |
-| RestoreAssessment | 2000  | 34,260.040 μs | 4,512.9165 μs | 247.3682 μs | 1125.0000 | 437.5000 | 187.5000 | 14082.06 KB |
+| **Capture**           | **100**   |      **1.221 μs** |     **0.0274 μs** |   **0.0015 μs** |    **0.4978** |        **-** |        **-** |     **4.08 KB** |
+| RestoreAssessment | 100   |  1,593.017 μs | 1,887.8769 μs | 103.4809 μs |   85.9375 |  23.4375 |        - |   717.92 KB |
+| **Capture**           | **2000**  |      **1.231 μs** |     **0.0691 μs** |   **0.0038 μs** |    **0.4978** |        **-** |        **-** |     **4.08 KB** |
+| RestoreAssessment | 2000  | 24,140.899 μs | 3,467.0651 μs | 190.0415 μs | 1062.5000 | 500.0000 | 250.0000 | 12241.94 KB |
 
 ## Interpretation and regression protection
 
@@ -72,7 +77,9 @@ validation establishes that every observation selector is declared there.
 for 1 versus 2,000 observations with identical contracts and dependency sets. Ownership tests
 assert that the public result has no constructors or setters, that source object/dictionary mutation
 does not alter retained observations, and that evidence reuses the evaluator-owned result.
-Wire-tampering tests cover standalone evidence and nested assessment restore. No timing threshold
+Wire-tampering tests cover standalone evidence and nested assessment restore, duplicate/unknown/missing
+fields, and general serializer round-trips with default and custom caller settings. Incomplete
+traces explicitly mark dependency discovery incomplete; only Completed traces use the selector shortcut. No timing threshold
 is imposed on CI.
 
 Run the checked-in fixture through the existing benchmark project:

@@ -297,6 +297,49 @@ public sealed class ClaimEvidenceTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GeneralSerializerRoundTripsWithAnInvariantWireProfile(bool customOptions)
+    {
+        var evaluation = Trace();
+        var options = customOptions
+            ? new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseUpper, WriteIndented = true }
+            : new JsonSerializerOptions();
+        var json = JsonSerializer.Serialize(evaluation, options);
+        var restored = JsonSerializer.Deserialize<TraceEvaluation>(json, options)!;
+        Assert.Equal(evaluation.Serialize(), restored.Serialize());
+        Assert.Equal(evaluation.Serialize(), TraceEvaluation.Reevaluate(restored.Serialize()).Serialize());
+    }
+
+    [Theory]
+    [InlineData("duplicate")]
+    [InlineData("unknown")]
+    [InlineData("missing")]
+    public void BothRestorationEntrypointsRejectNoncanonicalWireData(string tamper)
+    {
+        var json = Trace().Serialize();
+        if (tamper == "duplicate") json = "{\"method\":\"" + TraceEvaluation.MethodId + "\"," + json[1..];
+        else if (tamper == "unknown") json = "{\"unexpected\":true," + json[1..];
+        else
+        {
+            var node = JsonNode.Parse(json)!.AsObject();
+            node.Remove("diagnostics");
+            json = node.ToJsonString();
+        }
+        Assert.Throws<JsonException>(() => TraceEvaluation.Reevaluate(json));
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<TraceEvaluation>(json));
+    }
+
+    [Fact]
+    public void SerializerAcceptsFormattingWhileStandaloneReevaluationRequiresExactCanonicalText()
+    {
+        var evaluation = Trace();
+        var formatted = JsonNode.Parse(evaluation.Serialize())!.ToJsonString(new JsonSerializerOptions { WriteIndented = true });
+        Assert.Equal(evaluation.Serialize(), JsonSerializer.Deserialize<TraceEvaluation>(formatted)!.Serialize());
+        Assert.Throws<JsonException>(() => TraceEvaluation.Reevaluate(formatted));
+    }
+
+    [Theory]
     [InlineData(1, ProofState.Unknown)]
     [InlineData(3, ProofState.Disproven)]
     public void RealTraceEvidenceCanRefuteButCannotProve(int reserved, ProofState expected)

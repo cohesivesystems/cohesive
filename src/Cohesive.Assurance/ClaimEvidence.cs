@@ -72,13 +72,12 @@ public sealed class ClaimEvidence
             if (subject.Obligation != ProofObligation.Realization
                 || subject.Kind is not (EvidenceTargetKind.Implementation or EvidenceTargetKind.Deployment))
                 throw new ArgumentException("Trace evidence supports only realization obligations on implementation or deployment targets.", nameof(subject));
-            var checkedTrace = trace; // The sealed result can only originate from evaluation or verified restoration.
-            if (checkedTrace.Claim.Fingerprint != claim.Fingerprint || checkedTrace.Batch.Target != subject.Target
-                || checkedTrace.Status != status || checkedTrace.Verdict != verdict
+            if (trace.Claim.Fingerprint != claim.Fingerprint || trace.Batch.Target != subject.Target
+                || trace.Status != status || trace.Verdict != verdict
                 || method != ReferenceMethod || support != TraceSupport(status))
                 throw new ArgumentException("Trace provenance or outcome disagrees with its independently checked evaluation.");
             if (status == AssuranceAttemptStatus.Completed)
-                Dependencies = ClaimReference.NormalizeSet([.. Dependencies, .. TraceReferences(checkedTrace)]);
+                Dependencies = ClaimReference.NormalizeSet([.. Dependencies, .. TraceReferences(trace)]);
             else
                 DependenciesComplete = false; // A failed validation/bounded scan may not have inspected the entire mapping.
         }

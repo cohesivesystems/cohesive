@@ -168,6 +168,23 @@ public sealed class ScenarioAssuranceTests
     }
 
     [Fact]
+    public async Task BudgetExhaustionDiscardsEvenWhenAnEvaluatedObligationIsViolated()
+    {
+        var (world, shape) = Scenario(new(2, 0));
+        var driver = new ExpressionAuthoring().Input<Driver>("driver");
+        var claim = Claim.Define("dq.no-blockers", "1", R("driver"), Mapping, R("source"), R("config"))
+            .AtEveryCommittedState(R("single-driver"), InitialStateSelection.Include)
+            .Require(driver, ClaimInputRole.State, d => d.RemainingBlockers == 0).Build();
+        var result = await ScenarioAssurance.ExecuteAsync(claim, world, new Candidate(shape), Binding(),
+            limits: new TraceEvaluationLimits(MaxPredicateEvaluations: 1));
+        Assert.Equal(AssuranceAttemptStatus.BudgetExceeded, result.Evaluation.Status);
+        Assert.Contains(result.Evaluation.Alternatives.SelectMany(x => x.Obligations),
+            x => x.Verdict == ClaimVerdict.Violated);
+        Assert.Equal(ClaimVerdict.Inconclusive, result.Evaluation.Verdict);
+        Assert.Equal(PropertyCaseDisposition.Discarded, result.ToPropertyEvaluation().Disposition);
+    }
+
+    [Fact]
     public async Task RetainedArtifactRejectsDuplicateAndUnknownEnvelopeFields()
     {
         var (world, shape) = Scenario(new(2, 0));
@@ -254,6 +271,8 @@ public sealed class ScenarioAssuranceTests
         var claim = Claim.Define("noise", "1", R("driver"), Mapping, R("source"), R("config"))
             .ForEachCommitted(R("noise")).Require(value, ClaimInputRole.After, d => !d.Active).Build();
         var result = await ScenarioAssurance.ExecuteAsync(claim, world, new Candidate(shape), Binding() with { OperationId = "noise" });
+        Assert.Equal(AssuranceAttemptStatus.Completed, result.Evaluation.Status);
+        Assert.Equal(ClaimVerdict.Satisfied, result.Evaluation.Verdict);
         Assert.True(result.Evaluation.Alternatives[0].Vacuous);
         Assert.Equal(PropertyCaseDisposition.Discarded, result.ToPropertyEvaluation().Disposition);
     }
