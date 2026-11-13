@@ -1,6 +1,7 @@
 using Cohesive.Authoring;
 using System.Linq.Expressions;
 using System.Runtime.CompilerServices;
+using System.Text.Json.Serialization;
 using Cohesive.Execution;
 using Cohesive.Machines;
 using Cohesive.Model.Serialization;
@@ -11,13 +12,26 @@ using Cohesive.Transitions.Machines;
 
 namespace Cohesive.Processes.Machines;
 
+/// <summary>Identity boundary for a reaction occurrence.</summary>
+public enum MachineReactionIdentityScope
+{
+    /// <summary>Each distinct committed source occurrence creates independent work.</summary>
+    SourceOccurrence,
+    /// <summary>One immutable occurrence per source entity and exact policy revision; conflicting reuse is rejected.</summary>
+    SourceEntity
+}
+
 /// <summary>Portable reaction payload. Construct only through authoring lowering or persistence.</summary>
 /// <param name="Source">Bound source entity shape, including its exact machine authority.</param>
 /// <param name="Movement">Selected edge in that machine.</param>
 /// <param name="Target">Exact target Transition declaration.</param>
 /// <param name="Process">Canonical request projection and invocation; the sole action authority.</param>
+/// <param name="IdentityScope">Occurrence or one-shot source-entity identity boundary.</param>
+/// <param name="Prerequisite">Exact reaction whose successful target receipt releases the Process wait, or null.</param>
 public sealed record MachineReactionPayload(Shape Source, ExecutionNodeId Movement,
-    ExecutionDefinitionDocument Target, ExecutionDefinitionDocument Process);
+    ExecutionDefinitionDocument Target, ExecutionDefinitionDocument Process,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] MachineReactionIdentityScope IdentityScope = MachineReactionIdentityScope.SourceOccurrence,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] ExecutionDefinitionDocument? Prerequisite = null);
 
 /// <summary>A committed-movement trigger and a pure request policy lowered to an ordinary Process.</summary>
 /// <remarks>Definitions carry no transport, callback or runtime state. A successful Process result does
@@ -28,6 +42,10 @@ public sealed class MachineReaction
     public static ExecutionDefinitionKind Kind { get; } = new("machine.reaction/v1");
     /// <summary>Stable target invocation node within the generated Process.</summary>
     public static ExecutionNodeId InvocationNode { get; } = new("reaction/request");
+    /// <summary>Durable prerequisite wait node in coordinated reaction Processes.</summary>
+    public static ExecutionNodeId PrerequisiteNode { get; } = new("reaction/prerequisite");
+    internal static TimeSpan PrerequisiteRetentionHorizon { get; } = TimeSpan.FromDays(30);
+    internal static ExecutionNodeId PrerequisiteClause { get; } = new("reaction/prerequisite/succeeded");
     internal static ExecutionNodeId ReturnNode { get; } = new("reaction/result");
 
     internal MachineReaction(ExecutionDefinitionDocument document)
@@ -37,6 +55,17 @@ public sealed class MachineReaction
         Document = document;
         Payload = document.GetDefinition<MachineReactionPayload>();
         var payload = Payload;
+        if (!Enum.IsDefined(payload.IdentityScope)) throw new InvalidOperationException("Unknown reaction identity scope.");
+        if (payload.Prerequisite is { } prerequisiteDocument)
+        {
+            var prerequisite = new MachineReaction(prerequisiteDocument);
+            if (payload.IdentityScope != MachineReactionIdentityScope.SourceEntity
+                || prerequisite.Payload.IdentityScope != MachineReactionIdentityScope.SourceEntity
+                || prerequisite.Payload.Source != payload.Source
+                || prerequisite.Document.Metadata.DefinitionId == document.Metadata.DefinitionId)
+                throw new InvalidOperationException("Prerequisites require distinct exact policies bound once to the same source entity shape.");
+            PrerequisiteSignal = CreatePrerequisiteSignal(prerequisiteDocument);
+        }
         var binding = EntityMachineBinding.Read(payload.Source)
             ?? throw new InvalidOperationException("A reaction source must have an authoritative machine.");
         var machine = MachineDefinition.Deserialize(ExecutionDefinitionJsonSerializer.Serialize(binding.Machine));
@@ -50,7 +79,8 @@ public sealed class MachineReaction
             throw new InvalidOperationException(string.Join("; ", targetCompilation.Validation.Diagnostics.Select(d => d.Message)));
         var process = payload.Process.GetDefinition<ProcessDefinition>();
         if (process.Input != ValueContract.FromShape(payload.Source)
-            || process.Nodes.Length != 2 || process.Entry != InvocationNode
+            || process.Nodes.Length != (payload.Prerequisite is null ? 2 : 3)
+            || process.Entry != (payload.Prerequisite is null ? InvocationNode : PrerequisiteNode)
             || process.Nodes.OfType<InvokeTransitionProcessNode>().SingleOrDefault() is not { } invoke
             || invoke.Id != InvocationNode || invoke.Transition != payload.Target.Reference
             || invoke.Continuation.Edge.Target != ReturnNode || invoke.Receipt is not null
@@ -59,6 +89,16 @@ public sealed class MachineReaction
             || returned.Id != ReturnNode || returned.Result is not BindingExpr resultBinding
             || invoke.Continuation.Output?.Binding != resultBinding.Binding)
             throw new InvalidOperationException("Reaction Process must invoke its exact target from the source snapshot.");
+        if (payload.Prerequisite is not null)
+        {
+            var wait = process.Nodes.OfType<AwaitMatchProcessNode>().SingleOrDefault();
+            if (wait is null || wait.Id != PrerequisiteNode || wait.Clauses.Length != 1
+                || wait.Clauses[0] is not ProcessAwaitInteractionClause clause
+                || clause.Contract != new SignalContractReference(PrerequisiteSignal!.Reference)
+                || clause.Id != PrerequisiteClause || clause.Guard is not null
+                || clause.Continuation.Edge.Target != InvocationNode)
+                throw new InvalidOperationException("Coordinated reaction Process must await its exact prerequisite before dispatch.");
+        }
         var compilation = Compile();
         if (!compilation.IsSuccessful)
             throw new InvalidOperationException(string.Join("; ", compilation.Validation.Diagnostics.Select(d => d.Message)));
@@ -69,8 +109,17 @@ public sealed class MachineReaction
     /// <summary>Derived portable payload.</summary>
     public MachineReactionPayload Payload { get; }
 
+    /// <summary>Derived exact success-signal contract for the prerequisite, or null for independent reactions.</summary>
+    public ExecutionDefinitionDocument? PrerequisiteSignal { get; }
+
+    internal static ExecutionDefinitionDocument CreatePrerequisiteSignal(ExecutionDefinitionDocument prerequisite) =>
+        InteractionContractDocuments.Create(
+            new("reaction/prerequisite/" + prerequisite.Metadata.Fingerprint.Value), new("1"),
+            new SignalContractDefinition(new(new(new ScalarTypeRef(ScalarTypeKind.String)), new("reaction/prerequisite-receipt/v1"))),
+            new(new("cohesive.machine-reaction", "1"), new("reaction/prerequisite"), DocumentOrigin.Generated));
+
     /// <summary>Compiles the request Process using the exact target declaration retained by the policy.</summary>
-    /// <param name="interactions">Host interaction catalog; defaults to an empty catalog for this bounded profile.</param>
+    /// <param name="interactions">Host interaction catalog; by default includes the derived prerequisite signal when coordinated. Explicit catalogs must include that contract.</param>
     /// <returns>Existing Process compilation result and structured diagnostics.</returns>
     /// <exception cref="InvalidOperationException">The retained target declaration cannot be linked.</exception>
     public ProcessCompilationResult Compile(InteractionContractCatalog? interactions = null)
@@ -78,7 +127,7 @@ public sealed class MachineReaction
         var payload = Payload;
         var validation = ProcessDefinitionLink.TryCreateTransition(payload.Target, out var link);
         if (!validation.IsValid) throw new InvalidOperationException(string.Join("; ", validation.Diagnostics.Select(d => d.Message)));
-        if (interactions is null) InteractionContractCatalog.TryCreate([], out interactions);
+        if (interactions is null) InteractionContractCatalog.TryCreate(PrerequisiteSignal is null ? [] : [PrerequisiteSignal], out interactions);
         return ProcessStaticCompiler.Compile(payload.Process, new(definitions: [link!], interactionContracts: interactions));
     }
 
@@ -111,6 +160,30 @@ public sealed class MachineReactionSource<TSource> where TSource : notnull
     readonly MachineMovement movement;
     readonly string id;
     readonly string revision;
+    MachineReactionIdentityScope identityScope;
+    MachineReaction? prerequisite;
+
+    /// <summary>Declares one reaction occurrence per source entity and exact policy revision.</summary>
+    /// <returns>This authoring source; conflicting second source receipts will fail admission.</returns>
+    public MachineReactionSource<TSource> OncePerSourceEntity()
+    { identityScope = MachineReactionIdentityScope.SourceEntity; return this; }
+
+    /// <summary>Requires a successful target receipt from another one-shot reaction on the same source entity.</summary>
+    /// <param name="reaction">Exact prerequisite reaction declaration.</param>
+    /// <returns>This source with source-entity identity and a durable prerequisite wait.</returns>
+    /// <exception cref="ArgumentNullException">The reaction is null.</exception>
+    /// <exception cref="ArgumentException">The prerequisite is not one-shot or belongs to another source shape.</exception>
+    /// <exception cref="InvalidOperationException">A prerequisite is already declared.</exception>
+    public MachineReactionSource<TSource> After(MachineReaction reaction)
+    {
+        ArgumentNullException.ThrowIfNull(reaction);
+        if (prerequisite is not null) throw new InvalidOperationException("This profile supports one prerequisite per reaction.");
+        if (reaction.Payload.IdentityScope != MachineReactionIdentityScope.SourceEntity || reaction.Payload.Source != source.Shape)
+            throw new ArgumentException("The prerequisite must be declared once for the same source entity shape.", nameof(reaction));
+        prerequisite = reaction;
+        identityScope = MachineReactionIdentityScope.SourceEntity;
+        return this;
+    }
     internal MachineReactionSource(EntityDefinition source, MachineMovement movement, string id, string revision)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -157,10 +230,21 @@ public sealed class MachineReactionSource<TSource> where TSource : notnull
         var provenance = new ExecutionProvenance(new("cohesive.machine-reaction", "1"),
             new(id), DocumentOrigin.User);
         var process = ProcessAuthoring.Create<TSource, TResult>(
-            new(new(id + "/request"), new(revision), MachineReaction.InvocationNode, ProcessRecoveryPolicy.ContinueAttempt, provenance),
+            new(new(id + "/request"), new(revision), prerequisite is null ? MachineReaction.InvocationNode : MachineReaction.PrerequisiteNode, ProcessRecoveryPolicy.ContinueAttempt, provenance),
             ValueContract.FromShape(source.Shape), target.Definition.Outcome,
             p =>
             {
+                if (prerequisite is not null)
+                {
+                    var evidence = p.Output<string>(new ValueBindingId("reaction.prerequisite.receipt"), new ValueContract(new ScalarTypeRef(ScalarTypeKind.String)));
+                    var clause = p.AwaitInteractionClause(MachineReaction.PrerequisiteClause,
+                        new SignalContractReference(MachineReaction.CreatePrerequisiteSignal(prerequisite.Document).Reference), evidence,
+                        requestObligation: null, guard: null, priority: 0,
+                        p.Continuation(p.Edge(new ProcessEdgeId("reaction/prerequisite-released"), MachineReaction.InvocationNode)));
+                    p.AwaitMatch(MachineReaction.PrerequisiteNode, ProcessAwaitArbitration.ExclusivePriorityThenClauseId, [clause],
+                        ProcessAwaitInputDisposition.Observe, ProcessAwaitInputDisposition.Reject,
+                        ProcessAwaitInputDisposition.ReusePriorDisposition, ProcessAwaitMissingTargetDisposition.DeadLetter, MachineReaction.PrerequisiteRetentionHorizon);
+                }
                 var result = p.Output<TResult>(new ValueBindingId("reaction.outcome"), target.Definition.Outcome);
                 p.InvokeTransition(MachineReaction.InvocationNode, target.Reference,
                     p.CanonicalValue<string>(subjectValue, new(new Cohesive.Model.Authoring.DefaultClrTypeRefMapper().Map(typeof(string), null))),
@@ -169,6 +253,6 @@ public sealed class MachineReactionSource<TSource> where TSource : notnull
                 p.Return(MachineReaction.ReturnNode, result.Value);
             }, sourceFile, sourceLine);
         return new(ExecutionDefinitionDocument.Create(MachineReaction.Kind, new(id), new(revision),
-            new MachineReactionPayload(source.Shape, new(movement.Id), target.Document, process.Document), provenance));
+            new MachineReactionPayload(source.Shape, new(movement.Id), target.Document, process.Document, identityScope, prerequisite?.Document), provenance));
     }
 }

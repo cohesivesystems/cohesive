@@ -9,7 +9,8 @@ PendingAcceptance = MachineReaction.On<TenderState>(
         Tender.Entity,
         Tender.Machine.SendPending,
         id: "tender-to-load.pending",
-        revision: "1")
+        revision: "2")
+    .OncePerSourceEntity()
     .Request(
         MarkPending,
         subject: tender => tender.LoadId,
@@ -33,7 +34,9 @@ source shape and target input. This initial expression projection uses CLR membe
 custom renamed or graph-dependent mappings are not inferred. Unsupported projections fail lowering
 or Process compilation. The target declaration must compile with its entity-machine binding.
 
-The Process has one target invocation and returns its domain outcome. A returned rejection is still
+The Process has one target invocation and returns its domain outcome. A declared `.After(prerequisite)`
+adds an ordinary durable AwaitMatch before invocation; the host releases it only after verifying the
+prerequisite's successful target receipt. See [causal coordination](../../../eng/examples/tender-acceptance/coordination.md). A returned rejection is still
 an ordinary Process result; target admission and committed movement are determined from the exact
 target receipt, never from the Process's Completed label alone. Serialization verifies the policy
 envelope, source movement, target compilation, and bounded Process structure. Policy identity,
@@ -55,7 +58,10 @@ Applications still supply trusted authorization and worker lifetime.
 The source receipt is attribution, not a grant to mutate a load.
 
 The instance/command/idempotency identities derive from the exact policy reference and source
-receipt/node identity. Duplicate deliveries prepare the same intent. `ProcessStartRequest.Causation`
+receipt/node identity by default. `.OncePerSourceEntity()` instead binds one occurrence to the exact
+policy, authority and source entity identity; conflicting second occurrences fail admission. `.After`
+requires that scope so a missing prerequisite can be addressed before its receipt arrives. Duplicate
+deliveries prepare the same intent. `ProcessStartRequest.Causation`
 retains portable origin evidence independently of domain input, so
 `MachineReactionInvocation.Restore(policy, checkpoint.Start.Request)` can reconstruct inspection
 after restart without reading the source's later state. Causation participates in idempotent intent
@@ -98,11 +104,11 @@ This profile covers one source occurrence, one target transition, one initial Pr
 and same-authority execution. `CosmosMachineReactionSource` can observe committed receipt documents,
 and `HttpMachineReactionTarget` realizes exact target dispatch and receipt resolution. Neither is
 part of the semantic policy. Restarting the Process as a new attempt is explicitly rejected by this inspection profile;
-recover the existing attempt instead. Component composition, fan-out, cross-authority dispatch,
+recover the existing attempt instead. Component composition, multiple-prerequisite joins, cross-authority dispatch,
 historical policy replay and actor adapters need explicit additional semantics. Cosmos checkpoints
 after durable admission; independent workers discover and recover admitted nonterminal work. Terminal history is excluded
 from background scans before target access; explicit inspection still resolves target receipts. Discovery currently
-supports the in-memory reference and PostgreSQL Process stores. No cross-policy ordering is inferred.
+supports the in-memory reference and PostgreSQL Process stores. No cross-policy ordering is inferred; `.After` explicitly declares the supported one-shot prerequisite.
 
 Authoring and validation are cold operations. Preparation hashes one bounded origin record and
 materializes the committed source snapshot once per delivered occurrence. Execution uses existing

@@ -134,11 +134,11 @@ public sealed class EntityMachineOccurrenceTests
     }
 
     internal static async Task<(InMemoryEntityOutboxRepository Repository, OperationContext Context, EntityTransitionOperationCommit Commit)>
-        Prepare<TInput>(EntityDefinition entity, Transition<TenderState, TInput, string> transition, TenderState state, TInput input, string processId = "process-1")
+        Prepare<TInput>(EntityDefinition entity, Transition<TenderState, TInput, string> transition, TenderState state, TInput input, string processId = "process-1", string sourceId = "tender-1")
     {
         var context = OperationContext.Create();
         var repository = new InMemoryEntityOutboxRepository(entity, EntityPartitionKeyPolicy.Fixed("test"));
-        var initial = await repository.Upsert(context, new(entity.CreateState("tender-1", ObservationValue.FromObject(state).Fields!).Snapshot));
+        var initial = await repository.Upsert(context, new(entity.CreateState(sourceId, ObservationValue.FromObject(state).Fields!).Snapshot));
         var compilation = transition.Compile();
         Assert.True(compilation.IsSuccessful);
         var plan = compilation.Plan!;
@@ -149,7 +149,7 @@ public sealed class EntityMachineOccurrenceTests
             PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(state)));
         var request = new EntityTransitionOperationRequest(operation, new("tests", "test"),
             decision.Evidence.Definition, new(new(repository.EntityType), initial.Entity.EntityId), value);
-        var candidate = TransitionStateProjector.ApplyToEntity(entity, "tender-1", decision, initial.Entity);
+        var candidate = TransitionStateProjector.ApplyToEntity(entity, sourceId, decision, initial.Entity);
         var commit = new EntityTransitionOperationCommit(request, new(candidate.Snapshot, initial.ConcurrencyToken),
             decision.Kind, ProcessOperationResult.Completed(decision.Outcome!), decision.GuaranteeDemands, decision.Evidence);
         return (repository, context, commit);

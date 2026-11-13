@@ -244,8 +244,9 @@ public sealed class MachineReactionRecoveryTests
             f.Target.Authority, (_, _) => ValueTask.FromResult(true));
         MachineReactionHost Host(MachineReactionTarget realization) => new(f.Model.ReceiptConfirmation, f.Store, realization,
             (_, receipt) => ValueTask.FromResult<ProcessControlAuthorizationContext?>(new("worker", receipt.Request.AuthorityScope, "test")),
-            new("worker", TimeSpan.FromMinutes(5)), new((_, _) => ValueTask.FromResult(true), retryDelay: TimeSpan.Zero));
+            new("worker", TimeSpan.FromMinutes(5)), new((_, _) => ValueTask.FromResult(true), retryDelay: TimeSpan.Zero), prerequisite: f.Host());
         var id = Assert.Single(await Host(target).AdmitAsync(f.Context, confirmation));
+        Assert.Equal(MachineReactionStatus.Pending, (await Host(target).RecoverAsync(f.Context, id))!.Status);
         Assert.Equal(MachineReactionStatus.Indeterminate, (await Host(new LostAcknowledgement(target)).RecoverAsync(f.Context, id))!.Status);
         var recovery = new MachineReactionRecovery(f.Store, [f.Host(), Host(target)]);
         var page = await recovery.RunPageAsync(f.Context);

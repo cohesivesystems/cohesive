@@ -129,6 +129,19 @@ public sealed class MachineReactionTests
             new(occurrence.Source.AuthorityScope, new("confirm"),
                 new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), plan.Document.Metadata.Provenance));
         var decision = ProcessReferenceInterpreter.Activate(plan, ProcessReferenceInterpreter.Create(plan, start), activation, host);
+        Assert.Equal(ProcessActivationDisposition.DurableCut, decision.Disposition);
+        Assert.Null(host.Invocation);
+        var wait = Assert.Single(decision.State.Waits);
+        var target = new ProcessTokenInteractionTarget(invocation.Start.InitialContinuation, wait.Token, wait.RegistrationId);
+        var signal = new SignalEnvelope(InteractionEnvelope.CurrentSchemaVersion,
+            new(new("proof"), new ProcessInteractionOrigin(model.PendingAcceptance.Payload.Process.Reference,
+                MachineReaction.InvocationNode, invocation.Start.InitialContinuation, activation.Id, wait.Token),
+                new("confirmation"), null, occurrence.Source.AuthorityScope, new("proof"), null,
+                activation.Context.Delivery, plan.Document.Metadata.Provenance),
+            new SignalContractReference(model.ReceiptConfirmation.PrerequisiteSignal!.Reference),
+            PortableValue.Concrete(new(new ScalarTypeRef(ScalarTypeKind.String)), ObservationValue.FromString("receipt-fingerprint")), target);
+        decision = ProcessReferenceInterpreter.Activate(plan, decision.State,
+            new(new("confirmation/released"), ProcessActivationCause.Interaction, DateTimeOffset.UtcNow, activation.Context, [new(target, signal)]), host);
         Assert.Equal(ProcessActivationDisposition.Completed, decision.Disposition);
         Assert.Equal(model.Confirm.Reference, host.Invocation!.Definition);
         Assert.Equal("load-1", host.Invocation.Subject.Value!.Value.GetRequiredString());
