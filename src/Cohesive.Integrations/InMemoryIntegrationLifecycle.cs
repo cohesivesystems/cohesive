@@ -17,14 +17,14 @@ public sealed class InMemoryIntegrationLifecycle
     readonly object sync = new();
     readonly IngestionLedgerAddress consumer;
     readonly Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize;
-    readonly Dictionary<string, (IntegrationLifecycleChange Command, IntegrationLifecycleSnapshot Result)> changes = new(StringComparer.Ordinal);
-    readonly Dictionary<ProcessContinuationIdentity, IntegrationAdmission> admissions = new();
+    readonly Dictionary<string, IntegrationLifecycleChangeReceipt> changes = new(StringComparer.Ordinal);
+    readonly Dictionary<ProcessContinuationIdentity, IntegrationAdmission> pending = new();
     readonly Dictionary<ProcessContinuationIdentity, IntegrationCompletion> completed = new();
     long revision;
-    IntegrationDesiredState desired = IntegrationDesiredState.Deactivated;
+    IntegrationDesiredState desired = IntegrationDesiredState.Paused;
     IntegrationLifecycleChange? lastChange;
 
-    /// <summary>Creates a deactivated local controller for an explicit consumer and host authorization authority.</summary>
+    /// <summary>Creates a paused local controller for an explicit consumer and host authorization authority.</summary>
     /// <param name="consumer">Stable consumer; every identity component must be nonempty and bounded.</param>
     /// <param name="authorize">Host decision for the requested action; exceptions propagate without mutation.</param>
     /// <exception cref="ArgumentNullException">An argument is null.</exception>
@@ -50,96 +50,101 @@ public sealed class InMemoryIntegrationLifecycle
         lock (sync) return completed.GetValueOrDefault(continuation);
     }
 
-    /// <summary>Changes desired state with optimistic revision fencing and exact command replay.</summary>
-    /// <param name="command">Attributable command with a stable retry identity.</param>
-    /// <param name="snapshot">Accepted original result on replay; otherwise current state.</param>
-    /// <returns>Structured authorization, conflict or successful validation.</returns>
-    /// <exception cref="ArgumentNullException">Command or its authorization is null.</exception>
-    /// <exception cref="ArgumentException">Identity, desired state, revision or UTC timestamp is invalid.</exception>
-    public DocumentValidationResult Change(IntegrationLifecycleChange command, out IntegrationLifecycleSnapshot snapshot)
+    /// <summary>Validates and binds an immutable compilation once, outside the admission path.</summary>
+    /// <param name="compilation">Exact closure for this consumer; qualification and dispatch policy remain independent.</param>
+    /// <returns>A controller-owned token reusable across admissions, retries and stopped-state checks.</returns>
+    /// <exception cref="ArgumentNullException">Compilation is null.</exception>
+    /// <exception cref="ArgumentException">The compilation, consumer or lowered Process is invalid.</exception>
+    public IntegrationAdmissionBinding Bind(IntegrationCompilation compilation)
     {
-        ArgumentNullException.ThrowIfNull(command); ArgumentException.ThrowIfNullOrWhiteSpace(command.Id);
-        Validate(command.Authorization, command.AtUtc);
-        if (command.ExpectedRevision < 0 || !Enum.IsDefined(command.Desired)) throw new ArgumentException("Invalid lifecycle command.");
-        var permitted = authorize(IntegrationLifecycleAction.Change, command.Authorization);
-        lock (sync)
-        {
-            snapshot = Snapshot();
-            if (!permitted) return Error("authorization", "Host authorization rejected the lifecycle change.");
-            if (changes.TryGetValue(command.Id, out var prior))
-            {
-                if (prior.Command != command) return Error("command-conflict", "Command identity was reused with different intent.");
-                snapshot = prior.Result;
-                return Valid();
-            }
-            if (command.ExpectedRevision != revision) return Error("revision", "Desired-state revision changed; inspect and reconcile intent.");
-            if (revision == long.MaxValue) return Error("revision-exhausted", "Lifecycle revision cannot advance.");
-            desired = command.Desired; revision++; lastChange = command;
-            snapshot = Snapshot(); changes.Add(command.Id, (command, snapshot));
-            return Valid();
-        }
-    }
-
-    /// <summary>Admits a session against the current desired-state revision, or recovers its original admission.</summary>
-    /// <remarks>An exact retry after pause returns the original receipt; it is not a new admission. The host must
-    /// resume the existing Process and must not treat this receipt as permission to repeat external effects.</remarks>
-    /// <param name="compilation">Validated exact integration closure; capability and dispatch checks remain independent.</param>
-    /// <param name="continuation">Stable Process session identity.</param>
-    /// <param name="expectedRevision">Desired-state revision used for this original admission.</param>
-    /// <param name="authorization">Host-authenticated admission context.</param>
-    /// <param name="atUtc">Original UTC admission observation, unchanged on retry.</param>
-    /// <param name="admission">Original or newly accepted receipt; null on rejection.</param>
-    /// <returns>Structured admission decision without dispatching any operation.</returns>
-    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
-    /// <exception cref="ArgumentException">Revision or UTC timestamp is invalid.</exception>
-    public DocumentValidationResult Admit(IntegrationCompilation compilation, ProcessContinuationIdentity continuation,
-        long expectedRevision, ProcessControlAuthorizationContext authorization, DateTimeOffset atUtc, out IntegrationAdmission? admission)
-    {
-        ArgumentNullException.ThrowIfNull(compilation); ArgumentNullException.ThrowIfNull(continuation);
-        Validate(authorization, atUtc);
-        if (expectedRevision < 0) throw new ArgumentException("Revision cannot be negative.", nameof(expectedRevision));
-        admission = null;
-        if (!authorize(IntegrationLifecycleAction.Admit, authorization)) return Error("authorization", "Host authorization rejected admission.");
+        ArgumentNullException.ThrowIfNull(compilation);
         var validation = ValidateCompilation(compilation);
-        if (!validation.IsValid) return validation;
-        var candidate = new IntegrationAdmission(consumer, continuation, compilation.Binding!.Reference, compilation.Process!.Reference,
-            expectedRevision, authorization, atUtc);
+        if (!validation.IsValid) throw new ArgumentException(validation.Diagnostics[0].Message, nameof(compilation));
+        return new(this, compilation.Binding!.Reference, compilation.Process!.Reference);
+    }
+
+    /// <summary>Changes desired state with revision fencing and compact exact command replay.</summary>
+    /// <param name="request">Attributable command with stable retry identity.</param>
+    /// <returns>A typed disposition and original compact receipt on acceptance; never constructs a pending snapshot.</returns>
+    /// <exception cref="ArgumentNullException">Request or authorization is null.</exception>
+    /// <exception cref="ArgumentException">Identity, desired state, revision or UTC timestamp is invalid.</exception>
+    public IntegrationLifecycleResult<IntegrationLifecycleChangeReceipt> Change(IntegrationLifecycleChange request)
+    {
+        ArgumentNullException.ThrowIfNull(request); ArgumentException.ThrowIfNullOrWhiteSpace(request.Id);
+        Validate(request.Authorization, request.AtUtc);
+        if (request.ExpectedRevision < 0 || !Enum.IsDefined(request.Desired)) throw new ArgumentException("Invalid lifecycle command.");
+        if (!authorize(IntegrationLifecycleAction.Change, request.Authorization)) return new(IntegrationLifecycleOutcome.Unauthorized);
         lock (sync)
         {
-            if (admissions.TryGetValue(continuation, out var prior))
-            {
-                if (prior != candidate) return Error("admission-conflict", "Session identity already has a different admission.");
-                admission = prior; return Valid();
-            }
-            if (revision != expectedRevision) return Error("revision", "Admission requires the current desired-state revision.");
-            if (desired != IntegrationDesiredState.Active) return Error("admission-stopped", "Integration is not accepting new sessions.");
-            admissions.Add(continuation, candidate); admission = candidate;
-            return Valid();
+            if (changes.TryGetValue(request.Id, out var prior))
+                return prior.Command == request ? new(IntegrationLifecycleOutcome.Replayed, prior) : new(IntegrationLifecycleOutcome.IdentityConflict);
+            if (request.ExpectedRevision != revision) return new(IntegrationLifecycleOutcome.RevisionConflict);
+            if (revision == long.MaxValue) return new(IntegrationLifecycleOutcome.RevisionExhausted);
+            desired = request.Desired; revision++; lastChange = request;
+            var receipt = new IntegrationLifecycleChangeReceipt(request, revision);
+            changes.Add(request.Id, receipt);
+            return new(IntegrationLifecycleOutcome.Applied, receipt);
         }
     }
 
-    /// <summary>Removes a successfully completed exact Process from the draining set, retaining its admission.</summary>
-    /// <remarks>Failed, cancelled and unresolved Processes remain pending because terminal status alone cannot prove
-    /// that every external effect is resolved. Operator resolution for those cases is deliberately not inferred.</remarks>
-    /// <param name="admission">Exact receipt returned by this controller.</param>
-    /// <param name="completion">Trusted reference/runtime decision for the admitted Process and continuation.</param>
-    /// <param name="authorization">Host-authenticated completion recorder.</param>
-    /// <returns>Structured authorization, lineage or completion decision.</returns>
-    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
-    public DocumentValidationResult Complete(IntegrationAdmission admission, ProcessActivationDecision completion,
-        ProcessControlAuthorizationContext authorization)
+    /// <summary>Admits a session using a prevalidated token, or retrieves its original admission.</summary>
+    /// <remarks>Exact replay after pause or completion is not permission to repeat external effects.
+    /// Admission performs no catalog construction, binding inspection, lowering or history enumeration.</remarks>
+    /// <param name="request">Complete original intent, including the controller-owned binding token.</param>
+    /// <returns>Typed disposition with the original receipt on acceptance or replay.</returns>
+    /// <exception cref="ArgumentNullException">A required request field is null.</exception>
+    /// <exception cref="ArgumentException">Revision or UTC timestamp is invalid.</exception>
+    public IntegrationLifecycleResult<IntegrationAdmission> Admit(IntegrationAdmissionRequest request)
     {
-        ArgumentNullException.ThrowIfNull(admission); ArgumentNullException.ThrowIfNull(completion); ArgumentNullException.ThrowIfNull(authorization);
-        if (!authorize(IntegrationLifecycleAction.Complete, authorization)) return Error("authorization", "Host authorization rejected completion.");
+        ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Binding); ArgumentNullException.ThrowIfNull(request.Continuation);
+        Validate(request.Authorization, request.AtUtc);
+        if (request.ExpectedRevision < 0) throw new ArgumentException("Revision cannot be negative.", nameof(request));
+        if (!authorize(IntegrationLifecycleAction.Admit, request.Authorization)) return new(IntegrationLifecycleOutcome.Unauthorized);
+        if (!ReferenceEquals(request.Binding.Owner, this)) return new(IntegrationLifecycleOutcome.BindingMismatch);
         lock (sync)
         {
-            if (!admissions.TryGetValue(admission.Continuation, out var prior) || prior != admission
-                || completion.State.Definition != admission.Process || completion.State.Continuation != admission.Continuation)
-                return Error("completion-lineage", "Completion does not belong to the exact admitted session.");
-            if (completion.Disposition != ProcessActivationDisposition.Completed)
-                return Error("unresolved", "Only confirmed successful Process completion can leave the draining set.");
-            completed.TryAdd(admission.Continuation, new(admission, completion, authorization));
-            return Valid();
+            var prior = pending.GetValueOrDefault(request.Continuation) ?? completed.GetValueOrDefault(request.Continuation)?.Admission;
+            if (prior is not null)
+            {
+                var matches = prior.Binding == request.Binding.Binding && prior.Process == request.Binding.Process
+                    && prior.LifecycleRevision == request.ExpectedRevision && prior.Authorization == request.Authorization && prior.AtUtc == request.AtUtc;
+                return matches ? new(IntegrationLifecycleOutcome.Replayed, prior) : new(IntegrationLifecycleOutcome.IdentityConflict);
+            }
+            if (revision != request.ExpectedRevision) return new(IntegrationLifecycleOutcome.RevisionConflict);
+            if (desired != IntegrationDesiredState.Active) return new(IntegrationLifecycleOutcome.AdmissionStopped);
+            var receipt = new IntegrationAdmission(consumer, request.Continuation, request.Binding.Binding, request.Binding.Process,
+                request.ExpectedRevision, request.Authorization, request.AtUtc);
+            pending.Add(request.Continuation, receipt);
+            return new(IntegrationLifecycleOutcome.Applied, receipt);
+        }
+    }
+
+    /// <summary>Moves a successfully completed exact Process out of the pending set, retaining its original evidence.</summary>
+    /// <remarks>Failed/cancelled/unresolved work stays pending. A later authorized recorder receives
+    /// ReplayedWithOriginalRecorder and the first completion receipt; attribution is never silently replaced.</remarks>
+    /// <param name="request">Exact admission, trusted completion evidence and authenticated recorder.</param>
+    /// <returns>A typed disposition and original completion receipt on acceptance or replay.</returns>
+    /// <exception cref="ArgumentNullException">A required request field is null.</exception>
+    public IntegrationLifecycleResult<IntegrationCompletion> Complete(IntegrationCompletionRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Admission);
+        ArgumentNullException.ThrowIfNull(request.Decision); ArgumentNullException.ThrowIfNull(request.Authorization);
+        if (!authorize(IntegrationLifecycleAction.Complete, request.Authorization)) return new(IntegrationLifecycleOutcome.Unauthorized);
+        var admission = request.Admission;
+        var decision = request.Decision;
+        lock (sync)
+        {
+            var prior = pending.GetValueOrDefault(admission.Continuation) ?? completed.GetValueOrDefault(admission.Continuation)?.Admission;
+            if (prior != admission || decision.State.Definition != admission.Process || decision.State.Continuation != admission.Continuation)
+                return new(IntegrationLifecycleOutcome.CompletionMismatch);
+            if (decision.Disposition != ProcessActivationDisposition.Completed) return new(IntegrationLifecycleOutcome.Unresolved);
+            if (completed.TryGetValue(admission.Continuation, out var original))
+                return new(original.Authorization == request.Authorization ? IntegrationLifecycleOutcome.Replayed
+                    : IntegrationLifecycleOutcome.ReplayedWithOriginalRecorder, original);
+            var receipt = new IntegrationCompletion(admission, decision, request.Authorization);
+            completed.Add(admission.Continuation, receipt);
+            pending.Remove(admission.Continuation);
+            return new(IntegrationLifecycleOutcome.Applied, receipt);
         }
     }
 
@@ -160,7 +165,7 @@ public sealed class InMemoryIntegrationLifecycle
     }
 
     IntegrationLifecycleSnapshot Snapshot() => new(consumer, revision, desired, lastChange,
-        [.. admissions.Values.Where(a => !completed.ContainsKey(a.Continuation))
+        [.. pending.Values
             .OrderBy(a => a.Continuation.ProcessInstanceId.Value, StringComparer.Ordinal).ThenBy(a => a.Continuation.ProcessAttemptId.Value, StringComparer.Ordinal)]);
     static void Validate(ProcessControlAuthorizationContext authorization, DateTimeOffset atUtc)
     {

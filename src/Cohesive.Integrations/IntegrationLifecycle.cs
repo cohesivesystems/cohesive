@@ -10,9 +10,7 @@ public enum IntegrationDesiredState
     /// <summary>Permit new sessions; existing sessions continue under their own Process and dispatch policies.</summary>
     Active,
     /// <summary>Stop new sessions and drain admitted work; resume by explicitly selecting Active.</summary>
-    Paused,
-    /// <summary>Disable admission and drain admitted work; reactivation must be explicit.</summary>
-    Deactivated
+    Paused
 }
 
 /// <summary>Lifecycle operations authorized by the host, independently of provider dispatch policy.</summary>
@@ -50,7 +48,7 @@ public sealed record IntegrationAdmission(IngestionLedgerAddress Consumer, Proce
 /// <summary>Immutable lifecycle inspection; execution health and accepted data coverage are separate observations.</summary>
 /// <param name="Consumer">Controlled consumer.</param>
 /// <param name="Revision">Monotonic desired-state revision, initially zero.</param>
-/// <param name="Desired">Desired admission state, initially Deactivated.</param>
+/// <param name="Desired">Desired admission state, initially Paused.</param>
 /// <param name="LastChange">Last accepted command, or null before explicit activation.</param>
 /// <param name="Pending">Admitted sessions without confirmed successful Process completion.</param>
 public sealed record IntegrationLifecycleSnapshot(IngestionLedgerAddress Consumer, long Revision,
@@ -67,4 +65,80 @@ public sealed record IntegrationLifecycleSnapshot(IngestionLedgerAddress Consume
 /// <param name="Decision">Original successful Process decision, including execution evidence.</param>
 /// <param name="Authorization">Host-authenticated recorder and authorization evidence.</param>
 public sealed record IntegrationCompletion(IntegrationAdmission Admission, ProcessActivationDecision Decision,
+    ProcessControlAuthorizationContext Authorization);
+
+/// <summary>Typed lifecycle disposition; hosts never need to parse diagnostic strings.</summary>
+public enum IntegrationLifecycleOutcome
+{
+    /// <summary>New intent was accepted.</summary>
+    Applied,
+    /// <summary>The original receipt was returned without another mutation.</summary>
+    Replayed,
+    /// <summary>Completion already existed; the returned receipt retains its original authorization.</summary>
+    ReplayedWithOriginalRecorder,
+    /// <summary>Host authorization denied the operation.</summary>
+    Unauthorized,
+    /// <summary>Inspect current revision and reconcile intent before retrying.</summary>
+    RevisionConflict,
+    /// <summary>A stable identity was reused with changed intent.</summary>
+    IdentityConflict,
+    /// <summary>New sessions are stopped; a fresh revision alone will not permit admission.</summary>
+    AdmissionStopped,
+    /// <summary>The bound token belongs to a different controller.</summary>
+    BindingMismatch,
+    /// <summary>Completion does not match an admitted session.</summary>
+    CompletionMismatch,
+    /// <summary>The Process has not confirmed successful completion.</summary>
+    Unresolved,
+    /// <summary>The revision cannot advance further.</summary>
+    RevisionExhausted
+}
+
+/// <summary>Typed operation result with a receipt only for accepted outcomes.</summary>
+/// <typeparam name="TReceipt">Original immutable receipt returned on acceptance or replay.</typeparam>
+public sealed class IntegrationLifecycleResult<TReceipt> where TReceipt : class
+{
+    readonly TReceipt? receipt;
+    internal IntegrationLifecycleResult(IntegrationLifecycleOutcome outcome, TReceipt? receipt = null)
+    { Outcome = outcome; this.receipt = receipt; }
+    /// <summary>Machine-readable disposition.</summary>
+    public IntegrationLifecycleOutcome Outcome { get; }
+    /// <summary>Whether this result carries an accepted original receipt.</summary>
+    public bool IsAccepted => receipt is not null;
+    /// <summary>Accepted original receipt; check IsAccepted or Outcome before accessing it.</summary>
+    /// <exception cref="InvalidOperationException">The operation was rejected.</exception>
+    public TReceipt Receipt => receipt ?? throw new InvalidOperationException($"Lifecycle operation was rejected: {Outcome}.");
+}
+
+/// <summary>Compact original change receipt; pending sessions are inspected separately.</summary>
+/// <param name="Command">Accepted intent and actor.</param>
+/// <param name="Revision">Resulting desired-state revision.</param>
+public sealed record IntegrationLifecycleChangeReceipt(IntegrationLifecycleChange Command, long Revision);
+
+/// <summary>Opaque validated binding owned by one controller. Reuse it across session admissions.</summary>
+public sealed class IntegrationAdmissionBinding
+{
+    internal InMemoryIntegrationLifecycle Owner { get; }
+    internal IntegrationAdmissionBinding(InMemoryIntegrationLifecycle owner, ExecutionDefinitionReference binding, ExecutionDefinitionReference process)
+    { Owner = owner; Binding = binding; Process = process; }
+    /// <summary>Exact validated canonical integration binding.</summary>
+    public ExecutionDefinitionReference Binding { get; }
+    /// <summary>Exact validated canonical Process.</summary>
+    public ExecutionDefinitionReference Process { get; }
+}
+
+/// <summary>Attributable admission intent; reuse the complete request for an exact retry.</summary>
+/// <param name="Binding">Token validated once by this controller's Bind method.</param>
+/// <param name="Continuation">Stable Process instance and attempt.</param>
+/// <param name="ExpectedRevision">Original expected lifecycle revision.</param>
+/// <param name="Authorization">Host-authenticated actor and authority.</param>
+/// <param name="AtUtc">Original UTC admission observation.</param>
+public sealed record IntegrationAdmissionRequest(IntegrationAdmissionBinding Binding, ProcessContinuationIdentity Continuation,
+    long ExpectedRevision, ProcessControlAuthorizationContext Authorization, DateTimeOffset AtUtc);
+
+/// <summary>Intent to record successful completion of an admitted session.</summary>
+/// <param name="Admission">Original admission receipt.</param>
+/// <param name="Decision">Trusted Process completion evidence.</param>
+/// <param name="Authorization">Host-authenticated completion recorder.</param>
+public sealed record IntegrationCompletionRequest(IntegrationAdmission Admission, ProcessActivationDecision Decision,
     ProcessControlAuthorizationContext Authorization);

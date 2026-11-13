@@ -174,8 +174,8 @@ public sealed partial class HistoricalQualificationExamples
             };
         }
 
-        internal ProcessActivationDecision Start() => ProcessReferenceInterpreter.Activate(plan,
-            ProcessReferenceInterpreter.Create(plan, new(new("example/historical"), new("attempt/1")), Value(plan.Definition.Input, scope)),
+        internal ProcessActivationDecision Start(ProcessContinuationIdentity? continuation = null) => ProcessReferenceInterpreter.Activate(plan,
+            ProcessReferenceInterpreter.Create(plan, continuation ?? new(new("example/historical"), new("attempt/1")), Value(plan.Definition.Input, scope)),
             Activation("start", ProcessActivationCause.Start), this);
 
         internal ValueTask<RequestTerminalOutcome> Handle(RequestEnvelope request) => handlers[request.Contract](request);

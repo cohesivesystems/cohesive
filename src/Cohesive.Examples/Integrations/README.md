@@ -79,7 +79,7 @@ from a **known retained result**, not disk persistence, process termination or r
 external effect. They do not retry ambiguous effects or claim production storage durability.
 
 [HistoricalLifecycleExamples.cs](HistoricalLifecycleExamples.cs) adds the COH-136 local admission-control
-loop around that same Process. Revision-aware pause/deactivation rejects a new session while the
+loop around that same Process. Revision-aware pause rejects a new session while the
 admitted session finishes from its retained result through a fresh worker. Successful exact Process
 completion ends draining. Failed work stays visible until an explicit resolution protocol exists;
 these tests do not infer resolved external effects from a failure status.

@@ -1,6 +1,5 @@
 using Cohesive.Execution;
 using Cohesive.Integrations;
-using Cohesive.Model.Serialization;
 
 namespace Cohesive.Tests.Integrations;
 
@@ -11,39 +10,51 @@ public sealed partial class IntegrationModelTests
     static InMemoryIntegrationLifecycle Lifecycle() => new(Candidate().Binding!.GetDefinition<IngestionProviderBinding>().Consumer,
         (_, actor) => actor == LifecycleActor);
     static IntegrationLifecycleChange Change(string id, long revision, IntegrationDesiredState desired) => new(id, revision, desired, LifecycleActor, AdmissionTime);
+    static IntegrationAdmissionRequest Admission(IntegrationAdmissionBinding binding, long revision = 1) =>
+        new(binding, LifecycleSession, revision, LifecycleActor, AdmissionTime);
 
     [Fact]
     public void LifecycleCommandsAreAuthorizedFencedAndReplayOriginalDisposition()
     {
         var control = Lifecycle();
-        Assert.False(control.Admit(Candidate(), LifecycleSession, 0, LifecycleActor, AdmissionTime, out _).IsValid);
+        var binding = control.Bind(Candidate());
+        var stopped = control.Admit(Admission(binding, revision: 0));
+        Assert.Equal(IntegrationLifecycleOutcome.AdmissionStopped, stopped.Outcome);
+        Assert.False(stopped.IsAccepted);
+        Assert.Throws<InvalidOperationException>(() => stopped.Receipt);
         var activate = Change("activate", 0, IntegrationDesiredState.Active);
-        Assert.False(control.Change(activate with { Authorization = new("intruder", new("test", "tenant"), "forged") }, out _).IsValid);
+        Assert.Equal(IntegrationLifecycleOutcome.Unauthorized, control.Change(activate with
+            { Authorization = new("intruder", new("test", "tenant"), "forged") }).Outcome);
         Assert.Equal(0, control.Inspect().Revision);
-        Assert.True(control.Change(activate, out var active).IsValid);
-        Assert.True(control.Change(Change("pause", 1, IntegrationDesiredState.Paused), out var paused).IsValid);
-        Assert.False(control.Change(Change("stale-resume", 1, IntegrationDesiredState.Active), out _).IsValid);
-        Assert.False(control.Change(activate with { Desired = IntegrationDesiredState.Deactivated }, out _).IsValid);
-        Assert.True(control.Change(activate, out var replay).IsValid);
-        Assert.Equal(active, replay);
+        var active = control.Change(activate).Receipt;
+        Assert.True(control.Change(Change("pause", 1, IntegrationDesiredState.Paused)).IsAccepted);
+        var paused = control.Inspect();
+        Assert.Equal(IntegrationLifecycleOutcome.RevisionConflict, control.Change(Change("stale-resume", 1, IntegrationDesiredState.Active)).Outcome);
+        Assert.Equal(IntegrationLifecycleOutcome.IdentityConflict, control.Change(activate with { Desired = IntegrationDesiredState.Paused }).Outcome);
+        var replay = control.Change(activate);
+        Assert.Equal(IntegrationLifecycleOutcome.Replayed, replay.Outcome);
+        Assert.Same(active, replay.Receipt);
         Assert.Equal(paused, control.Inspect());
-        Assert.True(control.Change(Change("resume", 2, IntegrationDesiredState.Active), out var resumed).IsValid);
-        Assert.True(resumed.Accepting);
+        var resumed = control.Change(Change("resume", 2, IntegrationDesiredState.Active)).Receipt;
+        Assert.True(control.Inspect().Accepting);
         Assert.Equal(3, resumed.Revision);
     }
 
     [Fact]
-    public void OriginalAdmissionSurvivesDeactivationWithoutSwitchingItsBinding()
+    public void OriginalAdmissionSurvivesPauseWithoutSwitchingItsBinding()
     {
         var control = Lifecycle();
-        Assert.True(control.Change(Change("activate", 0, IntegrationDesiredState.Active), out _).IsValid);
-        Assert.True(control.Admit(Candidate(), LifecycleSession, 1, LifecycleActor, AdmissionTime, out var admitted).IsValid);
-        Assert.True(control.Change(Change("deactivate", 1, IntegrationDesiredState.Deactivated), out var stopped).IsValid);
-        Assert.True(stopped.Draining);
-        Assert.True(control.Admit(Candidate(), LifecycleSession, 1, LifecycleActor, AdmissionTime, out var replay).IsValid);
-        Assert.Equal(admitted, replay);
-        Assert.False(control.Admit(Candidate("v2"), LifecycleSession, 1, LifecycleActor, AdmissionTime, out _).IsValid);
-        Assert.False(control.Admit(Candidate(), new(new("session/2"), new("attempt/1")), 2, LifecycleActor, AdmissionTime, out _).IsValid);
+        var request = Admission(control.Bind(Candidate()));
+        Assert.True(control.Change(Change("activate", 0, IntegrationDesiredState.Active)).IsAccepted);
+        var admitted = control.Admit(request).Receipt;
+        Assert.True(control.Change(Change("pause", 1, IntegrationDesiredState.Paused)).IsAccepted);
+        Assert.True(control.Inspect().Draining);
+        var replay = control.Admit(request);
+        Assert.Equal(IntegrationLifecycleOutcome.Replayed, replay.Outcome);
+        Assert.Same(admitted, replay.Receipt);
+        Assert.Equal(IntegrationLifecycleOutcome.IdentityConflict, control.Admit(request with { Binding = control.Bind(Candidate("v2")) }).Outcome);
+        Assert.Equal(IntegrationLifecycleOutcome.AdmissionStopped, control.Admit(request with
+            { Continuation = new(new("session/2"), new("attempt/1")), ExpectedRevision = 2 }).Outcome);
         Assert.Single(control.Inspect().Pending);
     }
 
@@ -51,31 +62,46 @@ public sealed partial class IntegrationModelTests
     public async Task PauseAndAdmissionLinearizeAtTheSameRevisionBoundary()
     {
         var control = Lifecycle();
-        Assert.True(control.Change(Change("activate", 0, IntegrationDesiredState.Active), out _).IsValid);
+        var request = Admission(control.Bind(Candidate()));
+        Assert.True(control.Change(Change("activate", 0, IntegrationDesiredState.Active)).IsAccepted);
         using var ready = new Barrier(2);
-        var candidate = Candidate();
-        var admission = Task.Run(() => { ready.SignalAndWait(); return control.Admit(candidate, LifecycleSession, 1, LifecycleActor, AdmissionTime, out _); });
-        var pause = Task.Run(() => { ready.SignalAndWait(); return control.Change(Change("pause", 1, IntegrationDesiredState.Paused), out _); });
+        var admission = Task.Run(() => { ready.SignalAndWait(); return control.Admit(request); });
+        var pause = Task.Run(() => { ready.SignalAndWait(); return control.Change(Change("pause", 1, IntegrationDesiredState.Paused)); });
         await Task.WhenAll(admission, pause);
         var admitted = await admission;
-        Assert.True((await pause).IsValid);
+        Assert.True((await pause).IsAccepted);
         var state = control.Inspect();
         Assert.Equal(IntegrationDesiredState.Paused, state.Desired);
-        Assert.Equal(admitted.IsValid ? 1 : 0, state.Pending.Length);
-        Assert.Equal(admitted.IsValid, state.Draining);
-        Assert.False(control.Admit(candidate, new(new("after-pause"), new("attempt/1")), state.Revision, LifecycleActor, AdmissionTime, out _).IsValid);
+        Assert.Equal(admitted.IsAccepted ? 1 : 0, state.Pending.Length);
+        Assert.Equal(admitted.IsAccepted, state.Draining);
+        Assert.Equal(IntegrationLifecycleOutcome.AdmissionStopped, control.Admit(request with
+            { Continuation = new(new("after-pause"), new("attempt/1")), ExpectedRevision = state.Revision }).Outcome);
     }
 
     [Fact]
-    public void AdmissionRejectsUnrelatedProcessAndConsumer()
+    public void BindingRejectsUnrelatedProcessConsumerAndForeignController()
     {
         var control = Lifecycle();
-        Assert.True(control.Change(Change("activate", 0, IntegrationDesiredState.Active), out _).IsValid);
         var candidate = Candidate();
-        Assert.False(control.Admit(candidate with { Process = candidate.Binding }, LifecycleSession, 1, LifecycleActor, AdmissionTime, out _).IsValid);
+        Assert.Throws<ArgumentException>(() => control.Bind(candidate with { Process = candidate.Binding }));
         var other = new InMemoryIntegrationLifecycle(new("other", "source", "sink", "partition"), (_, _) => true);
-        Assert.True(other.Change(Change("activate", 0, IntegrationDesiredState.Active), out _).IsValid);
-        Assert.False(other.Admit(candidate, LifecycleSession, 1, LifecycleActor, AdmissionTime, out _).IsValid);
+        Assert.Throws<ArgumentException>(() => other.Bind(candidate));
+        var sameConsumer = Lifecycle();
+        Assert.Equal(IntegrationLifecycleOutcome.BindingMismatch, sameConsumer.Admit(Admission(control.Bind(candidate))).Outcome);
         Assert.Empty(control.Inspect().Pending);
+    }
+
+    [Fact]
+    public void ChangeReceiptsDoNotCapturePendingSessions()
+    {
+        var control = Lifecycle();
+        var binding = control.Bind(Candidate());
+        var start = control.Change(Change("start", 0, IntegrationDesiredState.Active)).Receipt;
+        for (var i = 0; i < 200; i++)
+            Assert.True(control.Admit(Admission(binding) with { Continuation = new(new("session/" + i), new("attempt/1")) }).IsAccepted);
+        for (var i = 1; i <= 200; i++)
+            Assert.Equal(i + 1, control.Change(Change("change/" + i, i, IntegrationDesiredState.Active)).Receipt.Revision);
+        Assert.Same(start, control.Change(Change("start", 0, IntegrationDesiredState.Active)).Receipt);
+        Assert.Equal(200, control.Inspect().Pending.Length);
     }
 }
