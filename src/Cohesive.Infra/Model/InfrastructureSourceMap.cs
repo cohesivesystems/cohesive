@@ -213,7 +213,7 @@ public static class InfrastructureSourceReferences
         ArgumentNullException.ThrowIfNull(manifest);
         return Create(
             "infrastructure-target-facility-manifest",
-            $"{manifest.Id.Value}#{manifest.Fingerprint.Algorithm}:{manifest.Fingerprint.Canonicalization}:{manifest.Fingerprint.Value}",
+            $"{manifest.Id.Value}#{manifest.Fingerprint.ToCanonicalString()}",
             nameof(manifest));
     }
 
@@ -233,7 +233,7 @@ public static class InfrastructureSourceReferences
         ArgumentNullException.ThrowIfNull(manifest);
         return Create(
             "infrastructure-target-deployment-manifest",
-            $"{manifest.Id.Value}#{manifest.Fingerprint.Algorithm}:{manifest.Fingerprint.Canonicalization}:{manifest.Fingerprint.Value}",
+            $"{manifest.Id.Value}#{manifest.Fingerprint.ToCanonicalString()}",
             nameof(manifest));
     }
 

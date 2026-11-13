@@ -451,5 +451,5 @@ internal static class ProcessScopeAnalyzer
 
     static string Describe(ExecutionDefinitionReference reference) =>
         $"{reference.DefinitionId.Value}@{reference.RevisionId.Value}"
-        + $"#{reference.Fingerprint.Algorithm}:{reference.Fingerprint.Canonicalization}:{reference.Fingerprint.Value}";
+        + $"#{reference.Fingerprint.ToCanonicalString()}";
 }

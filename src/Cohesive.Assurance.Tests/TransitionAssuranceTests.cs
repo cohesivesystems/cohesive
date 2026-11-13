@@ -67,6 +67,8 @@ public sealed class TransitionAssuranceTests
     {
         ExecutionDefinitionReference Ref(string algorithm, string profile) => new(new("reserve"), new("1"), new(algorithm, profile, "digest"));
         Assert.NotEqual(ClaimReference.FromExecution(Ref("a:b", "c")), ClaimReference.FromExecution(Ref("a", "b:c")));
+        Assert.Equal(Ref("sha256", "profile/v1").Fingerprint.ToCanonicalString(),
+            ClaimReference.FromExecution(Ref("sha256", "profile/v1")).Fingerprint);
         Assert.NotEqual(ClaimReference.FromExecution(Ref("sha256", "v1")), ClaimReference.FromExecution(Ref("sha256", "v2")));
     }
 }

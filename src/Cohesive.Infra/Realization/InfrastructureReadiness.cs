@@ -413,6 +413,10 @@ public sealed record InfrastructureReadinessAssessmentFingerprint
 
     /// <summary>Lowercase hexadecimal digest.</summary>
     public string Value { get; }
+
+    /// <summary>Formats this fingerprint using the shared delimiter-safe core encoding.</summary>
+    /// <returns>Algorithm, canonicalization and digest separated by colons, with embedded percent and colon escaped.</returns>
+    public string ToCanonicalString() => Cohesive.Model.FingerprintText.Format(Algorithm, Canonicalization, Value);
 }
 
 /// <summary>Portable assessment of exact infrastructure observations against canonical readiness obligations.</summary>
@@ -622,7 +626,7 @@ public static class InfrastructureReadinessEvaluator
 
         var realizationSource = SourceReference.Create(
             "infrastructure-realization",
-            $"{realization.Fingerprint.Algorithm}:{realization.Fingerprint.Canonicalization}:{realization.Fingerprint.Value}");
+            $"{realization.Fingerprint.ToCanonicalString()}");
         List<DocumentValidationDiagnostic> diagnostics =
         [
             .. realization.CapabilityClosure.Diagnostics,

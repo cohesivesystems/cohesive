@@ -27,6 +27,23 @@ public class ClaimAuthoringTests
         new(binding.Id, role, new ValueContract(binding.Type));
 
     [Fact]
+    public void SourceInstancesHaveReferenceIdentityEvenWhenDerivedSemanticsAgree()
+    {
+        var input = new ClaimInput(new("state"), ClaimInputRole.State, new(new ScalarTypeRef(ScalarTypeKind.Bool)));
+        var source = State();
+        var predicate = Expr.BoundValue(input.Id);
+        var first = source.Require(predicate, [input]);
+        var second = source.Require(predicate, [input]);
+        Assert.False(typeof(IEquatable<Claim>).IsAssignableFrom(typeof(Claim)));
+        Assert.False(first.Equals(second));
+        Assert.True(first.Equals(first));
+        Assert.Equal(first.Build().Fingerprint, second.Build().Fingerprint);
+        var changed = first.Assuming(Ref("atomicity"));
+        Assert.Empty(first.Build().Definition.Assumptions);
+        Assert.Single(changed.Build().Definition.Assumptions);
+    }
+
+    [Fact]
     public void SharedHashHelperPreservesCanonicalClaimDigests()
     {
         var input = new ClaimInput(new("state"), ClaimInputRole.State, new(new ScalarTypeRef(ScalarTypeKind.Bool)));

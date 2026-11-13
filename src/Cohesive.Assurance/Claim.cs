@@ -4,26 +4,31 @@ using Cohesive.Model;
 namespace Cohesive.Assurance;
 
 /// <summary>Authoritative structural claim source; immutable edits are lowered only by Build.</summary>
-public sealed record Claim
+/// <remarks>Source objects have reference identity. Compare derived document fingerprints for semantic equivalence.</remarks>
+public sealed class Claim
 {
-    string id { get; init; } = null!;
-    string revision { get; init; } = null!;
-    ClaimReference source { get; init; } = null!;
-    ClaimReference configuration { get; init; } = null!;
-    ClaimReference observation { get; init; } = null!;
-    ImmutableArray<ClaimAttachment> attachments { get; init; } = [];
-    ImmutableArray<ClaimReference> assumptions { get; init; } = [];
-    ClaimForm form { get; init; }
-    ClaimReference selection { get; init; } = null!;
-    ClaimReference? witness { get; init; }
-    InitialStateSelection initial { get; init; }
-    long? deadline { get; init; }
-    Expr predicate { get; init; } = null!;
-    ImmutableArray<ClaimInput> inputs { get; init; } = [];
-    string producer { get; init; } = ClaimDocument.LoweringVersion;
-    ImmutableArray<ClaimReference> evidenceRequirements { get; init; } = [];
+    string id { get; set; } = null!;
+    string revision { get; set; } = null!;
+    ClaimReference source { get; set; } = null!;
+    ClaimReference configuration { get; set; } = null!;
+    ClaimReference observation { get; set; } = null!;
+    ImmutableArray<ClaimAttachment> attachments { get; set; } = [];
+    ImmutableArray<ClaimReference> assumptions { get; set; } = [];
+    ClaimForm form { get; set; }
+    ClaimReference selection { get; set; } = null!;
+    ClaimReference? witness { get; set; }
+    InitialStateSelection initial { get; set; }
+    long? deadline { get; set; }
+    Expr predicate { get; set; } = null!;
+    ImmutableArray<ClaimInput> inputs { get; set; } = [];
+    string producer { get; set; } = ClaimDocument.LoweringVersion;
+    ImmutableArray<ClaimReference> evidenceRequirements { get; set; } = [];
 
     private Claim() { }
+
+    // Source instances use reference identity; compare derived documents for semantic equivalence.
+    // Every field is immutable or an immutable collection, so a shallow copy is sufficient.
+    Claim Clone() => (Claim)MemberwiseClone();
 
     /// <summary>Starts source authoring with exact semantic and provenance references.</summary>
     /// <param name="id">Stable claim identity.</param>
@@ -51,9 +56,16 @@ public sealed record Claim
         internal Declaration(Claim value) => this.value = value;
 
         Predicate Select(ClaimForm form, ClaimReference selected, ClaimReference? matching = null,
-            InitialStateSelection initialState = InitialStateSelection.Exclude, long? ticks = null) =>
-            new(value with { form = form, selection = Guard.RequireNotNull(selected), witness = matching,
-                initial = initialState, deadline = ticks });
+            InitialStateSelection initialState = InitialStateSelection.Exclude, long? ticks = null)
+        {
+            var next = value.Clone();
+            next.form = form;
+            next.selection = Guard.RequireNotNull(selected);
+            next.witness = matching;
+            next.initial = initialState;
+            next.deadline = ticks;
+            return new(next);
+        }
 
         /// <summary>Selects a state invariant over an exact population.</summary>
         /// <param name="population">Exact population selector.</param>
@@ -101,22 +113,32 @@ public sealed record Claim
     {
         role = Guard.RequireNotNullOrWhiteSpace(role);
         if (attachments.Any(x => x.Role == role)) throw new ArgumentException("Role already bound.", nameof(role));
-        return this with { attachments = [.. attachments, new(role, Guard.RequireNotNull(reference))] };
+        var next = Clone();
+        next.attachments = [.. attachments, new(role, Guard.RequireNotNull(reference))];
+        return next;
     }
 
     /// <summary>Adds an exact externally justified assumption.</summary>
     /// <param name="assumption">Exact assumption reference.</param>
     /// <returns>A new declaration retaining the assumption.</returns>
     /// <exception cref="ArgumentNullException">Assumption is null.</exception>
-    public Claim Assuming(ClaimReference assumption) =>
-        this with { assumptions = [.. assumptions, Guard.RequireNotNull(assumption)] };
+    public Claim Assuming(ClaimReference assumption)
+    {
+        var next = Clone();
+        next.assumptions = [.. assumptions, Guard.RequireNotNull(assumption)];
+        return next;
+    }
 
     /// <summary>Attaches an exact requirement for evidence without inventing a readiness policy.</summary>
     /// <param name="requirement">Exact evidence requirement/policy reference.</param>
     /// <returns>A new declaration retaining the requirement.</returns>
     /// <exception cref="ArgumentNullException">Requirement is null.</exception>
-    public Claim RequireEvidence(ClaimReference requirement) =>
-        this with { evidenceRequirements = [.. evidenceRequirements, Guard.RequireNotNull(requirement)] };
+    public Claim RequireEvidence(ClaimReference requirement)
+    {
+        var next = Clone();
+        next.evidenceRequirements = [.. evidenceRequirements, Guard.RequireNotNull(requirement)];
+        return next;
+    }
 
     /// <summary>Immutable source with a selected form, awaiting its required predicate.</summary>
     public sealed class Predicate
@@ -136,8 +158,11 @@ public sealed record Claim
         public Claim Require(Expr predicate, IEnumerable<ClaimInput> inputs, string producer = ClaimDocument.LoweringVersion)
         {
             ArgumentNullException.ThrowIfNull(inputs);
-            return value with { predicate = Guard.RequireNotNull(predicate), inputs = [.. inputs],
-                producer = Guard.RequireNotNullOrWhiteSpace(producer) };
+            var next = value.Clone();
+            next.predicate = Guard.RequireNotNull(predicate);
+            next.inputs = [.. inputs];
+            next.producer = Guard.RequireNotNullOrWhiteSpace(producer);
+            return next;
         }
     }
 

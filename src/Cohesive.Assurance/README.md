@@ -146,3 +146,11 @@ and complete fingerprint profile without a parallel identity or hashing implemen
 See [the executed inventory example](../Cohesive.Assurance.Tests/TransitionAssuranceTests.cs)
 and [the observation boundary](../../docs/assurance/batch-evaluation.md) for the distinction
 between an interpreted candidate and production commit evidence.
+
+
+Source instances use reference identity; compare derived document fingerprints for semantic
+comparison. Execution-reference text uses the shared `ToCanonicalString()` formatter owned
+by the fingerprint type, with colon/percent escaping rather than URI component encoding.
+
+Current consumers are the transition reference-model integration test and the benchmark.
+No production Cohesive observation adapter, ARI integration, or ITO integration ships here.

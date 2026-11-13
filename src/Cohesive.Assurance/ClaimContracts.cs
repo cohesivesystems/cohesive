@@ -78,7 +78,7 @@ public sealed record ClaimReference
         ArgumentNullException.ThrowIfNull(reference);
         var fingerprint = reference.Fingerprint;
         return new(SourceReference.Create("execution", Uri.EscapeDataString(reference.DefinitionId.Value)), reference.RevisionId.Value,
-            $"{Uri.EscapeDataString(fingerprint.Algorithm)}:{Uri.EscapeDataString(fingerprint.Canonicalization)}:{Uri.EscapeDataString(fingerprint.Value)}");
+            fingerprint.ToCanonicalString());
     }
 
     internal static ImmutableArray<ClaimReference> NormalizeSet(ImmutableArray<ClaimReference> references)

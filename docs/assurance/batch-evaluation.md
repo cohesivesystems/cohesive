@@ -136,13 +136,15 @@ production monitor or formal proof has been executed by this implementation.
 ## Authoring and integration boundary
 
 `Claim.Define` returns `Claim.Declaration`; choosing one form returns `Claim.Predicate`;
-`Require` returns the completed immutable `Claim`. Only the completed stage exposes `Build`,
+`Require` returns the completed immutable `Claim`. Source instances use reference identity; compare derived document fingerprints for semantic
+equivalence. Only the completed stage exposes `Build`,
 `Attach`, `Assuming` and `RequireEvidence`. Invalid form/predicate sequencing is unavailable
 in the source API, while semantic expression and contract validation still happens at lowering.
 
 `ClaimReference.FromExecution(transition.Reference)` reuses Cohesive's typed exact execution
-identity. Definition IDs are URI-escaped under `execution://`; fingerprint algorithm, profile
-and digest are individually escaped and colon-separated, preserving every component. This
+identity. Definition IDs are URI-escaped under `execution://`; fingerprint text comes from the owning type’s shared `ToCanonicalString()` projection.
+Components are colon-separated, with embedded percent/colon escaped and ordinary profile
+slashes preserved. This
 projection does not independently validate the referenced artifact. Other domain selectors
 and observation contracts still require explicit exact references; entity/event-specific
 bridges and production consumers are follow-on integration work.
@@ -165,3 +167,10 @@ eligible-comparison budget semantics and diagnostic deduplication. Earlier v1 ev
 be regenerated from its source observations; it is not silently reinterpreted. Claim schema
 and fingerprint bytes remain unchanged. Claim and result hashing use core's existing
 `StrictDocumentJson.ComputeCanonicalSha256`; each domain retains its payload/profile authority.
+
+
+Current consumers: the authored-transition reference-model test and the focused benchmark
+exercise Assurance. There is no production observation adapter or ARI/ITO integration yet.
+The staged source/fingerprint review also replaces the first PR revision’s URI-escaped
+fingerprint triples with the shared core text format. Existing hand-authored references are
+not rewritten; regenerate execution-derived claim references and their derived documents.
