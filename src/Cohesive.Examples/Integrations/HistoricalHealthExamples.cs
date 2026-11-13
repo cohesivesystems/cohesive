@@ -40,7 +40,7 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Empty(afterFetch.AcceptedSessions);
         Assert.Null(afterFetch.Publication);
         Assert.Null(afterFetch.SourceProgress);
-        Assert.Equal(1, afterFetch.Integration.PendingSessionCount);
+        Assert.Equal(1, afterFetch.Integration.ConsumerPendingWork.SessionCount);
 
         decision = fixture.Reply(decision, outcome);
         while (decision.Disposition == ProcessActivationDisposition.DurableCut)

@@ -3,11 +3,13 @@ using Cohesive.Execution;
 
 namespace Cohesive.Integrations;
 
-/// <summary>Reusable host seam for reading and exporting inspection from a bound integration and evidence store.</summary>
+/// <summary>Internal experimental host seam for local inspection examples and conformance tests.</summary>
 /// <remarks>The host supplies a prevalidated binding and an authenticated evidence reader. No compilation, provider
 /// discovery or acquisition occurs here. Endpoint authorization and transport errors remain host-owned. Reader failures
-/// propagate rather than being disguised as missing evidence; the clock is sampled after evidence retrieval.</remarks>
-public sealed class IntegrationInspectionHost
+/// propagate rather than being disguised as missing evidence; the clock is sampled after evidence retrieval.
+/// The binding currently owns an InMemoryIntegrationLifecycle. This is not a durable-store hosting contract;
+/// keep it internal until a real consumer establishes the storage, ownership and transport boundaries.</remarks>
+internal sealed class IntegrationInspectionHost
 {
     static readonly JsonSerializerOptions JsonOptions = InteractionEnvelopeJsonSerializer.CreateOptions();
     readonly IntegrationAdmissionBinding binding;

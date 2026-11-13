@@ -143,6 +143,8 @@ public sealed class IntegrationLifecycleResult<TOutcome, TReceipt> where TOutcom
 public sealed record IntegrationLifecycleChangeReceipt(IntegrationLifecycleChange Command, long Revision);
 
 /// <summary>Opaque validated binding owned by one controller. Reuse it across session admissions.</summary>
+/// <remarks>This local binding currently belongs to InMemoryIntegrationLifecycle. A durable lifecycle owner
+/// and its snapshot contract are not modeled by this type; no durable hosting capability is implied.</remarks>
 public sealed class IntegrationAdmissionBinding
 {
     internal InMemoryIntegrationLifecycle Owner { get; }

@@ -44,10 +44,11 @@ public sealed class IntegrationHealthEvidence
 public sealed class IntegrationInspection
 {
     IntegrationInspection(IntegrationAdmissionBinding binding, IntegrationLifecycleSnapshot lifecycle,
-        DateTimeOffset atUtc, IntegrationHealthEvidence? providerEvidence, DateTimeOffset? oldestPendingAtUtc, ImmutableArray<DocumentValidationDiagnostic> diagnostics)
+        DateTimeOffset atUtc, IntegrationHealthEvidence? providerEvidence, IntegrationPendingWork consumerPendingWork,
+        IntegrationPendingWork bindingPendingWork, ImmutableArray<DocumentValidationDiagnostic> diagnostics)
     {
         Binding = binding.Binding; Lifecycle = lifecycle; AtUtc = atUtc;
-        ProviderEvidence = providerEvidence; OldestPendingAtUtc = oldestPendingAtUtc; Diagnostics = diagnostics;
+        ProviderEvidence = providerEvidence; ConsumerPendingWork = consumerPendingWork; BindingPendingWork = bindingPendingWork; Diagnostics = diagnostics;
     }
 
     internal static IntegrationInspection Create(IntegrationAdmissionBinding binding, DateTimeOffset atUtc,
@@ -58,21 +59,28 @@ public sealed class IntegrationInspection
             throw new ArgumentException("Health evidence belongs to another binding revision or scope.", nameof(providerEvidence));
         // Only the bound controller can supply this snapshot. Admission already validates its invariants.
         var lifecycle = binding.Owner.Inspect();
-        DateTimeOffset? oldest = null;
+        DateTimeOffset? oldest = null, bindingOldest = null;
+        var bindingPendingCount = 0;
         var hasFutureAdmission = false;
         foreach (var admission in lifecycle.Pending)
         {
             if (admission.AtUtc > atUtc) hasFutureAdmission = true;
             if (oldest is null || admission.AtUtc < oldest) oldest = admission.AtUtc;
+            if (admission.Binding == binding.Binding)
+            {
+                bindingPendingCount++;
+                if (bindingOldest is null || admission.AtUtc < bindingOldest) bindingOldest = admission.AtUtc;
+            }
         }
         var diagnostics = ImmutableArray.CreateBuilder<DocumentValidationDiagnostic>();
         if (hasFutureAdmission)
             diagnostics.Add(new("integrations.inspection.admission-clock-skew", DiagnosticSeverity.Warning,
-                "Pending admission timestamps are ahead of inspection time; original timestamps are retained and negative age is clamped to zero."));
+                "Consumer-wide pending admission timestamps are ahead of inspection time; original timestamps are retained and negative age is clamped to zero."));
         if (providerEvidence is { } evidence && evidence.Observation.ObservedAtUtc > atUtc)
             diagnostics.Add(new("integrations.inspection.provider-clock-skew", DiagnosticSeverity.Warning,
                 "Provider observation is ahead of inspection time; current health remains Unknown."));
-        return new(binding, lifecycle, atUtc, providerEvidence, oldest, diagnostics.ToImmutable());
+        return new(binding, lifecycle, atUtc, providerEvidence, new(lifecycle.Pending.Length, oldest, atUtc),
+            new(bindingPendingCount, bindingOldest, atUtc), diagnostics.ToImmutable());
     }
 
     /// <summary>Exact binding whose provider evidence is being inspected.</summary>
@@ -90,12 +98,31 @@ public sealed class IntegrationInspection
     public ExecutionHealthStatus ProviderHealth => HasCurrentProviderEvidence ? ProviderEvidence!.Observation.Health : ExecutionHealthStatus.Unknown;
     /// <summary>Current provider readiness only, independent of lifecycle, qualification and authorization.</summary>
     public ExecutionReadinessStatus ProviderReadiness => HasCurrentProviderEvidence ? ProviderEvidence!.Observation.Readiness : ExecutionReadinessStatus.Unknown;
-    /// <summary>Number of unresolved admitted sessions across the consumer; not a count of ambiguous effects or queued jobs.</summary>
-    public int PendingSessionCount => Lifecycle.Pending.Length;
-    /// <summary>Earliest pending admission time, or null with no pending sessions.</summary>
-    public DateTimeOffset? OldestPendingAtUtc { get; }
-    /// <summary>Elapsed age of the oldest pending session, clamped to zero for clock skew; null with no pending work.</summary>
-    public TimeSpan? OldestPendingAge => OldestPendingAtUtc is { } oldest ? (AtUtc >= oldest ? AtUtc - oldest : TimeSpan.Zero) : null;
+    /// <summary>Unresolved sessions across Lifecycle.Consumer, including other binding revisions/providers.
+    /// Do not attribute this consumer-wide backlog to the provider described by ProviderEvidence.</summary>
+    public IntegrationPendingWork ConsumerPendingWork { get; }
+    /// <summary>Unresolved sessions admitted to the exact Binding reference whose provider evidence is inspected.
+    /// This is a session backlog, not proof that its provider caused delay or an external effect is ambiguous.</summary>
+    public IntegrationPendingWork BindingPendingWork { get; }
     /// <summary>Projection diagnostics such as observed clock skew, separate from original provider diagnostics.</summary>
     public ImmutableArray<DocumentValidationDiagnostic> Diagnostics { get; }
+}
+
+/// <summary>Pending-session summary for the explicitly named scope in an inspection view.</summary>
+/// <remarks>ConsumerPendingWork and BindingPendingWork name different populations. Neither identifies the cause
+/// of unresolved work. Counts and ages derive from the same controller snapshot and inspection boundary.</remarks>
+public sealed class IntegrationPendingWork
+{
+    internal IntegrationPendingWork(int sessionCount, DateTimeOffset? oldestAdmissionAtUtc, DateTimeOffset atUtc)
+    {
+        SessionCount = sessionCount;
+        OldestAdmissionAtUtc = oldestAdmissionAtUtc;
+        OldestAdmissionAge = oldestAdmissionAtUtc is { } oldest ? (atUtc >= oldest ? atUtc - oldest : TimeSpan.Zero) : null;
+    }
+    /// <summary>Number of unresolved admitted sessions in this scope, not queued jobs or ambiguous effects.</summary>
+    public int SessionCount { get; }
+    /// <summary>Original earliest admission timestamp in this scope; null when no sessions are pending.</summary>
+    public DateTimeOffset? OldestAdmissionAtUtc { get; }
+    /// <summary>Elapsed age of the earliest admission in this scope, clamped to zero for skew; null for an empty scope.</summary>
+    public TimeSpan? OldestAdmissionAge { get; }
 }
