@@ -41,7 +41,7 @@ public enum EntityTransitionResponse
 }
 
 // One warm entity API transition from request bytes to response bytes through the real ASP.NET binding:
-// body deserialization, repository read, reference decision, candidate preparation, commit and response writing.
+// body deserialization, repository read, transition decision, candidate preparation, commit and response writing.
 // Requests alternate between two carriers so every invocation is an Applied, committed transition.
 internal sealed class EntityTransitionEndToEnd : IDisposable
 {
@@ -106,26 +106,22 @@ internal sealed class EntityTransitionEndToEnd : IDisposable
         var app = builder.Build();
 
         var plan = CompileAssign(entity);
-        var api = Cohesive.Api.Api.Define()
-            .Entity<ShipmentResource>()
-                .Command("Assign")
-                    .Route("POST", Route)
-                    .RouteParameter<string>("id")
-                    .Body<AssignShipmentRequest>()
-                    .Returns<ShipmentResource>()
-                    .Transition(plan.DefinitionReference)
-                    .Done()
-            .Build();
+        var api = Cohesive.Api.Api.Define();
+        var options = new EntityApiEndpointOptions { Entity = entity.Definition };
         Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult = responseKind == EntityTransitionResponse.ClrResource
             ? static (_, snapshot) => Results.Ok(ToResource(snapshot))
             : static (_, snapshot) => Results.Ok(snapshot.Entity.Observation.Value);
-        app.MapEntityApiDefinition(api, new EntityApiEndpointOptions { Entity = entity.Definition }
-            .Bind(EntityApiOperationBinding.Transition(
-                "Assign",
-                plan,
-                static (context, request) => new ShipmentEntity.AssignInput(
-                    ((AssignShipmentRequest)request!).Carrier, context.OperationContext.UtcNow),
-                createResult)));
+        options.BindTransition(
+            api.Entity<ShipmentResource>().Command("Assign")
+                .Route("POST", Route)
+                .RouteParameter<string>("id")
+                .Body<AssignShipmentRequest>()
+                .Returns<ShipmentResource>(),
+            plan,
+            static (context, request) => new ShipmentEntity.AssignInput(
+                ((AssignShipmentRequest)request!).Carrier, context.OperationContext.UtcNow),
+            createResult);
+        app.MapEntityApiDefinition(api.Build(), options);
 
         var routeEndpoint = ((IEndpointRouteBuilder)app).DataSources
             .SelectMany(static source => source.Endpoints)

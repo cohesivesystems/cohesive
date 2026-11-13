@@ -361,8 +361,7 @@ public sealed partial class ServiceRuntime
             context.ThrowIfCancellationRequested();
             var state = repository.EntityDefinition.CreateState(snapshot.Entity);
             var plan = linked.Binding.Plan;
-            var decision = TransitionReferenceInterpreter.DecideFullState(plan, activation, input,
-                PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(state.Fields)));
+            var (decision, projected) = TransitionReferenceInterpreter.DecideForEntity(plan, activation, input, state.Observation);
             evidence.Record("transitionDecided");
             if (decision.Kind is not (TransitionDecisionKind.Applied or TransitionDecisionKind.NoChange))
             {
@@ -386,7 +385,7 @@ public sealed partial class ServiceRuntime
             EntityState next;
             try
             {
-                next = TransitionStateProjector.ApplyToEntity(repository.EntityDefinition, subject, decision, snapshot.Entity);
+                next = TransitionStateProjector.ApplyToEntity(repository.EntityDefinition, subject, decision, snapshot.Entity, projected);
             }
             catch (TransitionStatePreparationException exception)
             {

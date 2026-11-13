@@ -403,9 +403,22 @@ public sealed record EntityDefinition
             throw new SemanticRuleViolationException($"{context} on entity type '{Name.Value}' does not satisfy expected type '{JsonTypeSemantics.DescribeType(type)}'.");
     }
 
-    // Callers transfer a freshly normalized dictionary; computed-field normalization returns either that
-    // dictionary or a new one, so the observation can own the result without another snapshot copy.
-    EntityState BuildEntityState(EntityId entityId, Dictionary<string, ObservationValue> valuesByName, long version, EntityStateLineage? lineage = null)
+    internal EntityState CreateStateFromOrdinalCandidate(string entityId, ObservationValue value, long version)
+    {
+        var fields = value.Fields!;
+        if (fields is not IOrdinalObservationStorage ordinal
+            || !ReferenceEquals(ordinal.Layout.Graph, StateShape.Graph)
+            || ordinal.Layout.ShapeId != StateShape.QualifiedId)
+            return CreateState(entityId, fields, version);
+
+        // Exact entity layout supplies canonical, unique names. Keep field and shape validation
+        // and let the existing entity normalizer handle any computed values.
+        ValidateStateValues(fields);
+        return BuildEntityState(new(entityId), fields, version);
+    }
+
+    // Normalization can retain the supplied immutable fields or transfer a freshly owned dictionary.
+    EntityState BuildEntityState(EntityId entityId, IReadOnlyDictionary<string, ObservationValue> valuesByName, long version, EntityStateLineage? lineage = null)
     {
         Observation observation;
         try

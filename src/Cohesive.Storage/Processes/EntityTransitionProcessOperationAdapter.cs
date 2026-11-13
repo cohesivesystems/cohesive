@@ -400,18 +400,16 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
                 "/invocation/subject/entityId");
         }
 
-        var decision = createsSubject
-            ? TransitionReferenceInterpreter.DecideCreation(
+        var (decision, projected) = createsSubject
+            ? (TransitionReferenceInterpreter.DecideCreation(
                 binding.Plan,
                 invocation.Activation,
-                invocation.Input)
-            : TransitionReferenceInterpreter.DecideFullState(
+                invocation.Input), (ObservationValue?)null)
+            : TransitionReferenceInterpreter.DecideForEntity(
                 binding.Plan,
                 invocation.Activation,
                 invocation.Input,
-                PortableValue.Concrete(
-                    binding.Plan.Definition.Observation,
-                    ObservationValue.FromObject(snapshot!.Entity.Observation.Fields)));
+                snapshot!.Entity.Observation);
         if (decision.Kind is not (TransitionDecisionKind.Applied
             or TransitionDecisionKind.NoChange
             or TransitionDecisionKind.AdmissionRejected
@@ -450,7 +448,7 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
         try
         {
             candidateState = TransitionStateProjector.ApplyToEntity(binding.Repository.EntityDefinition,
-                subject.EntityId.Value, decision, createsSubject ? null : snapshot!.Entity);
+                subject.EntityId.Value, decision, createsSubject ? null : snapshot!.Entity, projected);
         }
         catch (TransitionStatePreparationException exception)
         {

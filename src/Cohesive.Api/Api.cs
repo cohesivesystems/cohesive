@@ -361,6 +361,20 @@ public abstract class OperationBuilder<TParent>
         return this;
     }
 
+    internal string OperationName => name;
+
+    internal ApiEndpoint BuildEntityTransition(ExecutionDefinitionReference reference)
+    {
+        if (kind != ApiOperationKind.Command || entity is null)
+            throw new InvalidOperationException($"Operation '{name}' must be an entity command to bind an entity Transition.");
+
+        var declared = endpoint is null ? transitionReference : endpoint.Operation.TransitionReference;
+        if ((declared is not null || endpoint is not null) && declared != reference)
+            throw new InvalidOperationException($"Operation '{name}' already declares a different Transition contract.");
+
+        return endpoint ?? BuildPrepared(FinalizeHttpBinding(body, query, requestType), requestType, primaryResult, reference);
+    }
+
     /// <summary>
     /// Adds a semantic scope policy to the operation.
     /// </summary>
@@ -563,7 +577,8 @@ public abstract class OperationBuilder<TParent>
     /// </summary>
     public ApiEndpoint Build() => endpoint ?? BuildPrepared(FinalizeHttpBinding(body, query, requestType), requestType, primaryResult);
 
-    ApiEndpoint BuildPrepared(HttpBinding? http, Type? preparedRequestType, ApiResultDefinition? preparedPrimaryResult)
+    ApiEndpoint BuildPrepared(HttpBinding? http, Type? preparedRequestType, ApiResultDefinition? preparedPrimaryResult,
+        ExecutionDefinitionReference? preparedTransitionReference = null)
     {
         var finalizedRequestType = http?.Body?.BodyType ?? http?.Query?.QueryType ?? preparedRequestType ?? typeof(void);
         var finalizedResults = FinalizeResults(hasHttpProjection: http is not null, preparedPrimaryResult);
@@ -578,7 +593,7 @@ public abstract class OperationBuilder<TParent>
             http: http,
             id: root.CreateEndpointId(name, entity),
             entity: entity,
-            transitionReference: transitionReference,
+            transitionReference: preparedTransitionReference ?? transitionReference,
             summary: summary,
             description: description,
             tags: finalizedTags,

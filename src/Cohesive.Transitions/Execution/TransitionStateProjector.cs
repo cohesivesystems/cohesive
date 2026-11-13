@@ -116,7 +116,7 @@ public static class TransitionStateProjector
     }
 
     // Equivalent to comparing with the PortableValue that Read would construct under the evidence's own contract.
-    static bool MatchesEvidence(PortableValue before, ObservationValue value) => value.Kind switch
+    internal static bool MatchesEvidence(PortableValue before, ObservationValue value) => value.Kind switch
     {
         ObservationValueKind.Undefined => before.State == PortableValueState.Absent,
         ObservationValueKind.Null => before.State == PortableValueState.Null,
@@ -136,7 +136,12 @@ public static class TransitionStateProjector
     /// <remarks>This is state application, not history replay or commit evidence. Callers retain authorization,
     /// concurrency fences, emission ownership, and atomic persistence responsibilities.</remarks>
     public static EntityState ApplyToEntity(EntityDefinition entity, string entityId,
-        TransitionDecision decision, EntityObservationSnapshot? current = null)
+        TransitionDecision decision, EntityObservationSnapshot? current = null) =>
+        ApplyToEntity(entity, entityId, decision, current, projectedWrites: null);
+
+    // Only same-invocation writes from DecideForEntity may bypass patch replay.
+    internal static EntityState ApplyToEntity(EntityDefinition entity, string entityId,
+        TransitionDecision decision, EntityObservationSnapshot? current, ObservationValue? projectedWrites)
     {
         ArgumentNullException.ThrowIfNull(entity);
         ArgumentNullException.ThrowIfNull(decision);
@@ -185,10 +190,12 @@ public static class TransitionStateProjector
                     "The existing version cannot be incremented.");
             version = decision.Kind == TransitionDecisionKind.Applied ? current.Version + 1 : current.Version;
         }
-        var projected = Apply(initial, decision);
+        var projected = projectedWrites ?? Apply(initial, decision);
         try
         {
-            var candidate = entity.CreateState(entityId, projected.Fields!, version);
+            var candidate = projectedWrites.HasValue
+                ? entity.CreateStateFromOrdinalCandidate(entityId, projected, version)
+                : entity.CreateState(entityId, projected.Fields!, version);
             if (current is null)
                 entity.ValidateState(candidate);
             return candidate;

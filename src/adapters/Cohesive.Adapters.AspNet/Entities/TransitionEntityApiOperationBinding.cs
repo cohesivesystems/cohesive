@@ -94,22 +94,20 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
             var input = createTransitionInput is null
                 ? request
                 : createTransitionInput(requestContext, request);
-            var decision = TransitionReferenceInterpreter.DecideFullState(
+            var (decision, projected) = TransitionReferenceInterpreter.DecideForEntity(
                 plan,
                 options.CreateActivationId(httpContext, operation),
                 ToPortableValue(
                     input,
                     plan.Definition.Input,
                     isSupplied: createTransitionInput is not null || operation.RequestType != typeof(void)),
-                PortableValue.Concrete(
-                    plan.Definition.Observation,
-                    ObservationValue.FromObject(state.Fields)));
+                state.Observation);
 
             EntityState newState;
             try
             {
                 newState = decision.GuaranteeDemands.CommitRequired
-                    ? TransitionStateProjector.ApplyToEntity(options.Entity, entityId, decision, snapshot.Entity)
+                    ? TransitionStateProjector.ApplyToEntity(options.Entity, entityId, decision, snapshot.Entity, projected)
                     : state;
             }
             catch (TransitionStatePreparationException exception)

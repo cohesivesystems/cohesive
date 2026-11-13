@@ -139,6 +139,73 @@ public sealed class EntityApiEndpointOptions
         return this;
     }
 
+    /// <summary>Completes an entity command with the compiled Transition reference and binds its execution.</summary>
+    /// <typeparam name="TParent">Parent of the API operation builder.</typeparam>
+    /// <param name="operation">Entity command declaration that supplies the operation identity and HTTP contract.</param>
+    /// <param name="plan">Exact compiled Transition plan to use for declaration and execution.</param>
+    /// <param name="createTransitionInput">Optional request-to-input projection.</param>
+    /// <param name="createResult">HTTP projection of the decision and effective snapshot.</param>
+    /// <param name="getExpectedConcurrencyToken">Optional concurrency override. Defaults to the loaded token.</param>
+    /// <param name="interactionContracts">Exact contracts required for emitting transitions.</param>
+    /// <param name="createEmissionPolicy">Request-scoped emission lowering policy.</param>
+    /// <returns>The endpoint handle registered in the operation's API builder and bound by these options.</returns>
+    /// <exception cref="ArgumentNullException">The operation, plan or result projection is null.</exception>
+    /// <exception cref="InvalidOperationException">The operation is incompatible, has a conflicting reference, or cannot be finalized.</exception>
+    public ApiEndpoint BindTransition<TParent>(
+        OperationBuilder<TParent> operation,
+        CompiledTransitionPlan plan,
+        Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
+        Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
+        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
+        InteractionContractCatalog? interactionContracts = null,
+        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy = null)
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(plan);
+        ArgumentNullException.ThrowIfNull(createResult);
+        var endpoint = operation.BuildEntityTransition(plan.DefinitionReference);
+        Bind(endpoint.Transition(plan, createTransitionInput, createResult, getExpectedConcurrencyToken,
+            interactionContracts, createEmissionPolicy));
+        return endpoint;
+    }
+
+    /// <summary>Compiles an authored Transition during registration and binds it to an entity command.</summary>
+    /// <typeparam name="TParent">Parent of the API operation builder.</typeparam>
+    /// <typeparam name="TEntity">Entity authoring type.</typeparam>
+    /// <typeparam name="TInput">Transition input type.</typeparam>
+    /// <typeparam name="TOutcome">Transition outcome type.</typeparam>
+    /// <param name="operation">Entity command declaration that supplies the operation identity and HTTP contract.</param>
+    /// <param name="transition">Canonical authored Transition to compile without an external shape graph.</param>
+    /// <param name="createTransitionInput">Optional request-to-input projection.</param>
+    /// <param name="createResult">HTTP projection of the decision and effective snapshot.</param>
+    /// <param name="getExpectedConcurrencyToken">Optional concurrency override. Defaults to the loaded token.</param>
+    /// <param name="interactionContracts">Exact contracts required for emitting transitions.</param>
+    /// <param name="createEmissionPolicy">Request-scoped emission lowering policy.</param>
+    /// <returns>The endpoint handle registered in the operation's API builder and bound by these options.</returns>
+    /// <exception cref="ArgumentNullException">The operation, transition or result projection is null.</exception>
+    /// <exception cref="TransitionApiPreparationException">Transition compilation fails with structured diagnostics.</exception>
+    /// <exception cref="InvalidOperationException">The operation is incompatible, has a conflicting reference, or cannot be finalized.</exception>
+    /// <exception cref="NotSupportedException">Canonical semantic content contains an unsupported runtime value.</exception>
+    public ApiEndpoint BindTransition<TParent, TEntity, TInput, TOutcome>(
+        OperationBuilder<TParent> operation,
+        Transition<TEntity, TInput, TOutcome> transition,
+        Func<EntityApiRequestContext, object?, object?>? createTransitionInput,
+        Func<EntityApiCommitContext, EntitySnapshot, IResult> createResult,
+        Func<EntityApiRequestContext, object?, EntityConcurrencyToken?>? getExpectedConcurrencyToken = null,
+        InteractionContractCatalog? interactionContracts = null,
+        Func<EntityApiCommitContext, TransitionEmissionLoweringPolicy>? createEmissionPolicy = null)
+        where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(operation);
+        ArgumentNullException.ThrowIfNull(transition);
+        ArgumentNullException.ThrowIfNull(createResult);
+        var compilation = transition.Compile();
+        if (!compilation.IsSuccessful)
+            throw new TransitionApiPreparationException(operation.OperationName, compilation);
+        return BindTransition(operation, compilation.Plan!, createTransitionInput, createResult,
+            getExpectedConcurrencyToken, interactionContracts, createEmissionPolicy);
+    }
+
     internal bool TryGetBinding(ApiOperation operation, out EntityApiOperationBinding binding)
     {
         ArgumentNullException.ThrowIfNull(operation);

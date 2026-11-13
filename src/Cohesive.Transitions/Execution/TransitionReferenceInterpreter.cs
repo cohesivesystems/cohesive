@@ -66,7 +66,7 @@ public static class TransitionExecutionDiagnosticCodes
 /// invokes no services or delegates, and mutates no caller-owned state. Its sparse patch, emission intents,
 /// guarantee demands, conflicts, and evidence are returned as data for an external commit interpretation.
 /// </remarks>
-public static class TransitionReferenceInterpreter
+public static partial class TransitionReferenceInterpreter
 {
     /// <summary>Decides one direct Transition activation from explicit finite evidence.</summary>
     /// <param name="plan">Successfully compiled exact Transition plan.</param>
@@ -132,6 +132,27 @@ public static class TransitionReferenceInterpreter
             TransitionObservationFrame.Full(state),
             commitState is null ? null : TransitionObservationFrame.Full(commitState)));
 
+    // The entity boundary still owns when projection failures are reported and when commits occur.
+    internal static (TransitionDecision Decision, ObservationValue? Projected) DecideForEntity(
+        CompiledTransitionPlan plan, ActivationId activationId, PortableValue input, Observation observation,
+        PortableValue? commitState = null)
+    {
+        var original = observation.Value;
+        var state = PortableValue.Concrete(plan.Definition.Observation, original);
+        if (original.CompositeStorage is not IOrdinalObservationStorage storage)
+            return (DecideFullState(plan, activationId, input, state, commitState), null);
+
+        var executable = plan.ForOrdinalWrites(storage.Layout);
+        if (!ReferenceEquals(storage.Layout, executable.SpecializedWriteLayout))
+            return (DecideFullState(plan, activationId, input, state, commitState), null);
+
+        var activation = new TransitionActivation(activationId, input, TransitionObservationFrame.Full(state),
+            commitState is null ? null : TransitionObservationFrame.Full(commitState));
+        var engine = new Engine(executable, activation, subjectAbsent: false, projectionSource: storage);
+        var decision = engine.Run();
+        return (decision, engine.ProjectedWrites(decision));
+    }
+
     /// <summary>Decides an activation from explicitly supplied sparse aggregate observations.</summary>
     /// <param name="plan">Successfully compiled exact Transition plan.</param>
     /// <param name="activationId">Caller-supplied stable activation identity.</param>
@@ -157,11 +178,14 @@ public static class TransitionReferenceInterpreter
             TransitionObservationFrame.Sparse(observations),
             commitObservations is null ? null : TransitionObservationFrame.Sparse(commitObservations)));
 
-    sealed class Engine
+    internal sealed partial class Engine
     {
         readonly CompiledTransitionPlan plan;
         readonly TransitionActivation activation;
         readonly bool subjectAbsent;
+        IOrdinalObservationStorage? projectionSource;
+        ObservationValue[]? projectedValues;
+        int projectedCount;
         readonly PortableExpressionReferenceEvaluator evaluator = new(
             TransitionExpressionLanguage.Capabilities,
             interpreterName: "Transition reference interpreter");
@@ -181,11 +205,13 @@ public static class TransitionReferenceInterpreter
         public Engine(
             CompiledTransitionPlan plan,
             TransitionActivation activation,
-            bool subjectAbsent)
+            bool subjectAbsent,
+            IOrdinalObservationStorage? projectionSource = null)
         {
             this.plan = plan;
             this.activation = activation;
             this.subjectAbsent = subjectAbsent;
+            this.projectionSource = projectionSource;
             observation = activation.Observation;
         }
 
@@ -234,7 +260,14 @@ public static class TransitionReferenceInterpreter
                     }
                 }
 
-                var terminal = ExecuteSequence(plan.Definition.Body, bindings);
+                Terminal? terminal;
+                if (plan.SpecializedBody is { } specialized)
+                {
+                    specialized(this);
+                    terminal = ExecuteOutcome((OutcomeTransitionNode)plan.Definition.Body.Steps[^1], bindings);
+                }
+                else
+                    terminal = ExecuteSequence(plan.Definition.Body, bindings);
                 if (terminal is null)
                 {
                     throw Invalid(
@@ -485,10 +518,15 @@ public static class TransitionReferenceInterpreter
                     $"Patch operation '{update.Operation.GetType().Name}' is unsupported.",
                     update.Id)
             };
+            RecordUpdate(executed);
+            return null;
+        }
+
+        void RecordUpdate(TransitionExecutedPatch executed)
+        {
             WriteCandidate(executed.Path, PortableExpressionValue.FromPortable(executed.After));
             executedPatches.Add(executed);
             TracePatch(executed, TransitionTraceEventKind.PatchExecuted);
-            return null;
         }
 
         TransitionExecutedPatch ExecuteSet(
@@ -499,13 +537,17 @@ public static class TransitionReferenceInterpreter
             Dictionary<ValueBindingId, PortableExpressionValue> scope)
         {
             var after = EvaluateTyped(operation.Value, contract, update.Id, candidateState: false, scope);
-            return new(
+            return CreateSetPatch(update, contract, before, after);
+        }
+
+        static TransitionExecutedPatch CreateSetPatch(UpdateTransitionNode update, ValueContract contract,
+            PortableExpressionValue before, PortableValue after) =>
+            new(
                 update.Id,
                 update.Path,
                 new EvaluatedSetTransitionPatch(after),
                 before.ToPortable(contract),
                 after);
-        }
 
         static TransitionExecutedPatch ExecuteRemove(
             UpdateTransitionNode update,
@@ -1087,6 +1129,11 @@ public static class TransitionReferenceInterpreter
                     node);
             }
 
+            return RecordRead(portable, access, node);
+        }
+
+        PortableExpressionValue RecordRead(PortableValue portable, TransitionObservationAccess access, ExecutionNodeId node)
+        {
             AddTrace(TransitionTraceEventKind.ObservationRead, node, access: access);
             if (!observedReads.ContainsKey(access))
             {
