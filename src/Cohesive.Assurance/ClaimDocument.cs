@@ -93,18 +93,23 @@ public sealed class ClaimDocument
                     $"Exact reference '{reference.Source}' revision '{reference.Revision}' fingerprint '{reference.Fingerprint}' is unavailable.",
                     path));
         }
-        Check(Source, "/source");
-        Check(Configuration, "/configuration");
-        Check(Definition.Observation, "/definition/observation");
-        Check(Definition.Selection, "/definition/selection");
-        if (Definition.Witness is { } witness) Check(witness, "/definition/witness");
-        for (var i = 0; i < Definition.Attachments.Length; i++)
-            Check(Definition.Attachments[i].Reference, $"/definition/attachments/{i}/reference");
-        for (var i = 0; i < Definition.Assumptions.Length; i++)
-            Check(Definition.Assumptions[i], $"/definition/assumptions/{i}");
-        for (var i = 0; i < Definition.EvidenceRequirements.Length; i++)
-            Check(Definition.EvidenceRequirements[i], $"/definition/evidenceRequirements/{i}");
+        foreach (var (reference, path) in ReferenceLocations()) Check(reference, path);
         return DocumentValidationResult.FromDiagnostics(diagnostics);
+    }
+
+    internal IEnumerable<(ClaimReference Reference, string Path)> ReferenceLocations()
+    {
+        yield return (Source, "/source");
+        yield return (Configuration, "/configuration");
+        yield return (Definition.Observation, "/definition/observation");
+        yield return (Definition.Selection, "/definition/selection");
+        if (Definition.Witness is { } witness) yield return (witness, "/definition/witness");
+        for (var i = 0; i < Definition.Attachments.Length; i++)
+            yield return (Definition.Attachments[i].Reference, $"/definition/attachments/{i}/reference");
+        for (var i = 0; i < Definition.Assumptions.Length; i++)
+            yield return (Definition.Assumptions[i], $"/definition/assumptions/{i}");
+        for (var i = 0; i < Definition.EvidenceRequirements.Length; i++)
+            yield return (Definition.EvidenceRequirements[i], $"/definition/evidenceRequirements/{i}");
     }
 
     internal static ClaimDocument Create(ClaimDefinition definition, ClaimReference source,

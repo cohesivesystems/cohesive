@@ -57,7 +57,7 @@ public sealed class TransitionAssuranceTests
                 [new(reference, "inventory-1", 1, 1, ObservationClosure.Closed, Fixture("closure"))])],
             EnumerationCompleteness.Complete, Fixture("enumeration"));
         var result = TraceClaimEvaluator.Evaluate(claim, batch);
-        Assert.Equal(TraceEvaluationStatus.Completed, result.Status);
+        Assert.Equal(AssuranceAttemptStatus.Completed, result.Status);
         Assert.Equal(verdict, result.Verdict);
         Assert.Equal(result.Serialize(), TraceEvaluation.Reevaluate(result.Serialize()).Serialize());
     }
