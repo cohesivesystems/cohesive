@@ -29,15 +29,20 @@ var evidence = ClaimEvidence.FromTrace(
 
 var restored = ClaimEvidence.Deserialize(evidence.Serialize());
 var assessment = ClaimAssessment.Evaluate(
-    claim, subject, acceptancePolicy,
-    acceptance: [new(evidence.Kind, evidence.Method, evidence.Configuration)],
-    evidence: [restored],
+    restored, acceptancePolicy,
+    acceptance: [EvidenceAcceptance.Of(restored)],
     asOf: reviewTime);
 ```
 
 The caller must supply resolved exact references and explicitly declare whether the dependency
 slice is complete. `true` is an assertion about dependency discovery, not proof of provider truth.
-The trace capture validates the retained evaluation through the reference evaluator. It also
+Trace evidence is restricted to realization obligations on implementation or deployment targets;
+it cannot be relabeled as a model or encoding proof. Scope and configuration remain explicit
+adapter attribution because the existing trace contract does not independently attest those facts.
+Trace capture reuses an unchanged in-memory reference-evaluator result by identity. Caller-created
+records and `with` copies are untrusted and independently checked; importing JSON also verifies
+its trace. A weak identity registry owned by the evaluator records provenance without retaining
+discarded evaluations or caching arbitrary external artifacts. It also
 records mapping, epoch, alternative, closure and enumeration references as dependencies. Failed
 or bounded validation cannot claim a fully inspected dependency slice. Original Simulation
 execution attribution and scheduled inputs can still be retained using `ScenarioAssuranceArtifact`;
@@ -98,9 +103,15 @@ obligation, even when their target identifiers happen to coincide.
 
 Noncompleted or unsupported reports cannot carry definitive verdicts. Unsupported, timed-out,
 cancelled, unknown and incomplete attempts stay distinct in retained evidence. Sampled success,
-unknown dependencies, unmatched targets and unaccepted methods cannot produce proof. Per-report
-contributions explain exclusion. Conflicting accepted establishment/refutation is reported;
-refutation takes precedence. Repeated reports are deduplicated, never counted as independent votes.
+unknown dependencies and unaccepted methods cannot produce proof. A mismatched claim or subject
+throws at assessment construction, even when other reports match; callers must partition reports
+explicitly. The single-report overload derives the boundary from the report, and `EvidenceAcceptance.Of`
+removes tuple copying while leaving acceptance an explicit policy decision.
+
+A full-scope accepted proof conflicts with an accepted refutation of the same subject. A conditional
+proof does not set `ConflictingEvidence`: the current envelope has no certificate that a counterexample
+lies inside that restricted domain. This conservative rule can leave a real bounded conflict unflagged;
+explicit domain-membership evidence is needed to strengthen it. Refutation still takes precedence. Repeated reports are deduplicated, never counted as independent votes.
 Shared predicate and lowering dependencies remain explicit.
 
 Waivers require authority, reason and expiry. At the expiry instant they are ineffective. Requirement
@@ -119,8 +130,9 @@ claim that relied on that assumption.
 
 Both evidence and assessment JSON reject unknown fields, duplicate fields, incompatible schemas,
 and inconsistent derived data using the existing strict canonical serializer. Evidence identities
-use the shared core fingerprint helper. External reports are not re-proved during restore; trace
-reports are re-evaluated. Hashes are integrity identities, not signatures or reuse authorization.
+use the shared core fingerprint helper. Trace data is a nested structured document, not escaped JSON
+inside a JSON string. External reports are not re-proved during restore; trace reports are re-evaluated.
+Once verified, in-memory capture and assessment do not repeat that evaluation. Hashes are integrity identities, not signatures or reuse authorization.
 
 These are offline retained-attempt operations. Whole documents are materialized, and restoration
 can re-evaluate embedded traces. They are not a streaming production monitor or an untrusted-input
@@ -130,3 +142,9 @@ output are domain-owned exact artifact references; adapters must retain and reso
 The general readiness engine, automatic dependency-change propagation, tool adapters, and production
 monitoring remain separate work. The API rename `TraceEvaluationStatus` → `AssuranceAttemptStatus`
 is source-breaking; existing status wire names and reference trace method v2 remain unchanged.
+
+Evidence and assessment schemas are now v2: the trace field is structured, subject mismatch is an
+error, and conflict interpretation is stricter. V1 envelopes are rejected rather than silently given
+new meaning. Keep old artifacts immutable and explicitly reconstruct v2 reports from retained
+reference evaluations with appropriate realization subjects. `ClaimEvidence.Trace` is now a
+`TraceEvaluation?`; the standalone reference trace format and method remain unchanged.

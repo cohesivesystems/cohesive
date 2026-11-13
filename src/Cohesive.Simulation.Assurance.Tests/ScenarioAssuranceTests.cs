@@ -123,8 +123,8 @@ public sealed class ScenarioAssuranceTests
                 R("candidate-configuration"), R("all-reactivation-inputs"), ProofObligation.Realization);
             var evidence = ClaimEvidence.FromTrace(run.Evaluation, subject, R("atomic-mapping-config"),
                 dependenciesComplete: true);
-            return ClaimAssessment.Evaluate(claim, subject, R("review-policy"),
-                [new(evidence.Kind, evidence.Method, evidence.Configuration)], [evidence], DateTimeOffset.UnixEpoch);
+            return ClaimAssessment.Evaluate(evidence, R("review-policy"),
+                [EvidenceAcceptance.Of(evidence)], DateTimeOffset.UnixEpoch);
         }
         Assert.Equal(ProofState.Disproven, AssessRun(first).State);
         Assert.Equal(ProofState.Unknown, AssessRun(corrected).State);
@@ -195,6 +195,24 @@ public sealed class ScenarioAssuranceTests
         else if (tamper is "binding" or "evaluation" or "trace") document[tamper] = other[tamper]!.DeepClone();
         else document[tamper] = "unsupported";
         Assert.Throws<System.Text.Json.JsonException>(() => ScenarioAssuranceArtifact.Reevaluate(document.ToJsonString()));
+    }
+
+    [Theory]
+    [InlineData(AssuranceAttemptStatus.Completed, ClaimVerdict.Violated, PropertyCaseDisposition.Failed)]
+    [InlineData(AssuranceAttemptStatus.Completed, ClaimVerdict.Satisfied, PropertyCaseDisposition.Discarded)]
+    [InlineData(AssuranceAttemptStatus.Completed, ClaimVerdict.Inconclusive, PropertyCaseDisposition.Discarded)]
+    [InlineData(AssuranceAttemptStatus.BudgetExceeded, ClaimVerdict.Violated, PropertyCaseDisposition.Discarded)]
+    public async Task PropertyProjectionDoesNotLetVacuityOverrideADefinitiveViolation(
+        AssuranceAttemptStatus status, ClaimVerdict verdict, PropertyCaseDisposition expected)
+    {
+        var (world, shape) = Scenario(new(2, 0));
+        var run = await ScenarioAssurance.ExecuteAsync(Safety(), world, new Candidate(shape), Binding());
+        // Synthetic projection fixture: current batch semantics cannot emit a definitive violation
+        // together with a satisfied/vacuous compatible alternative. Test precedence without weakening that rule.
+        var evaluation = run.Evaluation with { Status = status, Verdict = verdict,
+            Alternatives = [.. run.Evaluation.Alternatives, new(R("vacuous"), ClaimVerdict.Satisfied, [], 0, true, true)] };
+        var result = new ScenarioAssuranceResult(run.Method, run.Binding, run.Trace, evaluation);
+        Assert.Equal(expected, result.ToPropertyEvaluation().Disposition);
     }
 
     [Fact]

@@ -28,10 +28,10 @@ public sealed class ClaimEvidenceTests
         ImmutableArray<ClaimReference> residuals = default, ImmutableArray<ClaimReference> shared = default) =>
         new(Claim(), subject ?? Subject, kind, Method, Configuration, support, status, verdict, coverage,
             complete, dependencies, residuals, shared, [R("tool-report")]);
-    static EvidenceAcceptance Accept(ClaimEvidence evidence) => new(evidence.Kind, evidence.Method, evidence.Configuration);
+    static EvidenceAcceptance Accept(ClaimEvidence evidence) => EvidenceAcceptance.Of(evidence);
     static ClaimAssessment Assess(ClaimEvidence report, ImmutableArray<ClaimReference> unavailable = default,
-        ClaimDisposition? disposition = null) => ClaimAssessment.Evaluate(Claim(), Subject, R("policy"),
-            [Accept(report)], [report], DateTimeOffset.UnixEpoch, unavailable, disposition);
+        ClaimDisposition? disposition = null) => ClaimAssessment.Evaluate(report, R("policy"),
+            [Accept(report)], DateTimeOffset.UnixEpoch, unavailable, disposition);
 
     [Theory]
     [InlineData(EvidenceKind.FormalProof)]
@@ -107,14 +107,14 @@ public sealed class ClaimEvidenceTests
             Subject with { Kind = EvidenceTargetKind.Deployment }];
         foreach (var subject in subjects)
         {
-            var assessment = Assess(Report(subject: subject));
-            Assert.Equal(ProofState.Unknown, assessment.State);
-            Assert.Equal("evidence.subject-mismatch", Assert.Single(assessment.Contributions).Reason);
+            var report = Report(subject: subject);
+            Assert.Throws<ArgumentException>(() => ClaimAssessment.Evaluate(Claim(), Subject, R("policy"),
+                [Accept(report)], [report], DateTimeOffset.UnixEpoch));
         }
     }
 
     [Fact]
-    public void NoEvidenceNoAcceptanceAndChangedClaimStayUnknown()
+    public void EmptyAssessmentAndUnacceptedEvidenceAreUnknownButChangedClaimsFail()
     {
         var report = Report();
         var empty = ClaimAssessment.Evaluate(Claim(), Subject, R("policy"), [], [], DateTimeOffset.UnixEpoch);
@@ -122,9 +122,8 @@ public sealed class ClaimEvidenceTests
         Assert.Empty(empty.Contributions);
         var unaccepted = ClaimAssessment.Evaluate(Claim(), Subject, R("policy"), [], [report], DateTimeOffset.UnixEpoch);
         Assert.Equal(ProofState.Unknown, unaccepted.State);
-        var revised = ClaimAssessment.Evaluate(Claim("2"), Subject, R("policy"), [Accept(report)], [report], DateTimeOffset.UnixEpoch);
-        Assert.Equal(ProofState.Unknown, revised.State);
-        Assert.Equal("evidence.subject-mismatch", Assert.Single(revised.Contributions).Reason);
+        Assert.Throws<ArgumentException>(() => ClaimAssessment.Evaluate(Claim("2"), Subject, R("policy"),
+            [Accept(report)], [report], DateTimeOffset.UnixEpoch));
     }
 
     [Fact]
@@ -181,6 +180,30 @@ public sealed class ClaimEvidenceTests
     }
 
     [Fact]
+    public void RestrictedProofDoesNotConflictWithoutEstablishedCounterexampleMembership()
+    {
+        var bounded = Report(coverage: EvidenceCoverage.RestrictedScope, residuals: [R("orders<=4")]);
+        var refutation = Report(verdict: ClaimVerdict.Violated);
+        var assessment = ClaimAssessment.Evaluate(Claim(), Subject, R("policy"), [Accept(bounded)],
+            [bounded, refutation], DateTimeOffset.UnixEpoch);
+        Assert.Equal(ProofState.Disproven, assessment.State);
+        Assert.False(assessment.ConflictingEvidence);
+        Assert.Contains(assessment.Contributions, x => x.State == ProofState.Conditional);
+    }
+
+    [Fact]
+    public void MixedMatchingAndMismatchedReportsFailRatherThanHideWiringErrors()
+    {
+        var correct = Report();
+        var wrong = Report(subject: Subject with { Scope = R("different-scope") });
+        Assert.Throws<ArgumentException>(() => ClaimAssessment.Evaluate(Claim(), Subject, R("policy"),
+            [Accept(correct)], [correct, wrong], DateTimeOffset.UnixEpoch));
+        var json = JsonNode.Parse(Assess(correct).Serialize())!;
+        json["subject"]!["scope"]!["revision"] = "2";
+        Assert.Throws<JsonException>(() => ClaimAssessment.Reassess(json.ToJsonString()));
+    }
+
+    [Fact]
     public void CanonicalEvidenceAndAssessmentRejectTamperedDerivedFields()
     {
         var report = Report(dependencies: [R("b"), R("a"), R("b")]);
@@ -205,10 +228,7 @@ public sealed class ClaimEvidenceTests
         Assert.Throws<ArgumentException>(() => Report(residuals: [R("hidden-assumption")]));
     }
 
-    [Theory]
-    [InlineData(1, ProofState.Unknown)]
-    [InlineData(3, ProofState.Disproven)]
-    public void RealTraceEvidenceCanRefuteButCannotProve(int reserved, ProofState expected)
+    static TraceEvaluation Trace(int reserved = 1, int count = 1)
     {
         var claim = Claim();
         var observation = new SemanticObservation("state", "p", 0, 0, claim.Definition.Selection,
@@ -216,14 +236,46 @@ public sealed class ClaimEvidenceTests
             ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty.Add(ClaimInputRole.State,
                 ObservationValue.FromObject(new Stock(2, reserved))));
         var batch = new TraceObservationBatch(new(claim.Definition.Observation, R("atomic"), [new(claim.Definition.Selection, ["p"])]),
-            Subject.Target, R("epoch"), [new(R("alternative"), [observation],
-                [new(claim.Definition.Selection, "p", 0, 0, ObservationClosure.Closed, R("closure"))])],
+            Subject.Target, R("epoch"), [new(R("alternative"), [.. Enumerable.Range(0, count).Select(i => observation with { Occurrence = "s" + i, Step = i, Ticks = i })],
+                [new(claim.Definition.Selection, "p", count, count, ObservationClosure.Closed, R("closure"))])],
             EnumerationCompleteness.Complete, R("enumeration"));
-        var evaluation = TraceClaimEvaluator.Evaluate(claim, batch);
+        return TraceClaimEvaluator.Evaluate(claim, batch);
+    }
+
+    [Fact]
+    public void TrustedCaptureAllocationDoesNotScaleWithObservationCount()
+    {
+        var small = Trace(count: 1);
+        var large = Trace(count: 2000);
+        ClaimEvidence Capture(TraceEvaluation value) => ClaimEvidence.FromTrace(value, Subject, Configuration, dependenciesComplete: true);
+        for (var i = 0; i < 64; i++) { Capture(small); Capture(large); }
+        long Allocated(TraceEvaluation value)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var result = Capture(value);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            GC.KeepAlive(result);
+            return allocated;
+        }
+        Assert.InRange(Allocated(large), 0, Allocated(small) + 256);
+    }
+
+    [Theory]
+    [InlineData(1, ProofState.Unknown)]
+    [InlineData(3, ProofState.Disproven)]
+    public void RealTraceEvidenceCanRefuteButCannotProve(int reserved, ProofState expected)
+    {
+        var evaluation = Trace(reserved);
+        var claim = evaluation.Claim;
+        var batch = evaluation.Batch;
         var report = ClaimEvidence.FromTrace(evaluation, Subject, Configuration, dependenciesComplete: true);
         var restored = ClaimEvidence.Deserialize(report.Serialize());
         Assert.Equal(expected, Assess(restored).State);
-        Assert.Equal(evaluation.Serialize(), restored.Trace);
+        Assert.Equal(evaluation.Serialize(), restored.Trace!.Serialize());
+        Assert.Same(evaluation, report.Trace); // Trusted reference-produced results are reused, not re-evaluated.
+        var copied = evaluation with { };
+        Assert.NotSame(copied, ClaimEvidence.FromTrace(copied, Subject, Configuration, dependenciesComplete: true).Trace);
+        Assert.IsType<JsonObject>(JsonNode.Parse(report.Serialize())!["trace"]);
         Assert.Contains(R("atomic"), report.Dependencies);
         Assert.Contains(R("closure"), report.Dependencies);
         Assert.Equal(ProofState.Unknown, Assess(report, unavailable: [R("enumeration")]).State);
@@ -232,6 +284,24 @@ public sealed class ClaimEvidenceTests
         Assert.Equal(AssuranceAttemptStatus.InvalidObservations, invalidEvidence.Status);
         Assert.False(invalidEvidence.DependenciesComplete);
         Assert.Equal(ProofState.Unknown, Assess(ClaimEvidence.Deserialize(invalidEvidence.Serialize())).State);
+        foreach (var invalidSubject in new[] { Subject with { Obligation = ProofObligation.Model },
+                     Subject with { Obligation = ProofObligation.Encoding }, Subject with { Kind = EvidenceTargetKind.Model } })
+        {
+            Assert.Throws<ArgumentException>(() => ClaimEvidence.FromTrace(evaluation, invalidSubject, Configuration, dependenciesComplete: true));
+            var altered = JsonNode.Parse(report.Serialize())!;
+            altered["subject"]!["kind"] = invalidSubject.Kind.ToString();
+            altered["subject"]!["obligation"] = invalidSubject.Obligation.ToString();
+            Assert.Throws<JsonException>(() => ClaimEvidence.Deserialize(altered.ToJsonString()));
+        }
+        var deployment = ClaimEvidence.FromTrace(evaluation, Subject with { Kind = EvidenceTargetKind.Deployment },
+            Configuration, dependenciesComplete: true);
+        Assert.Equal(EvidenceTargetKind.Deployment, deployment.Subject.Kind);
+        var forged = JsonNode.Parse(report.Serialize())!;
+        forged["trace"]!["verdict"] = "Inconclusive";
+        Assert.Throws<JsonException>(() => ClaimEvidence.Deserialize(forged.ToJsonString()));
+        var savedAssessment = JsonNode.Parse(Assess(report).Serialize())!;
+        savedAssessment["evidence"]![0]!["trace"]!["verdict"] = "Inconclusive";
+        Assert.Throws<JsonException>(() => ClaimAssessment.Reassess(savedAssessment.ToJsonString()));
         var corrupted = evaluation with { Verdict = ClaimVerdict.Inconclusive };
         Assert.Throws<JsonException>(() => ClaimEvidence.FromTrace(corrupted, Subject, Configuration, dependenciesComplete: true));
     }

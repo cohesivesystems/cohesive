@@ -81,12 +81,27 @@ public sealed record ClaimReference
             fingerprint.ToCanonicalString());
     }
 
+    /// <summary>Creates an authoring scope for explicit fixture references used by examples, articles and tests.</summary>
+    /// <param name="sourceRoot">Canonical source namespace, for example example://fulfillment; a trailing slash is optional.</param>
+    /// <param name="revision">Explicit immutable fixture revision shared by its declarations.</param>
+    /// <returns>A single-threaded scope that fingerprints declaration text and collects exact references.</returns>
+    /// <exception cref="ArgumentNullException">Root or revision is null.</exception>
+    /// <exception cref="ArgumentException">Root or revision is invalid.</exception>
+    public static ClaimReferenceFixture Fixtures(string sourceRoot, string revision) => new(sourceRoot, revision);
+
+    internal static IComparer<ClaimReference> CanonicalComparer { get; } = Comparer<ClaimReference>.Create((left, right) =>
+    {
+        var order = StringComparer.Ordinal.Compare(left.Source.Value, right.Source.Value);
+        if (order != 0) return order;
+        order = StringComparer.Ordinal.Compare(left.Revision, right.Revision);
+        return order != 0 ? order : StringComparer.Ordinal.Compare(left.Fingerprint, right.Fingerprint);
+    });
+
     internal static ImmutableArray<ClaimReference> NormalizeSet(ImmutableArray<ClaimReference> references)
     {
         if (references.IsDefaultOrEmpty) return [];
         if (references.Any(x => x is null)) throw new ArgumentException("Exact references cannot be null.", nameof(references));
-        return [.. references.Distinct().OrderBy(x => x.Source.Value, StringComparer.Ordinal)
-            .ThenBy(x => x.Revision, StringComparer.Ordinal).ThenBy(x => x.Fingerprint, StringComparer.Ordinal)];
+        return [.. references.Distinct().OrderBy(x => x, CanonicalComparer)];
     }
 }
 

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Runtime.CompilerServices;
 using System.Collections.Immutable;
 using System.Text.Json;
 using Cohesive.Execution;
@@ -64,13 +65,28 @@ public sealed record TraceEvaluation(ClaimDocument Claim, TraceObservationBatch 
     AssuranceAttemptStatus Status, ClaimVerdict Verdict, ImmutableArray<TraceAlternativeResult> Alternatives,
     ImmutableArray<TraceEvaluationDiagnostic> Diagnostics)
 {
-    static readonly JsonSerializerOptions Options = CreateOptions();
+    static readonly JsonSerializerOptions Options = AssuranceJson.Options;
 
-    static JsonSerializerOptions CreateOptions()
+    // Reference identity is essential: public record construction and `with` copies are not trusted.
+    // Weak keys retain no discarded evaluations and are never persisted or used as semantic identity.
+    static readonly ConditionalWeakTable<TraceEvaluation, object> Verified = new();
+    static readonly object VerificationMarker = new();
+
+    internal TraceEvaluation MarkReferenceEvaluated()
     {
-        var options = StrictDocumentJson.CreateOptions();
-        options.Converters.Insert(0, PortableValueJsonConverter.TaggedObservationValues);
-        return options;
+        Verified.TryAdd(this, VerificationMarker);
+        return this;
+    }
+
+    internal static TraceEvaluation Verify(TraceEvaluation evaluation)
+    {
+        if (Verified.TryGetValue(evaluation, out _)) return evaluation;
+        if (evaluation.Claim is null || evaluation.Batch is null || evaluation.Limits is null)
+            throw new JsonException("Retained evidence must include the claim, observation batch and effective limits.");
+        var recomputed = TraceClaimEvaluator.Evaluate(evaluation.Claim, evaluation.Batch, evaluation.Limits);
+        if (!string.Equals(evaluation.Serialize(), recomputed.Serialize(), StringComparison.Ordinal))
+            throw new JsonException("Retained evidence does not agree with the reference evaluation of its inputs.");
+        return recomputed;
     }
 
     /// <summary>Versioned reference evaluation method; not a proof-system identity.</summary>
@@ -95,12 +111,10 @@ public sealed record TraceEvaluation(ClaimDocument Claim, TraceObservationBatch 
         if (!StrictDocumentJson.TryReadCanonicalObject(json, Options, "trace evaluation", out TraceEvaluation? retained, out var error)
             || retained is null)
             throw new JsonException($"{error.Failure} at {error.Location}: {error.Message}");
-        if (retained.Claim is null || retained.Batch is null || retained.Limits is null)
-            throw new JsonException("Retained evidence must include the claim, observation batch and effective limits.");
-        var recomputed = TraceClaimEvaluator.Evaluate(retained.Claim, retained.Batch, retained.Limits);
-        if (!string.Equals(json, recomputed.Serialize(), StringComparison.Ordinal))
-            throw new JsonException("Retained evidence does not agree with the reference evaluation of its inputs.");
-        return recomputed;
+        var result = Verify(retained);
+        if (!string.Equals(json, result.Serialize(), StringComparison.Ordinal))
+            throw new JsonException("Retained evaluation JSON is not the exact canonical reference output.");
+        return result;
     }
 
     /// <summary>Hashes the complete evaluation evidence, including inputs, limits and diagnostics.</summary>

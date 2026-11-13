@@ -162,3 +162,7 @@ No production Cohesive observation adapter, ARI integration, or ITO integration 
 explicit method acceptance, exact model/encoding/realization boundaries, dependency reassessment,
 and authority-recorded dispositions. Sampled success remains unknown; a waiver never changes proof
 state. Trace and external methods share `AssuranceAttemptStatus` (renamed from `TraceEvaluationStatus`).
+
+For articles and tests, [fixture reference scopes](../../docs/assurance/fixture-references.md)
+provide `ClaimReference.Fixtures(root, revision).Define(path, definition)` and an automatically
+collected immutable reference catalog. They identify fixture prose, not compiled domain definitions.

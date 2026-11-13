@@ -51,11 +51,13 @@ public sealed class ScenarioAssuranceResult
     /// <remarks>Discard counts against Simulation's discard budget; uncertainty never becomes a successful case.</remarks>
     public PropertyCaseEvaluation ToPropertyEvaluation() => Evaluation.Status != AssuranceAttemptStatus.Completed
         || Evaluation.Verdict == ClaimVerdict.Inconclusive
-        || Evaluation.Alternatives.Any(x => x.Vacuous)
         ? PropertyCaseEvaluation.Discard("assurance.inconclusive-or-vacuous")
         : Evaluation.Verdict == ClaimVerdict.Violated
             ? PropertyCaseEvaluation.Fail("assurance.violation")
-            : PropertyCaseEvaluation.Pass("assurance.satisfied");
+            : Evaluation.Alternatives.Any(x => x.Vacuous)
+                ? PropertyCaseEvaluation.Discard("assurance.inconclusive-or-vacuous")
+                : PropertyCaseEvaluation.Pass("assurance.satisfied");
+
 }
 
 /// <summary>Single-actor atomic-reference interpretation of existing Simulation traces.</summary>
