@@ -109,7 +109,8 @@ post-handler interruption. A production adapter must establish that atomic evide
 the operator, fence concurrent workers and retrieve trustworthy evidence. Existing Process controls and
 distribution reconciliation remain the execution authorities; this example adds neither a workflow engine
 nor a durable-store abstraction. The separate failure-resolution example below exercises terminal failure resolution and operator revision
-fencing. Bounded backfill and the production control projection remain follow-up work. Ito is unchanged.
+fencing. The bounded-window example below covers independent backfill progress; automatic planning and
+the production control projection remain follow-up work. Ito is unchanged.
 
 
 [HistoricalFailureResolutionExamples.cs](HistoricalFailureResolutionExamples.cs) uses the library's
@@ -121,3 +122,71 @@ completion remains absent and the ledger remains unchanged. Failure status alone
 resolution. Tests cover malformed/stale/unauthorized commands, missing and mismatched evidence,
 verifier exceptions, serialized command replay, concurrent exact retries and revision changes during
 verification. Production evidence authentication and durable storage remain outside this local fixture.
+
+
+[HistoricalBackfillExamples.cs](HistoricalBackfillExamples.cs) authors a fixed one-session historical
+backfill using the existing model. Forward and backfill consumers share source, destination and partition,
+but use distinct stable flow identities. Both execute the same canonical Process against one local
+publication store and one `InMemoryIngestionLedger`. Provider evidence limits each call to one calendar
+day; the backfill's selected interval and expected session are pinned in its compiled binding.
+
+```csharp
+var backfillConsumer = forwardConsumer with
+{
+    Flow = "research/backfill/september-1"
+};
+var backfillScope = requestedScope with
+{
+    StartDate = new DateOnly(2026, 9, 1),
+    EndDateInclusive = new DateOnly(2026, 9, 1),
+    ExpectedSessions = [new DateOnly(2026, 9, 1)]
+};
+var candidate = model.Collect.For(backfillScope)
+    .Use(model.Collect.Provider(profile).Provides(model.RetainedResponse))
+    .Through(connection)
+    .ForConsumer(backfillConsumer)
+    .Compile(bindings);
+// Qualify the bounded candidate, then bind and admit it through its own controller.
+```
+
+The application must derive `ExpectedSessions` from its pinned calendar; this fixture uses the existing
+synthetic two-session calendar. Narrowing the interval never changes the required coverage semantics.
+Separate flows also mean separate lifecycle controllers: pausing forward admission does not implicitly
+pause backfill. The missing group-control abstraction is tracked in [COH-163](https://linear.app/cohesive-ari/issue/COH-163); this example pauses
+backfill itself and verifies that an admitted window drains while another is rejected.
+
+The successful case first publishes September 2 through the forward flow, then September 1 through
+backfill. Both dates appear in the same destination, but the original forward entry remains exactly
+unchanged. Missing sessions and current provider-policy denial publish nothing. A two-day request is
+rejected against the one-day offer instead of silently widening its bound. Admission replay after
+completion returns the original receipt without creating another pending session.
+
+The negative flow-reuse case deliberately supplies a fresh forward revision for an older window.
+`IngestionLedgerReduction.ValidateSelection` consumes the frozen acquisition request before fetching;
+`ValidatePublication` consumes the retained chain and its actual prepared position before writing. It shares the
+commit reducer's scope, revision, definition and position rules rather than copying them into the host.
+The fixture checks observed progress again before publication; a competing advancement after acquisition
+therefore prevents a stale write in that case. The selected revision is never silently refreshed.
+
+This is a check of current evidence, not an atomic reservation. Another writer can advance after the
+check, so commit-time CAS and adapter-specific write fencing remain necessary; a later ledger conflict
+cannot roll back an external publication. Retained-result reconciliation uses original receipt replay,
+not the new-selection check. Qualification remains a static offer assessment; mutable consumer progress
+is checked at dispatch instead of being baked into long-lived capability evidence.
+
+`QualifyLocalHistorical` asserts admissibility with diagnostic codes and messages. Intentional rejection
+tests use `AssessLocalHistorical`. The fixture has one immutable `FixtureSetup`, explicit restart state,
+and a typed `DispatchChange`; provider-range rejection is a separate test from execution failures.
+
+These tests qualify one explicitly bounded window, not an automatic multi-window planner, bulk work
+budget or scheduled backfill service. Local publication identities now derive from exact acquisition
+Request emissions, allowing separate sessions to share the destination without colliding on fixture
+constants. The sink and receipts are still in-memory; cross-flow concurrent writes, correction/upsert
+policy, durable storage and a production operator API remain unqualified. No Ito changes.
+
+The fixture keeps sessions, destination and frozen revision only in `FixtureSetup`. The proposed forward
+position is selected once, then used to prepare work; publication reads that retained preparation.
+`AcquisitionValidation` and `PublicationValidation` remain separate, and failure replies identify the
+boundary, so a later check cannot erase evidence of the acquisition check. Both work-document validation
+and progress conflicts return structured diagnostics. Qualification assertions continue to report
+`IsAdmissible` failures with codes/messages; the explicit range-rejection test verifies that behavior.

@@ -24,7 +24,7 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Equal(1, original.Publications);
         Assert.Null(await original.Ledger.ReadAsync(original.Address, default));
         control.Change(new("pause", 1, IntegrationDesiredState.Paused, Operator, At));
-        var worker = new ProcessFixture(original, "policy");
+        var worker = new ProcessFixture(original, DispatchChange.PolicyDenied);
         await Assert.ThrowsAsync<InvalidOperationException>(async () => await worker.DispatchOnce(publish));
         Assert.True(control.Inspect().Draining);
         Assert.Equal(IntegrationCompletionOutcome.Unresolved, control.Complete(new(admission, decision, Operator)).Outcome);
@@ -73,7 +73,7 @@ public sealed partial class HistoricalQualificationExamples
         await Assert.ThrowsAsync<IOException>(async () => await original.DispatchOnce(publish, loss));
         if (loss == DispatchLoss.AfterEffect) original.PublishedBytes![0] ^= 1;
         control.Change(new("pause", 1, IntegrationDesiredState.Paused, Operator, At));
-        var worker = new ProcessFixture(original, "policy");
+        var worker = new ProcessFixture(original, DispatchChange.PolicyDenied);
         Assert.Null(worker.ReconcilePublication(publish, Operator));
         Assert.Null(original.ReconciliationRecorder);
         await Assert.ThrowsAsync<InvalidOperationException>(async () => await worker.DispatchOnce(publish));
@@ -93,7 +93,7 @@ public sealed partial class HistoricalQualificationExamples
         var original = new ProcessFixture(2);
         var request = Request(original.Start());
         await Assert.ThrowsAsync<IOException>(async () => await original.DispatchOnce(request, DispatchLoss.AfterEffect));
-        var worker = new ProcessFixture(original, "default");
+        var worker = new ProcessFixture(original, DispatchChange.DefaultChanged);
         Assert.Null(worker.ReconcilePublication(request, Operator));
         await Assert.ThrowsAsync<InvalidOperationException>(async () => await worker.DispatchOnce(request));
         Assert.Equal(1, original.ProviderCalls);
@@ -154,7 +154,7 @@ public sealed partial class HistoricalQualificationExamples
             if (retained.publicationRequest != fingerprint || retained.receipt is null || retained.prepared is null)
                 return null;
             var prepared = (IngestionPreparedPublication)retained.prepared.GetDefinition<IngestionWorkItem>();
-            if (!retained.sink.TryGetValue(prepared.Content.Locator, out var bytes) || !prepared.Content.Matches(bytes)
+            if (!retained.setup.Destination.Publications.TryGetValue(prepared.Content.Locator, out var bytes) || !prepared.Content.Matches(bytes)
                 || retained.receipt.ContentFingerprint != prepared.Content.Sha256) return null;
             var outcome = Outcome(request, new PublicationReceipt(retained.receipt.ReceiptReference));
             retained.dispatches[id] = (fingerprint, outcome);

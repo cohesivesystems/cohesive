@@ -16,11 +16,11 @@ public sealed partial class HistoricalQualificationExamples
     /// <param name="change">The configuration or evidence change after admission.</param>
     /// <param name="allowed">Whether a new acquisition remains permitted.</param>
     [Theory]
-    [InlineData("default", true)]
-    [InlineData("policy", false)]
-    [InlineData("grant", false)]
-    [InlineData("expiry", false)]
-    public void ReopenedHistoricalAdmissionGatesLocalProviderCalls(string change, bool allowed)
+    [InlineData(DispatchChange.DefaultChanged, true)]
+    [InlineData(DispatchChange.PolicyDenied, false)]
+    [InlineData(DispatchChange.GrantRevoked, false)]
+    [InlineData(DispatchChange.OfferExpired, false)]
+    public void ReopenedHistoricalAdmissionGatesLocalProviderCalls(DispatchChange change, bool allowed)
     {
         var original = Connection("v1");
         var replacement = Connection("v2");
@@ -33,12 +33,12 @@ public sealed partial class HistoricalQualificationExamples
 
         var current = Layer.Define("example/local-policy", "v2", "research-admin", new())
             .Prefer(IntegrationChoice.Select(Profile, replacement));
-        if (change == "policy") current = current.Enforce(new(AllowedProviders: []));
+        if (change == DispatchChange.PolicyDenied) current = current.Enforce(new(AllowedProviders: []));
         var first = new LocalAcquisition();
         var second = new LocalAcquisition();
         var runtime = new IntegrationRuntime().Register(Profile, original, first).Register(Profile, replacement, second);
-        var atDispatch = change == "expiry" ? At.AddDays(1) : At;
-        SelectionGrant[] currentGrants = change == "grant" ? [] : grants;
+        var atDispatch = change == DispatchChange.OfferExpired ? At.AddDays(1) : At;
+        SelectionGrant[] currentGrants = change == DispatchChange.GrantRevoked ? [] : grants;
 
         void Dispatch() => runtime.ResolveForDispatch<LocalAcquisition>(compiled,
             [current.Document], currentGrants, atDispatch).Acquire();
@@ -54,9 +54,18 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Equal(0, second.Calls);
     }
 
-    static IntegrationQualificationResult QualifyLocalHistorical()
+    static IntegrationQualificationResult QualifyLocalHistorical(HistoricalCoverageScope? selection = null,
+        IngestionLedgerAddress? consumer = null, HistoricalAcquisitionCapabilities? capabilities = null)
     {
-        var scope = CreateSelection();
+        var result = AssessLocalHistorical(selection, consumer, capabilities);
+        Assert.True(result.IsAdmissible, string.Join("; ", result.Validation.Diagnostics.Select(d => d.Code + ": " + d.Message)));
+        return result;
+    }
+
+    static IntegrationQualificationResult AssessLocalHistorical(HistoricalCoverageScope? selection = null,
+        IngestionLedgerAddress? consumer = null, HistoricalAcquisitionCapabilities? capabilities = null)
+    {
+        var scope = selection ?? CreateSelection();
         var original = Connection("v1");
         var replacement = Connection("v2");
         var logical = ConnectionReference.Named("market-data");
@@ -69,14 +78,13 @@ public sealed partial class HistoricalQualificationExamples
         var model = new HistoricalMarketData();
         var candidate = model.Collect.For(scope)
             .Use(model.Collect.Provider(selected.Profile!).Provides(model.RetainedResponse))
-            .Through(logical).ForConsumer(new("research/eod", "tiingo", "research/bars", "SPY"))
+            .Through(logical).ForConsumer(consumer ?? new("research/eod", "tiingo", "research/bars", "SPY"))
             .Compile(selected.Bindings!);
         var evidence = ContractPropertyDocuments.DeclareContext(new("example/local-conformance"), new("v1"),
             new HistoricalOfferEvidence("offline/raw-adapter-fixture/v1", "tiingo/research-account"), Profile.Document.Metadata.Provenance);
         var offer = IntegrationCapabilityOffer.Declare("example/local-offer", "v1", Profile, original, Schema,
-            Capabilities(scope), evidence, At.AddDays(-1), At.AddDays(1));
+            capabilities ?? Capabilities(scope), evidence, At.AddDays(-1), At.AddDays(1));
         var qualified = IntegrationQualification.Qualify(candidate, offer, Evaluator, At);
-        Assert.True(qualified.IsAdmissible);
         return qualified;
     }
 

@@ -35,6 +35,41 @@ public sealed class IngestionWorkTests
         return (request, acquired, prepared);
     }
 
+    [Fact]
+    public void DispatchValidationUsesRetainedRequestAndActualPreparedPosition()
+    {
+        var selected = new IngestionDateRangePosition(new(2026, 9, 18), new(2026, 9, 19));
+        var current = new IngestionLedgerEntry(Address, Definition, 1,
+            new IngestionDateRangePosition(new(2026, 9, 17), new(2026, 9, 18)));
+        var chain = Chain(expected: 1);
+        Assert.True(IngestionLedgerReduction.ValidateSelection(current, Reopen(chain.Request), selected).IsValid);
+        Assert.True(IngestionLedgerReduction.ValidatePublication(current, Reopen(chain.Request),
+            Reopen(chain.Acquisition), Reopen(chain.Prepared)).IsValid);
+        var changed = Chain(expected: 1, position: new IngestionDateRangePosition(new(2026, 9, 20), new(2026, 9, 21)));
+        var rejected = IngestionLedgerReduction.ValidatePublication(current, changed.Request, changed.Acquisition, changed.Prepared);
+        Assert.Contains(rejected.Diagnostics, d => d.Code == "integrations.ledger.position-transition");
+        var foreign = Chain(operation: "foreign", expected: 1);
+        Assert.False(IngestionLedgerReduction.ValidatePublication(current, chain.Request, foreign.Acquisition, chain.Prepared).IsValid);
+    }
+
+    [Fact]
+    public void DispatchValidationReturnsDiagnosticsForInvalidInputs()
+    {
+        var chain = Chain();
+        var position = new IngestionDateRangePosition(new(2026, 9, 18), new(2026, 9, 19));
+        Assert.False(IngestionLedgerReduction.ValidateSelection(null, null, position).IsValid);
+        Assert.False(IngestionLedgerReduction.ValidateSelection(null, chain.Request, null).IsValid);
+        Assert.False(IngestionLedgerReduction.ValidateSelection(null, chain.Prepared, position).IsValid);
+        Assert.False(IngestionLedgerReduction.ValidatePublication(null, chain.Request, null, chain.Prepared).IsValid);
+        foreach (var invalid in new[] { Request() with { Address = Address with { Flow = " " } }, Request(expected: -1) })
+        {
+            var malformed = ExecutionDefinitionDocument.Create<IngestionWorkItem>(chain.Request.Kind,
+                chain.Request.Metadata.DefinitionId, chain.Request.Metadata.RevisionId, invalid, Provenance);
+            Assert.False(IngestionLedgerReduction.ValidateSelection(null, malformed, position).IsValid);
+        }
+        Assert.False(IngestionLedgerReduction.ValidateSelection(null, Document(Request(expected: null)), position).IsValid);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

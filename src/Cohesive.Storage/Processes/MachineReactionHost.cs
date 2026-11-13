@@ -139,17 +139,15 @@ public sealed partial class MachineReactionHost
     /// <exception cref="InvalidOperationException">Retained evidence is inconsistent or storage cannot confirm progress.</exception>
     public async Task<MachineReactionProgress?> RecoverAsync(OperationContext context, ProcessInstanceId instance)
     {
-        var snapshot = await store.LoadAsync(context, instance).ConfigureAwait(false);
-        if (snapshot is null || snapshot.Checkpoint.Start.Request.Definition != Policy.Payload.Process.Reference
-            || snapshot.Checkpoint.Start.Request.Context.Authorization.AuthorityScope != Authority) return null;
+        var snapshot = await LoadOwnedAsync(context, instance).ConfigureAwait(false);
+        if (snapshot is null) return null;
         return await RecoverSnapshotAsync(context, snapshot).ConfigureAwait(false);
     }
 
     internal async Task<MachineReactionProgress> RecoverSnapshotAsync(OperationContext context, ProcessDurableStoreSnapshot snapshot)
     {
         var instance = snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId;
-        if (recovery is null || !await recovery.Authorize(context, snapshot.Checkpoint.Start.Request).ConfigureAwait(false))
-            throw new UnauthorizedAccessException("Reaction recovery access is denied.");
+        await AuthorizeRecoveryAsync(context, snapshot).ConfigureAwait(false);
         var attempts = ProcessTransitionAttempt.Read(snapshot);
         if (!CanDispatch(context, snapshot))
             return await InspectSnapshot(context, snapshot).ConfigureAwait(false);
@@ -219,6 +217,22 @@ public sealed partial class MachineReactionHost
 
     async Task<MachineReactionProgress> InspectSnapshot(OperationContext context, ProcessDurableStoreSnapshot snapshot)
     {
+        var progress = await InspectOwnSnapshot(context, snapshot).ConfigureAwait(false);
+        if (RequiresPrerequisiteEvidence(snapshot, progress))
+        {
+            var dependency = await InspectPrerequisiteAsync(context, MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request)).ConfigureAwait(false);
+            if (dependency.Status != MachineReactionStatus.Completed)
+                progress = dependency with { Attempts = progress.Attempts, Prerequisite = progress.Prerequisite };
+        }
+        return progress;
+    }
+
+    bool RequiresPrerequisiteEvidence(ProcessDurableStoreSnapshot snapshot, MachineReactionProgress progress) =>
+        progress.Status == MachineReactionStatus.Pending && prerequisite is not null && progress.Attempts.IsEmpty
+        && !HasPrerequisiteProof(snapshot, MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request));
+
+    async Task<MachineReactionProgress> InspectOwnSnapshot(OperationContext context, ProcessDurableStoreSnapshot snapshot)
+    {
         var invocation = MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request);
         var attempts = ProcessTransitionAttempt.Read(snapshot);
         var progress = await InspectCheckpoint(context, invocation, snapshot.Checkpoint).ConfigureAwait(false);
@@ -232,11 +246,18 @@ public sealed partial class MachineReactionHost
                     Diagnostic = new("machine.reaction.recovery.stopped", DiagnosticSeverity.Warning,
                     "Automatic recovery stopped; retain this identity and investigate the target receipt before operator recovery.") };
         }
-        if (progress.Status == MachineReactionStatus.Pending && prerequisite is not null && attempts.IsEmpty && !HasPrerequisiteProof(snapshot, invocation))
-        {
-            var dependency = await InspectPrerequisiteAsync(context, invocation).ConfigureAwait(false);
-            if (dependency.Status != MachineReactionStatus.Completed) progress = dependency;
-        }
+        if (snapshot.Checkpoint.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.Cancelled
+            && attempts.IsEmpty && snapshot.Checkpoint.Operations.IsEmpty)
+            progress = new(MachineReactionStatus.Abandoned, Diagnostic: new("machine.reaction.abandoned", DiagnosticSeverity.Info,
+                "Canonical Process cancellation stopped this reaction before target dispatch."));
+        else if (snapshot.Checkpoint.Continuation.Terminal.Kind == ExecutionTerminalOutcomeKind.Cancelled
+            && progress.Status is MachineReactionStatus.Pending or MachineReactionStatus.Indeterminate)
+            progress = progress with
+            {
+                Status = progress.Status == MachineReactionStatus.Pending ? MachineReactionStatus.Failed : progress.Status,
+                Diagnostic = new("machine.reaction.abandoned.targetEvidence", DiagnosticSeverity.Warning,
+                    "Process execution was cancelled. Retained target evidence still governs commitment; cancellation does not undo effects or authorize a new request.")
+            };
         return progress with { Attempts = attempts, Prerequisite = prerequisite is null ? null
             : MachineReactionInvocation.InstanceFor(prerequisite.Policy, invocation.Source, invocation.MovementNode) };
     }
