@@ -7,9 +7,20 @@ authoring source. It uses the official `ModelContextProtocol.Core` SDK (pinned t
 For a real application workflow with client configuration and an isolated source-change exercise, see
 [Orders development onboarding](../../../eng/examples/aspire-first/Development/README.md).
 
-## Run the example
+## Quickstart: connect a client
 
-From the repository root with .NET 10:
+Prerequisites: Git, the .NET 10 SDK and package-feed access for the first restore. No database, Docker,
+Aspire host or application credentials are needed for this quickstart. Commands below use a POSIX shell.
+Use a fixed checkout for reproducibility; keep server, exporter and domain packages on compatible pinned versions.
+
+From a fresh checkout:
+
+```sh
+git clone https://github.com/cohesivesystems/cohesive.git
+cd cohesive
+```
+
+From its repository root:
 
 ```sh
 dotnet run --project eng/examples/development-mcp -- "$PWD" "$PWD/tmp/development-workspace.json"
@@ -34,13 +45,26 @@ Configure an MCP client to launch the built server (replace `/absolute/cohesive`
 ```
 
 Launch the compiled DLL directly so build output cannot contaminate stdio. The server writes only MCP traffic
-to stdout. Usage errors go to stderr. The executable can also be packed as a .NET tool named `cohesive-mcp`.
+to stdout. Usage errors go to stderr. The project is configured to pack as a .NET tool named `cohesive-mcp`; this quickstart uses a source build and does not assume a published tool version.
 The repository root and export location are selected by the launching host, not by tool calls.
+
+After connecting, confirm that `tools/list` exposes the nine tools below. In a client, ask:
+
+> Use the Cohesive tools to inspect `orders/cancel`. Explain its rule and owning source, then describe how
+> you would validate a change. Do not edit the exported JSON.
+
+Call `learn` with `{}`, then `workspace` with `{}`. The fixture exports `orders/cancel`; a successful
+workspace response has a nonempty `snapshotId` and empty `changedInputs`. Tool results below are their
+MCP structured content, not text extracted from a client display. Exact hashes vary by checkout.
+
+For a Codex configuration example and a real application, use the
+[Orders host setup](../../../eng/examples/aspire-first/Development/README.md#build-export-and-connect).
+Client configuration syntax varies; the command and arguments above are the portable stdio launch contract.
 
 ## Agent loop
 
-1. Call `workspace` and retain `snapshotId`. Check `changedInputs` and `limitations`.
-2. Call `learn()` for versioned authoring guidance. It also works before an export exists.
+1. Call `learn` with `{}` for versioned host guidance. It also works before an export exists.
+2. Call `workspace` and retain `snapshotId`. Check `changedInputs` and `limitations`.
 3. Call `resolve(query: "cancel", expectedSnapshot)` to find the owning definition.
 4. Call `inspect(id: "orders/cancel", expectedSnapshot, pointer: "/definition")` to read its contract and body.
    Inspect `/metadata` for producer attribution; source-map references accompany inspection results.
@@ -62,22 +86,113 @@ exposes optional compiler-owned portable line spans. See the Orders walkthrough 
 `learn` returns an adapter-owned guide or the host's supplied `DevelopmentGuide`, without reading the workspace.
 The example remains an executable fixture, rather than a dependency of the server. Package-aware retrieval is future work.
 
-## Custom hosts
+## Tool reference
 
-The standalone executable supplies conventional domain validators and schema readers. To support
-another document kind, compose the same server in a host project referencing this adapter:
+All nine tools are read-only. Editing, building, exporting and running application tests happen through the
+agent's ordinary development tools. `expectedSnapshot` must be the exact ID returned by `workspace`.
+
+| Tool | Required arguments | Result / use |
+| --- | --- | --- |
+| `learn` | none | Versioned host guidance; no bundle required. |
+| `workspace` | none | Scope, current snapshot, declared-input freshness and subjects. |
+| `resolve` | `query`, `expectedSnapshot` | Matching identities; resolve ambiguity before inspecting. |
+| `inspect` | `id`, `expectedSnapshot` | Selected JSON, child pointers and source attribution; `pointer` defaults to the root. |
+| `references` | `id`, `expectedSnapshot` | Direct consumers with reference evidence and incomplete coverage. |
+| `impact` | `id`, `expectedSnapshot` | Bounded transitive consumers; optional `maxDepth` and `limit`. |
+| `check` | `expectedSnapshot` | Integrity and available domain validation; inspect `domainValidationAvailable` and diagnostics. |
+| `compare` | `baselineSnapshot`, `expectedSnapshot` | Added, removed and changed document fingerprints. |
+| `compatibility` | `id`, `baselineSnapshot`, `expectedSnapshot` | Directional API wire findings; optional `direction`. |
+
+For example, after substituting the returned snapshot:
+
+```json
+{"query":"orders/cancel","expectedSnapshot":"<snapshotId>"}
+```
+
+Pass that to `resolve`, then use its returned identity with `inspect`:
+
+```json
+{"id":"orders/cancel","expectedSnapshot":"<snapshotId>","pointer":"/definition"}
+```
+
+Workspace operations return an envelope with `snapshotId`, `inputRevision`, `semanticFingerprint`,
+`changedInputs`, `limitations` and `result`. `learn` instead returns `version` and `content`.
+The same snapshot can become stale relative to edited source: an unchanged `snapshotId` is not a freshness check.
+
+`workspace`, `resolve`, `references`, `check` and `compare` accept `offset`/`limit`; follow the returned
+`nextOffset` until null (for `compare`, it is under `result.changes`). `check` also accepts `diagnosticOffset`
+for each definition's diagnostics. Inspection children use `offset`/`limit`, and source attribution uses
+`sourceOffset`/`sourceLimit`. `impact` is bounded rather than paginated: inspect its truncation flags.
+Keep the server session alive across before/after comparisons; it retains only four snapshots in memory.
+
+## Bring your own application
+
+Start with the [minimal exporter](../../../eng/examples/development-mcp/Program.cs) and
+[typed source fixture](../../../eng/examples/development-mcp/OrderModel.cs). For a mixed application,
+use [OrdersWorkspace.Export](../../../eng/examples/aspire-first/Development/Program.cs) as the composition example.
+The minimal fixture demonstrates a transition, not the full API/recovery tool surface.
+
+1. Create a .NET 10 development console project with source `ProjectReference` entries to your application's
+   authoring project and `src/adapters/Cohesive.Adapters.Mcp.Development/Cohesive.Adapters.Mcp.Development.csproj`
+   in a pinned Cohesive checkout. This is the composition used by the Orders host. The adapter is packaged as a
+   .NET tool; do not assume that tool package is an embeddable library PackageReference. Align all domain/exporter
+   dependencies with that checkout. Keep runtime startup separate from model construction.
+2. In an explicit `export` command, invoke existing typed builders to lower the model. Use
+   `SemanticWorkspaceExport.DiscoverInputs` for selected source directories, plus explicit build, configuration,
+   lockfile and convention inputs. Use `Write` for execution documents or `WriteDocuments` for mixed domain JSON.
+   The library hashes declared inputs and atomically publishes the bundle. Do not hand-author canonical IR.
+3. In a separate `serve` command, use the default composition and supply project guidance:
 
 ```csharp
-var workspace = new SemanticWorkspace(root, bundlePath, domainValidators);
+using Cohesive.Adapters.Mcp.Development;
+
+var workspace = DevelopmentMcpServer.CreateDefaultWorkspace(
+    root: repositoryRoot, bundlePath: "tmp/workspace.json");
 await DevelopmentMcpServer.RunAsync(workspace,
-    guide: new DevelopmentGuide("my-guide/v1", authoringGuidance),
+    guide: new DevelopmentGuide("my-application-guide/v1", authoringGuidance),
     cancellationToken: cancellationToken);
 ```
 
-`domainValidators` uses the workspace's existing dictionary of canonical kinds and domain-owned validation
-functions. Shared integrity checks always run. This composition needs no server fork or runtime plug-in loader;
-the workspace and validator policy remain protocol-independent. `CreateDefaultWorkspace` supplies the standalone
-configuration when no customization is needed. The host owns any extra validator dependencies.
+Here `repositoryRoot`, `authoringGuidance` and `cancellationToken` are supplied by your console host.
+The guide should name the source entry points, exact rebuild/export command, model scope and unsupported behavior.
+The [Orders guide](../../../eng/examples/aspire-first/Development/Guide.md) is a concrete example. Avoid embedding
+answers to benchmark tasks or private scoring material in guidance or exports.
+
+4. Build and export before connecting. Configure your client to launch the compiled host's `serve` command.
+   Verify discovery, `learn`, a fresh `workspace`, one `inspect` and `check`. Edit source, verify `changedInputs`,
+   rebuild/export, then verify a new snapshot and comparison in the same session.
+
+The default composition registers domain-owned validators, reference readers and schema readers for the supported
+execution, relation, entity, shape, API and recovery documents. If you introduce another schema, construct
+`SemanticWorkspace` explicitly with `documentReaders` keyed by its original schema version and the appropriate
+`validators`, `referenceReaders` and `additionalReferences`. See the
+[default composition](DevelopmentMcpServer.cs) and [reader contracts](../../Cohesive.Semantics/README.md#direct-consumers-and-portable-source-locations).
+Replacing the workspace configuration does not implicitly inherit default readers. Preserve the existing entries
+when extending them; a validators-only constructor is insufficient for mixed-domain exports. No server fork or
+runtime plug-in loader is required. Custom readers and validators are trusted host code.
+
+For portable API compatibility, export `ApiContractDocument` using the effective serializer configuration.
+ASP.NET hosts can use `AspNetApiContract.Lower` for the qualified ProblemDetails interpretation. Version the
+serializer profile when its behavior or interpretation changes; old coverage gaps are not retroactively cleared.
+
+## Troubleshooting and interpretation
+
+| Symptom | Action |
+| --- | --- |
+| Server exits or tools do not appear | Check .NET 10, absolute DLL/root paths and stderr. Build first; do not put build output on the protocol's stdout. Restart the client connection after configuration changes. |
+| Missing export | Run the host's export command. `learn` can work before a bundle exists; semantic tools cannot. |
+| Nonempty `changedInputs` | Rebuild and re-export. `--no-build` after source edits can export stale compiled source. |
+| Expected snapshot rejected | Call `workspace` again and inspect what changed before retrying. Do not silently substitute a new snapshot for an already reviewed one. |
+| Baseline unavailable | The server restarted or the four-snapshot cache evicted it. Re-export the intended baseline from its source revision and retain it in the same session before exporting the proposed revision. |
+| Null or missing inspection value | Read `valueKind` and `isTruncated`; follow child pages for truncated containers. Oversized scalars need local artifact inspection. See the complete-value reader below. |
+| `domainValidationAvailable=false` | Integrity checking is not domain validation. Recovery assessments are integrity-checked reports; run target conformance separately. Register a validator for custom executable kinds. |
+| `Unknown` API verdict | Read diagnostic paths and coverage gaps. Align supported exporter/serializer profiles or add qualification; do not count Unknown as a pass. |
+| Incomplete references or truncated impact | Inspect `incompleteDefinitions` and every edge's evidence; increase bounds only where allowed. Missing evidence never proves absence. |
+| Unsupported schema or malformed replacement | Upgrade matching readers/exporters or repair and regenerate the artifact. The server does not silently serve an older export as current. |
+
+The selected root constrains bundle/input paths; it is not an OS security sandbox for the host or the agent.
+For evals, launch with only participant-visible files and keep the oracle outside the process's accessible environment.
+Source maps are attribution, not authorization. Builds and custom host code run with the launcher's permissions.
 
 ## Diagnostic transport caveat
 
@@ -107,13 +222,18 @@ Shape graphs expand into qualified, independently inspectable subjects; each wor
 
 ## Directional API compatibility
 
-The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v1`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.
+The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v2`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.
 
 For Orders, resolve `AvailableStock`, call `impact` on the returned field identity, and retain the snapshot before editing. After rebuilding and exporting:
 
 ```json
 {"id":"api:Order.Details","baselineSnapshot":"<before>","expectedSnapshot":"<after>","direction":"ExistingClientToProposedServer"}
 ```
+
+Policy v2 retains reader-required evidence independently of writer presence, including optional constructor defaults.
+The [API wire policy documentation](../../Cohesive.Api/README.md) describes qualified wrappers, dictionaries and
+ASP.NET ProblemDetails. Re-export both source revisions with the qualified producer when historical evidence is
+insufficient; a current contract self-comparison is not proof of cross-revision compatibility.
 
 Legacy application endpoint documents remain readable as route/binding projections. They do not carry portable wire types.
 

@@ -41,7 +41,7 @@ and endpoint binding projection change. Query source locations are not supplied 
 
 Resolve AvailableStock, use impact on the qualified field to trace the Orders query and api:Order.Details, then compare portable API contracts after rebuilding. The exercise checks both an additive inventoryPartition and a rename from availableStock to remainingStock with generated JSON readers/writers.
 
-The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v1`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.
+The portable API document retains HTTP bindings, result variants, serializer profile, qualified core types and execution/service references. Use `compatibility` with an endpoint ID, retained baseline snapshot and fresh expected snapshot. The default direction is existing client to proposed server; the reverse direction tests the proposed client against the existing server. Under `http-json-tolerant-readers/v2`, requests must remain acceptable to the server and responses readable by the client. Findings identify wire paths and return Compatible, Breaking or Unknown. Custom serializer behavior, authorization changes and unsupported type semantics can prevent a proof. This policy does not qualify arbitrary clients, deployed routes, or runtime behavior.
 
 ## Author a query and expose it as a read endpoint
 
@@ -122,3 +122,5 @@ performing effects. Restore the original policy; execution migration is not impl
 requires a qualified host. The exercise covers retries, multiple reservations, stale ownership, release/mark receipt
 recovery, and refusal to rewrite the retained policy. Runtime results qualify the tested native composition only;
 MCP integrity checks alone do not establish durability or physical binding correctness.
+
+Policy v2 separates reader-required fields from writer presence. Optional constructor defaults can accept omitted fields; required-constructor handling and JsonRequired follow the exported serializer evidence. Older exports keep their original profile and coverage gaps. Re-export both source revisions with a qualified producer when needed; do not turn Unknown into a passing result.
