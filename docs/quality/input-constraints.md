@@ -44,11 +44,16 @@ callback survives in the graph.
 
 Length is neither UTF-8 byte count nor grapheme count: 32 supplementary Unicode
 characters occupy 64 UTF-16 code units. Portable byte arrays count bytes as items.
-The attribute provider accepts native countable CLR values whose final composed
-field contract supports string, array, or byte length. The builder checks the
-resolved type/cardinality after all metadata overrides. When a JSON metadata
+Length eligibility is checked once, after metadata composition, against the final
+field contract. Explicit value-object-to-string overrides are supported for portable
+values; an override does not itself supply a CLR-to-value conversion.
+The builder discovers `IClrFieldProjectionValidator` hooks once per build and
+runs them on each resolved field, including nested fields. JSON providers retain
+their own frozen options; this validation hook does not identify concrete provider
+classes. When a JSON metadata
 provider is configured, its frozen options and resolver govern representation
-checks; no independent default serializer or type mapper is consulted. Dictionaries and property/type/configured
+checks; no independent default serializer or type mapper is consulted. Dictionaries and
+property/type/configured
 converters that cannot preserve native length are rejected during authoring; object entry counts are not implemented.
 Arbitrary Count-shaped CLR objects are outside this subset.
 
@@ -129,3 +134,20 @@ host-owned/localized display text. A follow-up semantic-identity design should
 exclude constraint messages while retaining them as document metadata, covering
 equality, deduplication, and the versioned fingerprint projection together.
 Changing only equality here would leave fingerprint and equality inconsistent.
+
+## Choosing the consumer boundary
+
+For cohesive-evals#42, `OperationQueue.Submit` should validate the portable value
+already produced at the admission boundary whenever it is available:
+
+```csharp
+var result = ObservationValidator.ValidateInput(inputValue, shapes.GetShape<SubmitInput>());
+```
+
+Here `inputValue` is an `ObservationValue`, not the CLR request record. This
+avoids the typed overload's reflection/dynamic-code requirements and a second
+projection. Calling `ObservationValue.FromObject(request)` just to select this
+overload does not remove projection's trimming requirements. In a trimmed or
+NativeAOT consumer, load the pre-authored graph and use a separately qualified
+portable input decoder/projector. Ordinary JIT consumers may use the typed
+convenience API; do not suppress analyzer warnings without qualifying that path.

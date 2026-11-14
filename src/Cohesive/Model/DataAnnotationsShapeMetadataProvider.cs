@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
-using Cohesive.Model.Serialization;
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
 
@@ -9,7 +8,7 @@ namespace Cohesive.Model;
 
 /// <summary>Opt-in lowering of DataAnnotations required/min/max length into portable semantic constraints.</summary>
 /// <remarks>Only exact built-in attribute types are supported. No CLR validator or callback survives projection.</remarks>
-public sealed class DataAnnotationsShapeMetadataProvider : IClrShapeMetadataProvider
+public sealed class DataAnnotationsShapeMetadataProvider : IClrShapeMetadataProvider, IClrFieldProjectionValidator
 {
     /// <summary>Stateless shared provider.</summary>
     public static DataAnnotationsShapeMetadataProvider Instance
@@ -39,22 +38,6 @@ public sealed class DataAnnotationsShapeMetadataProvider : IClrShapeMetadataProv
             if (context.Target != ClrShapeMetadataTarget.Field || attribute.ErrorMessageResourceType is not null
                 || attribute.ErrorMessageResourceName is not null)
                 throw Unsupported(attribute, context);
-            if (attribute is MinLengthAttribute or MaxLengthAttribute)
-            {
-                var type = context.ClrType;
-                var interfaces = type.GetInterfaces();
-                var dictionary = typeof(System.Collections.IDictionary).IsAssignableFrom(type)
-                    || interfaces.Append(type).Any(static candidate => candidate.IsGenericType
-                        && (candidate.GetGenericTypeDefinition() == typeof(IDictionary<,>)
-                            || candidate.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>)));
-                var countable = type == typeof(string) || type.IsArray
-                    || typeof(System.Collections.ICollection).IsAssignableFrom(type)
-                    || interfaces.Append(type).Any(static candidate => candidate.IsGenericType
-                        && candidate.GetGenericTypeDefinition() == typeof(ICollection<>));
-                if (!countable || dictionary || context.AttributeProvider.IsDefined(typeof(JsonConverterAttribute), inherit: true)
-                    || type.IsDefined(typeof(JsonConverterAttribute), inherit: true))
-                    throw new NotSupportedException($"constraint.lengthType: {type.Name} does not project to a supported string, array, or bytes value.");
-            }
             if (attribute.GetType() == typeof(RequiredAttribute))
             {
                 required = true;
@@ -85,14 +68,23 @@ public sealed class DataAnnotationsShapeMetadataProvider : IClrShapeMetadataProv
         };
     }
 
-    // Invoked after the builder has composed every provider and resolved the field's actual portable type.
-    internal void ValidateProjection(PropertyInfo property, TypeRef type, FieldCardinality cardinality,
-        SystemTextJsonClrShapeMetadataProvider? jsonProfile)
+    /// <summary>Checks length eligibility against the final composed field contract.</summary>
+    public void ValidateFieldProjection(ClrFieldProjectionContext context)
     {
-        if (!property.IsDefined(typeof(MinLengthAttribute), true) && !property.IsDefined(typeof(MaxLengthAttribute), true)) return;
-        if (!(cardinality == FieldCardinality.Many || type is ArrayTypeRef
+        if (!context.Metadata.Constraints.Any(static rule => rule is MinLengthConstraint or MaxLengthConstraint)) return;
+        var property = context.Property;
+        var type = context.Type;
+        // Without an explicit portable override, dictionaries serialize as objects despite being enumerable.
+        var clrType = property.PropertyType;
+        var dictionary = context.Metadata.TypeRef is null &&
+            (typeof(System.Collections.IDictionary).IsAssignableFrom(clrType)
+             || clrType.GetInterfaces().Append(clrType).Any(static candidate => candidate.IsGenericType
+                 && (candidate.GetGenericTypeDefinition() == typeof(IDictionary<,>)
+                     || candidate.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>))));
+        if (dictionary || !(context.Cardinality == FieldCardinality.Many || type is ArrayTypeRef
                 || type is ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Bytes })
-            || jsonProfile?.HasNativeLengthProjection(property) == false)
+            || property.IsDefined(typeof(JsonConverterAttribute), true)
+            || clrType.IsDefined(typeof(JsonConverterAttribute), true))
             throw new NotSupportedException($"constraint.lengthType: {property.DeclaringType?.Name}.{property.Name} does not have a supported effective string/array/bytes projection.");
     }
 

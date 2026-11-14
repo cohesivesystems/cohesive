@@ -30,6 +30,39 @@ public sealed class InputConstraintProjectionTests
             && context.ClrType == typeof(string) ? new() { TypeRef = new ScalarTypeRef(ScalarTypeKind.Int64) } : ClrShapeMetadata.Empty;
     }
 
+    public sealed record RequestId(string Text);
+    public sealed record ValueObjectInput([property: MaxLength(2)] RequestId Id);
+    public sealed record NestedValueObjectInput(ValueObjectInput Input);
+    sealed class ValueObjectProjection : IClrShapeMetadataProvider, IClrFieldProjectionValidator
+    {
+        public int Validated { get; private set; }
+        public ClrShapeMetadata GetMetadata(ClrShapeMetadataContext context) =>
+            context.Target == ClrShapeMetadataTarget.Field && context.ClrType == typeof(RequestId)
+                ? new() { TypeRef = new ScalarTypeRef(ScalarTypeKind.String) } : ClrShapeMetadata.Empty;
+        public void ValidateFieldProjection(ClrFieldProjectionContext context)
+        {
+            if (context.Property.PropertyType != typeof(RequestId)) return;
+            Assert.Equal(new ScalarTypeRef(ScalarTypeKind.String), context.Type);
+            Assert.Contains(context.Metadata.Constraints, rule => rule is MaxLengthConstraint);
+            Validated++;
+        }
+    }
+
+    [Fact]
+    public void FinalProjectionAdmitsValueObjectOverridesAndCallsCustomValidators()
+    {
+        var projection = new ValueObjectProjection();
+        var builder = new ClrShapeGraphBuilder().AddMetadataProvider(projection).UseDataAnnotations()
+            .AddShape<ValueObjectInput>().AddShape<NestedValueObjectInput>();
+        var built = builder.BuildResult();
+        var shape = built.GetShape<ValueObjectInput>();
+        Assert.True(ObservationValidator.ValidateInput(ObservationValue.FromObject(
+            new Dictionary<string, ObservationValue> { ["Id"] = ObservationValue.FromString("ok") }), shape).IsValid);
+        Assert.False(ObservationValidator.ValidateInput(ObservationValue.FromObject(
+            new Dictionary<string, ObservationValue> { ["Id"] = ObservationValue.FromString("long") }), shape).IsValid);
+        Assert.True(projection.Validated >= 2);
+    }
+
     [Fact]
     public void FinalMetadataOverridesAreCheckedForRootAndNestedFields()
     {

@@ -43,7 +43,7 @@ portable and ordinal successful validation over repeated 1,000-call windows.
 The minimum of three windows excludes one-time runtime setup without tolerating
 per-call allocations. The typed API owns its projected payload cost separately.
 
-Validation: the complete Release test project passed **5,660** tests, with 72
+Validation: the complete Release test project passed **5,661** tests, with 72
 environment-dependent skips. Review regressions cover case handling, dictionary
 projection rejection, idempotent shape resolution and retained collection-item
 rules, and message-dependent fingerprints. Application submission integration is
@@ -80,3 +80,10 @@ dotnet run -c Release --project src/Cohesive.Relations.Benchmarks -- \
 metadata override rejection, canonical target parity, and missing-optional
 allocation regressions. The generated metadata test is not a NativeAOT publish
 qualification.
+
+The final-projection hook follow-up to `446f2e3b` supersedes fresh-graph admission
+again in [the refreshed authoring report](authoring-hook.md), using the same eight
+cases and iteration settings. Optional-target lookup code is unchanged; its
+previous report remains applicable. Hook discovery occurs once per build; JSON
+validators use their provider's already-frozen settings, without scanning the
+provider list per field.

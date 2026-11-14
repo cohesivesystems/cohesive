@@ -21,7 +21,7 @@ public sealed class ClrShapeGraphBuilder
     readonly Dictionary<TypeId, TypeDefinition> contributedNamedTypes = [];
     readonly List<ClrEntityReferenceRegistration> entityReferences = [];
     bool useCanonicalClrEnumValues;
-    DataAnnotationsShapeMetadataProvider? dataAnnotations;
+    IClrFieldProjectionValidator[] projectionValidators = [];
     SystemTextJsonClrShapeMetadataProvider? publicJsonContracts;
 
     /// <summary>
@@ -80,7 +80,6 @@ public sealed class ClrShapeGraphBuilder
     public ClrShapeGraphBuilder AddMetadataProvider(IClrShapeMetadataProvider provider)
     {
         metadataProviders.Add(Guard.RequireNotNull(provider));
-        if (provider is DataAnnotationsShapeMetadataProvider annotations) dataAnnotations = annotations;
         return this;
     }
 
@@ -258,6 +257,7 @@ public sealed class ClrShapeGraphBuilder
     /// </exception>
     public ClrShapeGraphBuildResult BuildResult(GraphId? graphId = null)
     {
+        projectionValidators = metadataProviders.OfType<IClrFieldProjectionValidator>().ToArray();
         contributedNamedTypes.Clear();
         ValidateEntityReferenceRoots();
         var selectedGraphId = graphId ?? GraphId.New();
@@ -736,7 +736,7 @@ public sealed class ClrShapeGraphBuilder
             fieldIdentityOrigins);
 
         var resolvedType = fieldMetadata.TypeRef ?? MapTypeRef(effectiveType, identities);
-        ValidateProjectedLength(propertyMetadata.Property, resolvedType, cardinality);
+        ValidateFieldProjection(propertyMetadata.Property, resolvedType, cardinality, fieldMetadata);
         return new(
             name: fieldName,
             type: resolvedType,
@@ -778,7 +778,7 @@ public sealed class ClrShapeGraphBuilder
             fieldIdentityOrigins);
 
         var resolvedType = fieldMetadata.TypeRef ?? MapTypeRef(effectiveType, identities);
-        ValidateProjectedLength(propertyMetadata.Property, resolvedType, cardinality);
+        ValidateFieldProjection(propertyMetadata.Property, resolvedType, cardinality, fieldMetadata);
         return new(
             name: fieldName,
             type: resolvedType,
@@ -793,13 +793,11 @@ public sealed class ClrShapeGraphBuilder
             );
     }
 
-    void ValidateProjectedLength(PropertyInfo property, TypeRef type, FieldCardinality cardinality)
+    void ValidateFieldProjection(PropertyInfo property, TypeRef type, FieldCardinality cardinality, ClrShapeMetadata metadata)
     {
-        if (dataAnnotations is null) return;
-        SystemTextJsonClrShapeMetadataProvider? jsonProfile = null;
-        foreach (var provider in metadataProviders)
-            if (provider is SystemTextJsonClrShapeMetadataProvider json) jsonProfile = json;
-        dataAnnotations.ValidateProjection(property, type, cardinality, jsonProfile);
+        if (projectionValidators.Length == 0) return;
+        var context = new ClrFieldProjectionContext(property, type, cardinality, metadata);
+        foreach (var validator in projectionValidators) validator.ValidateFieldProjection(context);
     }
 
     static void RegisterFieldIdentity(
