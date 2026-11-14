@@ -14,18 +14,16 @@ namespace Cohesive.Integrations;
 /// snapshots are observations, not capabilities that can authorize an effect. No health is inferred from Active.</remarks>
 public sealed class InMemoryIntegrationLifecycle
 {
-    readonly object sync = new();
+    readonly object sync;
+    readonly InMemoryIntegrationAdmissionGroup? group;
+    readonly IntegrationDesiredStateControl control = new();
     readonly IngestionLedgerAddress consumer;
     readonly Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize;
-    readonly Dictionary<string, IntegrationLifecycleChangeReceipt> changes = new(StringComparer.Ordinal);
     readonly Dictionary<ProcessContinuationIdentity, IntegrationAdmission> pending = new();
     readonly Dictionary<ProcessContinuationIdentity, IntegrationCompletion> completed = new();
     readonly Func<IntegrationFailureResolutionRequest, ProcessActivationDecision?>? verifyFailureResolution;
     readonly Dictionary<string, IntegrationFailureResolution> resolutionCommands = new(StringComparer.Ordinal);
     readonly Dictionary<ProcessContinuationIdentity, IntegrationFailureResolution> resolvedFailures = new();
-    long revision;
-    IntegrationDesiredState desired = IntegrationDesiredState.Paused;
-    IntegrationLifecycleChange? lastChange;
 
     /// <summary>Creates a paused local controller for an explicit consumer and host authorization authority.</summary>
     /// <param name="consumer">Stable consumer; every identity component must be nonempty and bounded.</param>
@@ -37,10 +35,18 @@ public sealed class InMemoryIntegrationLifecycle
     /// may run concurrently. Exceptions propagate without controller mutation. This callback must not dispatch effects.</param>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentException">A consumer identity is invalid.</exception>
-    public InMemoryIntegrationLifecycle(IngestionLedgerAddress consumer,
+    internal InMemoryIntegrationLifecycle(IngestionLedgerAddress consumer,
         Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize,
         Func<IntegrationFailureResolutionRequest, ProcessActivationDecision?>? verifyFailureResolution = null)
+        : this(consumer, authorize, verifyFailureResolution, null) { }
+
+    internal InMemoryIntegrationLifecycle(IngestionLedgerAddress consumer,
+        Func<IntegrationLifecycleAction, ProcessControlAuthorizationContext, bool> authorize,
+        Func<IntegrationFailureResolutionRequest, ProcessActivationDecision?>? verifyFailureResolution,
+        InMemoryIntegrationAdmissionGroup? group)
     {
+        this.group = group;
+        sync = group?.Sync ?? new object();
         ArgumentNullException.ThrowIfNull(consumer); ArgumentNullException.ThrowIfNull(authorize);
         consumer.Validate(); this.consumer = consumer; this.authorize = authorize;
         this.verifyFailureResolution = verifyFailureResolution;
@@ -80,21 +86,9 @@ public sealed class InMemoryIntegrationLifecycle
     /// <exception cref="ArgumentException">Identity, desired state, revision or UTC timestamp is invalid.</exception>
     public IntegrationLifecycleResult<IntegrationChangeOutcome, IntegrationLifecycleChangeReceipt> Change(IntegrationLifecycleChange request)
     {
-        ArgumentNullException.ThrowIfNull(request); ArgumentException.ThrowIfNullOrWhiteSpace(request.Id);
-        Validate(request.Authorization, request.AtUtc);
-        if (request.ExpectedRevision < 0 || !Enum.IsDefined(request.Desired)) throw new ArgumentException("Invalid lifecycle command.");
+        IntegrationDesiredStateControl.Validate(request);
         if (!authorize(IntegrationLifecycleAction.Change, request.Authorization)) return new(IntegrationChangeOutcome.Unauthorized);
-        lock (sync)
-        {
-            if (changes.TryGetValue(request.Id, out var prior))
-                return prior.Command == request ? new(IntegrationChangeOutcome.Replayed, prior) : new(IntegrationChangeOutcome.IdentityConflict);
-            if (request.ExpectedRevision != revision) return new(IntegrationChangeOutcome.RevisionConflict);
-            if (revision == long.MaxValue) return new(IntegrationChangeOutcome.RevisionExhausted);
-            desired = request.Desired; revision++; lastChange = request;
-            var receipt = new IntegrationLifecycleChangeReceipt(request, revision);
-            changes.Add(request.Id, receipt);
-            return new(IntegrationChangeOutcome.Applied, receipt);
-        }
+        lock (sync) return control.Apply(request);
     }
 
     /// <summary>Admits a session using a prevalidated token, or retrieves its original admission.</summary>
@@ -107,8 +101,7 @@ public sealed class InMemoryIntegrationLifecycle
     public IntegrationLifecycleResult<IntegrationAdmissionOutcome, IntegrationAdmission> Admit(IntegrationAdmissionRequest request)
     {
         ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Binding); ArgumentNullException.ThrowIfNull(request.Continuation);
-        Validate(request.Authorization, request.AtUtc);
-        if (request.ExpectedRevision < 0) throw new ArgumentException("Revision cannot be negative.", nameof(request));
+        IntegrationDesiredStateControl.ValidateEnvelope(request.Authorization, request.ExpectedRevision, request.AtUtc);
         if (!authorize(IntegrationLifecycleAction.Admit, request.Authorization)) return new(IntegrationAdmissionOutcome.Unauthorized);
         if (!ReferenceEquals(request.Binding.Owner, this)) return new(IntegrationAdmissionOutcome.BindingMismatch);
         lock (sync)
@@ -121,10 +114,11 @@ public sealed class InMemoryIntegrationLifecycle
                     && prior.LifecycleRevision == request.ExpectedRevision && prior.Authorization == request.Authorization && prior.AtUtc == request.AtUtc;
                 return matches ? new(IntegrationAdmissionOutcome.Replayed, prior) : new(IntegrationAdmissionOutcome.IdentityConflict);
             }
-            if (revision != request.ExpectedRevision) return new(IntegrationAdmissionOutcome.RevisionConflict);
-            if (desired != IntegrationDesiredState.Active) return new(IntegrationAdmissionOutcome.AdmissionStopped);
+            if (group is not null && group.Desired != IntegrationDesiredState.Active) return new(IntegrationAdmissionOutcome.GroupAdmissionStopped);
+            if (control.Revision != request.ExpectedRevision) return new(IntegrationAdmissionOutcome.RevisionConflict);
+            if (control.Desired != IntegrationDesiredState.Active) return new(IntegrationAdmissionOutcome.AdmissionStopped);
             var receipt = new IntegrationAdmission(consumer, request.Continuation, request.Binding.Binding, request.Binding.Process,
-                request.ExpectedRevision, request.Authorization, request.AtUtc);
+                request.ExpectedRevision, request.Authorization, request.AtUtc, group is null ? null : new(group.Id, group.Revision));
             pending.Add(request.Continuation, receipt);
             return new(IntegrationAdmissionOutcome.Applied, receipt);
         }
@@ -177,9 +171,9 @@ public sealed class InMemoryIntegrationLifecycle
     {
         ArgumentNullException.ThrowIfNull(request); ArgumentNullException.ThrowIfNull(request.Admission);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.Id); ArgumentException.ThrowIfNullOrWhiteSpace(request.EvidenceReference);
-        Validate(request.Authorization, request.AtUtc);
-        if (request.ExpectedRevision < 0 || request.AtUtc < request.Admission.AtUtc)
-            throw new ArgumentException("Resolution requires a nonnegative revision and cannot predate admission.", nameof(request));
+        IntegrationDesiredStateControl.ValidateEnvelope(request.Authorization, request.ExpectedRevision, request.AtUtc);
+        if (request.AtUtc < request.Admission.AtUtc)
+            throw new ArgumentException("Resolution cannot predate admission.", nameof(request));
         if (!authorize(IntegrationLifecycleAction.ResolveFailure, request.Authorization))
             return new(IntegrationFailureResolutionOutcome.Unauthorized);
         lock (sync)
@@ -197,8 +191,8 @@ public sealed class InMemoryIntegrationLifecycle
                 || decision.State.Definition != request.Admission.Process
                 || decision.State.Continuation != request.Admission.Continuation)
                 return new(IntegrationFailureResolutionOutcome.DecisionMismatch);
-            revision++;
-            var receipt = new IntegrationFailureResolution(request, decision, revision);
+            control.AdvanceRevision();
+            var receipt = new IntegrationFailureResolution(request, decision, control.Revision);
             resolutionCommands.Add(request.Id, receipt);
             resolvedFailures.Add(request.Admission.Continuation, receipt);
             pending.Remove(request.Admission.Continuation);
@@ -223,12 +217,12 @@ public sealed class InMemoryIntegrationLifecycle
         if (resolutionCommands.TryGetValue(request.Id, out var prior))
             return prior.Command == request ? new(IntegrationFailureResolutionOutcome.Replayed, prior)
                 : new(IntegrationFailureResolutionOutcome.IdentityConflict);
-        if (request.ExpectedRevision != revision) return new(IntegrationFailureResolutionOutcome.RevisionConflict);
+        if (request.ExpectedRevision != control.Revision) return new(IntegrationFailureResolutionOutcome.RevisionConflict);
         if (completed.ContainsKey(request.Admission.Continuation) || resolvedFailures.ContainsKey(request.Admission.Continuation))
             return new(IntegrationFailureResolutionOutcome.AlreadyClosed);
         if (pending.GetValueOrDefault(request.Admission.Continuation) != request.Admission)
             return new(IntegrationFailureResolutionOutcome.AdmissionMismatch);
-        if (revision == long.MaxValue) return new(IntegrationFailureResolutionOutcome.RevisionExhausted);
+        if (!control.CanAdvance) return new(IntegrationFailureResolutionOutcome.RevisionExhausted);
         return null;
     }
 
@@ -249,14 +243,9 @@ public sealed class InMemoryIntegrationLifecycle
         return process!.Reference == compilation.Process!.Reference ? Valid() : Error("process", "Process differs from the admitted binding's lowering.");
     }
 
-    IntegrationLifecycleSnapshot Snapshot() => new(consumer, revision, desired, lastChange,
+    IntegrationLifecycleSnapshot Snapshot() => new(consumer, control.Revision, control.Desired, control.LastChange,
         [.. pending.Values
-            .OrderBy(a => a.Continuation.ProcessInstanceId.Value, StringComparer.Ordinal).ThenBy(a => a.Continuation.ProcessAttemptId.Value, StringComparer.Ordinal)]);
-    static void Validate(ProcessControlAuthorizationContext authorization, DateTimeOffset atUtc)
-    {
-        ArgumentNullException.ThrowIfNull(authorization);
-        if (atUtc.Offset != TimeSpan.Zero) throw new ArgumentException("Lifecycle observation must use UTC.", nameof(atUtc));
-    }
+            .OrderBy(a => a.Continuation.ProcessInstanceId.Value, StringComparer.Ordinal).ThenBy(a => a.Continuation.ProcessAttemptId.Value, StringComparer.Ordinal)], group?.Snapshot());
     static DocumentValidationResult Valid() => new([]);
     static DocumentValidationResult Error(string code, string message) => new([new("integrations.lifecycle." + code, DiagnosticSeverity.Error, message)]);
 }

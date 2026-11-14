@@ -4,13 +4,13 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Description>Canonical Cohesive Transition interpretation for deterministic simulation scenarios.</Description>
-    <PackageTags>cohesive;simulation;transitions;scenarios;testing;assurance</PackageTags>
+    <Description>Canonical Cohesive Transition and durable reaction interpretation for deterministic simulation scenarios.</Description>
+    <PackageTags>cohesive;simulation;transitions;reactions;scenarios;testing;assurance</PackageTags>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Cohesive.Simulation\Cohesive.Simulation.csproj" />
     <ProjectReference Include="..\Cohesive.Transitions\Cohesive.Transitions.csproj" />
+    <ProjectReference Include="../Cohesive.Storage/Cohesive.Storage.csproj" />
   </ItemGroup>
-
 </Project>

@@ -152,7 +152,7 @@ var candidate = model.Collect.For(backfillScope)
 The application must derive `ExpectedSessions` from its pinned calendar; this fixture uses the existing
 synthetic two-session calendar. Narrowing the interval never changes the required coverage semantics.
 Separate flows also mean separate lifecycle controllers: pausing forward admission does not implicitly
-pause backfill. The missing group-control abstraction is tracked in [COH-163](https://linear.app/cohesive-ari/issue/COH-163); this example pauses
+pause backfill. The local group-control example below addresses [COH-163](https://linear.app/cohesive-ari/issue/COH-163); this independent-flow example pauses
 backfill itself and verifies that an admitted window drains while another is rejected.
 
 The successful case first publishes September 2 through the forward flow, then September 1 through
@@ -190,3 +190,47 @@ position is selected once, then used to prepare work; publication reads that ret
 boundary, so a later check cannot erase evidence of the acquisition check. Both work-document validation
 and progress conflicts return structured diagnostics. Qualification assertions continue to report
 `IsAdmissible` failures with codes/messages; the explicit range-rejection test verifies that behavior.
+
+
+[HistoricalAdmissionGroupExamples.cs](HistoricalAdmissionGroupExamples.cs) registers the forward and
+backfill consumers under one partition admission group. Both actual Processes publish and lose their
+acknowledgements. A single authorized group pause then rejects new sessions across both flows. Their
+original admissions still replay, and exact sink evidence reconciles both publications without another
+provider call or write. Each Process advances only its own ledger and completes; group policy remains
+Paused while local intent remains Active. This demonstrates local admission ordering and recovery,
+not physical crash durability, cross-process coordination or cancellation of admitted work.
+
+
+Admission-group ownership is supplied by an explicit `InMemoryIntegrationLifecycleScope`. Its factories
+prevent a second controller for the same consumer within that host scope. Admissions supply only the
+local revision; the member atomically reads current group policy and records its observed group revision.
+Unrelated membership additions do not invalidate admission requests. Group/member operator commands
+retain their own revision checks. Group inspection reuses an immutable published snapshot; the shared
+member-operation lock is still a local reference tradeoff, not a durable scalability claim.
+
+[HistoricalOperatorExamples.cs](HistoricalOperatorExamples.cs) composes the existing inspection host
+and domain coverage projection into a read-only forward/backfill report. It includes requested scope,
+group policy, local intent, pending work, expiring provider evidence, publication-backed sessions and
+separate ledger positions. The example exports JSON through the shared wire options to test output;
+[OPERATOR-RUNBOOK.md](OPERATOR-RUNBOOK.md) gives the run command and recovery/action boundaries.
+Group observations bracket the asynchronous reads without claiming an atomic multi-store snapshot.
+The view remains private to the example until a real host establishes a reusable boundary.
+
+[HistoricalCatchUpExamples.cs](HistoricalCatchUpExamples.cs), tracked in
+[#542](https://github.com/cohesivesystems/cohesive/issues/542), is a single-dispatcher catch-up experiment
+over the existing synthetic September 1–2 calendar. Each invocation reads accepted ledger progress and
+admits at most one one-day window. A missed trigger does not become a skipped date: the next invocation
+starts at the previous accepted range's end. Once the explicit horizon is reached, repeated ticks have
+no new effects. Current lifecycle state is checked before selection and fenced again at admission;
+qualification, dispatch policy, coverage and ledger checks retain their existing authority.
+
+An unresolved admission stops subsequent ticks before another fetch. This includes a known coverage
+failure: a later tick cannot treat that failure as permission to retry or skip ahead. Use the operator
+runbook's evidence-based reconciliation/resolution path; new attempts after resolution are deliberately
+not modeled by this example. Admission replay also cannot authorize execution again.
+
+The tick has no persisted timer occurrence or process-local cursor. The ledger owns progress, while
+consumer admission owns unresolved work. Reads across them are not transactional, and the pending check
+is not a claim: concurrent dispatchers require additional ownership/fencing. This is not a production
+scheduler, restart-durability proof, arbitrary trading-calendar planner, correction policy or completion
+of the Ito-dependent acceptance gate. No new public API is introduced.

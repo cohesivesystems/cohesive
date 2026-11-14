@@ -12,6 +12,12 @@ using Cohesive.Application;
 using Microsoft.Extensions.DependencyInjection;
 using Cohesive.Storage.Processes;
 using Npgsql;
+using Marten;
+using Cohesive.Adapters.Marten;
+using Cohesive.Transitions.Authoring;
+using Cohesive.Transitions.Execution;
+using Cohesive.Transitions.IR;
+using Cohesive.Transitions.Model;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
@@ -277,6 +283,95 @@ public sealed class CancellationIntegrationTests
         Assert.Equal(OrderStatus.Cancelled, (await fixture.Order()).Status);
     }
 
+    [FulfillmentProcessIntegrationTests.PostgresTheory]
+    [InlineData(null)]
+    [InlineData(EntityStateAuthority.State)]
+    [InlineData(EntityStateAuthority.Events)]
+    public async Task Rejected_claim_retains_receipt_without_invalidating_prepared_completion(EntityStateAuthority? historyAuthority)
+    {
+        await using var fixture = await Fixture.Create(OrderStatus.Cancelling, historyAuthority: historyAuthority);
+        var before = (await fixture.Orders.TryGet(fixture.Context, fixture.OrderId,
+            EntityReadOptions.Full.WithPartitionKey(FulfillmentStoragePolicy.LocalPartition)))!;
+        var historyPosition = await fixture.OrderHistoryPosition();
+        var completion = PrepareOrderCommit(fixture, before, fixture.Model.Domain.OrderTransitions.CompleteCancellation, "owner");
+        var rejection = PrepareOrderCommit(fixture, before, fixture.Model.Domain.OrderTransitions.BeginCancellation, "contender");
+        Assert.Equal(TransitionDecisionKind.AdmissionRejected, rejection.DecisionKind);
+        var rejected = await fixture.Orders.CommitTransitionOperation(fixture.Context, rejection);
+        Assert.Equal(EntityTransitionOperationDisposition.Committed, rejected.Disposition);
+        Assert.Equal(before, rejected.Receipt!.Entity);
+        Assert.Equal(before, await fixture.Orders.TryGet(fixture.Context, fixture.OrderId,
+            EntityReadOptions.Full.WithPartitionKey(FulfillmentStoragePolicy.LocalPartition)));
+        Assert.Equal(historyPosition, await fixture.OrderHistoryPosition());
+        // The owner's previously prepared fence remains valid despite the competitor's receipt.
+        var completed = await fixture.Orders.CommitTransitionOperation(fixture.Context, completion);
+        Assert.Equal(EntityTransitionOperationDisposition.Committed, completed.Disposition);
+        Assert.Equal(OrderStatus.Cancelled, (await fixture.Order()).Status);
+        var replayed = await fixture.Orders.CommitTransitionOperation(fixture.Context, rejection);
+        Assert.Equal(EntityTransitionOperationDisposition.Replayed, replayed.Disposition);
+        Assert.Equal(rejected.Receipt.Commit.Fingerprint, replayed.Receipt!.Commit.Fingerprint);
+        Assert.Equal(rejected.Receipt.Entity, replayed.Receipt.Entity);
+        Assert.Equal(rejected.Receipt.CommittedAtUtc, replayed.Receipt.CommittedAtUtc);
+    }
+
+    [FulfillmentProcessIntegrationTests.PostgresTheory]
+    [InlineData(TransitionOutcomeDisposition.NoChange)]
+    [InlineData(TransitionOutcomeDisposition.DomainRejected)]
+    public async Task Non_applied_outcomes_preserve_the_entity_concurrency_fence(TransitionOutcomeDisposition disposition)
+    {
+        await using var fixture = await Fixture.Create(OrderStatus.Cancelling);
+        var before = (await fixture.Orders.TryGet(fixture.Context, fixture.OrderId,
+            EntityReadOptions.Full.WithPartitionKey(FulfillmentStoragePolicy.LocalPartition)))!;
+        var transition = fixture.Model.Domain.Orders.Transition<CancellationResult>(
+            new("receipt/non-applied"), new("1"), author => author.Return(new("result"), disposition,
+                new CancellationResult(CancellationOutcome.InProgress)));
+        var commit = PrepareOrderCommit(fixture, before, transition, "non-applied");
+        var retained = await fixture.Orders.CommitTransitionOperation(fixture.Context, commit);
+        Assert.Equal(EntityTransitionOperationDisposition.Committed, retained.Disposition);
+        Assert.Equal(before, retained.Receipt!.Entity);
+    }
+
+    [OrderStorageIntegrationTests.PostgresFact]
+    public async Task Receipt_only_commit_rejects_stale_evidence_and_changed_candidate_state()
+    {
+        await using var fixture = await Fixture.Create(OrderStatus.Cancelling);
+        var before = (await fixture.Orders.TryGet(fixture.Context, fixture.OrderId,
+            EntityReadOptions.Full.WithPartitionKey(FulfillmentStoragePolicy.LocalPartition)))!;
+        var rejected = PrepareOrderCommit(fixture, before, fixture.Model.Domain.OrderTransitions.BeginCancellation, "stale");
+        var changed = fixture.Orders.EntityDefinition.CreateState(fixture.OrderId,
+            ObservationValue.FromObject(new Order(fixture.OrderId, FulfillmentStoragePolicy.LocalPartition, OrderStatus.Cancelled)).Fields!,
+            before.Entity.Version).Snapshot;
+        var invalid = new EntityTransitionOperationCommit(rejected.Request, new(changed, before.ConcurrencyToken),
+            rejected.DecisionKind, rejected.Result, rejected.GuaranteeDemands, rejected.Evidence);
+        await Assert.ThrowsAsync<ArgumentException>(() => fixture.Orders.CommitTransitionOperation(fixture.Context, invalid));
+        Assert.Equal(EntityTransitionOperationDisposition.NotFound,
+            (await fixture.Orders.TryGetTransitionOperation(fixture.Context, rejected.Request)).Disposition);
+        await fixture.Orders.Upsert(fixture.Context,
+            new Order(fixture.OrderId, FulfillmentStoragePolicy.LocalPartition, OrderStatus.Cancelled), before.ConcurrencyToken);
+        Assert.Equal(EntityTransitionOperationDisposition.ConcurrencyConflict,
+            (await fixture.Orders.CommitTransitionOperation(fixture.Context, rejected)).Disposition);
+        Assert.Equal(EntityTransitionOperationDisposition.NotFound,
+            (await fixture.Orders.TryGetTransitionOperation(fixture.Context, rejected.Request)).Disposition);
+        Assert.Equal(OrderStatus.Cancelled, (await fixture.Order()).Status);
+    }
+
+    static EntityTransitionOperationCommit PrepareOrderCommit(Fixture fixture, EntitySnapshot before,
+        Transition<Order, Unit, CancellationResult> transition, string occurrenceId)
+    {
+        var compilation = transition.Compile();
+        Assert.True(compilation.IsSuccessful, string.Join("; ", compilation.Validation.Diagnostics));
+        var plan = compilation.Plan!;
+        var occurrence = new ProcessOperationOccurrence(new(new(occurrenceId + "/" + fixture.OrderId), new("attempt/1")),
+            new("activation"), new("token"), new("invoke"), occurrence: 0);
+        var input = PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(Unit.Value));
+        var decision = TransitionReferenceInterpreter.DecideFullState(plan, occurrence.Activation, input,
+            PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(before.Entity.Observation.Fields)));
+        var candidate = TransitionStateProjector.ApplyToEntity(fixture.Orders.EntityDefinition, fixture.OrderId, decision, before.Entity);
+        var request = new EntityTransitionOperationRequest(occurrence, new("aspire-first", FulfillmentStoragePolicy.LocalPartition),
+            plan.DefinitionReference, new(new(fixture.Orders.EntityType), before.Entity.EntityId), input);
+        return new(request, new(candidate.Snapshot, before.ConcurrencyToken), decision.Kind,
+            ProcessOperationResult.Completed(decision.Outcome!), decision.GuaranteeDemands, decision.Evidence);
+    }
+
     [Fact]
     public void Host_profile_omits_cancellation_rather_than_weakening_durable_cuts()
     {
@@ -298,22 +393,39 @@ public sealed class CancellationIntegrationTests
         internal IServicePersistence Persistence = null!;
         internal readonly InMemoryProcessDurableStore Store = new();
         PreparedServiceProcess? prepared;
+        IDocumentStore? historyStore;
+        PostgresEntityHistoryStorage? historyStorage;
+        string? historySchema;
         internal string ExtraReservationId { get; } = Guid.NewGuid().ToString("D");
         IEntityRepository<Order> orders = null!;
+        internal IEntityRepository<Order> Orders => orders;
         IEntityRepository<InventoryItem> inventory = null!;
         IEntityRepository<Reservation> reservations = null!;
-        internal static async Task<Fixture> Create(OrderStatus status = OrderStatus.Submitted, bool extraReservation = false, bool alreadyReleased = false)
+        internal static async Task<Fixture> Create(OrderStatus status = OrderStatus.Submitted, bool extraReservation = false, bool alreadyReleased = false, EntityStateAuthority? historyAuthority = null)
         {
             var fixture = new Fixture();
             await fixture.Model.Storage.Bindings.PrepareSchemaAsync(fixture.Database);
             var receipts = new PostgresTransitionReceiptOptions("public", "cohesive_process_receipts", FulfillmentStoragePolicy.LocalPartition);
             await using (var command = fixture.Database.CreateCommand(receipts.SchemaSql)) await command.ExecuteNonQueryAsync();
             var receiptStorage = await receipts.BindAsync(fixture.Database);
+            if (historyAuthority is { } authority)
+            {
+                fixture.historySchema = "receipt_history_" + Guid.NewGuid().ToString("N");
+                fixture.historyStore = DocumentStore.For(options =>
+                {
+                    options.Connection(fixture.Database);
+                    options.DatabaseSchemaName = fixture.historySchema;
+                    options.Events.DatabaseSchemaName = fixture.historySchema;
+                    options.UseCohesiveEntityHistory();
+                });
+                await fixture.historyStore.Storage.ApplyAllConfiguredChangesToDatabaseAsync();
+                fixture.historyStorage = await MartenEntityHistoryStorage.BindAsync(fixture.Database, fixture.historyStore, authority);
+            }
             var persistence = fixture.Model.Storage.Bindings.Bind(fixture.Database, authority: "test/cancellation");
             fixture.Persistence = persistence.ForServices(receiptStorage);
-            fixture.orders = persistence.Repository(fixture.Model.Domain.Orders, transitionReceipts: receiptStorage);
-            fixture.inventory = persistence.Repository(fixture.Model.Domain.Inventory, transitionReceipts: receiptStorage);
-            fixture.reservations = persistence.Repository(fixture.Model.Domain.Reservations, transitionReceipts: receiptStorage);
+            fixture.orders = persistence.Repository(fixture.Model.Domain.Orders, transitionReceipts: receiptStorage, stateHistory: fixture.historyStorage);
+            fixture.inventory = persistence.Repository(fixture.Model.Domain.Inventory, transitionReceipts: receiptStorage, stateHistory: fixture.historyStorage);
+            fixture.reservations = persistence.Repository(fixture.Model.Domain.Reservations, transitionReceipts: receiptStorage, stateHistory: fixture.historyStorage);
             await fixture.orders.Upsert(fixture.Context, new Order(fixture.OrderId, FulfillmentStoragePolicy.LocalPartition, status));
             await fixture.inventory.Upsert(fixture.Context, new InventoryItem(fixture.Sku, FulfillmentStoragePolicy.LocalPartition, 3));
             await fixture.reservations.Upsert(fixture.Context, new Reservation(fixture.OrderId, FulfillmentStoragePolicy.LocalPartition, fixture.OrderId, fixture.Sku, 2, alreadyReleased));
@@ -362,6 +474,15 @@ public sealed class CancellationIntegrationTests
                 .Single(value => value.Kind == ObservationValueKind.Array).Array
                 .Select(row => row.GetProperty("id").GetRequiredString()).ToArray();
         }
+        internal async Task<long?> OrderHistoryPosition()
+        {
+            if (historyStorage is null) return null;
+            await using var connection = await Database.OpenConnectionAsync();
+            await using var transaction = await connection.BeginTransactionAsync();
+            return (await historyStorage.ReadAsync(orders.EntityDefinition, transaction, orders.EntityType,
+                FulfillmentStoragePolicy.LocalPartition, OrderId, FulfillmentDomain.PartitionField,
+                latestOnly: true, CancellationToken.None))?.Position;
+        }
         internal async Task<Order> Order() => (await orders.TryGetEntity(Context, OrderId, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))!;
         internal async Task<InventoryItem> Inventory() => (await inventory.TryGetEntity(Context, Sku, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))!;
         internal async Task<Reservation> Reservation() => (await reservations.TryGetEntity(Context, OrderId, new(partitionKey: FulfillmentStoragePolicy.LocalPartition)))!;
@@ -377,6 +498,12 @@ public sealed class CancellationIntegrationTests
                 command.Parameters.AddWithValue(OrderId);
                 command.Parameters.AddWithValue(Sku);
                 await command.ExecuteNonQueryAsync();
+            }
+            historyStore?.Dispose();
+            if (historySchema is not null)
+            {
+                await using var cleanup = Database.CreateCommand($"DROP SCHEMA {PostgresSqlDialect.Identifier(historySchema)} CASCADE");
+                await cleanup.ExecuteNonQueryAsync();
             }
             await Database.DisposeAsync();
         }

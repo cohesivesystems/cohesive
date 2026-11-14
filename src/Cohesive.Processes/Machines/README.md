@@ -59,8 +59,9 @@ The source receipt is attribution, not a grant to mutate a load.
 
 The instance/command/idempotency identities derive from the exact policy reference and source
 receipt/node identity by default. `.OncePerSourceEntity()` instead binds one occurrence to the exact
-policy, authority and source entity identity; conflicting second occurrences fail admission. `.After`
-requires that scope so a missing prerequisite can be addressed before its receipt arrives. Duplicate
+policy, authority and source entity identity; conflicting second occurrences fail admission.
+`.OncePerEpisode(...)` additionally scopes that occurrence to a typed source episode key. `.After`
+inherits either scope so a missing prerequisite can be addressed before its receipt arrives. Duplicate
 deliveries prepare the same intent. `ProcessStartRequest.Causation`
 retains portable origin evidence independently of domain input, so
 `MachineReactionInvocation.Restore(policy, checkpoint.Start.Request)` can reconstruct inspection
@@ -119,3 +120,27 @@ The storage host also exposes `InspectLifecycleAsync` and `AbandonAsync`. Abando
 Process cancellation and retains its revision, reason and command receipt; it never clears target evidence.
 `MachineReactionRecovery.InspectDependentsAsync` provides bounded, authorized history inspection separately
 from pending recovery. See [operator lifecycle](../../../eng/examples/tender-acceptance/lifecycle.md).
+
+For repeated business cycles, `.OncePerEpisode(source => source.Episode)` selects a typed required
+source field. `.After(prerequisite)` inherits its selector and waits for the same entity and episode.
+The key is derived from committed/retained source facts, never current state. Correlation does not
+replace target guards. See [two tender cycles](../../../eng/examples/tender-acceptance/episodes.md)
+for supported key types, identity rules, stale confirmation and deployment boundaries.
+
+## Registration analysis
+
+`MachineReactionAnalysis.Analyze([acceptance, confirmation])` checks a closed set for one authority.
+It returns existing structured `DocumentValidationResult` diagnostics in deterministic order:
+duplicate exact registrations, ambiguous Process routes and missing exact prerequisites are errors. A similarly named revision,
+or a policy with another episode selector, cannot substitute for the pinned prerequisite. The policy
+constructor already checks source/identity compatibility. `MachineReactionRecovery` now runs this
+analysis per authority at registration, so a worker cannot silently omit a required predecessor.
+
+The current prerequisite language embeds finite, immutable predecessor documents. A true exact-reference
+cycle cannot be authored. Repeating a logical definition ID across different pinned revisions receives
+a warning, not a false deadlock error. Analysis does not decide guard satisfiability, prove eventual
+completion, or assume that every pending reaction must succeed.
+
+For executable evidence, the optional [simulation integration](../../Cohesive.Simulation.Transitions/README.md)
+interprets bounded schedules through the existing hosts. The [two-cycle tender scenario](../../../eng/examples/tender-acceptance/TenderEpisodeScenarios.cs)
+is the first consumer.

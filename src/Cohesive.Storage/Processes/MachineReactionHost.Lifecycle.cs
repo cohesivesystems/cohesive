@@ -8,8 +8,9 @@ namespace Cohesive.Storage.Processes;
 /// <param name="Progress">Target evidence, physical attempts and prerequisite identity.</param>
 /// <param name="Control">Canonical Process lifecycle, revision and attributable command receipts.</param>
 /// <param name="PrerequisiteProgress">Current authorized prerequisite evidence, or null if absent or independent.</param>
+/// <param name="Episode">Typed episode identity from the retained source snapshot, or null for non-episode policies.</param>
 public sealed record MachineReactionInspection(ProcessInstanceId Instance, MachineReactionProgress Progress,
-    ProcessControlState Control, MachineReactionProgress? PrerequisiteProgress);
+    ProcessControlState Control, MachineReactionProgress? PrerequisiteProgress, PortableValue? Episode = null);
 
 public sealed partial class MachineReactionHost
 {
@@ -17,7 +18,7 @@ public sealed partial class MachineReactionHost
     {
         if (prerequisite is null) return null;
         var invocation = MachineReactionInvocation.Restore(Policy, start);
-        return MachineReactionInvocation.InstanceFor(prerequisite.Policy, invocation.Source, invocation.MovementNode);
+        return invocation.PrerequisiteInstance(prerequisite.Policy);
     }
 
     /// <summary>Explains a reaction and its immediate prerequisite without executing either target.</summary>
@@ -39,19 +40,21 @@ public sealed partial class MachineReactionHost
     internal async Task<MachineReactionInspection> InspectLifecycleSnapshotAsync(OperationContext context, ProcessDurableStoreSnapshot snapshot)
     {
         await AuthorizeRecoveryAsync(context, snapshot).ConfigureAwait(false);
-        var progress = await InspectOwnSnapshot(context, snapshot).ConfigureAwait(false);
+        var invocation = MachineReactionInvocation.Restore(Policy, snapshot.Checkpoint.Start.Request);
+        var progress = await InspectOwnSnapshot(context, snapshot, invocation).ConfigureAwait(false);
         MachineReactionProgress? dependency = null;
         if (prerequisite is not null && progress.Prerequisite is { } required)
         {
             dependency = await ReadPrerequisiteAsync(context, required).ConfigureAwait(false);
-            if (RequiresPrerequisiteEvidence(snapshot, progress))
+            if (RequiresPrerequisiteEvidence(snapshot, progress, invocation))
             {
                 var disposition = PrerequisiteDisposition(required, dependency);
                 if (disposition.Status != MachineReactionStatus.Completed)
                     progress = disposition with { Attempts = progress.Attempts, Prerequisite = required };
             }
         }
-        return new(snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId, progress, snapshot.Checkpoint.Control, dependency);
+        return new(snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId, progress, snapshot.Checkpoint.Control, dependency,
+            invocation.Episode);
     }
 
     /// <summary>Abandons future reaction execution using canonical cooperative Process cancellation.</summary>

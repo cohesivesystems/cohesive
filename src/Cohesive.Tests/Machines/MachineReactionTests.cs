@@ -24,6 +24,38 @@ public sealed class MachineReactionTests
         Assert.True(restored.Compile().IsSuccessful);
     }
 
+    // Deliberately exercises the retained v1 wire format independently of the semantic identity model.
+    internal static ExecutionDefinitionDocument Persist(MachineReaction policy, MachineReactionPayload payload) =>
+        ExecutionDefinitionDocument.Create(MachineReaction.Kind, policy.Document.Metadata.DefinitionId,
+            policy.Document.Metadata.RevisionId, new LegacyPayload(payload.Source, payload.Movement, payload.Target, payload.Process,
+                payload.Identity switch
+                {
+                    MachineReactionIdentity.Occurrence => null,
+                    MachineReactionIdentity.Entity => "SourceEntity",
+                    MachineReactionIdentity.Episode => "SourceEpisode",
+                    _ => throw new InvalidOperationException()
+                }, payload.Prerequisite, (payload.Identity as MachineReactionIdentity.Episode)?.Key), policy.Document.Metadata.Provenance);
+
+    sealed record LegacyPayload(Shape Source, ExecutionNodeId Movement, ExecutionDefinitionDocument Target, ExecutionDefinitionDocument Process,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] string? IdentityScope,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] ExecutionDefinitionDocument? Prerequisite,
+        [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)] FieldPath? EpisodeKey);
+
+    [Theory]
+    [InlineData("SourceEpisode", false)]
+    [InlineData("SourceEntity", true)]
+    [InlineData("unknown", false)]
+    public void Malformed_legacy_identity_is_rejected_at_the_persistence_boundary(string scope, bool includeKey)
+    {
+        var policy = new TenderReactionModel().PendingAcceptance;
+        var payload = policy.Payload;
+        var invalid = new LegacyPayload(payload.Source, payload.Movement, payload.Target, payload.Process,
+            scope, payload.Prerequisite, includeKey ? FieldPath.FromField("LoadId") : null);
+        var document = ExecutionDefinitionDocument.Create(MachineReaction.Kind, policy.Document.Metadata.DefinitionId,
+            policy.Document.Metadata.RevisionId, invalid, policy.Document.Metadata.Provenance);
+        Assert.Throws<System.Text.Json.JsonException>(() => MachineReaction.Deserialize(ExecutionDefinitionJsonSerializer.Serialize(document)));
+    }
+
     [Theory]
     [InlineData(true, MachineReactionStatus.Completed)]
     [InlineData(false, MachineReactionStatus.Rejected)]
@@ -107,8 +139,7 @@ public sealed class MachineReactionTests
         var policy = model.PendingAcceptance;
         var payload = invalidMovement ? policy.Payload with { Movement = new("missing") }
             : policy.Payload with { Target = model.Confirm.Document };
-        var document = ExecutionDefinitionDocument.Create(MachineReaction.Kind,
-            policy.Document.Metadata.DefinitionId, policy.Document.Metadata.RevisionId, payload, policy.Document.Metadata.Provenance);
+        var document = Persist(policy, payload);
         Assert.Throws<InvalidOperationException>(() => MachineReaction.Deserialize(ExecutionDefinitionJsonSerializer.Serialize(document)));
     }
 

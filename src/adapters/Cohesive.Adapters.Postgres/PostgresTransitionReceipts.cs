@@ -6,6 +6,8 @@ using Cohesive.Model;
 using Cohesive.Model.Serialization;
 using Cohesive.Storage;
 using Cohesive.Storage.Processes;
+using Cohesive.Transitions.IR;
+using Cohesive.Transitions.Model;
 using Npgsql;
 
 namespace Cohesive.Adapters.Postgres;
@@ -141,7 +143,9 @@ public sealed partial class PostgresEntityRepository
     /// <returns>Committed/replayed receipt or structured identity, presence, or concurrency conflict.</returns>
     /// <remarks>No automatic retries. Cancellation or a connection failure during COMMIT is ambiguous;
     /// resolve the exact operation before deciding whether to retry. Receipt retention is explicit and must
-    /// outlive supported retries. Does not deliver emissions or create an outbox.</remarks>
+    /// outlive supported retries. Rejected and NoChange outcomes lock and validate the existing authority,
+    /// retain its concurrency token, and append only the receipt; they do not update state or append history.
+    /// Does not deliver emissions or create an outbox.</remarks>
     /// <exception cref="ArgumentException">Entity, partition, or write evidence is invalid.</exception>
     /// <exception cref="NotSupportedException">Receipt support is not configured or encoding is unsupported.</exception>
     /// <exception cref="InvalidOperationException">Retained evidence is corrupt or exceeds its bound.</exception>
@@ -172,7 +176,12 @@ public sealed partial class PostgresEntityRepository
         await Lock("subject/" + commit.Request.Subject.EntityId.Value).ConfigureAwait(false);
         var creation = commit.SubjectCondition == EntityTransitionSubjectCondition.MustBeAbsent;
         EntitySnapshot snapshot;
-        try { snapshot = await UpsertCore(context, connection, transaction, commit.Write, createOnly: creation).ConfigureAwait(false); }
+        try
+        {
+            snapshot = commit.DecisionKind == TransitionDecisionKind.Applied
+                ? await UpsertCore(context, connection, transaction, commit.Write, createOnly: creation).ConfigureAwait(false)
+                : await RetainUnchangedSubject(context, connection, transaction, commit.Write).ConfigureAwait(false);
+        }
         catch (ObservationConcurrencyConflictException)
         {
             return EntityTransitionCommitProtocol.Conflict(commit);
@@ -199,6 +208,38 @@ public sealed partial class PostgresEntityRepository
             Add(command, receipts!.Table + "/" + EntityType + "/" + receipts.PartitionKey + "/" + key);
             await command.ExecuteNonQueryAsync(context.CancellationToken).ConfigureAwait(false);
         }
+    }
+
+    // A rejection or NoChange still needs an atomic concurrency check, but must not manufacture
+    // an entity update (xmin, history, triggers or CDC) that can invalidate another operation.
+    async Task<EntitySnapshot> RetainUnchangedSubject(OperationContext context, NpgsqlConnection connection,
+        NpgsqlTransaction transaction, EntityWriteRequest write)
+    {
+        var id = write.Entity.EntityId.Value;
+        var partition = GetPartitionKey(write.Entity);
+        if (history is not null)
+            await LockHistorySubject(context, connection, transaction, partition, id).ConfigureAwait(false);
+        EntitySnapshot? snapshot;
+        if (history?.Authority == EntityStateAuthority.Events)
+        {
+            var action = await Reconstitute(context, connection, transaction, partition, id).ConfigureAwait(false);
+            snapshot = action is null ? null : new(action.State, partition, StreamToken(action.Position));
+        }
+        else
+        {
+            var template = sql.LockByIdentityAndPartition;
+            await using var command = new NpgsqlCommand(template.Text, connection, transaction);
+            AddReadParameters(command, template, id, partition);
+            await using var reader = await command.ExecuteReaderAsync(context.CancellationToken).ConfigureAwait(false);
+            snapshot = await reader.ReadAsync(context.CancellationToken).ConfigureAwait(false) ? ReadSnapshot(reader, selectedFields: null) : null;
+            if (snapshot is not null && await reader.ReadAsync(context.CancellationToken).ConfigureAwait(false))
+                throw new InvalidOperationException("A partitioned entity identity matched multiple rows.");
+        }
+        if (snapshot is null || snapshot.ConcurrencyToken != write.ExpectedConcurrencyToken)
+            throw new ObservationConcurrencyConflictException("The unchanged entity no longer matches its concurrency fence.");
+        if (snapshot.Entity != write.Entity)
+            throw new ArgumentException("A rejected or NoChange transition cannot alter the authoritative entity.", nameof(write));
+        return snapshot;
     }
 
     string ReceiptSelect(string projection, bool creation) =>

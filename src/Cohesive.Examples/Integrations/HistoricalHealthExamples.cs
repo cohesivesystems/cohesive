@@ -20,7 +20,7 @@ public sealed partial class HistoricalQualificationExamples
     public async Task HealthyHistoricalSourceDoesNotImplyAcceptedCoverage(int sessions)
     {
         var fixture = new ProcessFixture(sessions);
-        var control = new InMemoryIntegrationLifecycle(fixture.Address, (_, actor) => actor == Operator);
+        var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(fixture.Address, (_, actor) => actor == Operator).Receipt;
         var bound = control.Bind(fixture.Compilation);
         control.Change(new("activate", 0, IntegrationDesiredState.Active, Operator, At));
         var admission = control.Admit(new(bound, Session, 1, Operator, At)).Receipt;
@@ -84,7 +84,7 @@ public sealed partial class HistoricalQualificationExamples
             Assert.Equal(actual.Sha256, publication.ContentFingerprint);
             accepted = [.. JsonSerializer.Deserialize<DailyBar[]>(bytes)!.Select(b => DateOnly.FromDateTime(b.Date.UtcDateTime))];
         }
-        return new(view, fixture.Coverage, accepted, publication, await fixture.Ledger.ReadAsync(fixture.Address, default));
+        return new(view, fixture.RequestedScope, fixture.Coverage, accepted, publication, await fixture.Ledger.ReadAsync(fixture.Address, default));
     }
 
     sealed class HistoricalInspectionClock : TimeProvider
@@ -95,6 +95,6 @@ public sealed partial class HistoricalQualificationExamples
     }
 
     // Coverage stays domain-owned. Operational health cannot assert the publication contract on its behalf.
-    sealed record HistoricalInspection(IntegrationInspection Integration, CoverageEvidence? SourceCoverage,
+    sealed record HistoricalInspection(IntegrationInspection Integration, HistoricalCoverageScope RequestedScope, CoverageEvidence? SourceCoverage,
         ImmutableArray<DateOnly> AcceptedSessions, IngestionPublicationReceipt? Publication, IngestionLedgerEntry? SourceProgress);
 }
