@@ -244,7 +244,7 @@ public sealed class MachineReactionEpisodeTests
     internal sealed class Fixture
     {
         internal TenderEpisodeModel Model { get; } = new();
-        internal OperationContext Context { get; } = OperationContext.Create();
+        internal OperationContext Context { get; init; } = OperationContext.Create();
         internal InteractionAuthorityScope Authority { get; init; } = new("tests", "test");
         internal IProcessDurableStore Store = new InMemoryProcessDurableStore();
         internal InMemoryEntityOutboxRepository Tenders = null!;
@@ -254,9 +254,9 @@ public sealed class MachineReactionEpisodeTests
         int operation;
         internal string OperationPrefix = "source";
 
-        internal static async Task<Fixture> Create(int loadEpisode = 1, InteractionAuthorityScope? authority = null)
+        internal static async Task<Fixture> Create(int loadEpisode = 1, InteractionAuthorityScope? authority = null, TimeProvider? timeProvider = null)
         {
-            var f = new Fixture { Authority = authority ?? new("tests", "test") };
+            var f = new Fixture { Authority = authority ?? new("tests", "test"), Context = OperationContext.Create(timeProvider: timeProvider) };
             f.Tenders = new(f.Model.Tender, EntityPartitionKeyPolicy.Fixed("test"));
             f.Loads = new(f.Model.Load, EntityPartitionKeyPolicy.Fixed("test"));
             await f.Tenders.Upsert(f.Context, new(f.Model.Tender.CreateState("tender-1",

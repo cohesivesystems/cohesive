@@ -126,3 +126,21 @@ source field. `.After(prerequisite)` inherits its selector and waits for the sam
 The key is derived from committed/retained source facts, never current state. Correlation does not
 replace target guards. See [two tender cycles](../../../eng/examples/tender-acceptance/episodes.md)
 for supported key types, identity rules, stale confirmation and deployment boundaries.
+
+## Registration analysis
+
+`MachineReactionAnalysis.Analyze([acceptance, confirmation])` checks a closed set for one authority.
+It returns existing structured `DocumentValidationResult` diagnostics in deterministic order:
+duplicate exact registrations, ambiguous Process routes and missing exact prerequisites are errors. A similarly named revision,
+or a policy with another episode selector, cannot substitute for the pinned prerequisite. The policy
+constructor already checks source/identity compatibility. `MachineReactionRecovery` now runs this
+analysis per authority at registration, so a worker cannot silently omit a required predecessor.
+
+The current prerequisite language embeds finite, immutable predecessor documents. A true exact-reference
+cycle cannot be authored. Repeating a logical definition ID across different pinned revisions receives
+a warning, not a false deadlock error. Analysis does not decide guard satisfiability, prove eventual
+completion, or assume that every pending reaction must succeed.
+
+For executable evidence, the optional [simulation integration](../../Cohesive.Simulation.Transitions/README.md)
+interprets bounded schedules through the existing hosts. The [two-cycle tender scenario](../../../eng/examples/tender-acceptance/TenderEpisodeScenarios.cs)
+is the first consumer.

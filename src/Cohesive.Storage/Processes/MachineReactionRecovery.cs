@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using Cohesive.Execution;
+using Cohesive.Processes.Machines;
 
 namespace Cohesive.Storage.Processes;
 
@@ -24,7 +25,7 @@ public sealed class MachineReactionRecovery
     /// <param name="source">Store used by every host; it must also implement IProcessInstanceSource.</param>
     /// <param name="hosts">Hosts indexed by exact Process reference and authority; registration is copied.</param>
     /// <exception cref="ArgumentNullException">An argument or host is null.</exception>
-    /// <exception cref="ArgumentException">Discovery is unsupported, a host uses a different store instance, or a registration is duplicated, or a host has no recovery policy.</exception>
+    /// <exception cref="ArgumentException">Discovery is unsupported, a host uses a different store instance, or a registration is duplicated, a host has no recovery policy, or its exact prerequisite is not registered for the same authority.</exception>
     public MachineReactionRecovery(IProcessDurableStore source, IReadOnlyList<MachineReactionHost> hosts)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -41,6 +42,12 @@ public sealed class MachineReactionRecovery
                 throw new ArgumentException("Recovery hosts must share the supplied Process store instance.", nameof(hosts));
             if (!this.hosts.TryAdd((host.Policy.Payload.Process.Reference, host.Authority), host))
                 throw new ArgumentException("A reaction Process revision and authority may have only one recovery host.", nameof(hosts));
+        }
+        foreach (var authority in this.hosts.Values.GroupBy(host => host.Authority))
+        {
+            var analysis = MachineReactionAnalysis.Analyze(authority.Select(host => host.Policy));
+            if (!analysis.IsValid)
+                throw new ArgumentException(string.Join("; ", analysis.Diagnostics.Select(d => $"{d.Code}: {d.Message}")), nameof(hosts));
         }
     }
 
