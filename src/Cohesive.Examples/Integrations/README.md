@@ -215,3 +215,22 @@ separate ledger positions. The example exports JSON through the shared wire opti
 [OPERATOR-RUNBOOK.md](OPERATOR-RUNBOOK.md) gives the run command and recovery/action boundaries.
 Group observations bracket the asynchronous reads without claiming an atomic multi-store snapshot.
 The view remains private to the example until a real host establishes a reusable boundary.
+
+[HistoricalCatchUpExamples.cs](HistoricalCatchUpExamples.cs), tracked in
+[#542](https://github.com/cohesivesystems/cohesive/issues/542), is a single-dispatcher catch-up experiment
+over the existing synthetic September 1–2 calendar. Each invocation reads accepted ledger progress and
+admits at most one one-day window. A missed trigger does not become a skipped date: the next invocation
+starts at the previous accepted range's end. Once the explicit horizon is reached, repeated ticks have
+no new effects. Current lifecycle state is checked before selection and fenced again at admission;
+qualification, dispatch policy, coverage and ledger checks retain their existing authority.
+
+An unresolved admission stops subsequent ticks before another fetch. This includes a known coverage
+failure: a later tick cannot treat that failure as permission to retry or skip ahead. Use the operator
+runbook's evidence-based reconciliation/resolution path; new attempts after resolution are deliberately
+not modeled by this example. Admission replay also cannot authorize execution again.
+
+The tick has no persisted timer occurrence or process-local cursor. The ledger owns progress, while
+consumer admission owns unresolved work. Reads across them are not transactional, and the pending check
+is not a claim: concurrent dispatchers require additional ownership/fencing. This is not a production
+scheduler, restart-durability proof, arbitrary trading-calendar planner, correction policy or completion
+of the Ito-dependent acceptance gate. No new public API is introduced.
