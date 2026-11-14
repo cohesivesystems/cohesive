@@ -7,6 +7,7 @@ namespace Cohesive.Examples.Integrations;
 
 public sealed partial class HistoricalQualificationExamples
 {
+    static readonly ProcessAttemptId InitialCatchUpAttempt = new("attempt/1");
     /// <summary>Missed triggers catch up from confirmed progress one bounded window per tick.</summary>
     /// <returns>Completes after two windows, with repeated up-to-date ticks producing no new effects.</returns>
     [Fact]
@@ -15,7 +16,7 @@ public sealed partial class HistoricalQualificationExamples
         var destination = new HistoricalDestination();
         var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(ForwardConsumer, (_, actor) => actor == Operator).Receipt;
         control.Change(new("active", 0, IntegrationDesiredState.Active, Operator, At));
-        var first = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1);
+        var first = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1, InitialCatchUpAttempt);
         Assert.Equal(CatchUpDisposition.CompletedWindow, first.Disposition);
         Assert.Equal(new DateOnly(2026, 9, 1), first.Worker!.RequestedScope.StartDate);
         Assert.Single(destination.AcceptedDates);
@@ -23,7 +24,7 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Equal(1, firstEntry!.Revision);
 
         // The next invocation has no local cursor or remembered timer occurrence.
-        var second = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1);
+        var second = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1, InitialCatchUpAttempt);
         Assert.Equal(CatchUpDisposition.CompletedWindow, second.Disposition);
         Assert.Equal(new DateOnly(2026, 9, 2), second.Worker!.RequestedScope.StartDate);
         Assert.Equal(2, destination.AcceptedDates.Length);
@@ -32,7 +33,7 @@ public sealed partial class HistoricalQualificationExamples
         Assert.Equal(new IngestionDateRangePosition(new(2026, 9, 2), new(2026, 9, 3)), finalEntry.Position);
         for (var repeat = 0; repeat < 2; repeat++)
         {
-            var current = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1);
+            var current = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1, InitialCatchUpAttempt);
             Assert.Equal(CatchUpDisposition.UpToDate, current.Disposition);
             Assert.Null(current.Worker);
         }
@@ -53,12 +54,12 @@ public sealed partial class HistoricalQualificationExamples
         var destination = new HistoricalDestination();
         var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(ForwardConsumer, (_, _) => true).Receipt;
         control.Change(new("active", 0, IntegrationDesiredState.Active, Operator, At));
-        var failed = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 0);
+        var failed = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 0, InitialCatchUpAttempt);
         Assert.Equal(CatchUpDisposition.Unresolved, failed.Disposition);
         Assert.Single(control.Inspect().Pending);
         Assert.Single(failed.Worker!.Coverage!.MissingSessions);
         Assert.Null(await destination.Ledger.ReadAsync(ForwardConsumer, default));
-        var next = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1);
+        var next = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1, InitialCatchUpAttempt);
         Assert.Equal(CatchUpDisposition.Unresolved, next.Disposition);
         Assert.Null(next.Worker);
         Assert.Empty(destination.AcceptedDates);
@@ -73,12 +74,12 @@ public sealed partial class HistoricalQualificationExamples
     {
         var destination = new HistoricalDestination();
         var control = new InMemoryIntegrationLifecycleScope().CreateConsumer(ForwardConsumer, (_, _) => true).Receipt;
-        var paused = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1);
+        var paused = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1, InitialCatchUpAttempt);
         Assert.Equal(CatchUpDisposition.AdmissionStopped, paused.Disposition);
         Assert.Null(paused.Worker);
         Assert.Null(await destination.Ledger.ReadAsync(ForwardConsumer, default));
         control.Change(new("resume", 0, IntegrationDesiredState.Active, Operator, At));
-        var resumed = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1);
+        var resumed = await CatchUpOneHistoricalWindow(destination, control, returnedSessions: 1, InitialCatchUpAttempt);
         Assert.Equal(CatchUpDisposition.CompletedWindow, resumed.Disposition);
         Assert.Equal(new DateOnly(2026, 9, 1), resumed.Worker!.RequestedScope.StartDate);
     }
@@ -87,7 +88,7 @@ public sealed partial class HistoricalQualificationExamples
     // No wall clock, timer occurrence, provider response, or process-local cursor owns progress.
     // Pending inspection is not a reservation: concurrent dispatchers need durable claims/fencing.
     static async Task<CatchUpTick> CatchUpOneHistoricalWindow(HistoricalDestination destination,
-        InMemoryIntegrationLifecycle control, int returnedSessions)
+        InMemoryIntegrationLifecycle control, int returnedSessions, ProcessAttemptId attempt)
     {
         var lifecycle = control.Inspect();
         if (!lifecycle.Pending.IsEmpty) return new(CatchUpDisposition.Unresolved);
@@ -100,17 +101,20 @@ public sealed partial class HistoricalQualificationExamples
         var candidate = QualifyLocalHistorical(SingleSession(start), ForwardConsumer);
         var worker = new ProcessFixture(new FixtureSetup(candidate.Compilation!, returnedSessions,
             destination, ExpectedLedgerRevision: current?.Revision ?? 0));
-        var session = new ProcessContinuationIdentity(new($"catch-up/{start:yyyy-MM-dd}"), new("attempt/1"));
+        var session = new ProcessContinuationIdentity(new($"catch-up/{start:yyyy-MM-dd}"), attempt);
         var admitted = control.Admit(new(control.Bind(worker.Compilation), session, lifecycle.Revision, Operator, At));
         // A lifecycle change between inspection and admission must not be silently treated as permission.
-        Assert.Equal(IntegrationAdmissionOutcome.Applied, admitted.Outcome);
+        if (admitted.Outcome != IntegrationAdmissionOutcome.Applied)
+            return new(CatchUpDisposition.AdmissionRejected, worker, admitted);
         var decision = await RunHistorical(worker, session);
         if (decision.Disposition != ProcessActivationDisposition.Completed)
-            return new(CatchUpDisposition.Unresolved, worker);
+            return new(CatchUpDisposition.Unresolved, worker, admitted, decision);
         Assert.True(control.Complete(new(admitted.Receipt, decision, Operator)).IsAccepted);
-        return new(CatchUpDisposition.CompletedWindow, worker);
+        return new(CatchUpDisposition.CompletedWindow, worker, admitted, decision);
     }
 
-    enum CatchUpDisposition { CompletedWindow, UpToDate, AdmissionStopped, Unresolved }
-    sealed record CatchUpTick(CatchUpDisposition Disposition, ProcessFixture? Worker = null);
+    enum CatchUpDisposition { CompletedWindow, UpToDate, AdmissionStopped, AdmissionRejected, Unresolved }
+    sealed record CatchUpTick(CatchUpDisposition Disposition, ProcessFixture? Worker = null,
+        IntegrationLifecycleResult<IntegrationAdmissionOutcome, IntegrationAdmission>? Admission = null,
+        ProcessActivationDecision? Decision = null);
 }
