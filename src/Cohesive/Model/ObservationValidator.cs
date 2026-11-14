@@ -7,7 +7,7 @@ using System.Text;
 namespace Cohesive.Model;
 
 /// <summary>Validates identity-free observation fields against shape semantics.</summary>
-public static class ObservationValidator
+public static partial class ObservationValidator
 {
     const int MaxValidationDepth = 64;
     const int DirectLiteralCount = 8;
@@ -218,7 +218,8 @@ public static class ObservationValidator
             if (!TryValidateFieldValue(in values[ordinal], layout.GetFieldDefinition(ordinal), graph, ref diagnostics))
                 return false;
 
-        return true;
+        return TryValidateConstraints(new ConstraintValues(values, default, layout),
+            graph.GetShape(layout.ShapeId).Constraints, ref diagnostics);
     }
 
     static bool TryValidateRoot<TDiagnostics>(
@@ -256,6 +257,8 @@ public static class ObservationValidator
             var ordinal = ordinalsByShapeFieldIndex[fieldIndex];
             if (ordinal < 0 || !HasValue(hasValueBitMask, ordinal))
             {
+                if (!TryValidateConstraints(default, field.Constraints, ref diagnostics, field.Name.Value))
+                    return false;
                 if (field.Presence != FieldPresence.Required)
                     continue;
 
@@ -270,7 +273,7 @@ public static class ObservationValidator
             diagnostics.Pop();
         }
 
-        return true;
+        return TryValidateConstraints(new ConstraintValues(valuesByOrdinal, hasValueBitMask, layout), shape.Constraints, ref diagnostics);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -333,6 +336,8 @@ public static class ObservationValidator
         {
             if (!fields.TryGetValue(field.Name.Value, out var value))
             {
+                if (!TryValidateConstraints(default, field.Constraints, ref diagnostics, field.Name.Value))
+                    return false;
                 if (field.Presence != FieldPresence.Required)
                     continue;
 
@@ -346,7 +351,7 @@ public static class ObservationValidator
             diagnostics.Pop();
         }
 
-        return true;
+        return TryValidateConstraints(new ConstraintValues(fields, shape), shape.Constraints, ref diagnostics);
     }
 
     static string? FindUnknownField(IReadOnlyDictionary<string, ObservationValue> fields, Shape shape)
@@ -370,6 +375,8 @@ public static class ObservationValidator
         ObservationValidationPlan? plan = null)
         where TDiagnostics : IValidationDiagnostics
     {
+        if (!TryValidateConstraints(value, field.Constraints, ref diagnostics))
+            return false;
         if (!TryValidatePortableKind(value, ref diagnostics))
             return false;
 
@@ -619,6 +626,8 @@ public static class ObservationValidator
             var childPlan = plan?.Child(index, field.Type);
             if (!lookup.TryGet(index, field.Name.Value, out var fieldValue))
             {
+                if (!TryValidateConstraints(default, field.Constraints, ref diagnostics, field.Name.Value))
+                    return false;
                 if (field.Presence != FieldPresence.Required)
                     continue;
                 diagnostics.PushField(field.Name.Value);
@@ -628,6 +637,8 @@ public static class ObservationValidator
             }
 
             diagnostics.PushField(field.Name.Value);
+            if (!TryValidateConstraints(fieldValue, field.Constraints, ref diagnostics))
+                return false;
             if (!TryValidateObjectField(
                     fieldValue,
                     field.Type,
@@ -642,7 +653,7 @@ public static class ObservationValidator
             }
             diagnostics.Pop();
         }
-        return true;
+        return TryValidateConstraints(new ConstraintValues(value, structural), structural.Constraints, ref diagnostics);
     }
 
     static bool TryValidateObjectField<TDiagnostics>(
@@ -1371,6 +1382,8 @@ public static class ObservationValidator
 
         public bool RequiresFailureDetails => true;
         public string? Error { get; private set; }
+        public string? Code { get; private set; }
+        public string? Location { get; private set; }
         public void PushField(string fieldName) => path.Add(new(PathKind.Field, fieldName));
         public void PushElement(int index) => path.Add(new(PathKind.Element, index: index));
         public void Pop() => path.RemoveAt(path.Count - 1);
@@ -1380,9 +1393,12 @@ public static class ObservationValidator
             if (Error is not null)
                 return;
 
+            Code = failure.Code == ErrorCode.ConstraintViolation ? failure.Name : "observation." + failure.Code;
+            Location = FormatJsonPath();
             var context = FormatContext();
             Error = failure.Code switch
             {
+                ErrorCode.ConstraintViolation => $"{context}: {failure.Name} ({failure.Detail}).",
                 ErrorCode.RootMustBeObject =>
                     "An observation must be a concrete, present, non-null object value.",
                 ErrorCode.UndefinedValue =>
@@ -1517,6 +1533,7 @@ public static class ObservationValidator
 
     enum ErrorCode
     {
+        ConstraintViolation,
         RootMustBeObject,
         UndefinedValue,
         NonFiniteNumber,

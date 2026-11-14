@@ -180,6 +180,11 @@ public static class PortableExecutionValidator
                 return;
             }
 
+            if (value.Contract.Constraints is { } constraints
+                && value.State is PortableValueState.Concrete or PortableValueState.Null or PortableValueState.Missing or PortableValueState.Absent
+                && !ConstraintSemantics.IsSatisfied(value.Value ?? (value.State == PortableValueState.Null ? ObservationValue.Null : default), constraints))
+                Error("constraint.violation", "The value violates its portable constraints.", Child(location, "value"));
+
             switch (value.State)
             {
                 case PortableValueState.Missing:
@@ -243,6 +248,8 @@ public static class PortableExecutionValidator
                     $"Value nullability '{(int)contract.Nullability}' is not recognized.",
                     Child(location, "nullability"));
             }
+
+            if (contract.Constraints is { } constraints) ValidateConstraints(constraints, Child(location, "constraints"));
 
             if (contract.Type is { } type)
                 ValidateType(type, Child(location, "type"));
@@ -1249,12 +1256,19 @@ public static class PortableExecutionValidator
             if (value.Kind != ObservationValueKind.Object || value.Fields is null)
                 return Compatibility.Incompatible;
 
+            foreach (var constraint in structural.Constraints)
+                if (ConstraintSemantics.Target(constraint) is { } target
+                    && (target.Segments.Length != 1 || target.Segments[0].Kind != SegmentKind.Field
+                        || !structural.TryGetField(target.Segments[0].Segment!, out _))) return Compatibility.Incompatible;
+            if (!ConstraintSemantics.IsSatisfied(value, structural.Constraints)) return Compatibility.Incompatible;
             var result = Compatibility.Compatible;
             foreach (var field in structural.Fields)
             {
                 if (field is null || field.Type is null)
                     return Compatibility.Unresolved;
-                if (!value.Fields.TryGetValue(field.Name.Value, out var fieldValue))
+                var present = value.Fields.TryGetValue(field.Name.Value, out var fieldValue);
+                if (!ConstraintSemantics.IsSatisfied(fieldValue, field.Constraints)) return Compatibility.Incompatible;
+                if (!present)
                 {
                     if (field.Presence == FieldPresence.Required)
                         return Compatibility.Incompatible;
@@ -1311,12 +1325,19 @@ public static class PortableExecutionValidator
             if (value.Kind != ObservationValueKind.Object || value.Fields is null)
                 return Compatibility.Incompatible;
 
+            foreach (var constraint in shape.Constraints)
+                if (ConstraintSemantics.Target(constraint) is { } target
+                    && (target.Segments.Length != 1 || target.Segments[0].Kind != SegmentKind.Field
+                        || !shape.TryGetField(target.Segments[0].Segment!, out _))) return Compatibility.Incompatible;
+            if (!ConstraintSemantics.IsSatisfied(value, shape.Constraints)) return Compatibility.Incompatible;
             var result = Compatibility.Compatible;
             foreach (var field in shape.Fields)
             {
                 if (field is null || field.Type is null)
                     return Compatibility.Unresolved;
-                if (!value.Fields.TryGetValue(field.Name.Value, out var fieldValue))
+                var present = value.Fields.TryGetValue(field.Name.Value, out var fieldValue);
+                if (!ConstraintSemantics.IsSatisfied(fieldValue, field.Constraints)) return Compatibility.Incompatible;
+                if (!present)
                 {
                     if (field.Presence == FieldPresence.Required)
                         return Compatibility.Incompatible;

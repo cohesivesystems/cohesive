@@ -25,7 +25,8 @@ public sealed class CanonicalTransitionAuthoringTests
     [
         new(nameof(ReviewEntity.Status), StringContract.Type!),
         new(nameof(ReviewEntity.Eligible), BooleanContract.Type!)
-    ]));
+    ]), constraints: [new RequiredConstraint(FieldPath.FromField(nameof(ReviewEntity.Status))),
+        new RequiredConstraint(FieldPath.FromField(nameof(ReviewEntity.Eligible)))]);
 
     [Fact]
     public void TypedCSharpAuthoring_LowersToEquivalentDirectCanonicalIrDeterministically()

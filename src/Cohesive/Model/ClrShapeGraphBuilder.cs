@@ -63,6 +63,11 @@ public sealed class ClrShapeGraphBuilder
         return this;
     }
 
+    /// <summary>Enables explicit projection of supported DataAnnotations validation attributes.</summary>
+    /// <returns>This builder, using portable required/min/max length constraints.</returns>
+    /// <remarks>String lengths count UTF-16 code units. Unsupported validation attributes fail at build time.</remarks>
+    public ClrShapeGraphBuilder UseDataAnnotations() => AddMetadataProvider(DataAnnotationsShapeMetadataProvider.Instance);
+
     /// <summary>
     /// Adds a CLR metadata provider used while deriving shapes, named types, and fields.
     /// </summary>
@@ -941,6 +946,7 @@ public sealed class ClrShapeGraphBuilder
             }
         }
 
+        ConstraintSemantics.RequireConsistent(metadata.Constraints);
         return metadata;
     }
 

@@ -2412,7 +2412,8 @@ public static class TransitionStaticCompiler
                 identity,
                 contract.Cardinality,
                 contract.Presence,
-                contract.Nullability);
+                contract.Nullability, constraints: contract.Cardinality == FieldCardinality.Many
+                    ? contract.Constraints : (resolved.Constraints ?? []).AddRange(contract.Constraints ?? []));
         }
 
         static ImmutableArray<ExprScopeParameter> CreateParameters(ValueContract input)
