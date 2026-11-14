@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using Cohesive.Model.Serialization;
 
 namespace Cohesive.Model;
@@ -12,6 +13,8 @@ public static partial class ObservationValidator
     /// <returns>Structural and constraint admission result, before application side effects.</returns>
     /// <exception cref="ArgumentNullException">Shapes is null.</exception>
     /// <exception cref="InvalidOperationException">The input type is not registered.</exception>
+    [RequiresUnreferencedCode("Typed projection requires preserved CLR members. Use portable ObservationValue admission in trimmed applications.")]
+    [RequiresDynamicCode("Typed projection may compile CLR projection delegates. Use portable ObservationValue admission with an authored graph for NativeAOT.")]
     public static DocumentValidationResult ValidateInput<T>(T input, ClrShapeGraphBuildResult shapes) where T : notnull
     {
         ArgumentNullException.ThrowIfNull(shapes);

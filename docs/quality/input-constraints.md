@@ -44,9 +44,12 @@ callback survives in the graph.
 
 Length is neither UTF-8 byte count nor grapheme count: 32 supplementary Unicode
 characters occupy 64 UTF-16 code units. Portable byte arrays count bytes as items.
-The attribute provider accepts strings, bytes, and CLR contracts that both map to
-arrays and have an enumerable JSON representation. Dictionaries and property
-converters are rejected during authoring; object entry counts are not implemented.
+The attribute provider accepts native countable CLR values whose final composed
+field contract supports string, array, or byte length. The builder checks the
+resolved type/cardinality after all metadata overrides. When a JSON metadata
+provider is configured, its frozen options and resolver govern representation
+checks; no independent default serializer or type mapper is consulted. Dictionaries and property/type/configured
+converters that cannot preserve native length are rejected during authoring; object entry counts are not implemented.
 Arbitrary Count-shaped CLR objects are outside this subset.
 
 Explicit `RequiredConstraint` retains its presence/non-null meaning; its new
@@ -74,6 +77,10 @@ shape. Nested target paths and wildcard quantification are unsupported in this
 initial subset. Targets use canonical declared names; input value lookup uses
 exact spelling first, then ordinal-ignore-case fallback, shared by all constraint
 checks. This does not relax surrounding shape admission's canonical-key rules.
+`ID` is not a declared target for a field named `id`, consistently for shapes,
+named structural types, and object type references. Missing optional targets
+use allocation-free traversal for built-in storage; case-insensitive fallback
+still scans fields and remains O(n), without caching absent-value evidence.
 Other constraint kinds fail admission with
 `constraint.unsupported`; unsupported paths use `constraint.unsupportedTarget`.
 They are not silently treated as implemented rules.
@@ -104,3 +111,21 @@ before request-ID retention, capacity checks, and workflow execution. Its
 qualification must cover both single and batch submissions. The typed API projects
 the record on every call and therefore allocates; the portable-value validation
 benchmark measures only admission of an already projected value.
+
+## Trimming and NativeAOT boundary
+
+Attribute discovery is reflection-based authoring, not a trimming-safe runtime
+feature. `UseDataAnnotations` and provider acquisition carry
+`RequiresUnreferencedCode`. Build and persist the graph before trimming, or
+explicitly preserve the authoring members and attributes. `ValidateInput<T>`
+also advertises trimming/runtime-code-generation requirements from CLR projection.
+The portable `ObservationValue` overload avoids that projection step. This PR
+includes a generated-JSON-metadata test, not whole-SDK NativeAOT certification.
+
+## Message identity design
+
+The current persisted identity policy above remains unchanged in this PR. Prefer
+host-owned/localized display text. A follow-up semantic-identity design should
+exclude constraint messages while retaining them as document metadata, covering
+equality, deduplication, and the versioned fingerprint projection together.
+Changing only equality here would leave fingerprint and equality inconsistent.

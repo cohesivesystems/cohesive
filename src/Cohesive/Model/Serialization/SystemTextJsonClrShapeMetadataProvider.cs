@@ -109,6 +109,21 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
         };
     }
 
+    // Use this provider's frozen options, including resolver and converter configuration, never defaults.
+    internal bool HasNativeLengthProjection(PropertyInfo property)
+    {
+        var owner = options.GetTypeInfo(property.DeclaringType!);
+        var member = owner.Properties.FirstOrDefault(candidate => candidate.AttributeProvider is PropertyInfo info
+            && ShapeTypeInspector.IsSameProperty(info, property));
+        member ??= owner.Properties.FirstOrDefault(candidate => candidate.Name == ResolveJsonPropertyName(property));
+        if (member is null || member.CustomConverter is not null) return false;
+        var projected = options.GetTypeInfo(property.PropertyType);
+        // Arbitrary converters do not promise that CLR lengths survive their wire transformation.
+        if (projected.Converter.GetType().Assembly != typeof(JsonSerializer).Assembly) return false;
+        return property.PropertyType == typeof(string) || property.PropertyType == typeof(byte[])
+            || projected.Kind == JsonTypeInfoKind.Enumerable;
+    }
+
     ClrShapeMetadata GetFieldMetadata(ClrShapeMetadataContext context)
     {
         var property = context.Property

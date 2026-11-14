@@ -102,14 +102,32 @@ internal static class ConstraintSemantics
     internal static bool TryGetField(IReadOnlyDictionary<string, ObservationValue> fields, string name, out ObservationValue value)
     {
         if (fields.TryGetValue(name, out value)) return true;
-        foreach (var field in fields)
-            if (string.Equals(field.Key, name, StringComparison.OrdinalIgnoreCase))
+        var lookup = new CaseInsensitiveLookup(name);
+        ObservationFieldTraversal.Visit(fields, ref lookup);
+        value = lookup.Value;
+        return lookup.Found;
+    }
+
+    // Preserve exact-first fallback without boxing built-in storage enumerators or caching input state.
+    struct CaseInsensitiveLookup(string name) : IObservationFieldVisitor
+    {
+        internal bool Found;
+        internal ObservationValue Value;
+        public void Visit<TEnumerator>(TEnumerator fields, bool canonical)
+            where TEnumerator : IEnumerator<KeyValuePair<string, ObservationValue>>
+        {
+            try
             {
-                value = field.Value;
-                return true;
+                while (fields.MoveNext())
+                    if (string.Equals(fields.Current.Key, name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Value = fields.Current.Value;
+                        Found = true;
+                        return;
+                    }
             }
-        value = default;
-        return false;
+            finally { fields.Dispose(); }
+        }
     }
 
     internal static ShapeConstraint At(ShapeConstraint constraint, FieldPath target) => constraint switch

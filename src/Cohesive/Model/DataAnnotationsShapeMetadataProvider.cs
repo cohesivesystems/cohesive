@@ -1,9 +1,9 @@
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
+using System.Reflection;
+using Cohesive.Model.Serialization;
 using System.ComponentModel.DataAnnotations;
-using System.Text.Json;
 using System.Text.Json.Serialization;
-using System.Text.Json.Serialization.Metadata;
-using Cohesive.Model.Authoring;
 
 namespace Cohesive.Model;
 
@@ -12,7 +12,11 @@ namespace Cohesive.Model;
 public sealed class DataAnnotationsShapeMetadataProvider : IClrShapeMetadataProvider
 {
     /// <summary>Stateless shared provider.</summary>
-    public static DataAnnotationsShapeMetadataProvider Instance { get; } = new();
+    public static DataAnnotationsShapeMetadataProvider Instance
+    {
+        [RequiresUnreferencedCode("CLR attribute authoring requires preserved properties and validation attributes. Build and serialize the graph before trimming.")]
+        get;
+    } = new();
     DataAnnotationsShapeMetadataProvider() { }
 
     /// <summary>Projects supported property attributes without changing unrelated metadata.</summary>
@@ -38,10 +42,17 @@ public sealed class DataAnnotationsShapeMetadataProvider : IClrShapeMetadataProv
             if (attribute is MinLengthAttribute or MaxLengthAttribute)
             {
                 var type = context.ClrType;
-                var arrayProjection = JsonSerializerOptions.Default.GetTypeInfo(type).Kind == JsonTypeInfoKind.Enumerable
-                    && new DefaultClrTypeRefMapper().Map(type, null) is ArrayTypeRef;
-                if (context.AttributeProvider.IsDefined(typeof(JsonConverterAttribute), inherit: true)
-                    || (type != typeof(string) && type != typeof(byte[]) && !arrayProjection))
+                var interfaces = type.GetInterfaces();
+                var dictionary = typeof(System.Collections.IDictionary).IsAssignableFrom(type)
+                    || interfaces.Append(type).Any(static candidate => candidate.IsGenericType
+                        && (candidate.GetGenericTypeDefinition() == typeof(IDictionary<,>)
+                            || candidate.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>)));
+                var countable = type == typeof(string) || type.IsArray
+                    || typeof(System.Collections.ICollection).IsAssignableFrom(type)
+                    || interfaces.Append(type).Any(static candidate => candidate.IsGenericType
+                        && candidate.GetGenericTypeDefinition() == typeof(ICollection<>));
+                if (!countable || dictionary || context.AttributeProvider.IsDefined(typeof(JsonConverterAttribute), inherit: true)
+                    || type.IsDefined(typeof(JsonConverterAttribute), inherit: true))
                     throw new NotSupportedException($"constraint.lengthType: {type.Name} does not project to a supported string, array, or bytes value.");
             }
             if (attribute.GetType() == typeof(RequiredAttribute))
@@ -72,6 +83,17 @@ public sealed class DataAnnotationsShapeMetadataProvider : IClrShapeMetadataProv
             Presence = required ? FieldPresence.Required : null,
             Nullability = required ? FieldNullability.NonNullable : null
         };
+    }
+
+    // Invoked after the builder has composed every provider and resolved the field's actual portable type.
+    internal void ValidateProjection(PropertyInfo property, TypeRef type, FieldCardinality cardinality,
+        SystemTextJsonClrShapeMetadataProvider? jsonProfile)
+    {
+        if (!property.IsDefined(typeof(MinLengthAttribute), true) && !property.IsDefined(typeof(MaxLengthAttribute), true)) return;
+        if (!(cardinality == FieldCardinality.Many || type is ArrayTypeRef
+                || type is ScalarTypeRef { Kind: ScalarTypeKind.String or ScalarTypeKind.Bytes })
+            || jsonProfile?.HasNativeLengthProjection(property) == false)
+            throw new NotSupportedException($"constraint.lengthType: {property.DeclaringType?.Name}.{property.Name} does not have a supported effective string/array/bytes projection.");
     }
 
     static NotSupportedException Unsupported(ValidationAttribute attribute, ClrShapeMetadataContext context) =>
