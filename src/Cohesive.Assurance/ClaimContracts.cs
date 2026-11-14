@@ -81,6 +81,20 @@ public sealed record ClaimReference
             fingerprint.ToCanonicalString());
     }
 
+    /// <summary>References one semantic node inside an exact execution definition.</summary>
+    /// <param name="reference">Owning definition identity, revision and fingerprint.</param>
+    /// <param name="node">Stable node identity inside that definition.</param>
+    /// <returns>A node-qualified reference retaining the owning definition's exact fingerprint.</returns>
+    /// <exception cref="ArgumentNullException">Reference is null.</exception>
+    /// <exception cref="ArgumentException">Node identity is uninitialized.</exception>
+    public static ClaimReference FromExecution(ExecutionDefinitionReference reference, ExecutionNodeId node)
+    {
+        var definition = FromExecution(reference);
+        if (string.IsNullOrWhiteSpace(node.Value)) throw new ArgumentException("An exact node identity is required.", nameof(node));
+        return new(new SourceReference(definition.Source.Value + "/nodes/" + Uri.EscapeDataString(node.Value)),
+            definition.Revision, definition.Fingerprint);
+    }
+
     internal static IComparer<ClaimReference> CanonicalComparer { get; } = Comparer<ClaimReference>.Create((left, right) =>
     {
         var order = StringComparer.Ordinal.Compare(left.Source.Value, right.Source.Value);

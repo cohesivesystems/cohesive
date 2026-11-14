@@ -173,3 +173,7 @@ semantics as trace evaluation and introduces no Simulation or solver dependency.
 For articles and tests, [fixture reference scopes](../../docs/assurance/fixture-references.md)
 provide a source-only `FixtureReferences` helper to copy or link into the example project, with
 an automatically collected immutable reference catalog. This helper is not shipped in the library. Its references identify fixture prose, not compiled domain definitions.
+
+The optional [Transition admission binding](../Cohesive.Transitions.Assurance/README.md) derives
+finite-check guards from actual transition preconditions, retaining exact revisions and node sources.
+The faulty/repaired integration test checks the same IR that the transition interpreter executes.

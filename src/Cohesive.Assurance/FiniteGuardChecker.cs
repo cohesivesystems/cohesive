@@ -113,12 +113,12 @@ public sealed class FiniteGuardCheckResult
             Status == AssuranceAttemptStatus.Unsupported ? InterpretationSupport.Unsupported : InterpretationSupport.Supported,
             Status, Verdict == ClaimVerdict.Satisfied && NonVacuity != ClaimVerdict.Satisfied ? ClaimVerdict.Inconclusive : Verdict,
             EvidenceCoverage.RestrictedScope, dependenciesComplete: true,
-            dependencies: [Plan.Source], residuals: [planReference], artifacts: [planReference, resultReference]);
+            dependencies: [Plan.Source, .. Plan.GuardSources.Select(x => x.Source)], residuals: [planReference], artifacts: [planReference, resultReference]);
     }
 
     sealed record Retained(string Schema, ClaimReference Method, FiniteGuardCheckDocument Plan, int MaxMembers, AssuranceAttemptStatus Status,
         ClaimVerdict Verdict, int Visited, int? EnabledWitnessIndex, int? CounterexampleIndex, string? Diagnostic);
-    Retained Payload() => new("cohesive-assurance-finite-result/v1", FiniteGuardChecker.Method, Plan, MaxMembers, Status, Verdict, Visited, EnabledWitnessIndex, CounterexampleIndex, Diagnostic);
+    Retained Payload() => new("cohesive-assurance-finite-result/v2", FiniteGuardChecker.Method, Plan, MaxMembers, Status, Verdict, Visited, EnabledWitnessIndex, CounterexampleIndex, Diagnostic);
 
     /// <summary>Retains exact inputs, bounds, witnesses and outcome for independent checking.</summary>
     /// <returns>Canonical result JSON.</returns>

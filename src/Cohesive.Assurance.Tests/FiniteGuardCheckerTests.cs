@@ -85,6 +85,60 @@ public sealed class FiniteGuardCheckerTests
     }
 
     [Fact]
+    public void StructuralGuardSourceMatchesTypedLoweringAndRetainsProvenanceThroughAssumptions()
+    {
+        var (claim, input) = Contract();
+        var source = R("guard-source");
+        var declaration = FiniteGuardCheck.Define(claim, input, Domain, source, R("finite-config"));
+        var typed = declaration.When(q => q.OriginalResolved).Build();
+        var structural = declaration.When(Expr.Field(input.Id, "OriginalResolved"), [new("/guard", source)]).Build();
+        Assert.Equal(typed.Serialize(), structural.Serialize());
+        Assert.Equal(typed.Reference(), structural.Reference());
+
+        var otherSource = R("transition-node");
+        var attributed = declaration.When(typed.Guard, [new("/guard", otherSource)])
+            .Assuming(q => q.RemainingBlockers >= 0).Build();
+        Assert.True(attributed.GuardSources.SequenceEqual(FiniteGuardCheckDocument.Deserialize(attributed.Serialize()).GuardSources));
+        Assert.Contains(otherSource, FiniteGuardChecker.Check(attributed).ToEvidence().Dependencies);
+        Assert.NotEqual(typed.Reference(), attributed.Reference());
+        Assert.Throws<ArgumentException>(() => declaration.When(typed.Guard, []));
+        Assert.Throws<ArgumentException>(() => declaration.When(typed.Guard, [new("/members", source)]));
+        var missing = JsonNode.Parse(attributed.Serialize())!.AsObject();
+        missing.Remove("guardSources");
+        Assert.Throws<JsonException>(() => FiniteGuardCheckDocument.Deserialize(missing.ToJsonString()));
+        var oldSchema = attributed.Serialize().Replace("cohesive-assurance-finite-guard/v2", "cohesive-assurance-finite-guard/v1");
+        Assert.Throws<JsonException>(() => FiniteGuardCheckDocument.Deserialize(oldSchema));
+    }
+
+    [Fact]
+    public void GuardSourcesIdentifyRealNodesAndPreserveAllContributors()
+    {
+        var (claim, input) = Contract();
+        var source = R("source");
+        var other = R("other");
+        var declaration = FiniteGuardCheck.Define(claim, input, Domain, source, R("config"));
+        var guard = declaration.When(q => q.OriginalResolved && q.RemainingBlockers == 0).Build().Guard;
+        var plan = declaration.When(guard,
+            [new("/guard", source), new("/guard", other), new("/guard", source),
+             new("/guard/left", source), new("/guard/right/left", other)]).Build();
+        Assert.Equal(4, plan.GuardSources.Length);
+        Assert.Equal(2, plan.GuardSources.Count(x => x.Path == "/guard"));
+        Assert.True(plan.GuardSources.SequenceEqual(FiniteGuardCheckDocument.Deserialize(plan.Serialize()).GuardSources));
+        foreach (var path in new[] { "/guard/missing", "/guard/left/right", "/guard/right/operator", "/guard/" })
+        {
+            var error = Assert.Throws<ArgumentException>(() => declaration.When(guard, [new(path, source)]));
+            Assert.Equal("sources", error.ParamName);
+            Assert.Contains(path, error.Message);
+        }
+        var invalid = plan.Serialize().Replace("/guard/right/left", "/guard/right/missing");
+        Assert.Throws<JsonException>(() => FiniteGuardCheckDocument.Deserialize(invalid));
+        var result = FiniteGuardChecker.Check(plan);
+        Assert.Equal(result.Serialize(), FiniteGuardCheckResult.Recheck(result.Serialize()).Serialize());
+        Assert.Throws<JsonException>(() => FiniteGuardCheckResult.Recheck(result.Serialize()
+            .Replace("cohesive-assurance-finite-result/v2", "cohesive-assurance-finite-result/v1")));
+    }
+
+    [Fact]
     public void MemberBudgetNeverTurnsAnIncompleteSearchIntoSuccess()
     {
         var result = FiniteGuardChecker.Check(Plan(repaired: true).Build(), maxMembers: 4);
