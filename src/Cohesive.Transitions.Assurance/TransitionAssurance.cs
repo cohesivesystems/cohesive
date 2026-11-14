@@ -56,9 +56,7 @@ public static class TransitionAssurance
         var input = contract.Inputs[0];
         var observation = definition.Observation;
         if (input.Id != before.Binding.Id || input.Contract.Type != before.Binding.Type
-            || input.Contract.Type != observation.Type || input.Contract.Cardinality != observation.Cardinality
-            || input.Contract.Presence != observation.Presence || input.Contract.Nullability != observation.Nullability
-            || input.Contract.Shape != observation.Shape)
+            || !input.Contract.Equals(observation))
             throw new ArgumentException("Claim pre-state must match the transition's complete observation contract.", nameof(before));
 
         var rules = definition.Preconditions;

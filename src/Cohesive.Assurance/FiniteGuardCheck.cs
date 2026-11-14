@@ -61,14 +61,15 @@ public static class FiniteGuardCheck
 
         /// <summary>Authors a portable guard supplied by another semantic producer with exact source mappings.</summary>
         /// <param name="guard">Structural predicate source over this declaration's input; no host callbacks are accepted.</param>
-        /// <param name="sources">Nonempty mappings under /guard to exact source artifacts; retained as evidence dependencies.</param>
+        /// <param name="sources">Nonempty mappings to expression nodes rooted at /guard; multiple sources per path are retained as evidence dependencies.</param>
         /// <returns>Source ready for optional assumptions and validated lowering.</returns>
         /// <exception cref="ArgumentNullException">Guard is null.</exception>
-        /// <exception cref="ArgumentException">Source mappings are missing or invalid when built.</exception>
+        /// <exception cref="ArgumentException">Source mappings are missing or do not identify expression nodes in the supplied guard.</exception>
         public Source<T> When(Expr guard, ImmutableArray<ClaimSourceLocation> sources)
         {
             ArgumentNullException.ThrowIfNull(guard);
-            return new(claim, input, members, source, configuration, guard, Expr.Const(true), sources);
+            return new(claim, input, members, source, configuration, guard, Expr.Const(true),
+                FiniteGuardCheckDocument.NormalizeGuardSources(guard, sources));
         }
     }
 
@@ -143,11 +144,7 @@ public sealed class FiniteGuardCheckDocument
         }
         Claim = claim; Members = members; Guard = guard; Assumptions = assumptions;
         Source = source; Configuration = configuration;
-        if (guardSources.IsDefaultOrEmpty || guardSources.Any(x => x is null || x.Source is null
-            || (x.Path != "/guard" && !(x.Path?.StartsWith("/guard/", StringComparison.Ordinal) ?? false))))
-            throw new ArgumentException("Guard source mappings must identify exact artifacts at /guard or its descendants.", nameof(guardSources));
-        GuardSources = [.. guardSources.Distinct().OrderBy(x => x.Path, StringComparer.Ordinal)
-            .ThenBy(x => x.Source, ClaimReference.CanonicalComparer)];
+        GuardSources = NormalizeGuardSources(guard, guardSources);
     }
 
     /// <summary>Versioned finite-check profile and wire format.</summary>
@@ -169,6 +166,8 @@ public sealed class FiniteGuardCheckDocument
     /// <summary>Exact lowering and checker configuration.</summary>
     public ClaimReference Configuration { get; }
     /// <summary>Guard expression locations mapped to exact source artifacts, including referenced execution nodes.</summary>
+    /// <remarks>A path may have multiple contributors (for example transition, binding profile, and rule).
+    /// Consumers must group by path; only identical path/source pairs are deduplicated.</remarks>
     public ImmutableArray<ClaimSourceLocation> GuardSources { get; }
     /// <summary>Stable source locations for the derived plan, separate from the claim's source map.</summary>
     [JsonIgnore]
@@ -198,6 +197,54 @@ public sealed class FiniteGuardCheckDocument
     /// <exception cref="NotSupportedException">A retained representation is unsupported.</exception>
     public ClaimReference Reference() => new(Source.Source, Source.Revision,
         Convert.ToHexString(StrictDocumentJson.ComputeCanonicalSha256(this, Options)));
+
+    // Validate both authoring and restoration against actual expression nodes, not merely a prefix.
+    internal static ImmutableArray<ClaimSourceLocation> NormalizeGuardSources(
+        Expr guard, ImmutableArray<ClaimSourceLocation> sources)
+    {
+        if (sources.IsDefaultOrEmpty)
+            throw new ArgumentException("Guard source mappings must not be empty.", nameof(sources));
+        HashSet<string> paths = new(StringComparer.Ordinal);
+        Stack<(Expr Expression, string Path)> pending = new();
+        pending.Push((guard, "/guard"));
+        while (pending.TryPop(out var node))
+        {
+            paths.Add(node.Path);
+            switch (node.Expression)
+            {
+                case UnaryExpr unary:
+                    pending.Push((unary.Operand, node.Path + "/operand"));
+                    break;
+                case BinaryExpr binary:
+                    pending.Push((binary.Left, node.Path + "/left"));
+                    pending.Push((binary.Right, node.Path + "/right"));
+                    break;
+                case ConditionalExpr conditional:
+                    pending.Push((conditional.Test, node.Path + "/test"));
+                    pending.Push((conditional.IfTrue, node.Path + "/ifTrue"));
+                    pending.Push((conditional.IfFalse, node.Path + "/ifFalse"));
+                    break;
+                case CallExpr call:
+                    AddItems(call.Arguments, node.Path + "/arguments");
+                    break;
+                case AggregateExpr aggregate:
+                    pending.Push((aggregate.Source, node.Path + "/source"));
+                    AddItems(aggregate.GroupBy, node.Path + "/groupBy");
+                    break;
+            }
+        }
+        foreach (var source in sources)
+            if (source is null || source.Source is null || !paths.Contains(source.Path))
+                throw new ArgumentException($"Guard source path '{source?.Path}' must identify an expression node under /guard.", nameof(sources));
+        return [.. sources.Distinct().OrderBy(x => x.Path, StringComparer.Ordinal)
+            .ThenBy(x => x.Source, ClaimReference.CanonicalComparer)];
+
+        void AddItems(ImmutableArray<Expr> items, string path)
+        {
+            for (var i = 0; i < items.Length; i++)
+                pending.Push((items[i], path + "/" + i.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
+    }
 
     internal static void ValidateProfile(ClaimDocument claim)
     {

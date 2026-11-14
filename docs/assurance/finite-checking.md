@@ -191,4 +191,9 @@ transition bridge; it does not expose direct plan construction. Both surfaces lo
 source to identical artifacts when their expressions and source mappings agree.
 
 V1 plans/results must be regenerated from authoritative source; missing guard provenance is not
-silently inferred during restoration. Finite-result schema v1 still wraps the now-versioned v2 plan.
+silently inferred during restoration. Finite-result schema `cohesive-assurance-finite-result/v2`
+wraps the v2 plan.
+
+Guard source paths identify actual expression nodes and are validated when supplied and when restored.
+A path may have multiple contributors: `/guard` can reference the transition, binding profile, and a
+single admission rule. Consumers group entries by path; only identical path/source pairs are deduplicated.
