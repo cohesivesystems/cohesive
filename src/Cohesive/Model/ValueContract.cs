@@ -51,9 +51,7 @@ public sealed record ValueContract
         if (!declared.IsDefaultOrEmpty)
             foreach (var constraint in declared)
                 if (ConstraintSemantics.Target(constraint) is { } target
-                    && (target.Segments.Length != 1 || target.Segments[0].Kind != SegmentKind.Field
-                        || type is not ObjectTypeRef objectType
-                        || !objectType.Fields.Any(field => field.Name == target.Segments[0].Segment)))
+                    && !ConstraintSemantics.TryResolveTarget(target, out _, objectType: type as ObjectTypeRef))
                     throw new NotSupportedException("constraint.unsupportedTarget: Value contract targets require a declared direct object field.");
         Constraints = declared.IsDefaultOrEmpty ? null : declared;
         Type = type;
@@ -107,7 +105,7 @@ public sealed record ValueContract
     /// </returns>
     public bool IsSatisfiedByConstant(ObservationValue value)
     {
-        if (!ConstraintSemantics.IsSatisfied(value, Constraints ?? [])) return false;
+        if (!ConstraintSemantics.IsSatisfied(value, Constraints ?? [], objectType: Type as ObjectTypeRef)) return false;
         if (value.Kind == ObservationValueKind.Undefined)
             return Presence == FieldPresence.Optional;
         if (value.Kind == ObservationValueKind.Null)
@@ -174,6 +172,18 @@ public sealed record ValueContract
                     nullability: field.Nullability))
             ]),
             shape: qualifiedShape, constraints: ShapeConstraints(shape));
+    }
+
+    // Shape-only contracts are refined once. Single-value constraints compose as a set;
+    // many-valued contracts retain collection rules locally and resolve item rules through Shape.
+    // Keeping Shape is essential: flattening item field paths onto the array changes their meaning.
+    internal ValueContract ResolveShape(ShapeGraph graph)
+    {
+        if (Type is not null || Shape is not { } identity || !graph.TryGetShape(identity, out var shape)) return this;
+        var resolved = FromShape(shape, identity);
+        var constraints = Cardinality == FieldCardinality.Many ? Constraints
+            : (resolved.Constraints ?? []).Union(Constraints ?? []).ToImmutableArray();
+        return new(resolved.Type, identity, Cardinality, Presence, Nullability, constraints);
     }
 
     static ImmutableArray<ShapeConstraint> ShapeConstraints(Shape shape)

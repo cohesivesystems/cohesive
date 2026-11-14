@@ -44,8 +44,10 @@ callback survives in the graph.
 
 Length is neither UTF-8 byte count nor grapheme count: 32 supplementary Unicode
 characters occupy 64 UTF-16 code units. Portable byte arrays count bytes as items.
-The attribute provider accepts strings, arrays, and `ICollection`/`ICollection<T>`
-contracts. Arbitrary enumerable/Count-shaped CLR objects are outside this subset.
+The attribute provider accepts strings, bytes, and CLR contracts that both map to
+arrays and have an enumerable JSON representation. Dictionaries and property
+converters are rejected during authoring; object entry counts are not implemented.
+Arbitrary Count-shaped CLR objects are outside this subset.
 
 Explicit `RequiredConstraint` retains its presence/non-null meaning; its new
 `RejectEmptyStrings` flag defaults to false. The attribute provider sets that flag
@@ -57,7 +59,10 @@ not override an earlier bound. Contradictory min/max bounds for the same target
 are rejected during metadata composition. Unsupported/custom validation
 attributes, resource-based messages, and `IValidatableObject` are rejected during
 model authoring with coded exceptions. Literal error messages remain metadata;
-public error formatting belongs to the host.
+public error formatting belongs to the host. Messages participate in persisted
+constraint identity: changing a constraint's `Message` changes contract equality
+and the enclosing definition fingerprint even when acceptance is unchanged. Keep
+localized/UI wording in host error mapping when it should not version the model.
 
 ## Admission and value contracts
 
@@ -66,7 +71,10 @@ validation use the same required/length evaluator. Constraints on a field apply
 to its whole value, including a many-valued collection. Shape constraints may
 target one declared field. Nested objects enforce constraints on their own named
 shape. Nested target paths and wildcard quantification are unsupported in this
-initial subset. Other constraint kinds fail admission with
+initial subset. Targets use canonical declared names; input value lookup uses
+exact spelling first, then ordinal-ignore-case fallback, shared by all constraint
+checks. This does not relax surrounding shape admission's canonical-key rules.
+Other constraint kinds fail admission with
 `constraint.unsupported`; unsupported paths use `constraint.unsupportedTarget`.
 They are not silently treated as implemented rules.
 
@@ -74,7 +82,9 @@ They are not silently treated as implemented rules.
 constraints and projects direct field constraints to named targets. A field
 constraint with its own relative target is rejected rather than flattened
 incorrectly. Constant checks and portable execution admission enforce retained
-constraints. Named types still require their owning graph for complete admission;
+constraints. Resolving a shape-only contract is idempotent and deduplicates the
+single-value rules. For a many-valued contract, collection rules remain local;
+item rules remain on the retained qualified shape and require the owning graph. Named types still require their owning graph for complete admission;
 `IsSatisfiedByConstant` alone only resolves local semantics. Extracting
 `GetEffectiveType()` is structural inspection, not constraint admission.
 
@@ -85,3 +95,12 @@ serialized contracts that omitted rules cannot retroactively acquire them;
 re-author constrained definitions when upgrading. No automatic host middleware
 or validation-before-side-effects guarantee is implied: call admission at the
 application boundary.
+
+## Integration status
+
+This PR provides the SDK mechanism; it does not yet demonstrate order-submission
+integration. cohesive-evals#42 owns calling typed admission in the shared queue,
+before request-ID retention, capacity checks, and workflow execution. Its
+qualification must cover both single and batch submissions. The typed API projects
+the record on every call and therefore allocates; the portable-value validation
+benchmark measures only admission of an already projected value.

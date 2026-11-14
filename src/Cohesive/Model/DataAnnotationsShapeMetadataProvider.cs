@@ -1,5 +1,9 @@
 using System.Collections.Immutable;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
+using Cohesive.Model.Authoring;
 
 namespace Cohesive.Model;
 
@@ -34,10 +38,11 @@ public sealed class DataAnnotationsShapeMetadataProvider : IClrShapeMetadataProv
             if (attribute is MinLengthAttribute or MaxLengthAttribute)
             {
                 var type = context.ClrType;
-                if (type != typeof(string) && !type.IsArray && !typeof(System.Collections.ICollection).IsAssignableFrom(type)
-                    && !type.GetInterfaces().Append(type).Any(static candidate => candidate.IsGenericType
-                        && candidate.GetGenericTypeDefinition() == typeof(ICollection<>)))
-                    throw new NotSupportedException($"constraint.lengthType: {type.Name} does not have supported string/collection length semantics.");
+                var arrayProjection = JsonSerializerOptions.Default.GetTypeInfo(type).Kind == JsonTypeInfoKind.Enumerable
+                    && new DefaultClrTypeRefMapper().Map(type, null) is ArrayTypeRef;
+                if (context.AttributeProvider.IsDefined(typeof(JsonConverterAttribute), inherit: true)
+                    || (type != typeof(string) && type != typeof(byte[]) && !arrayProjection))
+                    throw new NotSupportedException($"constraint.lengthType: {type.Name} does not project to a supported string, array, or bytes value.");
             }
             if (attribute.GetType() == typeof(RequiredAttribute))
             {

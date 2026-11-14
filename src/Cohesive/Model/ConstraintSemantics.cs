@@ -49,20 +49,67 @@ internal static class ConstraintSemantics
             : (length > bound ? "constraint.maxLength" : null);
     }
 
-    internal static bool IsSatisfied(ObservationValue value, ImmutableArray<ShapeConstraint> constraints)
+    internal readonly record struct Failure(int Index, string Code);
+
+    internal static Failure? Evaluate(ConstraintValues values, ImmutableArray<ShapeConstraint> constraints)
     {
-        if (constraints.IsDefaultOrEmpty) return true;
-        foreach (var constraint in constraints)
+        if (constraints.IsDefaultOrEmpty) return null;
+        for (var index = 0; index < constraints.Length; index++)
         {
-            var candidate = value;
-            if (Target(constraint) is { } path)
-            {
-                if (value.Kind != ObservationValueKind.Object || path.Segments.Length != 1 || path.Segments[0].Kind != SegmentKind.Field) return false;
-                value.TryGetProperty(path.Segments[0].Segment!, out candidate);
-            }
-            if (Check(constraint, candidate) is not null) return false;
+            var constraint = constraints[index];
+            var code = values.TryResolve(Target(constraint), out var candidate)
+                ? Check(constraint, candidate) : "constraint.unsupportedTarget";
+            if (code is not null) return new(index, code);
         }
+        return null;
+    }
+
+    internal static bool IsSatisfied(ObservationValue value, ImmutableArray<ShapeConstraint> constraints,
+        Shape? shape = null, TypeDefinition.Structural? structural = null, ObjectTypeRef? objectType = null) =>
+        Evaluate(new ConstraintValues(value, structural, shape, objectType), constraints) is null;
+
+    // One target grammar and declaration lookup for authoring and every admission representation.
+    // Targets name canonical declared fields. Runtime value lookup is exact-first, ordinal-ignore-case.
+    internal static bool TryResolveTarget(FieldPath? target, out string? name,
+        Shape? shape = null, TypeDefinition.Structural? structural = null, ObjectTypeRef? objectType = null)
+    {
+        name = null;
+        if (target is null) return true;
+        var segments = target.Value.Segments;
+        if (segments.Length != 1 || segments[0].Kind != SegmentKind.Field) return false;
+        name = segments[0].Segment!;
+        if (shape is not null)
+        {
+            if (!shape.TryGetField(name, out var field)) return false;
+            name = field.Name.Value;
+        }
+        else if (structural is not null)
+        {
+            if (!structural.TryGetField(name, out var field)) return false;
+            name = field.Name.Value;
+        }
+        else if (objectType is not null)
+        {
+            var found = false;
+            foreach (var field in objectType.Fields)
+                if (field.Name == name) { found = true; break; }
+            if (!found) return false;
+        }
+        else return false; // A target must belong to a declaration, even when the input happens to contain that key.
         return true;
+    }
+
+    internal static bool TryGetField(IReadOnlyDictionary<string, ObservationValue> fields, string name, out ObservationValue value)
+    {
+        if (fields.TryGetValue(name, out value)) return true;
+        foreach (var field in fields)
+            if (string.Equals(field.Key, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = field.Value;
+                return true;
+            }
+        value = default;
+        return false;
     }
 
     internal static ShapeConstraint At(ShapeConstraint constraint, FieldPath target) => constraint switch
@@ -82,5 +129,48 @@ internal static class ConstraintSemantics
                 if (left is MinLengthConstraint minimum && right is MaxLengthConstraint maximum
                     && minimum.Field == maximum.Field && minimum.Value > maximum.Value)
                     throw new ArgumentException("constraint.conflictingBounds: minimum length exceeds maximum length.");
+    }
+}
+
+// Stack-only representation adapter. Target selection and rule evaluation belong to ConstraintSemantics.
+internal readonly ref struct ConstraintValues
+{
+    readonly ObservationValue root;
+    readonly IReadOnlyDictionary<string, ObservationValue>? fields;
+    readonly ReadOnlySpan<ObservationValue> values;
+    readonly ReadOnlySpan<ulong> presence;
+    readonly ObservationLayout? layout;
+    readonly Shape? shape;
+    readonly TypeDefinition.Structural? structural;
+    readonly ObjectTypeRef? objectType;
+
+    internal ConstraintValues(ObservationValue root, TypeDefinition.Structural? structural = null,
+        Shape? shape = null, ObjectTypeRef? objectType = null)
+    { this.root = root; this.structural = structural; this.shape = shape; this.objectType = objectType; }
+    internal ConstraintValues(IReadOnlyDictionary<string, ObservationValue> fields, Shape shape)
+    { this.fields = fields; this.shape = shape; }
+    internal ConstraintValues(ReadOnlySpan<ObservationValue> values, ReadOnlySpan<ulong> presence, ObservationLayout layout)
+    { this.values = values; this.presence = presence; this.layout = layout; shape = layout.Graph.GetShape(layout.ShapeId); }
+
+    internal bool TryResolve(FieldPath? target, out ObservationValue value)
+    {
+        value = root;
+        if (!ConstraintSemantics.TryResolveTarget(target, out var name, shape, structural, objectType)) return false;
+        if (name is null)
+        {
+            if (fields is not null || layout is not null) value = ObservationValue.EmptyObject;
+            return true;
+        }
+        if (layout is not null)
+        {
+            value = layout.TryGetOrdinal(name, out var ordinal)
+                && (presence.IsEmpty || (presence[ordinal >> 6] & (1UL << (ordinal & 63))) != 0) ? values[ordinal] : default;
+            return true;
+        }
+        var source = fields ?? root.Fields;
+        if (source is null) return false;
+        var present = ConstraintSemantics.TryGetField(source, name, out value);
+        // A missing declared optional member has undefined value. An undeclared target cannot pass a length rule.
+        return present || shape is not null || structural is not null || objectType is not null;
     }
 }

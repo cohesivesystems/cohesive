@@ -2396,25 +2396,7 @@ public static class TransitionStaticCompiler
             return false;
         }
 
-        ValueContract ResolveContract(ValueContract contract)
-        {
-            if (contract.Type is not null
-                || contract.Shape is not { } identity
-                || graph is null
-                || !graph.TryGetShape(identity, out var shape))
-            {
-                return contract;
-            }
-
-            var resolved = ValueContract.FromShape(shape, identity);
-            return new(
-                resolved.Type,
-                identity,
-                contract.Cardinality,
-                contract.Presence,
-                contract.Nullability, constraints: contract.Cardinality == FieldCardinality.Many
-                    ? contract.Constraints : (resolved.Constraints ?? []).AddRange(contract.Constraints ?? []));
-        }
+        ValueContract ResolveContract(ValueContract contract) => graph is null ? contract : contract.ResolveShape(graph);
 
         static ImmutableArray<ExprScopeParameter> CreateParameters(ValueContract input)
         {

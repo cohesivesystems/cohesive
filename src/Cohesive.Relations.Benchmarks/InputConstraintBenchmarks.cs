@@ -15,6 +15,8 @@ public class InputConstraintBenchmarks
     GraphShapeId shape;
     ObservationValue value;
     Type root = null!;
+    object input = null!;
+    ClrShapeGraphBuildResult shapes = null!;
 
     public sealed record Request([property: Required, MaxLength(64)] string RequestId);
     public sealed record Nested(Request Child);
@@ -24,7 +26,7 @@ public class InputConstraintBenchmarks
     public void Setup()
     {
         var request = new Request("request-123");
-        object input = Workload switch
+        input = Workload switch
         {
             "nested" => new Nested(request),
             "collection" => new Collection(Enumerable.Repeat(request, 16).ToArray()),
@@ -32,21 +34,35 @@ public class InputConstraintBenchmarks
             _ => request
         };
         root = input.GetType();
-        shape = Build(); value = ObservationValue.FromObject(input);
+        shapes = Build();
+        shape = new(shapes.Graph, shapes.Graph.Shapes[0].Id); value = ObservationValue.FromObject(input);
         if (!WarmAdmission()) throw new InvalidOperationException("Invalid benchmark fixture.");
     }
 
-    GraphShapeId Build()
+    ClrShapeGraphBuildResult Build()
     {
         var builder = new ClrShapeGraphBuilder();
         if (Constrained) builder.UseDataAnnotations();
-        var graph = builder.AddShape(root).Build();
-        return new(graph, graph.Shapes[0].Id);
+        return builder.AddShape(root).BuildResult();
     }
 
     [Benchmark]
     public bool WarmAdmission() => ObservationValidator.ValidateInput(value, shape).IsValid;
 
+    // Includes record-to-observation materialization on every call; no cached input projection.
     [Benchmark]
-    public bool FreshGraphAdmission() => ObservationValidator.ValidateInput(value, Build()).IsValid;
+    public bool TypedAdmission() => input switch
+    {
+        Request request => ObservationValidator.ValidateInput(request, shapes).IsValid,
+        Nested nested => ObservationValidator.ValidateInput(nested, shapes).IsValid,
+        Collection collection => ObservationValidator.ValidateInput(collection, shapes).IsValid,
+        _ => throw new InvalidOperationException()
+    };
+
+    [Benchmark]
+    public bool FreshGraphAdmission()
+    {
+        var built = Build();
+        return ObservationValidator.ValidateInput(value, new GraphShapeId(built.Graph, built.Graph.Shapes[0].Id)).IsValid;
+    }
 }

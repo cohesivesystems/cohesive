@@ -257,7 +257,7 @@ public static partial class ObservationValidator
             var ordinal = ordinalsByShapeFieldIndex[fieldIndex];
             if (ordinal < 0 || !HasValue(hasValueBitMask, ordinal))
             {
-                if (!TryValidateConstraints(default, field.Constraints, ref diagnostics, field.Name.Value))
+                if (!TryValidateConstraints(default, field.Constraints, ref diagnostics, field.Name.Value, field.Type as ObjectTypeRef))
                     return false;
                 if (field.Presence != FieldPresence.Required)
                     continue;
@@ -336,7 +336,7 @@ public static partial class ObservationValidator
         {
             if (!fields.TryGetValue(field.Name.Value, out var value))
             {
-                if (!TryValidateConstraints(default, field.Constraints, ref diagnostics, field.Name.Value))
+                if (!TryValidateConstraints(default, field.Constraints, ref diagnostics, field.Name.Value, field.Type as ObjectTypeRef))
                     return false;
                 if (field.Presence != FieldPresence.Required)
                     continue;
@@ -375,7 +375,7 @@ public static partial class ObservationValidator
         ObservationValidationPlan? plan = null)
         where TDiagnostics : IValidationDiagnostics
     {
-        if (!TryValidateConstraints(value, field.Constraints, ref diagnostics))
+        if (!TryValidateConstraints(value, field.Constraints, ref diagnostics, objectType: field.Type as ObjectTypeRef))
             return false;
         if (!TryValidatePortableKind(value, ref diagnostics))
             return false;
@@ -626,7 +626,7 @@ public static partial class ObservationValidator
             var childPlan = plan?.Child(index, field.Type);
             if (!lookup.TryGet(index, field.Name.Value, out var fieldValue))
             {
-                if (!TryValidateConstraints(default, field.Constraints, ref diagnostics, field.Name.Value))
+                if (!TryValidateConstraints(default, field.Constraints, ref diagnostics, field.Name.Value, field.Type as ObjectTypeRef))
                     return false;
                 if (field.Presence != FieldPresence.Required)
                     continue;
@@ -637,7 +637,7 @@ public static partial class ObservationValidator
             }
 
             diagnostics.PushField(field.Name.Value);
-            if (!TryValidateConstraints(fieldValue, field.Constraints, ref diagnostics))
+            if (!TryValidateConstraints(fieldValue, field.Constraints, ref diagnostics, objectType: field.Type as ObjectTypeRef))
                 return false;
             if (!TryValidateObjectField(
                     fieldValue,
