@@ -24,19 +24,7 @@ public static class FiniteGuardChecker
     {
         ArgumentNullException.ThrowIfNull(plan);
         if (maxMembers <= 0) throw new ArgumentOutOfRangeException(nameof(maxMembers));
-        PortableExpressionReferenceEvaluator evaluator = new(AssurancePredicates.Capabilities, "finite guard checker");
-        var id = plan.Claim.Definition.Inputs[0].Id;
-        PortableExpressionValue missing = new(PortableValueState.Missing, default);
-        var current = missing;
-        PortableExpressionValue Resolve(ValueBindingId binding) => binding == id ? current : missing;
-        PortableExpressionEvaluationContext context = new()
-        {
-            ResolveBinding = Resolve,
-            ResolveField = (binding, path) => binding is { } value ? Resolve(value).Project(path, missingFieldState: PortableValueState.Missing) : missing,
-            ResolveParameter = _ => missing,
-            MissingFieldState = PortableValueState.Missing
-        };
-        bool Evaluate(Expr expression) => PortableExpressionReferenceEvaluator.RequireBoolean(evaluator.Evaluate(expression, context), "finite guard predicate");
+        FinitePredicateEvaluator evaluator = new(plan);
         int visited = 0;
         int? enabled = null;
         FiniteGuardCheckResult Result(AssuranceAttemptStatus status, ClaimVerdict verdict, int? counterexample = null, string? diagnostic = null) =>
@@ -47,13 +35,13 @@ public static class FiniteGuardChecker
                 return Result(AssuranceAttemptStatus.Cancelled, ClaimVerdict.Inconclusive);
             if (visited == maxMembers)
                 return Result(AssuranceAttemptStatus.BudgetExceeded, ClaimVerdict.Inconclusive);
-            current = PortableExpressionValue.FromObservation(plan.Members[index]);
+            evaluator.SetMember(plan.Members[index]);
             visited++;
             try
             {
-                if (!Evaluate(plan.Assumptions) || !Evaluate(plan.Guard)) continue;
+                if (!evaluator.Evaluate(plan.Assumptions) || !evaluator.Evaluate(plan.Guard)) continue;
                 enabled ??= index;
-                if (!Evaluate(plan.Claim.Definition.Predicate))
+                if (!evaluator.Evaluate(plan.Claim.Definition.Predicate))
                     return Result(AssuranceAttemptStatus.Completed, ClaimVerdict.Violated, index);
             }
             catch (PortableExpressionEvaluationException error)

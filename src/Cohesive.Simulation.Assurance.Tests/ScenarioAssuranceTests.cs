@@ -147,9 +147,16 @@ public sealed class ScenarioAssuranceTests
         Assert.Equal(ClaimVerdict.Violated, check.Verdict);
         var witness = plan.Members[check.CounterexampleIndex!.Value].Deserialize<Driver>()!;
 
+        var repairedPlan = FiniteGuardCheck.Define(claim, input, catalog, R("repaired-guard-source"), R("finite-config"))
+            .When(d => d.RemainingBlockers == 0).Build();
+        var difference = FiniteComparisonResult.Recheck(FiniteComparison.Compare(
+            plan, repairedPlan, FiniteComparisonTarget.Admission).Serialize());
+        var distinguishingState = difference.OldCandidate.Members[difference.NewlyForbiddenIndex!.Value].Deserialize<Driver>()!;
+        Assert.Equal(witness, distinguishingState);
+
         // Domain-specific reconstruction: resolve one original blocker before reactivation.
         // Only initial state and scheduled commands are supplied; the candidate computes every after-state.
-        var (world, shape) = Scenario(new Parameters(Blockers: witness.RemainingBlockers + 1, Noise: 0));
+        var (world, shape) = Scenario(new Parameters(Blockers: distinguishingState.RemainingBlockers + 1, Noise: 0));
         var candidate = new Candidate(shape, yield: true);
         var execution = await ScenarioAssurance.ExecuteAsync(claim, world, candidate,
             Binding() with { OperationId = "reactivate" });

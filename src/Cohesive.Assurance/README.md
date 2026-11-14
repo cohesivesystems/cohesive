@@ -177,3 +177,7 @@ an automatically collected immutable reference catalog. This helper is not shipp
 The optional [Transition admission binding](../Cohesive.Transitions.Assurance/README.md) derives
 finite-check guards from actual transition preconditions, retaining exact revisions and node sources.
 The faulty/repaired integration test checks the same IR that the transition interpreter executes.
+
+[Constructive finite comparison](../../docs/assurance/finite-comparison.md) finds newly permitted
+and newly forbidden rows between pinned admission or requirement candidates, retains both meanings,
+and independently rechecks directional witnesses. Conclusions remain bounded to the shared catalog.
