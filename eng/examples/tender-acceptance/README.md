@@ -74,3 +74,23 @@ and the distinction between replaying uncertain delivery and requesting new busi
 
 [Explicit episodes](episodes.md) extends the sketch with two acceptance cycles, episode-scoped
 prerequisites and target guards that reject late confirmation from an older cycle.
+
+## Reaction analysis and deterministic schedules
+
+`TenderEpisodeScenarios.ConfirmationFirst()` authors the canonical delivery/recovery schedule for two
+acceptance cycles. Its initial environment has already acknowledged acceptance 1 and revised the load
+to episode 2, ready for acceptance. Confirmation 2 arrives first and waits. Replaying acceptance 1
+cannot release it. Acceptance 2 releases its own confirmation; delayed confirmation 1 fails the target
+episode guard. The target adapter loses the first acknowledgement for episode 2 after committing, and
+recovery reuses the same operation identity. Repeated recovery of the completed instance adds no attempt.
+
+`MachineReactionSimulationTests` runs that schedule twice from independently built, fixed-clock native
+in-memory environments and compares the serialized portable traces. It also runs all 24 permutations
+of the four receipts against a load initially ready for episode 2: old acceptance is rejected, its
+confirmation cannot dispatch, and episode 2 converges. A separate schedule abandons acceptance 1 and
+shows that its dependent stays blocked while episode 2 proceeds.
+
+The example's source remains the fluent machines, reactions and scenario builder. The scenario document
+and trace are derived artifacts. Hosts execute the existing canonical Process and Transition definitions;
+the simulation layer only selects the next explicit action and time. Static registration diagnostics
+are covered in `MachineReactionAnalysisTests`. See the [simulation profile and boundaries](../../../src/Cohesive.Simulation.Transitions/README.md).

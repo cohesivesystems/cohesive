@@ -77,4 +77,7 @@
     <ProjectReference Include="../Cohesive.Application/Cohesive.Application.csproj" />
     <ProjectReference Include="../Cohesive.Application.Cli/Cohesive.Application.Cli.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Cohesive.Simulation.Transitions/Cohesive.Simulation.Transitions.csproj" />
+  </ItemGroup>
 </Project>

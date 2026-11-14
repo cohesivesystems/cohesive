@@ -544,3 +544,12 @@ its same-data-source/fenced-receipt boundary remains mandatory. The supplied hos
 and must apply it to every transition repository. The shared cancellation conformance scenarios qualify receipt replay
 and stale-owner rejection; native tests additionally verify root-lock/takeover linearization. The profile does not
 advertise complete Process construct support or arbitrary external-effect fencing.
+
+Native Transition receipts for `AdmissionRejected`, `DomainRejected`, and `NoChange` validate the
+expected concurrency token and exact unchanged candidate under the existing authority lock, then
+retain only the receipt. State authority uses a parameterized `SELECT ... FOR UPDATE`; event authority
+uses its existing history-subject lock and reconstitution. These outcomes preserve the entity token
+and do not append replacement history, fire update triggers, or generate entity CDC updates. A stale
+fence still conflicts, and a purported non-applied outcome carrying changed state is rejected. The
+row/history lock lasts through receipt commit, preserving atomic decision evidence. `Applied` outcomes
+continue through the ordinary state/history write path even when their field values happen to match.
