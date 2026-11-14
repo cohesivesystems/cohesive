@@ -34,8 +34,8 @@ Apple M5 Max, 1 CPU, 18 logical and 18 physical cores
 .NET SDK 10.0.402
   [Host] : .NET 10.0.13 (10.0.13, 10.0.1326.50504), Arm64 RyuJIT armv8.0-a
 
-Job=ShortRun  Toolchain=InProcessEmitToolchain  IterationCount=3  
-LaunchCount=1  WarmupCount=1  
+Job=ShortRun  Toolchain=InProcessEmitToolchain  IterationCount=3
+LaunchCount=1  WarmupCount=1
 
 ```
 | Method            | Count | Mean      | Error     | StdDev    | Gen0     | Gen1     | Gen2     | Allocated   |
@@ -54,8 +54,8 @@ Apple M5 Max, 1 CPU, 18 logical and 18 physical cores
 .NET SDK 10.0.402
   [Host] : .NET 10.0.13 (10.0.13, 10.0.1326.50504), Arm64 RyuJIT armv8.0-a
 
-Job=ShortRun  Toolchain=InProcessEmitToolchain  IterationCount=3  
-LaunchCount=1  WarmupCount=1  
+Job=ShortRun  Toolchain=InProcessEmitToolchain  IterationCount=3
+LaunchCount=1  WarmupCount=1
 
 ```
 | Method            | Count | Mean          | Error         | StdDev      | Gen0      | Gen1     | Gen2     | Allocated   |
