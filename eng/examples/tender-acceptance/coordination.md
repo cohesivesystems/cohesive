@@ -31,7 +31,8 @@ Duplicate delivery of the same receipt replays. A second distinct receipt trying
 one-shot identity fails admission, even if its projected command is identical.
 
 The tender episode does not repeat its acceptance edge. Reusable entities with multiple acceptance
-episodes need an explicit episode key; that authoring surface is not implemented here. Do not reuse
+episodes can use [explicit episode identity](episodes.md). This original example intentionally retains
+the once-per-entity profile. Do not reuse
 a deleted tender's key as a new lifecycle under the same policy revision. The example revisions advance
 to `2`; old admitted reactions retain their old identities and definitions. Deploy the exact old and
 new policies intentionally, and do not replay old history under the new revisions without a plan.

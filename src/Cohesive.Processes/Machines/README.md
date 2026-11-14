@@ -59,8 +59,9 @@ The source receipt is attribution, not a grant to mutate a load.
 
 The instance/command/idempotency identities derive from the exact policy reference and source
 receipt/node identity by default. `.OncePerSourceEntity()` instead binds one occurrence to the exact
-policy, authority and source entity identity; conflicting second occurrences fail admission. `.After`
-requires that scope so a missing prerequisite can be addressed before its receipt arrives. Duplicate
+policy, authority and source entity identity; conflicting second occurrences fail admission.
+`.OncePerEpisode(...)` additionally scopes that occurrence to a typed source episode key. `.After`
+inherits either scope so a missing prerequisite can be addressed before its receipt arrives. Duplicate
 deliveries prepare the same intent. `ProcessStartRequest.Causation`
 retains portable origin evidence independently of domain input, so
 `MachineReactionInvocation.Restore(policy, checkpoint.Start.Request)` can reconstruct inspection
@@ -119,3 +120,9 @@ The storage host also exposes `InspectLifecycleAsync` and `AbandonAsync`. Abando
 Process cancellation and retains its revision, reason and command receipt; it never clears target evidence.
 `MachineReactionRecovery.InspectDependentsAsync` provides bounded, authorized history inspection separately
 from pending recovery. See [operator lifecycle](../../../eng/examples/tender-acceptance/lifecycle.md).
+
+For repeated business cycles, `.OncePerEpisode(source => source.Episode)` selects a typed required
+source field. `.After(prerequisite)` inherits its selector and waits for the same entity and episode.
+The key is derived from committed/retained source facts, never current state. Correlation does not
+replace target guards. See [two tender cycles](../../../eng/examples/tender-acceptance/episodes.md)
+for supported key types, identity rules, stale confirmation and deployment boundaries.

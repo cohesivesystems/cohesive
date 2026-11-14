@@ -71,3 +71,6 @@ arriving first, durable waiting, independent guards, and acknowledgement-loss re
 
 [Reaction lifecycle](lifecycle.md) shows authorized inspection, dependent discovery, explicit abandonment,
 and the distinction between replaying uncertain delivery and requesting new business work.
+
+[Explicit episodes](episodes.md) extends the sketch with two acceptance cycles, episode-scoped
+prerequisites and target guards that reject late confirmation from an older cycle.

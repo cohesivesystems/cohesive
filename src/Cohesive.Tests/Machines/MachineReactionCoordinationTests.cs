@@ -97,8 +97,7 @@ public sealed class MachineReactionCoordinationTests
         Assert.Equal(MachineReaction.PrerequisiteNode, restored.Compile().Plan!.Definition.Entry);
         Assert.Equal(policy.Document.Reference, new TenderReactionModel().ReceiptConfirmation.Document.Reference);
         var bypass = policy.Payload with { Process = model.PendingAcceptance.Payload.Process };
-        var malformed = ExecutionDefinitionDocument.Create(MachineReaction.Kind, policy.Document.Metadata.DefinitionId,
-            policy.Document.Metadata.RevisionId, bypass, policy.Document.Metadata.Provenance);
+        var malformed = MachineReactionTests.Persist(policy, bypass);
         Assert.Throws<InvalidOperationException>(() => MachineReaction.Deserialize(ExecutionDefinitionJsonSerializer.Serialize(malformed)));
     }
 

@@ -84,8 +84,8 @@ operations through normal recovery before cancelling. This API provides no force
 restart-attempt, or post-cancellation redispatch escape hatch.
 
 A fresh request after conclusive rejection is new business intent. The current one-occurrence-per-entity
-profile intentionally rejects a second receipt under the same reaction identity. Explicit episode identity
-and a source-machine transition authorizing another attempt remain separate work; changing a policy revision
+profile intentionally rejects a second receipt under the same reaction identity. [Explicit episode identity](episodes.md)
+and a source-machine transition can authorize new work; changing a policy revision
 solely to bypass deduplication is not a recovery procedure.
 
 Tests cover blocked tender confirmation, explicit dependent abandonment, persisted reasons, authorization,
