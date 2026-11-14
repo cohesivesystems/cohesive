@@ -19,7 +19,7 @@ public static class FiniteGuardCheck
     /// <param name="claim">Derived state or pre-state claim to check.</param>
     /// <param name="input">The exact typed input used by the claim.</param>
     /// <param name="members">Complete declared catalog, defensively materialized; order determines witness search order.</param>
-    /// <param name="source">Exact authoritative source for this catalog, guard and assumptions.</param>
+    /// <param name="source">Exact authoritative catalog and assumption source; also the guard source for the expression overload.</param>
     /// <param name="configuration">Exact lowering/checker convention configuration.</param>
     /// <returns>Source awaiting a required guard predicate.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
@@ -57,7 +57,19 @@ public static class FiniteGuardCheck
         /// <exception cref="ArgumentNullException">Guard is null.</exception>
         /// <exception cref="ExpressionAuthoringException">The expression is unsupported or captures host state.</exception>
         public Source<T> When(Expression<Func<T, bool>> guard) =>
-            new(claim, input, members, source, configuration, Lower(input, guard, source, "guard"), Expr.Const(true));
+            new(claim, input, members, source, configuration, Lower(input, guard, source, "guard"), Expr.Const(true), [new("/guard", source)]);
+
+        /// <summary>Authors a portable guard supplied by another semantic producer with exact source mappings.</summary>
+        /// <param name="guard">Structural predicate source over this declaration's input; no host callbacks are accepted.</param>
+        /// <param name="sources">Nonempty mappings under /guard to exact source artifacts; retained as evidence dependencies.</param>
+        /// <returns>Source ready for optional assumptions and validated lowering.</returns>
+        /// <exception cref="ArgumentNullException">Guard is null.</exception>
+        /// <exception cref="ArgumentException">Source mappings are missing or invalid when built.</exception>
+        public Source<T> When(Expr guard, ImmutableArray<ClaimSourceLocation> sources)
+        {
+            ArgumentNullException.ThrowIfNull(guard);
+            return new(claim, input, members, source, configuration, guard, Expr.Const(true), sources);
+        }
     }
 
     /// <summary>Immutable source; only derived portable expressions and values enter the check document.</summary>
@@ -69,11 +81,14 @@ public static class FiniteGuardCheck
         readonly ImmutableArray<ObservationValue> members;
         readonly ClaimReference source, configuration;
         readonly Expr guard, assumptions;
+        readonly ImmutableArray<ClaimSourceLocation> guardSources;
         internal Source(ClaimDocument claim, IExpressionInput<T> input, ImmutableArray<ObservationValue> members,
-            ClaimReference source, ClaimReference configuration, Expr guard, Expr assumptions)
+            ClaimReference source, ClaimReference configuration, Expr guard, Expr assumptions,
+            ImmutableArray<ClaimSourceLocation> guardSources)
         {
             this.claim = claim; this.input = input; this.members = members; this.source = source;
             this.configuration = configuration; this.guard = guard; this.assumptions = assumptions;
+            this.guardSources = guardSources;
         }
 
         /// <summary>Conjoins another explicit domain assumption.</summary>
@@ -82,13 +97,13 @@ public static class FiniteGuardCheck
         /// <exception cref="ArgumentNullException">Assumption is null.</exception>
         /// <exception cref="ExpressionAuthoringException">The expression cannot be lowered.</exception>
         public Source<T> Assuming(Expression<Func<T, bool>> assumption) => new(claim, input, members, source,
-            configuration, guard, Expr.And(assumptions, Lower(input, assumption, source, "assumptions")));
+            configuration, guard, Expr.And(assumptions, Lower(input, assumption, source, "assumptions")), guardSources);
 
         /// <summary>Materializes the derived finite-domain check document.</summary>
         /// <returns>Validated immutable plan containing no host-language callbacks or CLR types.</returns>
-        /// <exception cref="ArgumentException">A member violates the input contract.</exception>
+        /// <exception cref="ArgumentException">A member violates the input contract or guard source mappings are missing or invalid.</exception>
         /// <exception cref="ClaimValidationException">A predicate is outside the supported expression profile.</exception>
-        public FiniteGuardCheckDocument Build() => new(claim, members, guard, assumptions, source, configuration);
+        public FiniteGuardCheckDocument Build() => new(claim, members, guard, assumptions, source, configuration, guardSources);
     }
 
     static Expr Lower<T>(IExpressionInput<T> input, Expression<Func<T, bool>> expression,
@@ -108,7 +123,8 @@ public sealed class FiniteGuardCheckDocument
 
     [JsonConstructor]
     internal FiniteGuardCheckDocument(ClaimDocument claim, ImmutableArray<ObservationValue> members,
-        Expr guard, Expr assumptions, ClaimReference source, ClaimReference configuration)
+        Expr guard, Expr assumptions, ClaimReference source, ClaimReference configuration,
+        ImmutableArray<ClaimSourceLocation> guardSources)
     {
         ArgumentNullException.ThrowIfNull(claim); ArgumentNullException.ThrowIfNull(guard);
         ArgumentNullException.ThrowIfNull(assumptions); ArgumentNullException.ThrowIfNull(source);
@@ -127,10 +143,15 @@ public sealed class FiniteGuardCheckDocument
         }
         Claim = claim; Members = members; Guard = guard; Assumptions = assumptions;
         Source = source; Configuration = configuration;
+        if (guardSources.IsDefaultOrEmpty || guardSources.Any(x => x is null || x.Source is null
+            || (x.Path != "/guard" && !(x.Path?.StartsWith("/guard/", StringComparison.Ordinal) ?? false))))
+            throw new ArgumentException("Guard source mappings must identify exact artifacts at /guard or its descendants.", nameof(guardSources));
+        GuardSources = [.. guardSources.Distinct().OrderBy(x => x.Path, StringComparer.Ordinal)
+            .ThenBy(x => x.Source, ClaimReference.CanonicalComparer)];
     }
 
     /// <summary>Versioned finite-check profile and wire format.</summary>
-    public string Schema => "cohesive-assurance-finite-guard/v1";
+    public string Schema => "cohesive-assurance-finite-guard/v2";
     /// <summary>Versioned source lowerer.</summary>
     public string Producer => ExpressionLowerer.Producer;
     /// <summary>Exact predicate capability profile.</summary>
@@ -143,14 +164,16 @@ public sealed class FiniteGuardCheckDocument
     public Expr Guard { get; }
     /// <summary>Portable conjunction of explicit domain assumptions.</summary>
     public Expr Assumptions { get; }
-    /// <summary>Exact authoritative source for domain, guard and assumptions.</summary>
+    /// <summary>Exact authoritative source for the catalog and assumptions; guard sources are retained separately.</summary>
     public ClaimReference Source { get; }
     /// <summary>Exact lowering and checker configuration.</summary>
     public ClaimReference Configuration { get; }
+    /// <summary>Guard expression locations mapped to exact source artifacts, including referenced execution nodes.</summary>
+    public ImmutableArray<ClaimSourceLocation> GuardSources { get; }
     /// <summary>Stable source locations for the derived plan, separate from the claim's source map.</summary>
     [JsonIgnore]
     public ImmutableArray<ClaimSourceLocation> SourceMap =>
-        [new("/members", Source), new("/guard", Source), new("/assumptions", Source)];
+        [new("/members", Source), .. GuardSources, new("/assumptions", Source)];
 
     /// <summary>Serializes the portable derived plan.</summary>
     /// <returns>Canonical JSON retaining all domain members and exact claim provenance.</returns>

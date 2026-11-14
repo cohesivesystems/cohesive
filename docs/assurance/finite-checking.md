@@ -50,6 +50,68 @@ input contract once at the document boundary. Fixed source, ordering and configu
 identical derived artifacts. Source maps identify `/members`, `/guard` and `/assumptions`; the
 claim retains its own reviewed source and source map.
 
+## Binding the actual Transition admission rules
+
+The optional `Cohesive.Transitions.Assurance` package replaces the separately authored
+`.When(...)` with the admission predicates retained by an actual Cohesive transition.
+The following uses the same entity shape for transition execution and claim authoring:
+
+```csharp
+var entity = ObjectEntityDefinition.For<Driver>(new("driver"));
+var reactivate = TransitionAuthoring.Create<Driver, bool, bool>(
+    entity.Shape, new("driver/reactivate"), new("1"), t => t
+        .Requires(new("activation-eligibility"),
+            (driver, command) => driver.OriginalResolved,
+            (driver, command) => false)
+        .Set(new("activate"), driver => driver.Active, true)
+        .Return(new("activated"), TransitionOutcomeDisposition.Applied, true));
+
+// Import the authoritative entity shape; do not assume a CLR-named type is equivalent.
+var graph = ShapeGraphDocument.FromGraph(new ShapeGraph(new("driver-model"), [entity.Shape]));
+var author = new ExpressionAuthoring();
+var before = author.Input(
+    author.Clr.Shape<Driver>(graph, new(graph.Graph.Id, entity.Shape.Id)), "before");
+
+var reference = ClaimReference.FromExecution(reactivate.Reference);
+var claim = Claim.Define("activation.requires-no-blockers", "1",
+        reference, observationContract, claimSource, claimConfiguration)
+    .ForEachCommitted(reference)
+    .Require(before, ClaimInputRole.Before, driver => driver.RemainingBlockers == 0)
+    .Build();
+
+Driver[] catalog =
+[
+    new(false, false, 1), new(false, true, 0),
+    new(false, true, 1), new(false, true, 2)
+];
+var plan = TransitionAssurance.CheckAdmission(
+    reactivate, claim, before, catalog, catalogSource, checkerConfiguration).Build();
+var failure = FiniteGuardChecker.Check(plan);
+// Witness: Driver(Active: false, OriginalResolved: true, RemainingBlockers: 1).
+```
+
+Here `Driver` is `record Driver(bool Active, bool OriginalResolved, int RemainingBlockers)`.
+Repair the transition's `.Requires` predicate to `driver.RemainingBlockers == 0`, give it a
+new revision, and rebuild the claim against that new exact reference with the same policy expression.
+The finite checker derives the changed guard automatically; no test-owned guard needs editing.
+
+Every explicit admission rule participates in original evaluation order. An empty list means true.
+The first profile rejects command-dependent guards, entity creation, lifecycle machine bindings,
+and unsupported expressions. It checks the full pre-state value contract and exact transition
+subject/selector, rather than guessing compatibility from the CLR type. Source-map entries retain
+the transition and individual admission-node identities plus the versioned binding profile, and
+all become evidence dependencies.
+
+This is admission soundness, not a proof of complete transition behavior: body rejection,
+post-state invariants, reachability and commit coordination are outside this query. A counterexample
+is only an admitted model state until actual execution reproduces it. The integration test runs
+the reference interpreter on the witness, verifies the faulty candidate activates, and verifies
+the repaired candidate rejects; it also compares admission with the checker for every catalog row.
+No production commit is inferred.
+
+Retain the transition document to resolve node-level source locations or rederive the guard.
+`Recheck` reevaluates the retained finite plan; it does not fetch external source artifacts.
+
 ## Completion and evidence
 
 `Check` visits the catalog in declared order. Rows excluded by assumptions or the guard still count
@@ -119,3 +181,14 @@ reference operation: the complete catalog is retained in memory, and `maxMembers
 not expression complexity, input bytes or wall-clock time. It is not an untrusted-code isolation
 boundary. Cartesian-domain construction, symbolic solvers, imported domain-completion certificates,
 and automatic witness-to-execution reconstruction remain follow-on extensions.
+
+## Guard provenance format
+
+Finite plan schema `cohesive-assurance-finite-guard/v2` retains `GuardSources` separately from
+catalog/assumption `Source`. The typed `.When(expression)` overload attributes its guard to that
+source. The structural `.When(Expr, sources)` overload supports semantic producers such as the
+transition bridge; it does not expose direct plan construction. Both surfaces lower equivalent
+source to identical artifacts when their expressions and source mappings agree.
+
+V1 plans/results must be regenerated from authoritative source; missing guard provenance is not
+silently inferred during restoration. Finite-result schema v1 still wraps the now-versioned v2 plan.

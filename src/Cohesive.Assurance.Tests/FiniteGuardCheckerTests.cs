@@ -85,6 +85,32 @@ public sealed class FiniteGuardCheckerTests
     }
 
     [Fact]
+    public void StructuralGuardSourceMatchesTypedLoweringAndRetainsProvenanceThroughAssumptions()
+    {
+        var (claim, input) = Contract();
+        var source = R("guard-source");
+        var declaration = FiniteGuardCheck.Define(claim, input, Domain, source, R("finite-config"));
+        var typed = declaration.When(q => q.OriginalResolved).Build();
+        var structural = declaration.When(Expr.Field(input.Id, "OriginalResolved"), [new("/guard", source)]).Build();
+        Assert.Equal(typed.Serialize(), structural.Serialize());
+        Assert.Equal(typed.Reference(), structural.Reference());
+
+        var otherSource = R("transition-node");
+        var attributed = declaration.When(typed.Guard, [new("/guard", otherSource)])
+            .Assuming(q => q.RemainingBlockers >= 0).Build();
+        Assert.True(attributed.GuardSources.SequenceEqual(FiniteGuardCheckDocument.Deserialize(attributed.Serialize()).GuardSources));
+        Assert.Contains(otherSource, FiniteGuardChecker.Check(attributed).ToEvidence().Dependencies);
+        Assert.NotEqual(typed.Reference(), attributed.Reference());
+        Assert.Throws<ArgumentException>(() => declaration.When(typed.Guard, []).Build());
+        Assert.Throws<ArgumentException>(() => declaration.When(typed.Guard, [new("/members", source)]).Build());
+        var missing = JsonNode.Parse(attributed.Serialize())!.AsObject();
+        missing.Remove("guardSources");
+        Assert.Throws<JsonException>(() => FiniteGuardCheckDocument.Deserialize(missing.ToJsonString()));
+        var oldSchema = attributed.Serialize().Replace("cohesive-assurance-finite-guard/v2", "cohesive-assurance-finite-guard/v1");
+        Assert.Throws<JsonException>(() => FiniteGuardCheckDocument.Deserialize(oldSchema));
+    }
+
+    [Fact]
     public void MemberBudgetNeverTurnsAnIncompleteSearchIntoSuccess()
     {
         var result = FiniteGuardChecker.Check(Plan(repaired: true).Build(), maxMembers: 4);

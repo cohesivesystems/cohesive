@@ -113,7 +113,7 @@ public sealed class FiniteGuardCheckResult
             Status == AssuranceAttemptStatus.Unsupported ? InterpretationSupport.Unsupported : InterpretationSupport.Supported,
             Status, Verdict == ClaimVerdict.Satisfied && NonVacuity != ClaimVerdict.Satisfied ? ClaimVerdict.Inconclusive : Verdict,
             EvidenceCoverage.RestrictedScope, dependenciesComplete: true,
-            dependencies: [Plan.Source], residuals: [planReference], artifacts: [planReference, resultReference]);
+            dependencies: [Plan.Source, .. Plan.GuardSources.Select(x => x.Source)], residuals: [planReference], artifacts: [planReference, resultReference]);
     }
 
     sealed record Retained(string Schema, ClaimReference Method, FiniteGuardCheckDocument Plan, int MaxMembers, AssuranceAttemptStatus Status,

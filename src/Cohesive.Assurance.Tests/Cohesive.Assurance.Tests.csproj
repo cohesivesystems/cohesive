@@ -14,5 +14,6 @@
     <Compile Include="../../eng/examples/assurance/FixtureReferences.cs" Link="Examples/FixtureReferences.cs" />
     <ProjectReference Include="../Cohesive.Assurance/Cohesive.Assurance.csproj" />
     <ProjectReference Include="../Cohesive.Transitions/Cohesive.Transitions.csproj" />
+    <ProjectReference Include="../Cohesive.Transitions.Assurance/Cohesive.Transitions.Assurance.csproj" />
   </ItemGroup>
 </Project>

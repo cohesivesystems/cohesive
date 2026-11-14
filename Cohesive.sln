@@ -248,6 +248,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Simulation.Assuran
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Simulation.Assurance.Tests", "src\Cohesive.Simulation.Assurance.Tests\Cohesive.Simulation.Assurance.Tests.csproj", "{7700EE02-CE25-44F5-A6DD-4BDFBA5CC00A}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Cohesive.Transitions.Assurance", "src\Cohesive.Transitions.Assurance\Cohesive.Transitions.Assurance.csproj", "{A625121E-F4E6-4A5A-AB50-869C0467184E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1650,6 +1652,18 @@ Global
 		{7700EE02-CE25-44F5-A6DD-4BDFBA5CC00A}.Release|x64.Build.0 = Release|Any CPU
 		{7700EE02-CE25-44F5-A6DD-4BDFBA5CC00A}.Release|x86.ActiveCfg = Release|Any CPU
 		{7700EE02-CE25-44F5-A6DD-4BDFBA5CC00A}.Release|x86.Build.0 = Release|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Debug|x64.Build.0 = Debug|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Debug|x86.Build.0 = Debug|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Release|x64.ActiveCfg = Release|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Release|x64.Build.0 = Release|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Release|x86.ActiveCfg = Release|Any CPU
+		{A625121E-F4E6-4A5A-AB50-869C0467184E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
