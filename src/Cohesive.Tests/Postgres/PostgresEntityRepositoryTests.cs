@@ -31,6 +31,10 @@ public sealed class PostgresEntityRepositoryTests
         Assert.Contains("ON CONFLICT (\"tenant_id\", \"order_id\")", sql.Upsert.Text, StringComparison.Ordinal);
         Assert.Contains("\"observation_version\"", sql.Upsert.Text, StringComparison.Ordinal);
         Assert.Contains("(\"xmin\" = $", sql.Replace.Text, StringComparison.Ordinal);
+        Assert.Contains("FOR UPDATE", sql.LockByIdentityAndPartition.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("FOR UPDATE", sql.ReadByIdentityAndPartition.Text, StringComparison.Ordinal);
+        Assert.Equal(sql.ReadByIdentityAndPartition.Parameters.Select(parameter => (parameter.Binding, parameter.Position, parameter.Placeholder, parameter.Kind)),
+            sql.LockByIdentityAndPartition.Parameters.Select(parameter => (parameter.Binding, parameter.Position, parameter.Placeholder, parameter.Kind)));
         Assert.DoesNotContain("@", sql.ReadByIdentity.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("@", sql.ReadByIdentityAndPartition.Text, StringComparison.Ordinal);
         Assert.DoesNotContain("@", sql.Upsert.Text, StringComparison.Ordinal);

@@ -649,6 +649,7 @@ public sealed partial class PostgresEntityRepository : IEntityTransitionOperatio
 internal sealed record PostgresEntityRepositorySql(
     SqlCommandTemplate ReadByIdentity,
     SqlCommandTemplate ReadByIdentityAndPartition,
+    SqlCommandTemplate LockByIdentityAndPartition,
     SqlCommandTemplate Upsert,
     SqlCommandTemplate CreateIfAbsent,
     SqlCommandTemplate Replace,
@@ -701,6 +702,7 @@ internal sealed record PostgresEntityRepositorySql(
         return new(
             readByIdentity,
             readByIdentityAndPartition,
+            CreateRead(mapping, identity, partition, lockRow: true),
             CreateInsert(mapping, createOnly: false),
             CreateInsert(mapping, createOnly: true),
             replace.BuildTemplate(PostgresSqlDialect.Instance),
@@ -745,7 +747,7 @@ internal sealed record PostgresEntityRepositorySql(
     static SqlCommandTemplate CreateRead(
         PostgresEntityRepositoryMapping mapping,
         PostgresEntityRepositoryFieldBinding identity,
-        PostgresEntityRepositoryFieldBinding? partition)
+        PostgresEntityRepositoryFieldBinding? partition, bool lockRow = false)
     {
         SqlAliasAllocator aliases = new(PostgresSqlDialect.StandardMaxUtf8ByteLength, StringComparer.Ordinal);
         SqlSelectBuilder selected = new(mapping.Table, SourceAlias);
@@ -772,6 +774,7 @@ internal sealed record PostgresEntityRepositorySql(
                 left: SqlExpression.Column(SourceAlias, partition.Column.Value),
                 right: SqlExpression.RuntimeParameter(PartitionBinding)));
         }
+        if (lockRow) selected.ForUpdate();
         return selected.Limit(2).BuildTemplate(PostgresSqlDialect.Instance);
     }
 
