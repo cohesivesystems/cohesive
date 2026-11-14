@@ -207,3 +207,11 @@ local revision; the member atomically reads current group policy and records its
 Unrelated membership additions do not invalidate admission requests. Group/member operator commands
 retain their own revision checks. Group inspection reuses an immutable published snapshot; the shared
 member-operation lock is still a local reference tradeoff, not a durable scalability claim.
+
+[HistoricalOperatorExamples.cs](HistoricalOperatorExamples.cs) composes the existing inspection host
+and domain coverage projection into a read-only forward/backfill report. It includes requested scope,
+group policy, local intent, pending work, expiring provider evidence, publication-backed sessions and
+separate ledger positions. The example exports JSON through the shared wire options to test output;
+[OPERATOR-RUNBOOK.md](OPERATOR-RUNBOOK.md) gives the run command and recovery/action boundaries.
+Group observations bracket the asynchronous reads without claiming an atomic multi-store snapshot.
+The view remains private to the example until a real host establishes a reusable boundary.
