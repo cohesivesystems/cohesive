@@ -289,3 +289,9 @@ whole row through JSON. Results remain independent. Shape-qualified admission is
 without rebuilding the whole object for each edit. `Undefined` removes a field; unchanged
 subtrees retain their immutable storage. It does not replace Transition before-value evidence
 checks or establish a backend patch operation.
+
+### Typed input constraints
+
+Opt into DataAnnotations projection with `ClrShapeGraphBuilder.UseDataAnnotations()`
+and validate records before application admission with `ObservationValidator.ValidateInput`.
+See [mapping, diagnostics, and contract compatibility](../../docs/quality/input-constraints.md).

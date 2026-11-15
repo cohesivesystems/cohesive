@@ -24,12 +24,20 @@ public sealed record RequiredConstraint : ShapeConstraint
     /// <summary>
     /// Creates a required constraint.
     /// </summary>
+    /// <param name="field">Optional target relative to the constrained value.</param>
+    /// <param name="message">Optional explanatory message.</param>
+    /// <param name="rejectEmptyStrings">Also reject empty/whitespace strings; DataAnnotations Required enables this by default.</param>
     [JsonConstructor]
-    public RequiredConstraint(FieldPath? field = null, string? message = null)
+    public RequiredConstraint(FieldPath? field = null, string? message = null, bool rejectEmptyStrings = false)
     {
         Field = field;
         Message = message;
+        RejectEmptyStrings = rejectEmptyStrings;
     }
+
+    /// <summary>Whether requiredness also rejects empty and whitespace strings. Null and absence never satisfy requiredness.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool RejectEmptyStrings { get; init; }
 
     /// <summary>
     /// Optional field path target.
@@ -43,7 +51,7 @@ public sealed record RequiredConstraint : ShapeConstraint
 }
 
 /// <summary>
-/// Minimum string/collection length constraint.
+/// Minimum UTF-16 string-code-unit or array-item count constraint. Null and absent optional values satisfy it.
 /// </summary>
 public sealed record MinLengthConstraint : ShapeConstraint
 {
@@ -78,7 +86,7 @@ public sealed record MinLengthConstraint : ShapeConstraint
 }
 
 /// <summary>
-/// Maximum string/collection length constraint.
+/// Maximum UTF-16 string-code-unit or array-item count constraint. Null and absent optional values satisfy it.
 /// </summary>
 public sealed record MaxLengthConstraint : ShapeConstraint
 {

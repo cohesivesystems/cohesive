@@ -46,7 +46,7 @@ public static class SystemTextJsonShapeAnnotations
 /// <remarks>Safe for concurrent metadata reads. Serializer options are frozen on construction; nested
 /// profiles are prepared once per property and retained for this provider's lifetime. Preparation and
 /// recursion tracking share a reentrant gate across nested profiles; failures are not cached.</remarks>
-public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataProvider
+public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataProvider, IClrFieldProjectionValidator
 {
     readonly JsonSerializerOptions options;
     readonly object profileGate;
@@ -107,6 +107,29 @@ public sealed class SystemTextJsonClrShapeMetadataProvider : IClrShapeMetadataPr
             ClrShapeMetadataTarget.Shape or ClrShapeMetadataTarget.Type => GetTypeMetadata(context.ClrType),
             _ => ClrShapeMetadata.Empty
         };
+    }
+
+    /// <summary>Checks length constraints using this provider's already-frozen JSON contract settings.</summary>
+    public void ValidateFieldProjection(ClrFieldProjectionContext context)
+    {
+        if (context.Metadata.Constraints.Any(static rule => rule is MinLengthConstraint or MaxLengthConstraint)
+            && !HasNativeLengthProjection(context.Property))
+            throw new NotSupportedException($"constraint.lengthType: {context.Property.DeclaringType?.Name}.{context.Property.Name} does not preserve native length in the configured JSON contract.");
+    }
+
+    // Use this provider's frozen options, including resolver and converter configuration, never defaults.
+    internal bool HasNativeLengthProjection(PropertyInfo property)
+    {
+        var owner = options.GetTypeInfo(property.DeclaringType!);
+        var member = owner.Properties.FirstOrDefault(candidate => candidate.AttributeProvider is PropertyInfo info
+            && ShapeTypeInspector.IsSameProperty(info, property));
+        member ??= owner.Properties.FirstOrDefault(candidate => candidate.Name == ResolveJsonPropertyName(property));
+        if (member is null || member.CustomConverter is not null) return false;
+        var projected = options.GetTypeInfo(property.PropertyType);
+        // Arbitrary converters do not promise that CLR lengths survive their wire transformation.
+        if (projected.Converter.GetType().Assembly != typeof(JsonSerializer).Assembly) return false;
+        return property.PropertyType == typeof(string) || property.PropertyType == typeof(byte[])
+            || projected.Kind == JsonTypeInfoKind.Enumerable;
     }
 
     ClrShapeMetadata GetFieldMetadata(ClrShapeMetadataContext context)

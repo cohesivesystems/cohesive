@@ -285,6 +285,66 @@ export interface ShapeGraph {
   hasErrors: boolean;
 }
 
+export type ShapeConstraint = {
+  readonly $constraint: 'required';
+} & RequiredConstraint | {
+  readonly $constraint: 'minLength';
+} & MinLengthConstraint | {
+  readonly $constraint: 'maxLength';
+} & MaxLengthConstraint | {
+  readonly $constraint: 'range';
+} & RangeConstraint | {
+  readonly $constraint: 'regex';
+} & RegexConstraint | {
+  readonly $constraint: 'allowedValues';
+} & AllowedValuesConstraint | {
+  readonly $constraint: 'occurrence';
+} & OccurrenceConstraint;
+
+export interface RequiredConstraint {
+  rejectEmptyStrings: boolean;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface MinLengthConstraint {
+  value: number;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface MaxLengthConstraint {
+  value: number;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface RangeConstraint {
+  minimum?: number | null;
+  maximum?: number | null;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface RegexConstraint {
+  pattern: string;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface AllowedValuesConstraint {
+  values: string[];
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
+export interface OccurrenceConstraint {
+  minimum?: number | null;
+  maximum?: number | null;
+  field?: FieldPath | null;
+  message?: string | null;
+}
+
 export type TypeRef = {
   readonly $type: 'named';
 } & NamedTypeRef | {
@@ -885,65 +945,6 @@ export interface GraphFieldPath {
   path: FieldPath;
 }
 
-export type ShapeConstraint = {
-  readonly $constraint: 'required';
-} & RequiredConstraint | {
-  readonly $constraint: 'minLength';
-} & MinLengthConstraint | {
-  readonly $constraint: 'maxLength';
-} & MaxLengthConstraint | {
-  readonly $constraint: 'range';
-} & RangeConstraint | {
-  readonly $constraint: 'regex';
-} & RegexConstraint | {
-  readonly $constraint: 'allowedValues';
-} & AllowedValuesConstraint | {
-  readonly $constraint: 'occurrence';
-} & OccurrenceConstraint;
-
-export interface RequiredConstraint {
-  field?: FieldPath | null;
-  message?: string | null;
-}
-
-export interface MinLengthConstraint {
-  value: number;
-  field?: FieldPath | null;
-  message?: string | null;
-}
-
-export interface MaxLengthConstraint {
-  value: number;
-  field?: FieldPath | null;
-  message?: string | null;
-}
-
-export interface RangeConstraint {
-  minimum?: number | null;
-  maximum?: number | null;
-  field?: FieldPath | null;
-  message?: string | null;
-}
-
-export interface RegexConstraint {
-  pattern: string;
-  field?: FieldPath | null;
-  message?: string | null;
-}
-
-export interface AllowedValuesConstraint {
-  values: string[];
-  field?: FieldPath | null;
-  message?: string | null;
-}
-
-export interface OccurrenceConstraint {
-  minimum?: number | null;
-  maximum?: number | null;
-  field?: FieldPath | null;
-  message?: string | null;
-}
-
 export interface EnumValue {
   name: string;
   value?: string | null;
@@ -980,6 +981,10 @@ export interface GraphDiagnostic {
   shapeId?: ShapeId | null;
   fieldIdentity?: string | null;
   typeId?: TypeId | null;
+}
+
+export interface FieldPath {
+  segments: FieldPathSegment[];
 }
 
 export interface TypeInferenceDiagnostic {
@@ -1197,10 +1202,6 @@ export type RelationQueryContextEvidenceId = string;
 export type RelationQueryCompositionRuleId = string;
 
 export type RelationQueryRealizationOverrideId = string;
-
-export interface FieldPath {
-  segments: FieldPathSegment[];
-}
 
 export type EffectiveConfigurationOrigin = 'Explicit' | 'ScopedProfile' | 'AdapterConvention' | 'FrameworkDefault';
 
@@ -1920,6 +1921,11 @@ export interface ComputeDefinition {
 
 export type DiagnosticId = string;
 
+export interface FieldPathSegment {
+  kind: SegmentKind;
+  segment?: string | null;
+}
+
 export interface RelationQueryLogicalPlan {
   nodes: RelationQueryLogicalPlanNode[];
   retainedNodes: QueryNodeId[];
@@ -2051,11 +2057,6 @@ export interface RelationQueryEvaluationObservationFingerprint {
   algorithm: string;
   canonicalization: string;
   value: string;
-}
-
-export interface FieldPathSegment {
-  kind: SegmentKind;
-  segment?: string | null;
 }
 
 export type RelationQueryPhysicalLoweringRuleId = string;
@@ -2666,6 +2667,18 @@ export const sourceReferenceUniquenessLabels: Record<SourceReferenceUniqueness, 
   GloballyUnique: 'GloballyUnique',
 };
 
+export type SegmentKind = 'Field' | 'Element';
+
+export const segmentKinds = {
+  field: 'Field',
+  element: 'Element',
+} as const satisfies Record<string, SegmentKind>;
+
+export const segmentKindLabels: Record<SegmentKind, string> = {
+  Field: 'Field',
+  Element: 'Element',
+};
+
 export interface RelationQueryLogicalPlanNode {
   node: QueryNodeId;
   inputs: RelationQueryLogicalPlanInput[];
@@ -2833,18 +2846,6 @@ export const relationRequirementGapResolutionKindLabels: Record<RelationRequirem
   ProvideValue: 'ProvideValue',
   ProvideCapability: 'ProvideCapability',
   CorrectConversion: 'CorrectConversion',
-};
-
-export type SegmentKind = 'Field' | 'Element';
-
-export const segmentKinds = {
-  field: 'Field',
-  element: 'Element',
-} as const satisfies Record<string, SegmentKind>;
-
-export const segmentKindLabels: Record<SegmentKind, string> = {
-  Field: 'Field',
-  Element: 'Element',
 };
 
 export type RelationQueryOutputReferenceKind = 'Relation' | 'QueryResult';
@@ -3262,6 +3263,7 @@ export interface ShapeGraphDocument {
 }
 
 export interface ValueContract {
+  constraints?: ShapeConstraint[] | null;
   type?: TypeRef | null;
   shape?: QualifiedShapeId | null;
   cardinality: FieldCardinality;

@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Model;
@@ -14,19 +15,22 @@ public sealed record ValueContract
     /// <param name="cardinality">Whether the value is single or many-valued.</param>
     /// <param name="presence">Whether the value is required to be present.</param>
     /// <param name="nullability">Whether an explicitly present value may be null.</param>
+    /// <param name="constraints">Optional portable constraints; omitted when empty to preserve existing contract wire identity.</param>
     /// <exception cref="ArgumentOutOfRangeException">
     /// <paramref name="cardinality"/>, <paramref name="presence"/>, or <paramref name="nullability"/> is unsupported.
     /// </exception>
     /// <exception cref="ArgumentException">
-    /// <paramref name="shape"/> is a default or incomplete qualified identity.
+    /// <paramref name="shape"/> is a default or incomplete qualified identity, or length constraints conflict.
     /// </exception>
+    /// <exception cref="NotSupportedException">A constraint targets an undeclared field or a nested/wildcard path.</exception>
     [JsonConstructor]
     public ValueContract(
         TypeRef? type = null,
         QualifiedShapeId? shape = null,
         FieldCardinality cardinality = FieldCardinality.Single,
         FieldPresence presence = FieldPresence.Required,
-        FieldNullability nullability = FieldNullability.NonNullable)
+        FieldNullability nullability = FieldNullability.NonNullable,
+        ImmutableArray<ShapeConstraint>? constraints = null)
     {
         if (!Enum.IsDefined(cardinality))
             throw new ArgumentOutOfRangeException(nameof(cardinality), cardinality, "Unsupported value cardinality.");
@@ -42,12 +46,24 @@ public sealed record ValueContract
                 "A known value shape requires non-empty graph and shape identifiers.",
                 nameof(shape));
         }
+        var declared = constraints ?? [];
+        ConstraintSemantics.RequireConsistent(declared);
+        if (!declared.IsDefaultOrEmpty)
+            foreach (var constraint in declared)
+                if (ConstraintSemantics.Target(constraint) is { } target
+                    && !ConstraintSemantics.TryResolveTarget(target, out _, objectType: type as ObjectTypeRef))
+                    throw new NotSupportedException("constraint.unsupportedTarget: Value contract targets require a declared direct object field.");
+        Constraints = declared.IsDefaultOrEmpty ? null : declared;
         Type = type;
         Shape = shape;
         Cardinality = cardinality;
         Presence = presence;
         Nullability = nullability;
     }
+
+    /// <summary>Portable value constraints, or null when unconstrained. Empty input is normalized to null.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ImmutableArray<ShapeConstraint>? Constraints { get; }
 
     /// <summary>Known element or single-value type.</summary>
     public TypeRef? Type { get; }
@@ -79,7 +95,7 @@ public sealed record ValueContract
     /// <remarks>This does not validate a value. Use only where an assertion or branch proves these guarantees;
     /// nested member contracts and element types remain unchanged.</remarks>
     public ValueContract AsPresentNonNull() => Presence == FieldPresence.Required && Nullability == FieldNullability.NonNullable
-        ? this : new(Type, Shape, Cardinality);
+        ? this : new(Type, Shape, Cardinality, constraints: Constraints);
 
     /// <summary>Tests whether a portable constant satisfies this value contract.</summary>
     /// <param name="value">Constant value to test.</param>
@@ -89,6 +105,7 @@ public sealed record ValueContract
     /// </returns>
     public bool IsSatisfiedByConstant(ObservationValue value)
     {
+        if (!ConstraintSemantics.IsSatisfied(value, Constraints ?? [], objectType: Type as ObjectTypeRef)) return false;
         if (value.Kind == ObservationValueKind.Undefined)
             return Presence == FieldPresence.Optional;
         if (value.Kind == ObservationValueKind.Null)
@@ -110,7 +127,7 @@ public sealed record ValueContract
         ArgumentNullException.ThrowIfNull(field);
         if (field.Type is null)
             throw new ArgumentException("A field value contract requires a semantic type.", nameof(field));
-        return new(field.Type, cardinality: field.Cardinality, presence: field.Presence, nullability: field.Nullability);
+        return new(field.Type, cardinality: field.Cardinality, presence: field.Presence, nullability: field.Nullability, constraints: field.Constraints);
     }
 
     /// <summary>Creates an object-value contract from a semantic shape.</summary>
@@ -123,6 +140,7 @@ public sealed record ValueContract
     /// <paramref name="shape"/>, or
     /// <paramref name="shape"/> contains a field with invalid identity or value-contract metadata.
     /// </exception>
+    /// <exception cref="NotSupportedException">A field constraint has an unsupported kind or relative target and cannot be flattened without loss.</exception>
     public static ValueContract FromShape(Shape shape, QualifiedShapeId? qualifiedShape = null)
     {
         ArgumentNullException.ThrowIfNull(shape);
@@ -153,7 +171,33 @@ public sealed record ValueContract
                     cardinality: field.Cardinality,
                     nullability: field.Nullability))
             ]),
-            shape: qualifiedShape);
+            shape: qualifiedShape, constraints: ShapeConstraints(shape));
+    }
+
+    // Shape-only contracts are refined once. Single-value constraints compose as a set;
+    // many-valued contracts retain collection rules locally and resolve item rules through Shape.
+    // Keeping Shape is essential: flattening item field paths onto the array changes their meaning.
+    internal ValueContract ResolveShape(ShapeGraph graph)
+    {
+        if (Type is not null || Shape is not { } identity || !graph.TryGetShape(identity, out var shape)) return this;
+        var resolved = FromShape(shape, identity);
+        var constraints = Cardinality == FieldCardinality.Many ? Constraints
+            : (resolved.Constraints ?? []).Union(Constraints ?? []).ToImmutableArray();
+        return new(resolved.Type, identity, Cardinality, Presence, Nullability, constraints);
+    }
+
+    static ImmutableArray<ShapeConstraint> ShapeConstraints(Shape shape)
+    {
+        if (shape.Constraints.IsEmpty && shape.Fields.All(static field => field.Constraints.IsEmpty)) return [];
+        var constraints = shape.Constraints.ToBuilder();
+        foreach (var field in shape.Fields)
+            foreach (var constraint in field.Constraints)
+            {
+                if (ConstraintSemantics.Target(constraint) is not null)
+                    throw new NotSupportedException("Field-relative constraint paths cannot be flattened into a value contract.");
+                constraints.Add(ConstraintSemantics.At(constraint, FieldPath.FromField(field.Name.Value)));
+            }
+        return constraints.ToImmutable();
     }
 
     /// <summary>
@@ -172,7 +216,8 @@ public sealed record ValueContract
             && Nullable.Equals(Shape, other.Shape)
             && Cardinality == other.Cardinality
             && Presence == other.Presence
-            && Nullability == other.Nullability;
+            && Nullability == other.Nullability
+            && (Constraints ?? []).SequenceEqual(other.Constraints ?? []);
     }
 
     /// <summary>Computes a hash code from persisted semantic state.</summary>
@@ -185,6 +230,7 @@ public sealed record ValueContract
         hash.Add(Cardinality);
         hash.Add(Presence);
         hash.Add(Nullability);
+        if (Constraints is { } constraints) foreach (var constraint in constraints) hash.Add(constraint);
         return hash.ToHashCode();
     }
 
