@@ -71,6 +71,21 @@ public sealed class TransitionAdmissionTests
     }
 
     [Fact]
+    public void AdmissionDifferenceWitnessExecutesDifferentlyUnderTheActualCandidates()
+    {
+        var faulty = Candidate(repaired: false);
+        var repaired = Candidate(repaired: true);
+        var comparison = FiniteComparison.Compare(Bind(faulty), Bind(repaired), FiniteComparisonTarget.Admission);
+        Assert.Equal(ClaimVerdict.Satisfied, comparison.NewlyForbidden);
+        Assert.Equal(ClaimVerdict.Violated, comparison.NewlyPermitted);
+        var restored = FiniteComparisonResult.Recheck(comparison.Serialize());
+        var witness = restored.OldCandidate.Members[restored.NewlyForbiddenIndex!.Value].Deserialize<Driver>()!;
+        Assert.Equal(new Driver(false, true, 1), witness);
+        Assert.Equal(TransitionDecisionKind.Applied, Execute(faulty, witness).Kind);
+        Assert.Equal(TransitionDecisionKind.AdmissionRejected, Execute(repaired, witness).Kind);
+    }
+
+    [Fact]
     public void ActualTransitionAdmissionFindsFaultAndRepairChangesBothCheckingAndExecution()
     {
         var faulty = Candidate(repaired: false);
