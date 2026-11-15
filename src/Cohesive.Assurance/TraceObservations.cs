@@ -62,7 +62,16 @@ public sealed record TraceObservationContract(ClaimReference Reference, ClaimRef
 /// <param name="EventPayload">Role-neutral event payload; null means missing evidence. Must be null for non-events.</param>
 public sealed record SemanticObservation(string Occurrence, string Partition, long Step, long Ticks,
     ClaimReference Selector, SemanticObservationKind Kind,
-    ImmutableDictionary<ClaimInputRole, ObservationValue> Values, ObservationValue? EventPayload = null);
+    ImmutableDictionary<ClaimInputRole, ObservationValue> Values, ObservationValue? EventPayload = null)
+{
+    // Occurrence identity and content must agree independently of dictionary instance identity.
+    internal bool SameContent(SemanticObservation other) =>
+        Occurrence == other.Occurrence && Partition == other.Partition
+        && Step == other.Step && Ticks == other.Ticks && Kind == other.Kind && Selector == other.Selector
+        && Nullable.Equals(EventPayload, other.EventPayload)
+        && Values.Count == other.Values.Count
+        && Values.All(x => other.Values.TryGetValue(x.Key, out var value) && x.Value.Equals(value));
+}
 
 /// <summary>Attributed completeness from scope origin through inclusive frontiers for one source and selector.</summary>
 /// <param name="Selector">Exact selector whose occurrences and population membership are complete.</param>

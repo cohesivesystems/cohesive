@@ -181,3 +181,12 @@ The faulty/repaired integration test checks the same IR that the transition inte
 [Constructive finite comparison](../../docs/assurance/finite-comparison.md) finds newly permitted
 and newly forbidden rows between pinned admission or requirement candidates, retains both meanings,
 and independently rechecks directional witnesses. Conclusions remain bounded to the shared catalog.
+
+## Incremental reference monitoring
+
+[Bounded reference monitoring](../../docs/assurance/reference-monitor.md) documents ordered updates,
+per-source completeness, immutable checkpoints, explicit correction epochs and backpressure. The first
+profile retains bounded history and reuses batch evaluation; it does not yet optimize per-obligation state.
+
+Delivery tracking lives in the [GitHub Assurance project](https://github.com/orgs/cohesivesystems/projects/2)
+and [plan #550](https://github.com/cohesivesystems/cohesive/issues/550). Linear records are historical only.

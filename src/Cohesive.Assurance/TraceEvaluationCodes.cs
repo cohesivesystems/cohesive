@@ -47,5 +47,14 @@ public static class TraceEvaluationCodes
     /// <summary>Observation identities, order, mapping or completeness are contradictory or malformed.</summary>
     public const string InvalidObservation = "assurance.observation.invalid";
 
+    /// <summary>The incremental reference profile requires one completely enumerated mapping.</summary>
+    public const string MonitorProfile = "assurance.monitor.profile";
+
+    /// <summary>A newly delivered occurrence contradicts an earlier completeness certificate.</summary>
+    public const string MonitorLateObservation = "assurance.monitor.lateObservation";
+
+    /// <summary>An update regresses completeness or changes a previously closed boundary.</summary>
+    public const string MonitorFrontierRegression = "assurance.monitor.frontierRegression";
+
     internal static string Expression(PortableExpressionEvaluationError error) => "assurance.expression." + error;
 }

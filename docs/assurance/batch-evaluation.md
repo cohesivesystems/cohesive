@@ -57,8 +57,8 @@ initial wire contract; multi-selector projections need explicit distinct project
   populations and missing source partitions cannot become empty successful quantifiers.
 
 Frontiers certify inclusive step/time coverage from scope origin for a selector and source.
-There is at most one frontier per source/selector in a batch. Incremental frontier merging,
-protocol qualification, checkpointing and late-data breach detection remain monitor work.
+There is at most one frontier per source/selector in a batch. The [bounded reference monitor](reference-monitor.md) adds incremental frontier merging,
+checkpointing and late-data breach detection. Protocol qualification remains adapter work.
 Corrections create a new epoch/artifact and a new result; an earlier result remains immutable.
 A stateless re-evaluation does not independently detect a correction's causal relationship.
 

@@ -134,7 +134,7 @@ public static class TraceClaimEvaluator
                 var key = (observation.Partition, observation.Occurrence);
                 if (seen.TryGetValue(key, out var previous))
                 {
-                    if (!SameOccurrence(previous, observation))
+                    if (!previous.SameContent(observation))
                     {
                         Invalid(observation.Occurrence, "Duplicate identity has contradictory content; append a new correction epoch instead.");
                         return observations;
@@ -196,11 +196,6 @@ public static class TraceClaimEvaluator
                 _ => observation.Kind == SemanticObservationKind.Event
             };
         }
-
-        static bool SameOccurrence(SemanticObservation a, SemanticObservation b) =>
-            a.Step == b.Step && a.Ticks == b.Ticks && a.Kind == b.Kind && a.Selector == b.Selector
-            && Nullable.Equals(a.EventPayload, b.EventPayload)
-            && a.Values.Count == b.Values.Count && a.Values.All(x => b.Values.TryGetValue(x.Key, out var value) && x.Value.Equals(value));
 
         TraceAlternativeResult EvaluateAlternative(TraceObservationAlternative alternative,
             List<SemanticObservation> observations, int duplicates)
