@@ -62,5 +62,17 @@ public static class TraceEvaluationCodes
     /// <summary>A retained correction lacks its required lineage or mapping evidence.</summary>
     public const string MonitorCorrection = "assurance.monitor.correction";
 
+    /// <summary>Transport envelope is malformed, unsupported or carries prohibited completeness assertions.</summary>
+    public const string TelemetryEnvelope = "assurance.telemetry.envelope";
+
+    /// <summary>Activity source is not the explicitly registered semantic observation source.</summary>
+    public const string TelemetrySource = "assurance.telemetry.source";
+
+    /// <summary>Contract, target, epoch or mapping evidence differs from the pinned binding.</summary>
+    public const string TelemetryBinding = "assurance.telemetry.binding";
+
+    /// <summary>Transport payload exceeds its configured per-event or aggregate activity bound.</summary>
+    public const string TelemetryPayloadLimit = "assurance.telemetry.payloadLimit";
+
     internal static string Expression(PortableExpressionEvaluationError error) => "assurance.expression." + error;
 }

@@ -1,5 +1,7 @@
 using System.Collections.Immutable;
+using System.Text.Json;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Assurance;
 
@@ -48,7 +50,20 @@ public sealed record ObservationRequirement(ClaimReference Selector, ImmutableAr
 /// <param name="Scope">Exact scope and linearization/clock contract; never inferred from arrival order.</param>
 /// <param name="Requirements">Required partitions for each supported selector.</param>
 public sealed record TraceObservationContract(ClaimReference Reference, ClaimReference Scope,
-    ImmutableArray<ObservationRequirement> Requirements);
+    ImmutableArray<ObservationRequirement> Requirements)
+{
+    /// <summary>Compares exact contract content without relying on immutable-array instance identity.</summary>
+    /// <param name="other">Contract to compare; null never matches.</param>
+    /// <returns>Whether references and ordered requirements/partitions match exactly. Default arrays differ from empty arrays.</returns>
+    /// <remarks>This is representation equality, not equivalence under reordered requirements. It does not validate a contract.</remarks>
+    public bool SameContent(TraceObservationContract? other)
+    {
+        return other is not null && Reference == other.Reference && Scope == other.Scope
+            && ObservationContent.SequenceEqual(Requirements, other.Requirements, static (left, right) =>
+                left is null || right is null ? left == right : left.Selector == right.Selector
+                    && ObservationContent.SequenceEqual(left.Partitions, right.Partitions, static (a, b) => a == b));
+    }
+}
 
 /// <summary>One mapped observation; this is an adapter input, not a Simulation run or world.</summary>
 /// <param name="Occurrence">Stable source occurrence identity; retries must have distinct identities.</param>
@@ -100,4 +115,55 @@ public sealed record TraceObservationAlternative(ClaimReference Reference,
 /// <remarks>Completeness declarations are conditional inputs, not independent verification of an adapter or provider.</remarks>
 public sealed record TraceObservationBatch(TraceObservationContract Contract, ClaimReference Target,
     ClaimReference Epoch, ImmutableArray<TraceObservationAlternative> Alternatives,
-    EnumerationCompleteness Enumeration, ClaimReference EnumerationEvidence);
+    EnumerationCompleteness Enumeration, ClaimReference EnumerationEvidence)
+{
+    /// <summary>Validates the transport-neutral capture profile: one complete mapping and no completeness certificates.</summary>
+    /// <exception cref="TraceObservationException">Required envelope fields are missing or the capture profile is unsupported.</exception>
+    /// <remarks>Does not validate individual observations or target binding; AdvanceCaptured owns those checks.</remarks>
+    public void ValidateCapture()
+    {
+        if (Contract is null || Target is null || Epoch is null || EnumerationEvidence is null
+            || Enumeration != EnumerationCompleteness.Complete || Alternatives.IsDefault
+            || Alternatives.Length != 1 || Alternatives[0] is not { } alternative
+            || alternative.Reference is null || alternative.Observations.IsDefault || alternative.Completeness.IsDefault
+            || !alternative.Completeness.IsEmpty)
+            throw new TraceObservationException(new(TraceEvaluationCodes.TelemetryEnvelope, "/capture",
+                "Capture requires one complete mapping with initialized rows and no completeness certificates."));
+    }
+
+    sealed record Wire(string Schema, TraceObservationBatch Batch);
+    const string WireSchema = "cohesive-assurance-observations/v1";
+
+    /// <summary>Encodes a standalone, versioned observation-input document with the shared canonical JSON policy.</summary>
+    /// <remarks>Use this format for transport of unevaluated inputs. Evaluation/checkpoint artifacts embed the same batch
+    /// payload under their own versioned envelope; use their Serialize/Deserialize APIs for retained results instead.</remarks>
+    /// <returns>Versioned canonical observation document; serialization does not establish semantic validity or completeness.</returns>
+    /// <exception cref="JsonException">A retained observation cannot be encoded.</exception>
+    /// <exception cref="NotSupportedException">A representation is unsupported.</exception>
+    public string Serialize() => StrictDocumentJson.GetCanonicalText(new Wire(WireSchema, this), AssuranceJson.Options);
+
+    /// <summary>Reads a canonical observation document without evaluating or trusting its assertions.</summary>
+    /// <param name="json">Canonical versioned observation JSON.</param>
+    /// <returns>Untrusted observation inputs; an evaluator or monitor must validate them against the exact claim.</returns>
+    /// <exception cref="JsonException">The document is malformed, noncanonical or uses an unsupported version.</exception>
+    public static TraceObservationBatch Deserialize(string json)
+    {
+        if (!StrictDocumentJson.TryReadCanonicalObject(json, AssuranceJson.Options, "observations",
+                out Wire? wire, out var error) || wire is null || wire.Batch is null)
+            throw new JsonException($"{error.Failure} at {error.Location}: {error.Message}");
+        if (wire.Schema != WireSchema) throw new JsonException("Unsupported observation wire schema.");
+        return wire.Batch;
+    }
+}
+
+// Shared ordered immutable-content comparison. Kept internal until needed beyond observations.
+static class ObservationContent
+{
+    internal static bool SequenceEqual<T>(ImmutableArray<T> left, ImmutableArray<T> right, Func<T, T, bool> equal)
+    {
+        if (left.IsDefault || right.IsDefault) return left.IsDefault == right.IsDefault;
+        if (left.Length != right.Length) return false;
+        for (var i = 0; i < left.Length; i++) if (!equal(left[i], right[i])) return false;
+        return true;
+    }
+}

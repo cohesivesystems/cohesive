@@ -34,7 +34,7 @@ public sealed class TraceMonitor
     /// <returns>Immutable monitor containing a completed evaluation, which may have an inconclusive verdict.</returns>
     /// <exception cref="ArgumentNullException">Claim or initial batch is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">An evaluation bound is nonpositive.</exception>
-    /// <exception cref="TraceMonitorUpdateException">Mapping profile is unsupported or evaluation cannot complete.</exception>
+    /// <exception cref="TraceObservationException">Mapping profile is unsupported or evaluation cannot complete.</exception>
     /// <exception cref="OperationCanceledException">Evaluation is cancelled.</exception>
     public static TraceMonitor Start(ClaimDocument claim, TraceObservationBatch initial,
         TraceEvaluationLimits? limits = null, CancellationToken cancellationToken = default)
@@ -53,7 +53,7 @@ public sealed class TraceMonitor
     /// <param name="cancellationToken">Cancellation rejects the entire update.</param>
     /// <returns>A new accepted snapshot, or this instance for an identical replay of the current reference.</returns>
     /// <exception cref="ArgumentNullException">Update is null.</exception>
-    /// <exception cref="TraceMonitorUpdateException">Input is invalid, late, contradicts prior completeness, exceeds bounds,
+    /// <exception cref="TraceObservationException">Input is invalid, late, contradicts prior completeness, exceeds bounds,
     /// reuses a reference for changed content, or cannot be evaluated. Retry without acknowledging the rejected delivery,
     /// or explicitly correct the epoch when prior completeness was false.</exception>
     /// <exception cref="OperationCanceledException">Evaluation is cancelled; no part of the update is accepted.</exception>
@@ -75,7 +75,7 @@ public sealed class TraceMonitor
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (TraceObservationValidation.Observe(observation, seen, out var duplicate) is { } invalid)
-                throw new TraceMonitorUpdateException(invalid);
+                throw new TraceObservationException(invalid);
             if (duplicate) continue;
             if (frontiers.TryGetValue((observation.Selector, observation.Partition), out var frontier)
                 && (frontier.Closure == ObservationClosure.Closed || observation.Step <= frontier.ThroughStep
@@ -91,7 +91,7 @@ public sealed class TraceMonitor
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (TraceObservationValidation.Register(frontier, updatedFrontiers) is { } invalid)
-                throw new TraceMonitorUpdateException(invalid);
+                throw new TraceObservationException(invalid);
             var key = TraceObservationValidation.Key(frontier);
             if (frontiers.TryGetValue(key, out var previous))
             {
@@ -120,6 +120,46 @@ public sealed class TraceMonitor
         return new(evaluated, Reference());
     }
 
+    /// <summary>Atomically accepts transport-neutral capture envelopes without completeness assertions.</summary>
+    /// <param name="batches">Lazily decoded envelopes; enumeration or validation failure rejects the entire update.
+    /// Envelope count and total supplied rows have independent counters with the same MaxObservations ceiling.
+    /// Empty envelopes consume envelope capacity only; the envelope counter resets on each capture call.</param>
+    /// <param name="cumulativeReference">Exact resulting alternative reference, honored even for empty captures.</param>
+    /// <param name="cancellationToken">Cancellation rejects the entire capture.</param>
+    /// <returns>Accepted monitor and producer references in delivery order, including empty envelopes and duplicates.</returns>
+    /// <exception cref="ArgumentNullException">Batches or cumulative reference is null.</exception>
+    /// <exception cref="TraceObservationException">Capture profile, binding, observation budget or semantic update is invalid.</exception>
+    /// <exception cref="OperationCanceledException">Capture is cancelled.</exception>
+    /// <remarks>Decoder exceptions propagate unchanged. No partial result is published. This path cannot advance completeness;
+    /// qualified completeness protocols use the native alternative-update overload.</remarks>
+    public TraceCapture AdvanceCaptured(IEnumerable<TraceObservationBatch> batches, ClaimReference cumulativeReference,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(batches);
+        ArgumentNullException.ThrowIfNull(cumulativeReference);
+        cancellationToken.ThrowIfCancellationRequested();
+        var expected = Evaluation.Batch;
+        var references = ImmutableArray.CreateBuilder<ClaimReference>();
+        var observations = ImmutableArray.CreateBuilder<SemanticObservation>();
+        foreach (var batch in batches)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (batch is null) throw Reject(TraceEvaluationCodes.TelemetryEnvelope, "/capture", "Capture batch is null.");
+            batch.ValidateCapture();
+            if (batch.Target != expected.Target || batch.Epoch != expected.Epoch
+                || batch.EnumerationEvidence != expected.EnumerationEvidence || !expected.Contract.SameContent(batch.Contract))
+                throw Reject(TraceEvaluationCodes.TelemetryBinding, "/capture", "Capture does not match the pinned contract, target, epoch and mapping evidence.");
+            var alternative = batch.Alternatives[0];
+            if (references.Count >= Evaluation.Limits.MaxObservations)
+                throw Reject(TraceEvaluationCodes.BudgetExceeded, "/capture/envelopes",
+                    "Capture envelope count exceeds the per-call MaxObservations ceiling; retained row capacity is unchanged.");
+            if ((long)observations.Count + alternative.Observations.Length > Evaluation.Limits.MaxObservations) throw Capacity();
+            references.Add(alternative.Reference);
+            observations.AddRange(alternative.Observations);
+        }
+        return new(Advance(new(cumulativeReference, observations.ToImmutable(), []), cancellationToken), references.ToImmutable());
+    }
+
     /// <summary>Replaces the retained history in a new epoch, explicitly superseding the current snapshot.</summary>
     /// <param name="replacement">Complete replacement prefix and frontiers; missing old records are deliberately removed.</param>
     /// <param name="newEpoch">New exact epoch, different from the current one.</param>
@@ -127,7 +167,7 @@ public sealed class TraceMonitor
     /// <param name="cancellationToken">Cancellation rejects the replacement.</param>
     /// <returns>A new checkpoint linked to this one; the original evidence remains immutable and attributable.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
-    /// <exception cref="TraceMonitorUpdateException">Epoch or alternative identity is reused, or replacement evaluation cannot complete.</exception>
+    /// <exception cref="TraceObservationException">Epoch or alternative identity is reused, or replacement evaluation cannot complete.</exception>
     /// <exception cref="OperationCanceledException">Evaluation is cancelled.</exception>
     /// <remarks>Claim, target, scope and observation contract remain pinned. Release or mapping changes require a new session;
     /// this method does not prove reconstruction fidelity or automatically invalidate externally retained assessments.</remarks>
@@ -147,13 +187,13 @@ public sealed class TraceMonitor
     {
         var result = TraceClaimEvaluator.Evaluate(claim, batch, limits, cancellation);
         if (result.Status != AssuranceAttemptStatus.Completed)
-            throw new TraceMonitorUpdateException(result.Diagnostics.FirstOrDefault()
+            throw new TraceObservationException(result.Diagnostics.FirstOrDefault()
                 ?? new(TraceEvaluationCodes.InvalidObservation, "/batch", "Monitor update could not be evaluated completely."));
         return result;
     }
-    static TraceMonitorUpdateException Capacity() => Reject(TraceEvaluationCodes.BudgetExceeded, "/records",
+    static TraceObservationException Capacity() => Reject(TraceEvaluationCodes.BudgetExceeded, "/records",
         "Retained history or incoming update exceeds the explicit record limit; no records were accepted or evicted. Apply backpressure or start an explicitly reconfigured session.");
-    static TraceMonitorUpdateException Reject(string code, string location, string message) => new(new(code, location, message));
+    static TraceObservationException Reject(string code, string location, string message) => new(new(code, location, message));
 
     sealed record Checkpoint(string Schema, TraceEvaluation Evaluation, ClaimReference? Predecessor, ClaimReference? CorrectionEvidence);
     Checkpoint Payload() => new("cohesive-assurance-reference-monitor/v1", Evaluation, Predecessor, CorrectionEvidence);
@@ -176,7 +216,7 @@ public sealed class TraceMonitor
     /// <summary>Restores a checkpoint and independently re-evaluates its retained trace.</summary>
     /// <param name="json">Canonical checkpoint from durable storage.</param>
     /// <returns>Monitor pinned to the restored claim, target, contract, limits and epoch; inspect these before binding a live source.</returns>
-    /// <exception cref="TraceMonitorUpdateException">Checkpoint parsing, verification, profile or correction validation fails; Diagnostic retains a stable code.</exception>
+    /// <exception cref="TraceObservationException">Checkpoint parsing, verification, profile or correction validation fails; Diagnostic retains a stable code.</exception>
     /// <remarks>A predecessor reference is provenance, not proof that the predecessor was retained or that an adapter's
     /// completeness declarations are true. The host must retain the referenced checkpoints separately.</remarks>
     public static TraceMonitor Restore(string json)
@@ -197,10 +237,8 @@ public sealed class TraceMonitor
     }
 }
 
-/// <summary>Structured rejection of an entire monitor update; the accepted immutable prefix is unchanged.</summary>
-public sealed class TraceMonitorUpdateException : InvalidOperationException
-{
-    internal TraceMonitorUpdateException(TraceEvaluationDiagnostic diagnostic) : base(diagnostic.Message) => Diagnostic = diagnostic;
-    /// <summary>Stable diagnostic identifying invalid input, a continuity breach, unsupported interpretation or exhausted bounds.</summary>
-    public TraceEvaluationDiagnostic Diagnostic { get; }
-}
+/// <summary>Accepted capture and its producer provenance, independent of transport.</summary>
+/// <param name="Monitor">Accepted monitor whose alternative uses the requested cumulative reference, even with zero rows.</param>
+/// <param name="EnvelopeReferences">Producer assertions in delivery order, including duplicates and empty envelopes.
+/// Persist alongside the checkpoint and delivery position; these are not independently verified content digests.</param>
+public sealed record TraceCapture(TraceMonitor Monitor, ImmutableArray<ClaimReference> EnvelopeReferences);

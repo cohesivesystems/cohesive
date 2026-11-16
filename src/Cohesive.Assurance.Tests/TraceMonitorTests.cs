@@ -51,6 +51,51 @@ public sealed class TraceMonitorTests
     }
 
     [Fact]
+    public void CapturedBatchesShareBindingProfileBudgetAndAtomicityWithoutTransport()
+    {
+        var initial = Batch();
+        var monitor = TraceMonitor.Start(Invariant(), initial, new(MaxObservations: 2));
+        var first = initial with { Alternatives = [Update("producer", [State("first", 1, 4)])] };
+        var accepted = monitor.AdvanceCaptured([first], R("accepted"));
+        Assert.Equal(R("producer"), Assert.Single(accepted.EnvelopeReferences));
+        Assert.Single(accepted.Monitor.Evaluation.Batch.Alternatives[0].Observations);
+        Assert.Equal(TraceEvaluationCodes.TelemetryBinding, Assert.Throws<TraceObservationException>(() =>
+            monitor.AdvanceCaptured([first, initial with { Target = R("different") }], R("bad"))).Diagnostic.Code);
+        var certified = initial with { Alternatives = [Update("certified", frontiers: [Frontier(Selection, 1, 1)])] };
+        Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope, Assert.Throws<TraceObservationException>(() =>
+            monitor.AdvanceCaptured([first, certified], R("bad"))).Diagnostic.Code);
+        Assert.Equal(TraceEvaluationCodes.BudgetExceeded, Assert.Throws<TraceObservationException>(() =>
+            monitor.AdvanceCaptured([first, first, first], R("too-many"))).Diagnostic.Code);
+        Assert.Equal(TraceEvaluationCodes.BudgetExceeded, Assert.Throws<TraceObservationException>(() =>
+            monitor.AdvanceCaptured([initial, initial, initial], R("too-many-empty"))).Diagnostic.Code);
+        // Empty envelopes use their own per-call counter, not the retained row budget.
+        var emptyThenRows = monitor.AdvanceCaptured([initial, first], R("empty-then-rows"));
+        Assert.Single(emptyThenRows.Monitor.Evaluation.Batch.Alternatives[0].Observations);
+        var next = initial with { Alternatives = [Update("next-producer", [State("second", 2, 5)])] };
+        Assert.Equal(2, emptyThenRows.Monitor.AdvanceCaptured([initial, next], R("second-capture"))
+            .Monitor.Evaluation.Batch.Alternatives[0].Observations.Length);
+        Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
+    }
+
+    [Fact]
+    public void EmptyCaptureHonorsReferenceAndLazyDecoderFailureDoesNotAdvance()
+    {
+        var initial = Batch();
+        var monitor = TraceMonitor.Start(Invariant(), initial);
+        var empty = monitor.AdvanceCaptured([], R("empty"));
+        Assert.Equal(R("empty"), empty.Monitor.Evaluation.Batch.Alternatives[0].Reference);
+        Assert.Equal(R("empty"), TraceMonitor.Restore(empty.Monitor.Serialize()).Evaluation.Batch.Alternatives[0].Reference);
+        Assert.Same(empty.Monitor, empty.Monitor.AdvanceCaptured([], R("empty")).Monitor);
+        Assert.Throws<FormatException>(() => monitor.AdvanceCaptured(BrokenDecoder(), R("failed")));
+        Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
+        IEnumerable<TraceObservationBatch> BrokenDecoder()
+        {
+            yield return initial with { Alternatives = [Update("producer", [State("first", 1, 4)])] };
+            throw new FormatException("Decoder failure after a valid envelope.");
+        }
+    }
+
+    [Fact]
     public void InvariantPrefixesAndRestoredContinuationMatchIndependentBatches()
     {
         var initial = Batch();
@@ -142,7 +187,7 @@ public sealed class TraceMonitorTests
         var result = monitor.Advance(Update("redelivered", [duplicate]));
         Assert.Single(result.Evaluation.Batch.Alternatives[0].Observations);
         Assert.Equal(ClaimVerdict.Satisfied, result.Evaluation.Verdict);
-        var conflict = Assert.Throws<TraceMonitorUpdateException>(() => monitor.Advance(Update("conflict", [State("stock", 1, 12)])));
+        var conflict = Assert.Throws<TraceObservationException>(() => monitor.Advance(Update("conflict", [State("stock", 1, 12)])));
         Assert.Equal(TraceEvaluationCodes.InvalidObservation, conflict.Diagnostic.Code);
     }
 
@@ -154,7 +199,7 @@ public sealed class TraceMonitorTests
             .Advance(Update("absent", frontiers: [Frontier(Witness, 11, 11)]));
         var old = monitor.Serialize();
         var late = Event("paid", 2, 5, witness: true);
-        var error = Assert.Throws<TraceMonitorUpdateException>(() => monitor.Advance(Update("late", [late])));
+        var error = Assert.Throws<TraceObservationException>(() => monitor.Advance(Update("late", [late])));
         Assert.Equal(TraceEvaluationCodes.MonitorLateObservation, error.Diagnostic.Code);
         Assert.Equal(old, monitor.Serialize());
         var corrected = monitor.Correct(Update("replacement", [Event("order", 1, 1), late],
@@ -173,15 +218,15 @@ public sealed class TraceMonitorTests
         var monitor = TraceMonitor.Start(Invariant(), Batch(), new(MaxObservations: 3))
             .Advance(Update("first", [State("one", 1, 1)], [Frontier(Selection, 1, 1)]));
         var old = monitor.Serialize();
-        Assert.Equal(TraceEvaluationCodes.MonitorFrontierRegression, Assert.Throws<TraceMonitorUpdateException>(() =>
+        Assert.Equal(TraceEvaluationCodes.MonitorFrontierRegression, Assert.Throws<TraceObservationException>(() =>
             monitor.Advance(Update("regress", frontiers: [Frontier(Selection, 0, 0)]))).Diagnostic.Code);
-        Assert.Equal(TraceEvaluationCodes.BudgetExceeded, Assert.Throws<TraceMonitorUpdateException>(() =>
+        Assert.Equal(TraceEvaluationCodes.BudgetExceeded, Assert.Throws<TraceObservationException>(() =>
             monitor.Advance(Update("overflow", [State("two", 2, 2), State("three", 3, 3)]))).Diagnostic.Code);
         Assert.Equal(old, monitor.Serialize());
         var accepted = monitor.Advance(Update("retry", [State("two", 2, 2)]));
         Assert.Equal(2, accepted.Evaluation.Batch.Alternatives[0].Observations.Length);
         var unordered = TraceMonitor.Start(Invariant(), Batch()).Advance(Update("later", [State("later", 3, 3)]));
-        Assert.Throws<TraceMonitorUpdateException>(() => unordered.Advance(Update("earlier", [State("earlier", 2, 2)])));
+        Assert.Throws<TraceObservationException>(() => unordered.Advance(Update("earlier", [State("earlier", 2, 2)])));
     }
 
     [Fact]
@@ -189,9 +234,9 @@ public sealed class TraceMonitorTests
     {
         var monitor = TraceMonitor.Start(Invariant(), Batch())
             .Advance(Update("closed", frontiers: [Frontier(Selection, 1, 1, ObservationClosure.Closed)]));
-        Assert.Equal(TraceEvaluationCodes.MonitorFrontierRegression, Assert.Throws<TraceMonitorUpdateException>(() =>
+        Assert.Equal(TraceEvaluationCodes.MonitorFrontierRegression, Assert.Throws<TraceObservationException>(() =>
             monitor.Advance(Update("reopen", frontiers: [Frontier(Selection, 2, 2)]))).Diagnostic.Code);
-        Assert.Equal(TraceEvaluationCodes.MonitorLateObservation, Assert.Throws<TraceMonitorUpdateException>(() =>
+        Assert.Equal(TraceEvaluationCodes.MonitorLateObservation, Assert.Throws<TraceObservationException>(() =>
             monitor.Advance(Update("new", [State("new", 2, 2)]))).Diagnostic.Code);
     }
 
@@ -209,7 +254,7 @@ public sealed class TraceMonitorTests
         {
             var update = Update("bad", [observation]);
             var batch = TraceClaimEvaluator.Evaluate(Invariant(), Batch() with { Alternatives = [update] });
-            var error = Assert.Throws<TraceMonitorUpdateException>(() => monitor.Advance(update));
+            var error = Assert.Throws<TraceObservationException>(() => monitor.Advance(update));
             Assert.Equal(batch.Diagnostics[0], error.Diagnostic);
         }
         var frontier = Frontier(Selection, 1, 1);
@@ -220,7 +265,7 @@ public sealed class TraceMonitorTests
         {
             var update = Update("bad", frontiers: frontiers);
             var batch = TraceClaimEvaluator.Evaluate(Invariant(), Batch() with { Alternatives = [update] });
-            var error = Assert.Throws<TraceMonitorUpdateException>(() => monitor.Advance(update));
+            var error = Assert.Throws<TraceObservationException>(() => monitor.Advance(update));
             Assert.Equal(batch.Diagnostics[0], error.Diagnostic);
         }
     }
@@ -230,17 +275,17 @@ public sealed class TraceMonitorTests
     {
         var monitor = TraceMonitor.Start(Invariant(), Batch());
         Assert.Equal(TraceEvaluationCodes.MonitorCheckpoint,
-            Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore("not JSON")).Diagnostic.Code);
+            Assert.Throws<TraceObservationException>(() => TraceMonitor.Restore("not JSON")).Diagnostic.Code);
         var node = JsonNode.Parse(monitor.Serialize())!.AsObject();
         var partial = TraceClaimEvaluator.Evaluate(Invariant(), Batch() with { Enumeration = EnumerationCompleteness.Partial });
         node["evaluation"] = JsonNode.Parse(partial.Serialize());
         Assert.Equal(TraceEvaluationCodes.MonitorProfile,
-            Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore(node.ToJsonString())).Diagnostic.Code);
+            Assert.Throws<TraceObservationException>(() => TraceMonitor.Restore(node.ToJsonString())).Diagnostic.Code);
         var corrected = monitor.Correct(Update("replacement"), R("epoch-2"), R("evidence"));
         var correction = JsonNode.Parse(corrected.Serialize())!.AsObject();
         correction["predecessor"] = null;
         Assert.Equal(TraceEvaluationCodes.MonitorCorrection,
-            Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore(correction.ToJsonString())).Diagnostic.Code);
+            Assert.Throws<TraceObservationException>(() => TraceMonitor.Restore(correction.ToJsonString())).Diagnostic.Code);
     }
 
     [Fact]
@@ -256,14 +301,14 @@ public sealed class TraceMonitorTests
     public void ReferenceReuseCancellationAndUnsupportedMappingsDoNotCreateAcceptedState()
     {
         var monitor = TraceMonitor.Start(Invariant(), Batch());
-        Assert.Throws<TraceMonitorUpdateException>(() => monitor.Advance(Update("initial", [State("new", 1, 1)])));
+        Assert.Throws<TraceObservationException>(() => monitor.Advance(Update("initial", [State("new", 1, 1)])));
         Assert.Throws<OperationCanceledException>(() => monitor.Advance(Update("cancel", [State("new", 1, 1)]), new(canceled: true)));
-        Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Start(Invariant(), Batch() with { Enumeration = EnumerationCompleteness.Partial }));
-        Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Start(Invariant(), Batch() with { Alternatives = [Update("a"), Update("b")] }));
-        Assert.Throws<TraceMonitorUpdateException>(() => monitor.Correct(Update("new"), R("epoch"), R("evidence")));
+        Assert.Throws<TraceObservationException>(() => TraceMonitor.Start(Invariant(), Batch() with { Enumeration = EnumerationCompleteness.Partial }));
+        Assert.Throws<TraceObservationException>(() => TraceMonitor.Start(Invariant(), Batch() with { Alternatives = [Update("a"), Update("b")] }));
+        Assert.Throws<TraceObservationException>(() => monitor.Correct(Update("new"), R("epoch"), R("evidence")));
         var invalid = JsonNode.Parse(monitor.Serialize())!.AsObject();
         invalid["evaluation"]!["verdict"] = "Satisfied";
-        Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore(invalid.ToJsonString()));
-        Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore(monitor.Serialize().Replace("reference-monitor/v1", "reference-monitor/v9")));
+        Assert.Throws<TraceObservationException>(() => TraceMonitor.Restore(invalid.ToJsonString()));
+        Assert.Throws<TraceObservationException>(() => TraceMonitor.Restore(monitor.Serialize().Replace("reference-monitor/v1", "reference-monitor/v9")));
     }
 }

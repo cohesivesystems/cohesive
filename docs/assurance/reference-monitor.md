@@ -7,7 +7,8 @@ Claim, observation contract, target and evaluation limits are pinned at session 
 The intended live host is the optional #558 production-capture adapter/worker. It owns source
 positions, atomic checkpoint persistence, acknowledgment, backpressure and correction propagation.
 Simulation provides conformance and reconstruction scenarios; it does not own the live consumer
-lifecycle. This PR supplies the reference profile and tests; a production consumer is not yet implemented.
+lifecycle. The optional [OpenTelemetry bridge](opentelemetry-observations.md) now supplies explicit
+semantic event ingestion; a durable production worker is not yet implemented.
 
 ```csharp
 var monitor = TraceMonitor.Start(claim, initialBatch, limits);
@@ -45,7 +46,7 @@ correctness. A completed evaluation may still have an inconclusive verdict or pe
   predicate and event-candidate budgets as the batch interpreter. Capacity or evaluation exhaustion,
   invalid observations, unsupported evaluation and cancellation do not accept any part of the update.
 
-`TraceMonitorUpdateException.Diagnostic` identifies update and restore rejection. Restore uses
+`TraceObservationException.Diagnostic` identifies update and restore rejection. Restore uses
 `assurance.monitor.checkpoint` for malformed/incompatible or unverifiable artifacts,
 `assurance.monitor.profile` for mapping-profile violations, and `assurance.monitor.correction`
 for invalid correction lineage. Cancellation uses
