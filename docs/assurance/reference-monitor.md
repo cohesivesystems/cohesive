@@ -7,7 +7,8 @@ Claim, observation contract, target and evaluation limits are pinned at session 
 The intended live host is the optional #558 production-capture adapter/worker. It owns source
 positions, atomic checkpoint persistence, acknowledgment, backpressure and correction propagation.
 Simulation provides conformance and reconstruction scenarios; it does not own the live consumer
-lifecycle. This PR supplies the reference profile and tests; a production consumer is not yet implemented.
+lifecycle. The optional [OpenTelemetry bridge](opentelemetry-observations.md) now supplies explicit
+semantic event ingestion; a durable production worker is not yet implemented.
 
 ```csharp
 var monitor = TraceMonitor.Start(claim, initialBatch, limits);

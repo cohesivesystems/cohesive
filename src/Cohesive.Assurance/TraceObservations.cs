@@ -1,5 +1,8 @@
 using System.Collections.Immutable;
+using System.Text;
+using System.Text.Json;
 using Cohesive.Model;
+using Cohesive.Model.Serialization;
 
 namespace Cohesive.Assurance;
 
@@ -100,4 +103,28 @@ public sealed record TraceObservationAlternative(ClaimReference Reference,
 /// <remarks>Completeness declarations are conditional inputs, not independent verification of an adapter or provider.</remarks>
 public sealed record TraceObservationBatch(TraceObservationContract Contract, ClaimReference Target,
     ClaimReference Epoch, ImmutableArray<TraceObservationAlternative> Alternatives,
-    EnumerationCompleteness Enumeration, ClaimReference EnumerationEvidence);
+    EnumerationCompleteness Enumeration, ClaimReference EnumerationEvidence)
+{
+    sealed record Wire(string Schema, TraceObservationBatch Batch);
+    const string WireSchema = "cohesive-assurance-observations/v1";
+
+    /// <summary>Encodes observation inputs with the shared portable-value and canonical JSON policy.</summary>
+    /// <returns>Versioned canonical observation document; serialization does not establish semantic validity or completeness.</returns>
+    /// <exception cref="JsonException">A retained observation cannot be encoded.</exception>
+    /// <exception cref="NotSupportedException">A representation is unsupported.</exception>
+    public string Serialize() => Encoding.UTF8.GetString(
+        StrictDocumentJson.GetCanonicalBytes(new Wire(WireSchema, this), AssuranceJson.Options));
+
+    /// <summary>Reads a canonical observation document without evaluating or trusting its assertions.</summary>
+    /// <param name="json">Canonical versioned observation JSON.</param>
+    /// <returns>Untrusted observation inputs; an evaluator or monitor must validate them against the exact claim.</returns>
+    /// <exception cref="JsonException">The document is malformed, noncanonical or uses an unsupported version.</exception>
+    public static TraceObservationBatch Deserialize(string json)
+    {
+        if (!StrictDocumentJson.TryReadCanonicalObject(json, AssuranceJson.Options, "observations",
+                out Wire? wire, out var error) || wire is null || wire.Batch is null)
+            throw new JsonException($"{error.Failure} at {error.Location}: {error.Message}");
+        if (wire.Schema != WireSchema) throw new JsonException("Unsupported observation wire schema.");
+        return wire.Batch;
+    }
+}
