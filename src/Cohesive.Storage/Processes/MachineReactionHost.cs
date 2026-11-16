@@ -12,6 +12,7 @@ namespace Cohesive.Storage.Processes;
 public sealed partial class MachineReactionHost
 {
     readonly IProcessDurableStore store;
+    readonly ProcessDurableRuntimeOptions options;
     readonly MachineReactionTarget target;
     readonly ProcessDurableRuntime runtime;
     readonly ProcessDurableRuntime recoveryRuntime;
@@ -36,6 +37,7 @@ public sealed partial class MachineReactionHost
         ProcessDurableRuntimeOptions options,
         MachineReactionRecoveryPolicy? recovery = null, MachineReactionHost? prerequisite = null)
     {
+        this.options = options;
         this.recovery = recovery;
         this.prerequisite = prerequisite;
         ArgumentNullException.ThrowIfNull(store);
@@ -60,6 +62,22 @@ public sealed partial class MachineReactionHost
 
     /// <summary>Exact authority and tenant routed to this host; other scopes are unrelated deliveries.</summary>
     public InteractionAuthorityScope Authority => target.Authority;
+
+    /// <summary>Creates an independent host using a decorated target and the same policy, storage and authorization.</summary>
+    /// <param name="decorate">Infrastructure decorator receiving the actual registered target exactly once.</param>
+    /// <returns>A new host with the decorated execution and receipt-resolution boundary; the original host is unchanged.</returns>
+    /// <exception cref="ArgumentNullException">The decorator or its result is null.</exception>
+    /// <exception cref="ArgumentException">The decorated target changes transition revision or authority.</exception>
+    /// <remarks>Prerequisite inspection retains its existing host; decoration cannot replace coordination semantics.
+    /// This is runtime infrastructure configuration and never enters canonical reaction IR.</remarks>
+    public MachineReactionHost DecorateTarget(Func<MachineReactionTarget, MachineReactionTarget> decorate)
+    {
+        ArgumentNullException.ThrowIfNull(decorate);
+        var decorated = decorate(target) ?? throw new ArgumentNullException(nameof(decorate), "A target decorator returned null.");
+        if (decorated.Transition != target.Transition || decorated.Authority != target.Authority)
+            throw new ArgumentException("A target decorator must preserve the exact transition and authority.", nameof(decorate));
+        return new(Policy, store, decorated, authorize, options, recovery, prerequisite);
+    }
 
     internal IProcessDurableStore Store => store;
     internal bool SupportsRecovery => recovery is not null;

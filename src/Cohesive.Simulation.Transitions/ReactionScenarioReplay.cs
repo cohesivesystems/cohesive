@@ -74,7 +74,8 @@ public static class ReactionScenarioReplay
     /// <returns>A freshly executed trace identical to the retained trace.</returns>
     /// <exception cref="ArgumentNullException">The factory is null.</exception>
     /// <exception cref="JsonException">The envelope, recipe or embedded trace is malformed or unsupported.</exception>
-    /// <exception cref="InvalidOperationException">Reconstruction identity or execution differs from retained evidence.</exception>
+    /// <exception cref="InvalidOperationException">Reconstruction identity or execution differs from retained evidence.
+    /// Outcome divergence includes the first zero-based SequenceIndex, ActionId, ExpectedOutcome and ActualOutcome in Data.</exception>
     /// <exception cref="OperationCanceledException">Replay is cancelled.</exception>
     public static async Task<ScenarioExecutionTraceDocument> ReplayAsync(string json,
         Func<ReactionScenarioEnvironment, CancellationToken, ValueTask<MachineReactionScenarioInterpreter>> createInterpreter,
@@ -93,7 +94,21 @@ public static class ReactionScenarioReplay
             throw new InvalidOperationException("The reconstructed reaction environment does not match the retained interpreter identity.");
         var actual = await ScenarioRunner.ExecuteAsync(expected.ToInitialWorldSnapshot(), interpreter, cancellationToken).ConfigureAwait(false);
         if (actual.Fingerprint != expected.Fingerprint)
-            throw new InvalidOperationException("Reaction replay diverged from the retained execution trace.");
+        {
+            for (var index = 0; index < expected.Outcomes.Length; index++)
+            {
+                var before = expected.Outcomes[index];
+                var after = actual.Outcomes[index];
+                if (before.Output.Equals(after.Output) && before.StateChanges.SequenceEqual(after.StateChanges)) continue;
+                var divergence = new InvalidOperationException($"Reaction replay diverged at sequence {index} (zero-based), action '{before.ActionId}'.");
+                divergence.Data["SequenceIndex"] = index;
+                divergence.Data["ActionId"] = before.ActionId;
+                divergence.Data["ExpectedOutcome"] = before;
+                divergence.Data["ActualOutcome"] = after;
+                throw divergence;
+            }
+            throw new InvalidOperationException("Reaction replay diverged in trace metadata before sequence 0.");
+        }
         return actual;
     }
 }

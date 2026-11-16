@@ -14,31 +14,37 @@ namespace Cohesive.Examples.TenderAcceptance;
 internal sealed class TenderEpisodeRuntime
 {
     internal TenderEpisodeModel Model { get; } = new();
-    internal OperationContext Context { get; init; } = OperationContext.Create();
-    internal InteractionAuthorityScope Authority { get; init; } = new("tests", "test");
+    internal OperationContext Context { get; }
+    internal InteractionAuthorityScope Authority { get; }
     internal IProcessDurableStore Store = new InMemoryProcessDurableStore();
-    internal InMemoryEntityOutboxRepository Tenders = null!;
-    internal InMemoryEntityOutboxRepository Loads = null!;
-    internal MachineReactionTarget AcceptTarget = null!;
-    internal MachineReactionTarget ConfirmTarget = null!;
+    internal InMemoryEntityOutboxRepository Tenders { get; }
+    internal InMemoryEntityOutboxRepository Loads { get; }
+    internal MachineReactionTarget AcceptTarget { get; }
+    internal MachineReactionTarget ConfirmTarget { get; }
     int operation;
     internal string OperationPrefix = "source";
 
+    TenderEpisodeRuntime(InteractionAuthorityScope authority, TimeProvider? timeProvider)
+    {
+        Authority = authority;
+        Context = OperationContext.Create(timeProvider: timeProvider);
+        Tenders = new(Model.Tender, EntityPartitionKeyPolicy.Fixed("test"));
+        Loads = new(Model.Load, EntityPartitionKeyPolicy.Fixed("test"));
+        if (!InteractionContractCatalog.TryCreate([], out var contracts).IsValid)
+            throw new InvalidOperationException("Empty interaction catalog did not validate.");
+        AcceptTarget = MachineReactionTarget.Local(new(Model.MarkPending.Compile().Plan!, Loads, contracts!), Authority,
+            (_, _) => ValueTask.FromResult(true));
+        ConfirmTarget = MachineReactionTarget.Local(new(Model.ConfirmLoad.Compile().Plan!, Loads, contracts!), Authority,
+            (_, _) => ValueTask.FromResult(true));
+    }
+
     internal static async Task<TenderEpisodeRuntime> Create(int loadEpisode = 1, InteractionAuthorityScope? authority = null, TimeProvider? timeProvider = null)
     {
-        var f = new TenderEpisodeRuntime { Authority = authority ?? new("tests", "test"), Context = OperationContext.Create(timeProvider: timeProvider) };
-        f.Tenders = new(f.Model.Tender, EntityPartitionKeyPolicy.Fixed("test"));
-        f.Loads = new(f.Model.Load, EntityPartitionKeyPolicy.Fixed("test"));
+        var f = new TenderEpisodeRuntime(authority ?? new("tests", "test"), timeProvider);
         await f.Tenders.Upsert(f.Context, new(f.Model.Tender.CreateState("tender-1",
             ObservationValue.FromObject(new EpisodeTender(EpisodeTenderStatus.Offered, "load-1", 1)).Fields!).Snapshot));
         await f.Loads.Upsert(f.Context, new(f.Model.Load.CreateState("load-1",
             ObservationValue.FromObject(new EpisodeLoad(EpisodeLoadStatus.Ready, loadEpisode)).Fields!).Snapshot));
-        if (!InteractionContractCatalog.TryCreate([], out var contracts).IsValid)
-            throw new InvalidOperationException("Empty interaction catalog did not validate.");
-        f.AcceptTarget = MachineReactionTarget.Local(new(f.Model.MarkPending.Compile().Plan!, f.Loads, contracts!), f.Authority,
-            (_, _) => ValueTask.FromResult(true));
-        f.ConfirmTarget = MachineReactionTarget.Local(new(f.Model.ConfirmLoad.Compile().Plan!, f.Loads, contracts!), f.Authority,
-            (_, _) => ValueTask.FromResult(true));
         return f;
     }
 
@@ -62,6 +68,8 @@ internal sealed class TenderEpisodeRuntime
         return (a1, c1, a2, c2);
     }
 
+    // Fixture preparation only: not an application execution API. The missing direct receipt-backed
+    // executor must reuse the native adapter's decision/projection/emission mechanism (see README).
     internal async Task<EntityTransitionOperationReceipt> Execute<TState>(InMemoryEntityOutboxRepository repository,
         EntityDefinition entity, string id, Transition<TState, EpisodeCommand, string> transition, EpisodeCommand command) where TState : notnull
     {
@@ -70,15 +78,18 @@ internal sealed class TenderEpisodeRuntime
         var occurrence = new ProcessOperationOccurrence(new(new(OperationPrefix + "/" + ++operation), new("attempt")),
             new("activation"), new("token"), new("invoke"), occurrence: 0);
         var input = PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(command));
-        var decision = TransitionReferenceInterpreter.DecideFullState(plan, occurrence.Activation, input,
-            PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(before.Entity.Observation.Fields)));
-        if (decision.Kind != TransitionDecisionKind.Applied)
-            throw new InvalidOperationException("Tender replay setup transition was not applied.");
-        var request = new EntityTransitionOperationRequest(occurrence, Authority, decision.Evidence.Definition,
+        var request = new EntityTransitionOperationRequest(occurrence, Authority, plan.DefinitionReference,
             new(new(repository.EntityType), before.Entity.EntityId), input);
-        var candidate = TransitionStateProjector.ApplyToEntity(entity, id, decision, before.Entity);
-        var commit = new EntityTransitionOperationCommit(request, new(candidate.Snapshot, before.ConcurrencyToken),
-            decision.Kind, ProcessOperationResult.Completed(decision.Outcome!), decision.GuaranteeDemands, decision.Evidence);
-        return (await repository.CommitTransitionOperation(Context, commit)).Receipt!;
+        var result = await repository.ExecuteTransitionOperation(Context, request, () =>
+        {
+            var decision = TransitionReferenceInterpreter.DecideFullState(plan, occurrence.Activation, input,
+                PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(before.Entity.Observation.Fields)));
+            if (decision.Kind != TransitionDecisionKind.Applied)
+                throw new InvalidOperationException("Tender replay setup transition was not applied.");
+            var candidate = TransitionStateProjector.ApplyToEntity(entity, id, decision, before.Entity);
+            return new(request, new(candidate.Snapshot, before.ConcurrencyToken),
+                decision.Kind, ProcessOperationResult.Completed(decision.Outcome!), decision.GuaranteeDemands, decision.Evidence);
+        });
+        return result.Receipt ?? throw new InvalidOperationException("Tender replay setup did not produce an atomic receipt.");
     }
 }

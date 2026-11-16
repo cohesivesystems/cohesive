@@ -77,17 +77,15 @@ internal static class TenderEpisodeScenarios
         var first = (await fixture.Acceptance().AdmitAsync(fixture.Context, receipts.Acceptance1)).Single();
         await fixture.Acceptance().RecoverAsync(fixture.Context, first);
         await fixture.Execute(fixture.Loads, fixture.Model.Load, "load-1", fixture.Model.ReviseLoad, new EpisodeCommand(2));
-        var faults = new ReactionScenarioFaults();
-        var target = faults.Bind(ConfirmationHost, fixture.ConfirmTarget);
         return new MachineReactionScenarioInterpreter(environment.Identity, fixture.Store,
             new Dictionary<string, MachineReactionHost>
             {
-                [AcceptanceHost] = fixture.Acceptance(), [ConfirmationHost] = fixture.Confirmation(target)
+                [AcceptanceHost] = fixture.Acceptance(), [ConfirmationHost] = fixture.Confirmation()
             }, new Dictionary<string, EntityTransitionOperationReceipt>
             {
                 [Acceptance1.Receipt] = receipts.Acceptance1, [Confirmation1.Receipt] = receipts.Confirmation1,
                 [Acceptance2.Receipt] = receipts.Acceptance2, [Confirmation2.Receipt] = receipts.Confirmation2
-            }, faults: faults);
+            });
     }
 
     sealed class FixedClock : TimeProvider

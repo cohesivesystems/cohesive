@@ -16,44 +16,22 @@ public enum ReactionScenarioFault
     LoseAcknowledgement
 }
 
-/// <summary>Single-run target instrumentation driven exclusively by canonical scenario action inputs.</summary>
-/// <remarks>Bind targets before constructing their hosts. Pass this same instance to the scenario interpreter.
-/// Only sequential isolated simulations are supported. Faults never carry into another action, and a declared
-/// fault that did not reach its target boundary fails the run rather than silently passing.</remarks>
-public sealed class ReactionScenarioFaults
+// Owned by the interpreter: targets are wrapped from their actual registered hosts.
+internal sealed class ReactionScenarioFaults
 {
-    readonly Dictionary<string, MachineReactionTarget> targets = new(StringComparer.Ordinal);
-    bool attached;
     string? activeHost;
     ReactionScenarioFault activeFault;
     int hits;
+    int calls;
 
-    /// <summary>Wraps a target without changing its transition, authority, receipt resolution or real failure classification.</summary>
-    /// <param name="host">Unique host alias used by scenario inputs.</param>
-    /// <param name="target">Isolated deterministic target to instrument.</param>
-    /// <returns>A target to supply to the corresponding durable host.</returns>
-    /// <exception cref="ArgumentException">The alias is blank or already bound.</exception>
-    /// <exception cref="ArgumentNullException">The target is null.</exception>
-    /// <exception cref="InvalidOperationException">The session is already attached to an interpreter.</exception>
-    public MachineReactionTarget Bind(string host, MachineReactionTarget target)
+    internal MachineReactionTarget Bind(string host, MachineReactionTarget target) => new Target(this, host, target);
+
+    internal static ReactionScenarioFault Parse(string? name)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(host);
-        ArgumentNullException.ThrowIfNull(target);
-        if (attached) throw new InvalidOperationException("Bind targets before attaching the fault session to an interpreter.");
-        if (!targets.TryAdd(host, target)) throw new ArgumentException("A fault target alias is already bound.", nameof(host));
-        return new Target(this, host, target);
-    }
-
-    internal bool Contains(string host) => targets.ContainsKey(host);
-    internal IEnumerable<string> Aliases => targets.Keys.Order(StringComparer.Ordinal);
-
-    internal void Attach(IReadOnlyDictionary<string, MachineReactionHost> hosts)
-    {
-        if (attached) throw new InvalidOperationException("Use fresh fault instrumentation for each interpreter.");
-        foreach (var (alias, target) in targets)
-            if (!hosts.TryGetValue(alias, out var host) || host.Authority != target.Authority || host.Policy.Payload.Target.Reference != target.Transition)
-                throw new ArgumentException("An instrumented target must match its registered host's exact transition and authority.");
-        attached = true;
+        if (!Enum.TryParse<ReactionScenarioFault>(name, out var fault) || !Enum.IsDefined(fault)
+            || !string.Equals(name, fault.ToString(), StringComparison.Ordinal))
+            throw new InvalidOperationException("Unknown or noncanonical reaction scenario fault.");
+        return fault;
     }
 
     internal void Begin(string host, ReactionScenarioFault fault)
@@ -62,18 +40,19 @@ public sealed class ReactionScenarioFaults
         activeHost = host;
         activeFault = fault;
         hits = 0;
+        calls = 0;
     }
 
     internal void End(bool requireHit)
     {
-        var missed = activeFault != ReactionScenarioFault.None && hits != 1;
+        var missed = calls > 1 || activeFault != ReactionScenarioFault.None && hits != 1;
         activeHost = null;
         activeFault = ReactionScenarioFault.None;
-        if (requireHit && missed)
+        if (calls > 1 || requireHit && missed)
             throw new InvalidOperationException("The scheduled reaction fault did not reach exactly one target execution boundary.");
     }
 
-    sealed class InjectedFailure(ReactionScenarioFault fault) : TimeoutException($"Injected reaction fault: {fault}")
+    sealed class InjectedFailure(ReactionScenarioFault fault) : Exception($"Injected reaction fault: {fault}")
     {
         internal ReactionScenarioFault Fault { get; } = fault;
     }
@@ -85,9 +64,10 @@ public sealed class ReactionScenarioFaults
         {
             context.CancellationToken.ThrowIfCancellationRequested();
             var fault = owner.activeHost == alias ? owner.activeFault : ReactionScenarioFault.None;
+            if (owner.activeHost == alias && ++owner.calls > 1)
+                throw new InvalidOperationException("A recovery action executed its target more than once.");
             if (fault != ReactionScenarioFault.None)
             {
-                if (owner.hits != 0) throw new InvalidOperationException("A fault action executed its target more than once.");
                 if (fault == ReactionScenarioFault.BeforeExecution)
                 {
                     owner.hits++;

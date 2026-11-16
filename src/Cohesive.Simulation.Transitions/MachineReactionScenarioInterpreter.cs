@@ -57,7 +57,7 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
     readonly Dictionary<string, EntityTransitionOperationReceipt> receipts;
     readonly Dictionary<(string Host, string Receipt), ProcessInstanceId> admitted = [];
     readonly Func<OperationContext, ProcessStartRequest, CancelProcessCommand, ValueTask<bool>> authorizeAbandon;
-    readonly ReactionScenarioFaults? faults;
+    readonly ReactionScenarioFaults faults = new();
     int nextSequence;
     string? scenarioFingerprint;
 
@@ -67,20 +67,17 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
     /// <param name="hosts">Host aliases; every prerequisite must be registered in the same authority.</param>
     /// <param name="receipts">Immutable source evidence indexed by alias; copied on construction.</param>
     /// <param name="authorizeAbandon">Explicit simulation control authorization; null denies abandonment.</param>
-    /// <param name="faults">Optional single-run instrumentation bound to this run's target hosts.</param>
     /// <exception cref="ArgumentException">Environment identity is blank, aliases are blank, or runtime registration has missing prerequisites, incompatible stores or hosts without recovery.</exception>
     /// <exception cref="ArgumentNullException">A required argument or registration value is null.</exception>
-    /// <exception cref="InvalidOperationException">Fault instrumentation already belongs to another interpreter.</exception>
     public MachineReactionScenarioInterpreter(string environmentIdentity, IProcessDurableStore store,
         IReadOnlyDictionary<string, MachineReactionHost> hosts,
         IReadOnlyDictionary<string, EntityTransitionOperationReceipt> receipts,
-        Func<OperationContext, ProcessStartRequest, CancelProcessCommand, ValueTask<bool>>? authorizeAbandon = null, ReactionScenarioFaults? faults = null)
+        Func<OperationContext, ProcessStartRequest, CancelProcessCommand, ValueTask<bool>>? authorizeAbandon = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(environmentIdentity);
         ArgumentNullException.ThrowIfNull(hosts);
         ArgumentNullException.ThrowIfNull(receipts);
         EnvironmentIdentity = environmentIdentity;
-        this.faults = faults;
         this.hosts = new(hosts, StringComparer.Ordinal);
         this.receipts = new(receipts, StringComparer.Ordinal);
         foreach (var (alias, host) in this.hosts)
@@ -95,16 +92,16 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
         }
         // Reuse the runtime's registration authority, including store, recovery, revision and tenant checks.
         _ = new MachineReactionRecovery(store, [.. this.hosts.Values]);
-        faults?.Attach(this.hosts);
+        foreach (var (alias, host) in this.hosts.ToArray())
+            this.hosts[alias] = host.DecorateTarget(target => faults.Bind(alias, target));
         this.authorizeAbandon = authorizeAbandon ?? ((_, _, _) => ValueTask.FromResult(false));
         var identity = JsonSerializer.Serialize(new
         {
             Environment = environmentIdentity,
-            FaultTargets = faults?.Aliases.ToArray() ?? [],
             Hosts = this.hosts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new { Alias = p.Key, Policy = p.Value.Policy.Document.Reference, p.Value.Authority }),
             Receipts = this.receipts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new { Alias = p.Key, p.Value.Commit.Fingerprint, p.Value.CommittedAtUtc })
         });
-        Identity = "cohesive-simulation-reactions/v2/sha256/" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
+        Identity = "cohesive-simulation-reactions/v3/sha256/" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
     }
 
     /// <summary>Profile identity pinning host policies, source commits and declared initial environment.</summary>
@@ -166,14 +163,14 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
         MachineReactionProgress? actionProgress = null;
         if (context.Operation.Id == Recover)
         {
-            faults?.Begin(hostAlias, fault);
+            faults.Begin(hostAlias, fault);
             var completed = false;
             try
             {
                 actionProgress = await host.RecoverAsync(operation, instance).ConfigureAwait(false);
                 completed = true;
             }
-            finally { faults?.End(requireHit: completed); }
+            finally { faults.End(requireHit: completed); }
         }
         var inspection = await host.InspectLifecycleAsync(operation, instance).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Admitted reaction is missing from its store.");
@@ -213,7 +210,7 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
                 throw new InvalidOperationException("The schedule refers to an unregistered host or receipt.");
             if (action.OperationId is not (Deliver or Recover or Inspect or Abandon))
                 throw new InvalidOperationException("Unknown reaction scenario operation.");
-            if (fault != ReactionScenarioFault.None && (action.OperationId != Recover || faults?.Contains(host) != true))
+            if (fault != ReactionScenarioFault.None && action.OperationId != Recover)
                 throw new InvalidOperationException("A fault requires a recovery action and an instrumented target alias.");
             if (action.OperationId == Deliver) delivered.Add((host, receipt));
             else if (!delivered.Contains((host, receipt)))
@@ -221,13 +218,8 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
         }
     }
 
-    static ReactionScenarioFault ReadFault(ObservationValue input)
-    {
-        var name = input.Fields![nameof(ReactionScenarioInput.Fault)].GetString();
-        if (!Enum.TryParse<ReactionScenarioFault>(name, out var fault) || !Enum.IsDefined(fault))
-            throw new InvalidOperationException("Unknown reaction scenario fault.");
-        return fault;
-    }
+    static ReactionScenarioFault ReadFault(ObservationValue input) =>
+        ReactionScenarioFaults.Parse(input.Fields![nameof(ReactionScenarioInput.Fault)].GetString());
 
     sealed class ActionClock(DateTimeOffset now) : TimeProvider
     {

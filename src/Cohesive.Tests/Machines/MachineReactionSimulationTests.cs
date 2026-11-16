@@ -139,9 +139,8 @@ public sealed class MachineReactionSimulationTests
     public async Task Invalid_fault_placement_fails_before_any_admission(string operation)
     {
         var fixture = await Fixture.Create(timeProvider: new FixedClock());
-        var faults = new ReactionScenarioFaults();
         var interpreter = Create(fixture, await fixture.TwoCycles(),
-            faults.Bind(ConfirmationHost, fixture.ConfirmTarget), "invalid-placement", faults);
+            fixture.ConfirmTarget, "invalid-placement");
         var scenario = Build([(Deliver, Confirmation2),
             (operation, Confirmation2 with { Fault = ReactionScenarioFault.BeforeExecution })]);
         await Assert.ThrowsAsync<InvalidOperationException>(() => ScenarioRunner.ExecuteAsync(
@@ -150,22 +149,11 @@ public sealed class MachineReactionSimulationTests
     }
 
     [Fact]
-    public async Task Missing_fault_instrumentation_fails_before_any_admission()
-    {
-        var fixture = await Fixture.Create(timeProvider: new FixedClock());
-        var interpreter = await Interpreter(fixture);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => ScenarioRunner.ExecuteAsync(
-            ScenarioWorldSnapshot.FromCoreWorld(ConfirmationFirst()), interpreter));
-        Assert.Empty(await ((IProcessInstanceSource)fixture.Store).ListInstancesAsync(fixture.Context, null, 32));
-    }
-
-    [Fact]
     public async Task A_fault_on_a_waiting_reaction_is_reported_as_unexercised()
     {
         var fixture = await Fixture.Create(timeProvider: new FixedClock());
-        var faults = new ReactionScenarioFaults();
         var interpreter = Create(fixture, await fixture.TwoCycles(),
-            faults.Bind(ConfirmationHost, fixture.ConfirmTarget), "waiting", faults);
+            fixture.ConfirmTarget, "waiting");
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => ScenarioRunner.ExecuteAsync(
             ScenarioWorldSnapshot.FromCoreWorld(Build([(Deliver, Confirmation2),
                 (Recover, Confirmation2 with { Fault = ReactionScenarioFault.LoseAcknowledgement })])), interpreter));
@@ -183,8 +171,7 @@ public sealed class MachineReactionSimulationTests
             new ReactionScenarioEnvironment("other-profile", environment.InitialState), interpreter, trace));
         var fixture = await Fixture.Create(timeProvider: new FixedClock());
         fixture.OperationPrefix = "changed-source";
-        var faults = new ReactionScenarioFaults();
-        var changed = Create(fixture, await fixture.TwoCycles(), faults.Bind(ConfirmationHost, fixture.ConfirmTarget), environment.Identity, faults);
+        var changed = Create(fixture, await fixture.TwoCycles(), fixture.ConfirmTarget, environment.Identity);
         await Assert.ThrowsAsync<InvalidOperationException>(() => ReactionScenarioReplay.ReplayAsync(artifact,
             (_, _) => ValueTask.FromResult(changed)));
         Assert.Empty(await ((IProcessInstanceSource)fixture.Store).ListInstancesAsync(fixture.Context, null, 32));
@@ -202,9 +189,8 @@ public sealed class MachineReactionSimulationTests
         var receipts = await fixture.TwoCycles();
         var first = Assert.Single(await fixture.Acceptance().AdmitAsync(fixture.Context, receipts.Acceptance1));
         await fixture.Acceptance().RecoverAsync(fixture.Context, first);
-        var faults = new ReactionScenarioFaults();
         var recording = new RecordingTarget(fixture.ConfirmTarget, fixture);
-        var interpreter = Create(fixture, receipts, faults.Bind(ConfirmationHost, recording), "boundary-check", faults);
+        var interpreter = Create(fixture, receipts, recording, "boundary-check");
         var trace = await ScenarioRunner.ExecuteAsync(ScenarioWorldSnapshot.FromCoreWorld(Build([
             (Deliver, Confirmation1), (Recover, Confirmation1),
             (Recover, Confirmation1 with { Fault = ReactionScenarioFault.BeforeExecution }),
@@ -232,23 +218,27 @@ public sealed class MachineReactionSimulationTests
         Assert.Equal(original.Identity, candidate.Identity); // A factory's initial-state assertion is not a sandbox.
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => ReactionScenarioReplay.ReplayAsync(
             artifact, (_, _) => ValueTask.FromResult(candidate)));
-        Assert.Contains("diverged", error.Message);
+        Assert.Contains("diverged at sequence 1", error.Message);
+        Assert.Equal(1, error.Data["SequenceIndex"]);
+        Assert.Equal("step-001", error.Data["ActionId"]);
+        Assert.IsType<ScenarioActionOutcome>(error.Data["ExpectedOutcome"]);
+        Assert.IsType<ScenarioActionOutcome>(error.Data["ActualOutcome"]);
     }
 
     [Fact]
-    public async Task Fault_sessions_are_single_owner_and_binding_changes_are_pinned()
+    public async Task Host_decoration_preserves_registration_and_rejects_wrong_targets()
     {
         var fixture = await Fixture.Create(timeProvider: new FixedClock());
-        var receipts = await fixture.TwoCycles();
-        var faults = new ReactionScenarioFaults();
-        var target = faults.Bind(ConfirmationHost, fixture.ConfirmTarget);
-        var instrumented = Create(fixture, receipts, target, "binding", faults);
-        Assert.NotEqual(instrumented.Identity, Create(fixture, receipts, fixture.ConfirmTarget, "binding").Identity);
-        Assert.Throws<InvalidOperationException>(() => Create(fixture, receipts, target, "binding", faults));
-        Assert.Throws<InvalidOperationException>(() => faults.Bind("late", fixture.AcceptTarget));
-        var mismatch = new ReactionScenarioFaults();
-        mismatch.Bind(ConfirmationHost, fixture.AcceptTarget);
-        Assert.Throws<ArgumentException>(() => Create(fixture, receipts, fixture.ConfirmTarget, "binding", mismatch));
+        var host = fixture.Confirmation();
+        Assert.Throws<ArgumentException>(() => host.DecorateTarget(_ => fixture.AcceptTarget));
+        Assert.Throws<ArgumentNullException>(() => host.DecorateTarget(_ => null!));
+        var decorated = host.DecorateTarget(target =>
+        {
+            Assert.Same(fixture.ConfirmTarget, target);
+            return target;
+        });
+        Assert.Equal(host.Policy, decorated.Policy);
+        Assert.Equal(host.Authority, decorated.Authority);
     }
 
     [Fact]
@@ -271,15 +261,45 @@ public sealed class MachineReactionSimulationTests
         var receipts = await fixture.TwoCycles();
         var accepted = Assert.Single(await fixture.Acceptance().AdmitAsync(fixture.Context, receipts.Acceptance1));
         await fixture.Acceptance().RecoverAsync(fixture.Context, accepted);
-        var faults = new ReactionScenarioFaults();
         var failing = new FailingTarget(fixture.ConfirmTarget);
-        var wrapped = faults.Bind(ConfirmationHost, failing);
-        Assert.Equal(FailingTarget.Failure, wrapped.DescribeFailure(new IOException()));
-        var interpreter = Create(fixture, receipts, wrapped, "real-failure", faults);
+        var interpreter = Create(fixture, receipts, failing, "real-failure");
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() => ScenarioRunner.ExecuteAsync(
             ScenarioWorldSnapshot.FromCoreWorld(Build([(Deliver, Confirmation1), (Recover, Confirmation1),
                 (Recover, Confirmation1 with { Fault = ReactionScenarioFault.LoseAcknowledgement })])), interpreter));
         Assert.Contains("exactly one target", error.Message);
+    }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("0")]
+    [InlineData("BeforeExecution ")]
+    [InlineData("beforeexecution")]
+    [InlineData("None, BeforeExecution")]
+    public void Fault_names_must_be_exact_canonical_names(string value) =>
+        Assert.Throws<InvalidOperationException>(() => ReactionScenarioFaults.Parse(value));
+
+    [Fact]
+    public void Every_declared_fault_name_is_accepted()
+    {
+        foreach (var fault in Enum.GetValues<ReactionScenarioFault>())
+            Assert.Equal(fault, ReactionScenarioFaults.Parse(fault.ToString()));
+    }
+
+    [Fact]
+    public async Task Repeated_target_call_is_retained_even_if_the_host_swallows_the_exception()
+    {
+        var fixture = await Fixture.Create(timeProvider: new FixedClock());
+        var faults = new ReactionScenarioFaults();
+        var wrapped = faults.Bind(ConfirmationHost, fixture.ConfirmTarget);
+        faults.Begin(ConfirmationHost, ReactionScenarioFault.BeforeExecution);
+        var injected = await Assert.ThrowsAnyAsync<Exception>(async () => await wrapped.ExecuteAsync(fixture.Context, null!));
+        Assert.IsNotType<TimeoutException>(injected);
+        Assert.Equal(DurableOperationEffectEvidence.NotExecuted, wrapped.DescribeFailure(injected).EffectEvidence);
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await wrapped.ExecuteAsync(fixture.Context, null!));
+        // The durable host can catch/convert both exceptions; End must still fail outside that boundary.
+        Assert.Throws<InvalidOperationException>(() => faults.End(requireHit: true));
+        faults.Begin(ConfirmationHost, ReactionScenarioFault.None);
+        faults.End(requireHit: true);
     }
 
     sealed class FailingTarget(MachineReactionTarget inner) : MachineReactionTarget(inner.Transition, inner.Authority)
@@ -324,7 +344,7 @@ public sealed class MachineReactionSimulationTests
     static MachineReactionScenarioInterpreter Create(Fixture fixture,
         (EntityTransitionOperationReceipt Acceptance1, EntityTransitionOperationReceipt Confirmation1,
          EntityTransitionOperationReceipt Acceptance2, EntityTransitionOperationReceipt Confirmation2) receipts,
-        MachineReactionTarget confirmationTarget, string environment, ReactionScenarioFaults? faults = null) => new(environment, fixture.Store,
+        MachineReactionTarget confirmationTarget, string environment) => new(environment, fixture.Store,
         new Dictionary<string, MachineReactionHost>
         {
             [AcceptanceHost] = fixture.Acceptance(), [ConfirmationHost] = fixture.Confirmation(confirmationTarget)
@@ -332,7 +352,7 @@ public sealed class MachineReactionSimulationTests
         {
             [Acceptance1.Receipt] = receipts.Acceptance1, [Confirmation1.Receipt] = receipts.Confirmation1,
             [Acceptance2.Receipt] = receipts.Acceptance2, [Confirmation2.Receipt] = receipts.Confirmation2
-        }, authorizeAbandon: (_, _, _) => ValueTask.FromResult(true), faults: faults);
+        }, authorizeAbandon: (_, _, _) => ValueTask.FromResult(true));
 
     static string? Field(ScenarioExecutionTraceDocument trace, int index, string field) =>
         trace.Outcomes[index].Output.Value!.Value.Fields![field].GetString();
