@@ -45,10 +45,13 @@ internal sealed class ReactionScenarioFaults
 
     internal void End(bool requireHit)
     {
-        var missed = calls > 1 || activeFault != ReactionScenarioFault.None && hits != 1;
+        var repeated = calls > 1;
+        var missed = activeFault != ReactionScenarioFault.None && hits != 1;
         activeHost = null;
         activeFault = ReactionScenarioFault.None;
-        if (calls > 1 || requireHit && missed)
+        if (repeated)
+            throw new InvalidOperationException("A faulted recovery action executed its target more than once.");
+        if (requireHit && missed)
             throw new InvalidOperationException("The scheduled reaction fault did not reach exactly one target execution boundary.");
     }
 
@@ -64,15 +67,12 @@ internal sealed class ReactionScenarioFaults
         {
             context.CancellationToken.ThrowIfCancellationRequested();
             var fault = owner.activeHost == alias ? owner.activeFault : ReactionScenarioFault.None;
-            if (owner.activeHost == alias && ++owner.calls > 1)
-                throw new InvalidOperationException("A recovery action executed its target more than once.");
-            if (fault != ReactionScenarioFault.None)
+            if (fault != ReactionScenarioFault.None && ++owner.calls > 1)
+                throw new InvalidOperationException("A faulted recovery action executed its target more than once.");
+            if (fault == ReactionScenarioFault.BeforeExecution)
             {
-                if (fault == ReactionScenarioFault.BeforeExecution)
-                {
-                    owner.hits++;
-                    throw new InjectedFailure(fault);
-                }
+                owner.hits++;
+                throw new InjectedFailure(fault);
             }
             var result = await inner.ExecuteAsync(context, invocation).ConfigureAwait(false);
             if (fault == ReactionScenarioFault.LoseAcknowledgement)

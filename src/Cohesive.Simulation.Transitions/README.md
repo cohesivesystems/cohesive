@@ -130,20 +130,23 @@ are expressed by scheduled virtual times. No additional delivery scheduler or fa
 
 The interpreter automatically decorates each registered host's actual target with private, single-run
 instrumentation. Callers supply ordinary hosts; there is no Bind/Attach protocol and no separate fault
-session to pass. `MachineReactionHost.DecorateTarget` preserves the policy, store, authorization,
+session to pass. The internal `MachineReactionHost.DecorateTarget` seam preserves the policy, store, authorization,
 recovery options, exact target revision and authority while leaving the original host unchanged.
 Prerequisite inspection retains its original host; receipt lookup is unaffected by target faults.
 A fault applies only during its recovery action, and ordinary target exceptions retain their
 target-owned classification. Pre-execution failure records `PreCall/NotExecuted`; acknowledgement loss records
 `PostCommitPreAcknowledgement/Ambiguous`. An acknowledgement may also be lost after a domain rejection:
 the wrapper does not assert that every target return committed a mutation. Fault inputs accept only exact
-enum names (no numeric or comma-separated aliases). Repeated target execution is recorded outside the
+enum names (no numeric or comma-separated aliases). For faulted actions only, repeated target execution is recorded outside the
 host's failure-classification boundary and fails the action even when the host catches the inner exception.
+Unfaulted actions transparently preserve the host's retry behavior, including multiple target attempts in one
+recovery call. The injected exception derives from Exception, not TimeoutException; explicit failure evidence
+supplies its retry classification.
 
 The interpreter validates aliases, contracts, delivery ordering and fault placement for the complete
 schedule before the first admission. A declared fault that never reaches its target (for example a
 reaction still waiting for a prerequisite) fails the run explicitly. `ReactionScenarioObservation.Fault`
-records an exercised boundary. The v3 interpreter profile (with the fault-bearing input/output contracts) intentionally rejects old
+records an exercised boundary. The v4 interpreter profile (with the fault-bearing input/output contracts) intentionally rejects old
 fault-less scenario contracts rather than silently reinterpreting retained traces.
 
 `ReactionScenarioEnvironment` holds a versioned reconstruction profile and concrete `PortableValue`
@@ -174,7 +177,10 @@ executable, arbitrary repository backup or credential store. The factory owns ta
 preexisting Process history and receipts; these are reconstructed by the recipe rather than copied into
 the scenario's actor world. A changed reconstructed identity is rejected before scheduled execution;
 changed execution evidence fails exact trace comparison. A divergence identifies the first zero-based
-sequence and action ID; the exception's Data also carries ExpectedOutcome and ActualOutcome for inspection. Hashes provide integrity/comparison, not
+sequence and action ID; the exception's Data also carries ExpectedOutcome and ActualOutcome for inspection.
+Comparison covers the complete canonical outcome, including action identity and state changes. Missing or extra
+outcomes identify their boundary and both counts; a missing side is null. Metadata-only differences are reported
+separately without assigning a fictitious sequence number. Hashes provide integrity/comparison, not
 authentication, and cannot prove a factory honestly reconstructed hidden state. Always use isolated
 stores/targets and a fresh interpreter. Automatic fixture discovery, production snapshot import,
 network timing faults and exhaustive schedule search are outside this profile.

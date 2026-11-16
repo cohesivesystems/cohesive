@@ -230,6 +230,7 @@ public sealed class MachineReactionSimulationTests
     {
         var fixture = await Fixture.Create(timeProvider: new FixedClock());
         var host = fixture.Confirmation();
+        Assert.Null(typeof(MachineReactionHost).GetMethod("DecorateTarget"));
         Assert.Throws<ArgumentException>(() => host.DecorateTarget(_ => fixture.AcceptTarget));
         Assert.Throws<ArgumentNullException>(() => host.DecorateTarget(_ => null!));
         var decorated = host.DecorateTarget(target =>
@@ -293,13 +294,76 @@ public sealed class MachineReactionSimulationTests
         var wrapped = faults.Bind(ConfirmationHost, fixture.ConfirmTarget);
         faults.Begin(ConfirmationHost, ReactionScenarioFault.BeforeExecution);
         var injected = await Assert.ThrowsAnyAsync<Exception>(async () => await wrapped.ExecuteAsync(fixture.Context, null!));
-        Assert.IsNotType<TimeoutException>(injected);
+        Assert.False(injected is TimeoutException);
         Assert.Equal(DurableOperationEffectEvidence.NotExecuted, wrapped.DescribeFailure(injected).EffectEvidence);
         await Assert.ThrowsAsync<InvalidOperationException>(async () => await wrapped.ExecuteAsync(fixture.Context, null!));
         // The durable host can catch/convert both exceptions; End must still fail outside that boundary.
         Assert.Throws<InvalidOperationException>(() => faults.End(requireHit: true));
         faults.Begin(ConfirmationHost, ReactionScenarioFault.None);
         faults.End(requireHit: true);
+    }
+
+    [Fact]
+    public async Task Unfaulted_recovery_preserves_multiple_target_attempts_and_real_failures()
+    {
+        var fixture = await Fixture.Create(timeProvider: new FixedClock());
+        var faults = new ReactionScenarioFaults();
+        var target = faults.Bind(ConfirmationHost, new FailingTarget(fixture.ConfirmTarget));
+        faults.Begin(ConfirmationHost, ReactionScenarioFault.None);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            var failure = await Assert.ThrowsAsync<IOException>(async () => await target.ExecuteAsync(fixture.Context, null!));
+            Assert.Equal(FailingTarget.Failure, target.DescribeFailure(failure));
+        }
+        faults.End(requireHit: true);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Replay_reports_the_first_missing_or_extra_outcome(bool shorter)
+    {
+        var output = Environment().InitialState;
+        var first = new ScenarioActionOutcome("first", output);
+        var second = new ScenarioActionOutcome("second", output);
+        var error = Assert.Throws<InvalidOperationException>(() => ReactionScenarioReplay.RequireMatchingOutcomes(
+            shorter ? [first, second] : [first], shorter ? [first] : [first, second]));
+        Assert.Equal(1, error.Data["SequenceIndex"]);
+        Assert.Equal("second", error.Data["ActionId"]);
+        Assert.Equal(shorter ? 2 : 1, error.Data["ExpectedOutcomeCount"]);
+        Assert.Equal(shorter ? 1 : 2, error.Data["ActualOutcomeCount"]);
+        Assert.Null(error.Data[shorter ? "ActualOutcome" : "ExpectedOutcome"]);
+        Assert.Contains(shorter ? "missing outcome" : "unexpected outcome", error.Message);
+    }
+
+    [Theory]
+    [InlineData("action")]
+    [InlineData("output")]
+    [InlineData("change-count")]
+    [InlineData("actor")]
+    [InlineData("before")]
+    [InlineData("after")]
+    public void Replay_compares_every_canonical_outcome_field(string field)
+    {
+        var scenario = Build([(Deliver, Acceptance1)]);
+        var initial = ScenarioWorldSnapshot.FromCoreWorld(scenario).Actors[0].Observation;
+        var generation = scenario.Definition.InitialWorld.GetCoreWorld().Definition.Populations.Single().Generation;
+        var shape = new GraphShapeId(generation.ShapeGraph, generation.Root.ShapeId);
+        var changed = Observation.Create(shape, ObservationValue.FromObject(new { Worker = 2 }));
+        var other = Observation.Create(shape, ObservationValue.FromObject(new { Worker = 3 }));
+        var output = Environment().InitialState;
+        var first = new ScenarioActionOutcome("first", output);
+        var expected = new ScenarioActionOutcome("second", output, [new("worker", initial, changed)]);
+        var actual = new ScenarioActionOutcome(field == "action" ? "renamed" : "second",
+            field == "output" ? PortableValue.Concrete(output.Contract, ObservationValue.FromObject(new ReplaySeed(2))) : output,
+            field == "change-count" ? [] : [new(field == "actor" ? "other" : "worker",
+                field == "before" ? other : initial, field == "after" ? other : changed)]);
+        ReactionScenarioReplay.RequireMatchingOutcomes([first, expected], [first, expected]);
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            ReactionScenarioReplay.RequireMatchingOutcomes([first, expected], [first, actual]));
+        Assert.Equal(1, error.Data["SequenceIndex"]);
+        Assert.Same(expected, error.Data["ExpectedOutcome"]);
+        Assert.Same(actual, error.Data["ActualOutcome"]);
     }
 
     sealed class FailingTarget(MachineReactionTarget inner) : MachineReactionTarget(inner.Transition, inner.Authority)

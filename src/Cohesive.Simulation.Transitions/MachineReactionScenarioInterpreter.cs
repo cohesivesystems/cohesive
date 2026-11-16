@@ -101,7 +101,7 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
             Hosts = this.hosts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new { Alias = p.Key, Policy = p.Value.Policy.Document.Reference, p.Value.Authority }),
             Receipts = this.receipts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new { Alias = p.Key, p.Value.Commit.Fingerprint, p.Value.CommittedAtUtc })
         });
-        Identity = "cohesive-simulation-reactions/v3/sha256/" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
+        Identity = "cohesive-simulation-reactions/v4/sha256/" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
     }
 
     /// <summary>Profile identity pinning host policies, source commits and declared initial environment.</summary>

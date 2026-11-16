@@ -70,7 +70,7 @@ public sealed partial class MachineReactionHost
     /// <exception cref="ArgumentException">The decorated target changes transition revision or authority.</exception>
     /// <remarks>Prerequisite inspection retains its existing host; decoration cannot replace coordination semantics.
     /// This is runtime infrastructure configuration and never enters canonical reaction IR.</remarks>
-    public MachineReactionHost DecorateTarget(Func<MachineReactionTarget, MachineReactionTarget> decorate)
+    internal MachineReactionHost DecorateTarget(Func<MachineReactionTarget, MachineReactionTarget> decorate)
     {
         ArgumentNullException.ThrowIfNull(decorate);
         var decorated = decorate(target) ?? throw new ArgumentNullException(nameof(decorate), "A target decorator returned null.");

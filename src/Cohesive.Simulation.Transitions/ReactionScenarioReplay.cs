@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using Cohesive.Execution;
@@ -95,20 +96,47 @@ public static class ReactionScenarioReplay
         var actual = await ScenarioRunner.ExecuteAsync(expected.ToInitialWorldSnapshot(), interpreter, cancellationToken).ConfigureAwait(false);
         if (actual.Fingerprint != expected.Fingerprint)
         {
-            for (var index = 0; index < expected.Outcomes.Length; index++)
-            {
-                var before = expected.Outcomes[index];
-                var after = actual.Outcomes[index];
-                if (before.Output.Equals(after.Output) && before.StateChanges.SequenceEqual(after.StateChanges)) continue;
-                var divergence = new InvalidOperationException($"Reaction replay diverged at sequence {index} (zero-based), action '{before.ActionId}'.");
-                divergence.Data["SequenceIndex"] = index;
-                divergence.Data["ActionId"] = before.ActionId;
-                divergence.Data["ExpectedOutcome"] = before;
-                divergence.Data["ActualOutcome"] = after;
-                throw divergence;
-            }
-            throw new InvalidOperationException("Reaction replay diverged in trace metadata before sequence 0.");
+            RequireMatchingOutcomes(expected.Outcomes, actual.Outcomes);
+            var metadata = new InvalidOperationException("Reaction replay outcomes match, but scenario, interpreter or initial-actor metadata differs.");
+            metadata.Data["ExpectedFingerprint"] = expected.Fingerprint;
+            metadata.Data["ActualFingerprint"] = actual.Fingerprint;
+            throw metadata;
         }
         return actual;
     }
+
+    internal static void RequireMatchingOutcomes(ImmutableArray<ScenarioActionOutcome> expected,
+        ImmutableArray<ScenarioActionOutcome> actual)
+    {
+        // Canonical JSON covers every outcome field, using the same nested value codecs as trace fingerprinting.
+        // Compare only the common prefix before reporting the first missing/extra outcome.
+        var commonLength = Math.Min(expected.Length, actual.Length);
+        var options = ScenarioExecutionTraceJsonSerializer.CreateOptions();
+        for (var index = 0; index < commonLength; index++)
+        {
+            var before = StrictDocumentJson.GetCanonicalBytes(expected[index], options);
+            var after = StrictDocumentJson.GetCanonicalBytes(actual[index], options);
+            if (!before.AsSpan().SequenceEqual(after))
+                throw Divergence(index, expected[index], actual[index], expected.Length, actual.Length);
+        }
+        if (expected.Length != actual.Length)
+            throw Divergence(commonLength, commonLength < expected.Length ? expected[commonLength] : null,
+                commonLength < actual.Length ? actual[commonLength] : null, expected.Length, actual.Length);
+    }
+
+    static InvalidOperationException Divergence(int index, ScenarioActionOutcome? expected, ScenarioActionOutcome? actual,
+        int expectedCount, int actualCount)
+    {
+        var action = expected?.ActionId ?? actual!.ActionId;
+        var reason = expected is null ? "unexpected outcome" : actual is null ? "missing outcome" : "different outcome";
+        var error = new InvalidOperationException($"Reaction replay diverged at sequence {index} (zero-based), action '{action}': {reason}.");
+        error.Data["SequenceIndex"] = index;
+        error.Data["ActionId"] = action;
+        error.Data["ExpectedOutcome"] = expected;
+        error.Data["ActualOutcome"] = actual;
+        error.Data["ExpectedOutcomeCount"] = expectedCount;
+        error.Data["ActualOutcomeCount"] = actualCount;
+        return error;
+    }
+
 }
