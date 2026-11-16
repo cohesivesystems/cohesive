@@ -1,0 +1,81 @@
+  Determining projects to restore...
+  All projects are up-to-date for restore.
+  Cohesive.Analyzers -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Analyzers/bin/Release/netstandard2.0/Cohesive.Analyzers.dll
+  Cohesive -> /private/tmp/cohesive-transition-parameters/src/Cohesive/bin/Release/net10.0/Cohesive.dll
+  Cohesive.AI -> /private/tmp/cohesive-transition-parameters/src/Cohesive.AI/bin/Release/net10.0/Cohesive.AI.dll
+  Cohesive.Simulation -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Simulation/bin/Release/net10.0/Cohesive.Simulation.dll
+  Cohesive.Relations -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Relations/bin/Release/net10.0/Cohesive.Relations.dll
+  Cohesive.Configuration -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Configuration/bin/Release/net10.0/Cohesive.Configuration.dll
+  Cohesive.Adapters.Json -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Json/bin/Release/net10.0/Cohesive.Adapters.Json.dll
+  Cohesive.Adapters.Sql -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Sql/bin/Release/net10.0/Cohesive.Adapters.Sql.dll
+  Cohesive.Infra -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Infra/bin/Release/net10.0/Cohesive.Infra.dll
+  Cohesive.Presentation -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Presentation/bin/Release/net10.0/Cohesive.Presentation.dll
+  Cohesive.Cli -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Cli/bin/Release/net10.0/Cohesive.Cli.dll
+  Cohesive.Relations.Infra -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Infra/bin/Release/net10.0/Cohesive.Relations.Infra.dll
+  Cohesive.Adapters.DockerCompose -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.DockerCompose/bin/Release/net10.0/Cohesive.Adapters.DockerCompose.dll
+  Cohesive.Adapters.CSharp -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.CSharp/bin/Release/net10.0/Cohesive.Adapters.CSharp.dll
+  Cohesive.Adapters.AzureStorage -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.AzureStorage/bin/Release/net10.0/Cohesive.Adapters.AzureStorage.dll
+  Cohesive.Relations.TestFixtures -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.TestFixtures/bin/Release/net10.0/Cohesive.Relations.TestFixtures.dll
+  Cohesive.Transitions -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Transitions/bin/Release/net10.0/Cohesive.Transitions.dll
+  Cohesive.Api -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Api/bin/Release/net10.0/Cohesive.Api.dll
+  Cohesive.Relations.Contracts -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Contracts/bin/Release/net10.0/Cohesive.Relations.Contracts.dll
+  Cohesive.Adapters.GraphQL -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.GraphQL/bin/Release/net10.0/Cohesive.Adapters.GraphQL.dll
+  Cohesive.Adapters.TypeScript -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.TypeScript/bin/Release/net10.0/Cohesive.Adapters.TypeScript.dll
+  Cohesive.Processes -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Processes/bin/Release/net10.0/Cohesive.Processes.dll
+  Cohesive.Adapters.OpenApi -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.OpenApi/bin/Release/net10.0/Cohesive.Adapters.OpenApi.dll
+  Cohesive.CodeGen.Cli -> /private/tmp/cohesive-transition-parameters/src/Cohesive.CodeGen.Cli/bin/Release/net10.0/cohesive-codegen.dll
+  Cohesive.Integrations -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Integrations/bin/Release/net10.0/Cohesive.Integrations.dll
+  Cohesive.Storage -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Storage/bin/Release/net10.0/Cohesive.Storage.dll
+  Cohesive.Processes.Distribution -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Processes.Distribution/bin/Release/net10.0/Cohesive.Processes.Distribution.dll
+  Cohesive.Simulation.Transitions -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Simulation.Transitions/bin/Release/net10.0/Cohesive.Simulation.Transitions.dll
+  Cohesive.Identity -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Identity/bin/Release/net10.0/Cohesive.Identity.dll
+  Cohesive.Adapters.SQLite -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.SQLite/bin/Release/net10.0/Cohesive.Adapters.SQLite.dll
+  Cohesive.Api.Execution -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Api.Execution/bin/Release/net10.0/Cohesive.Api.Execution.dll
+  Cohesive.Application -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Application/bin/Release/net10.0/Cohesive.Application.dll
+  Cohesive.Processes.Contracts -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Processes.Contracts/bin/Release/net10.0/Cohesive.Processes.Contracts.dll
+  Cohesive.Host -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Host/bin/Release/net10.0/Cohesive.Host.dll
+  Cohesive.MaterializationHarness.Control -> /private/tmp/cohesive-transition-parameters/eng/materialization-harness/control/bin/Release/net10.0/Cohesive.MaterializationHarness.Control.dll
+  Cohesive.Adapters.Cosmos -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Cosmos/bin/Release/net10.0/Cohesive.Adapters.Cosmos.dll
+  Cohesive.ExecutionKernel.TestFixtures -> /private/tmp/cohesive-transition-parameters/src/Cohesive.ExecutionKernel.TestFixtures/bin/Release/net10.0/Cohesive.ExecutionKernel.TestFixtures.dll
+  Cohesive.MaterializationHarness.Model -> /private/tmp/cohesive-transition-parameters/eng/materialization-harness/model/bin/Release/net10.0/Cohesive.MaterializationHarness.Model.dll
+  Cohesive.Adapters.AspNet -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.AspNet/bin/Release/net10.0/Cohesive.Adapters.AspNet.dll
+  Cohesive.Adapters.Elastic -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Elastic/bin/Release/net10.0/Cohesive.Adapters.Elastic.dll
+  Cohesive.Adapters.DurableTask -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.DurableTask/bin/Release/net10.0/Cohesive.Adapters.DurableTask.dll
+  Cohesive.MaterializationHarness.Supervise -> /private/tmp/cohesive-transition-parameters/eng/materialization-harness/supervise/bin/Release/net10.0/Cohesive.MaterializationHarness.Supervise.dll
+  Cohesive.Application.Cli -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Application.Cli/bin/Release/net10.0/Cohesive.Application.Cli.dll
+  Cohesive.Adapters.Postgres -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Postgres/bin/Release/net10.0/Cohesive.Adapters.Postgres.dll
+  Cohesive.Adapters.Postgres.Infra -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Postgres.Infra/bin/Release/net10.0/Cohesive.Adapters.Postgres.Infra.dll
+  Cohesive.Adapters.Marten -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Marten/bin/Release/net10.0/Cohesive.Adapters.Marten.dll
+  Cohesive.Adapters.Postgres.Services -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Postgres.Services/bin/Release/net10.0/Cohesive.Adapters.Postgres.Services.dll
+  Cohesive.MaterializationHarness.Materialize -> /private/tmp/cohesive-transition-parameters/eng/materialization-harness/materialize/bin/Release/net10.0/Cohesive.MaterializationHarness.Materialize.dll
+  Cohesive.Tests -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Tests/bin/Release/net10.0/Cohesive.Tests.dll
+Test run for /private/tmp/cohesive-transition-parameters/src/Cohesive.Tests/bin/Release/net10.0/Cohesive.Tests.dll (.NETCoreApp,Version=v10.0)
+A total of 1 test files matched the specified pattern.
+[xUnit.net 00:00:01.10]     Cohesive.Tests.ExecutionKernel.EntityTransitionProcessOperationAdapterCreationTests.CosmosRepository_CreationIndexReplaysOriginalReceiptForReplacementAttempt [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.EntityTransitionProcessOperationAdapterCreationTests.CosmosRepository_CreationIndexReplaysOriginalReceiptForReplacementAttempt [1 ms]
+[xUnit.net 00:00:02.96]     Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_ProvesCompletionFailureDuplicateStartAndWorkerRestart [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_ProvesCompletionFailureDuplicateStartAndWorkerRestart [1 ms]
+[xUnit.net 00:00:03.32]     Cohesive.Tests.Model.CosmosRelationQueryCompilerTests.CosmosArtifact_PhysicalEntityScopeExcludesOutboxDocumentsFromSharedContainer [SKIP]
+  Skipped Cohesive.Tests.Model.CosmosRelationQueryCompilerTests.CosmosArtifact_PhysicalEntityScopeExcludesOutboxDocumentsFromSharedContainer [1 ms]
+[xUnit.net 00:00:03.39]     Cohesive.Tests.Model.CosmosRelationQueryCompilerTests.CosmosArtifact_KeysetPagesMatchCanonicalOrderingWithoutDuplicatesOrOmissions [SKIP]
+  Skipped Cohesive.Tests.Model.CosmosRelationQueryCompilerTests.CosmosArtifact_KeysetPagesMatchCanonicalOrderingWithoutDuplicatesOrOmissions [1 ms]
+[xUnit.net 00:00:04.90]     Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_LifecycleDispatcherRetainsExactResponsesAcrossTerminalAndWorkerReplacement [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_LifecycleDispatcherRetainsExactResponsesAcrossTerminalAndWorkerReplacement [1 ms]
+[xUnit.net 00:00:04.96]     Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_RestartAttemptClosesOldChildBeforeReplacementCompletes [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_RestartAttemptClosesOldChildBeforeReplacementCompletes [1 ms]
+[xUnit.net 00:00:05.26]     Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_AuthoredCancellationRunsExactFinalizerBeforeTerminalControl [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_AuthoredCancellationRunsExactFinalizerBeforeTerminalControl [1 ms]
+[xUnit.net 00:00:05.66]     Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_StartAdmissionIsLinearizableAndSurvivesWorkerReplacement [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_StartAdmissionIsLinearizableAndSurvivesWorkerReplacement [1 ms]
+[xUnit.net 00:00:05.88]     Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_RedeliversExactDurableRequestAfterWorkerShutdown [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_RedeliversExactDurableRequestAfterWorkerShutdown [1 ms]
+[xUnit.net 00:00:06.03]     Cohesive.Tests.ExecutionKernel.EntityTransitionOperationRepositoryTests.CosmosRepository_AtomicallyCommitsAndReplaysTransitionReceiptAfterRestart [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.EntityTransitionOperationRepositoryTests.CosmosRepository_AtomicallyCommitsAndReplaysTransitionReceiptAfterRestart [1 ms]
+[xUnit.net 00:00:06.24]     Cohesive.Tests.Model.CosmosRelationQueryCompilerTests.CosmosArtifact_ProofGatedUtcInstantKeysetMatchesCanonicalPage [SKIP]
+  Skipped Cohesive.Tests.Model.CosmosRelationQueryCompilerTests.CosmosArtifact_ProofGatedUtcInstantKeysetMatchesCanonicalPage [1 ms]
+[xUnit.net 00:00:06.30]     Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_AdmitsFailedChildReplyWhileTopLevelFailureRemainsPhysical [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_AdmitsFailedChildReplyWhileTopLevelFailureRemainsPhysical [1 ms]
+[xUnit.net 00:00:06.36]     Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_ProvesCanonicalLifecycleControlAndAttemptLineage [SKIP]
+  Skipped Cohesive.Tests.ExecutionKernel.DurableTaskSequentialProcessInterpreterTests.SchedulerEmulator_ProvesCanonicalLifecycleControlAndAttemptLineage [1 ms]
+
+Passed!  - Failed:     0, Passed:  3099, Skipped:    13, Total:  3112, Duration: 43 s - Cohesive.Tests.dll (net10.0)

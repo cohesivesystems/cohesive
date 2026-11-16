@@ -823,10 +823,59 @@ public sealed class CompiledTransitionPlan
                 prepared.Add(parameter.Name, (FieldPath.FromField(parameter.Name), contract, new($"input/{parameter.Name}")));
         }
         Parameters = prepared.ToFrozenDictionary(StringComparer.Ordinal);
+        var observations = new Dictionary<FieldPath, ValueContract>();
+        foreach (var requirement in analysis.Requirements)
+        {
+            var path = requirement switch
+            {
+                TransitionObservationRequirement read => read.Access.Path,
+                TransitionWriteRequirement write => write.Path,
+                _ => (FieldPath?)null
+            };
+            if (path is { } fieldPath && !observations.ContainsKey(fieldPath)
+                && ResolveRelativeContract(definition.Observation, fieldPath, out _) is { } contract)
+                observations.Add(fieldPath, contract);
+        }
+        ObservationContracts = observations.ToFrozenDictionary();
     }
 
     /// <summary>Immutable parameter navigation and validation metadata; never retains activation values.</summary>
     internal FrozenDictionary<string, (FieldPath Path, ValueContract Contract, ExecutionNodeId Node)> Parameters { get; }
+
+    /// <summary>Contracts for statically known reads and writes, shared without retaining observation values.</summary>
+    internal FrozenDictionary<FieldPath, ValueContract> ObservationContracts { get; }
+
+    /// <summary>Resolves aggregate-relative navigation without changing the caller's failure policy.</summary>
+    /// <param name="root">Contract at the navigation root.</param>
+    /// <param name="path">Relative path; an empty path selects the root contract.</param>
+    /// <param name="error">The original navigation diagnostic message on failure; otherwise null.</param>
+    /// <returns>The resolved contract, or null for unsupported or missing navigation.</returns>
+    internal ValueContract? ResolveRelativeContract(ValueContract root, FieldPath path, out string? error)
+    {
+        var current = root;
+        foreach (var segment in path.Segments)
+        {
+            if (segment.Kind != SegmentKind.Field || string.IsNullOrWhiteSpace(segment.Segment))
+            {
+                error = $"Field path '{path}' contains unsupported collection-element navigation.";
+                return null;
+            }
+            if (current.Cardinality == FieldCardinality.Many)
+            {
+                error = $"Field path '{path}' navigates through a collection without an element scope.";
+                return null;
+            }
+            var field = ResolveFieldContract(current, segment.Segment);
+            if (field is null)
+            {
+                error = $"Field path '{path}' is absent from the compiled aggregate contract.";
+                return null;
+            }
+            current = field;
+        }
+        error = null;
+        return current;
+    }
 
     /// <summary>Resolves one field using the plan's pinned shape graph and original contract semantics.</summary>
     /// <param name="parent">Contract owning the field.</param>

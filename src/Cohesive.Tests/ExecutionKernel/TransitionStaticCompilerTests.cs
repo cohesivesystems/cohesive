@@ -14,6 +14,27 @@ public sealed class TransitionStaticCompilerTests
     static readonly ValueContract Int64Contract = new(new ScalarTypeRef(ScalarTypeKind.Int64));
 
     [Fact]
+    public void Compile_ObservationMetadataRetainsShapeFieldConstraints()
+    {
+        ShapeId stateShape = new("constrained-state");
+        ShapeGraph graph = new(new("observation-contracts"),
+            [new(stateShape, [new(new FieldName("name"), StringContract.Type!,
+                constraints: [new MaxLengthConstraint(2)])])]);
+        var observation = ValueContract.FromShape(graph.GetShape(stateShape), graph.Qualify(stateShape));
+        CanonicalTransitionDefinition definition = new(new(new ObjectTypeRef([])),
+            observation, StringContract,
+            [new(new("check-name"), Expr.Eq(Expr.Field("name"), Expr.Const("ok")), Expr.Const("bad"))],
+            Sequence("root", Outcome("outcome")), []);
+        var result = TransitionStaticCompiler.Compile(Document(definition), graph);
+        Assert.True(result.IsSuccessful, Format(result.Validation));
+        var contract = result.Plan!.ObservationContracts[FieldPath.FromField("name")];
+        Assert.False(PortableExecutionValidator.Validate(PortableValue.Concrete(
+            contract, ObservationValue.FromString("long")), graph).IsValid);
+        Assert.True(PortableExecutionValidator.Validate(PortableValue.Concrete(
+            contract, ObservationValue.FromString("ok")), graph).IsValid);
+    }
+
+    [Fact]
     public void Compile_ParameterMetadataRetainsShapeFieldConstraints()
     {
         ShapeId inputShape = new("constrained-input");
