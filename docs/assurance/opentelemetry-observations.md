@@ -54,7 +54,12 @@ for semantic observations remains unordered and therefore has a distinct contrac
 `TraceMonitor.AdvanceCaptured(batches, cumulativeReference)` owns the shared capture boundary for
 OTel, future OTLP decoders and durable transports. It validates the capture profile, checks the complete
 observation contract, target, epoch and mapping-evidence reference against the pinned monitor, and
-bounds both total supplied observations and envelope count by `MaxObservations`.
+bounds total supplied observations and envelope count using **independent counters** with the same
+`MaxObservations` ceiling. This reference profile intentionally reuses that configured ceiling to bound
+producer-reference receipts without adding a separate tuning option. Empty envelopes consume only
+per-call envelope capacity, never retained row capacity. Envelope capacity resets on every capture;
+retained rows remain subject to the monitor's existing history bound. A regression test accepts empty
+envelopes alongside rows and continues until the retained row limit.
 `TraceObservationBatch.ValidateCapture` is the same profile check used by producers.
 The adapter only decodes activity events and enforces transport source/payload bounds. Exactly one completely enumerated mapping is accepted. Complete mapping
 enumeration says how the supplied records are interpreted; it does **not** assert complete capture.
@@ -81,10 +86,12 @@ bounded by the monitor profile. Encoding checks length after serialization, so t
 preallocation guarantee. Collector/backend attribute limits may be smaller and must be qualified by
 the host; truncated documents are rejected. Retained monitor history remains bounded without eviction.
 
-All diagnostics are in core `TraceEvaluationCodes`. Malformed transport, wrong activity source or
-payload size raises `AssuranceTelemetryException`; core capture/profile/binding/update rejection raises
-`TraceMonitorUpdateException`. Both expose `Diagnostic`; neither has a public constructor or exception
-factory. Cancellation or rejection leaves the immutable prior
+All diagnostics are in core `TraceEvaluationCodes`. Hosts can catch `TraceObservationException`
+once across producer validation, transport decoding and monitor ingestion, and read its `Diagnostic`.
+Producer-neutral capture profile errors use that base exception directly, without implying a monitor
+ran. `AssuranceTelemetryException` and `TraceMonitorUpdateException` specialize the same contract
+for transport and monitor rejections. Boundary-specific types remain available when a host needs them;
+a shared diagnostic code does not require separate catch paths. There is no public exception factory. Cancellation or rejection leaves the immutable prior
 checkpoint unchanged. Disposition belongs to the capture host:
 
 - Envelope, binding and `TelemetryPayloadLimit` rejections are permanent for unchanged input and

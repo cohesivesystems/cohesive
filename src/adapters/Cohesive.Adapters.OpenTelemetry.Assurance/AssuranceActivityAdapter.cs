@@ -40,7 +40,7 @@ public static class AssuranceActivityAdapter
     /// <returns>An activity event; add it to an activity from Source. Export and sampling remain host-controlled.</returns>
     /// <exception cref="ArgumentNullException">Observations are null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Payload bound is nonpositive.</exception>
-    /// <exception cref="TraceMonitorUpdateException">Envelope profile is invalid.</exception>
+    /// <exception cref="TraceObservationException">Envelope profile is invalid; no monitor is involved.</exception>
     /// <exception cref="AssuranceTelemetryException">Encoded payload exceeds its bound.</exception>
     /// <exception cref="JsonException">A portable observation cannot be serialized.</exception>
     /// <exception cref="NotSupportedException">A retained representation is unsupported.</exception>
@@ -69,7 +69,8 @@ public static class AssuranceActivityAdapter
     /// The host must persist its checkpoint and delivery position before acknowledging captured input.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Payload bound is nonpositive.</exception>
-    /// <exception cref="TraceMonitorUpdateException">An envelope violates the capture profile or binding, or the monitor rejects the update.</exception>
+    /// <exception cref="TraceObservationException">An envelope violates the capture profile.</exception>
+    /// <exception cref="TraceMonitorUpdateException">Binding fails or the monitor rejects the update.</exception>
     /// <exception cref="AssuranceTelemetryException">Activity source, event payload or aggregate payload size is invalid.</exception>
     /// <exception cref="OperationCanceledException">Processing is cancelled.</exception>
     public static TraceCapture Apply(TraceMonitor monitor, Activity activity, ClaimReference cumulativeReference,
@@ -110,14 +111,12 @@ public static class AssuranceActivityAdapter
     }
 
     static AssuranceTelemetryException Capacity(string code) => Reject(code,
-        "Semantic telemetry exceeds the explicit payload or observation bound; no observations were accepted.");
+        "Semantic telemetry exceeds the configured payload character limit; no observations were accepted.");
     static AssuranceTelemetryException Reject(string code, string message) => new(new(code, "/telemetry", message));
 }
 
 /// <summary>Transport decoding or payload rejection before semantic monitor ingestion.</summary>
-public sealed class AssuranceTelemetryException : InvalidOperationException
+public sealed class AssuranceTelemetryException : TraceObservationException
 {
-    internal AssuranceTelemetryException(TraceEvaluationDiagnostic diagnostic) : base(diagnostic.Message) => Diagnostic = diagnostic;
-    /// <summary>Stable transport diagnostic from the shared trace code catalog.</summary>
-    public TraceEvaluationDiagnostic Diagnostic { get; }
+    internal AssuranceTelemetryException(TraceEvaluationDiagnostic diagnostic) : base(diagnostic) { }
 }

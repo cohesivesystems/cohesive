@@ -62,12 +62,18 @@ public sealed class TraceMonitorTests
         Assert.Equal(TraceEvaluationCodes.TelemetryBinding, Assert.Throws<TraceMonitorUpdateException>(() =>
             monitor.AdvanceCaptured([first, initial with { Target = R("different") }], R("bad"))).Diagnostic.Code);
         var certified = initial with { Alternatives = [Update("certified", frontiers: [Frontier(Selection, 1, 1)])] };
-        Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope, Assert.Throws<TraceMonitorUpdateException>(() =>
+        Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope, Assert.Throws<TraceObservationException>(() =>
             monitor.AdvanceCaptured([first, certified], R("bad"))).Diagnostic.Code);
         Assert.Equal(TraceEvaluationCodes.BudgetExceeded, Assert.Throws<TraceMonitorUpdateException>(() =>
             monitor.AdvanceCaptured([first, first, first], R("too-many"))).Diagnostic.Code);
         Assert.Equal(TraceEvaluationCodes.BudgetExceeded, Assert.Throws<TraceMonitorUpdateException>(() =>
             monitor.AdvanceCaptured([initial, initial, initial], R("too-many-empty"))).Diagnostic.Code);
+        // Empty envelopes use their own per-call counter, not the retained row budget.
+        var emptyThenRows = monitor.AdvanceCaptured([initial, first], R("empty-then-rows"));
+        Assert.Single(emptyThenRows.Monitor.Evaluation.Batch.Alternatives[0].Observations);
+        var next = initial with { Alternatives = [Update("next-producer", [State("second", 2, 5)])] };
+        Assert.Equal(2, emptyThenRows.Monitor.AdvanceCaptured([initial, next], R("second-capture"))
+            .Monitor.Evaluation.Batch.Alternatives[0].Observations.Length);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
     }
 

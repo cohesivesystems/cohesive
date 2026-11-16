@@ -122,12 +122,14 @@ public sealed class TraceMonitor
 
     /// <summary>Atomically accepts transport-neutral capture envelopes without completeness assertions.</summary>
     /// <param name="batches">Lazily decoded envelopes; enumeration or validation failure rejects the entire update.
-    /// Envelope count and total supplied rows are each bounded by MaxObservations.</param>
+    /// Envelope count and total supplied rows have independent counters with the same MaxObservations ceiling.
+    /// Empty envelopes consume envelope capacity only; the envelope counter resets on each capture call.</param>
     /// <param name="cumulativeReference">Exact resulting alternative reference, honored even for empty captures.</param>
     /// <param name="cancellationToken">Cancellation rejects the entire capture.</param>
     /// <returns>Accepted monitor and producer references in delivery order, including empty envelopes and duplicates.</returns>
     /// <exception cref="ArgumentNullException">Batches or cumulative reference is null.</exception>
-    /// <exception cref="TraceMonitorUpdateException">Profile, binding, observation budget or semantic update is invalid.</exception>
+    /// <exception cref="TraceObservationException">A capture envelope violates the producer-neutral profile.</exception>
+    /// <exception cref="TraceMonitorUpdateException">Binding, observation budget or semantic update is invalid.</exception>
     /// <exception cref="OperationCanceledException">Capture is cancelled.</exception>
     /// <remarks>Decoder exceptions propagate unchanged. No partial result is published. This path cannot advance completeness;
     /// qualified completeness protocols use the native alternative-update overload.</remarks>
@@ -149,7 +151,9 @@ public sealed class TraceMonitor
                 || batch.EnumerationEvidence != expected.EnumerationEvidence || !expected.Contract.SameContent(batch.Contract))
                 throw Reject(TraceEvaluationCodes.TelemetryBinding, "/capture", "Capture does not match the pinned contract, target, epoch and mapping evidence.");
             var alternative = batch.Alternatives[0];
-            if (references.Count >= Evaluation.Limits.MaxObservations) throw Capacity();
+            if (references.Count >= Evaluation.Limits.MaxObservations)
+                throw Reject(TraceEvaluationCodes.BudgetExceeded, "/capture/envelopes",
+                    "Capture envelope count exceeds the per-call MaxObservations ceiling; retained row capacity is unchanged.");
             if ((long)observations.Count + alternative.Observations.Length > Evaluation.Limits.MaxObservations) throw Capacity();
             references.Add(alternative.Reference);
             observations.AddRange(alternative.Observations);
@@ -235,12 +239,9 @@ public sealed class TraceMonitor
 }
 
 /// <summary>Structured rejection of an entire monitor update; the accepted immutable prefix is unchanged.</summary>
-public sealed class TraceMonitorUpdateException : InvalidOperationException
+public sealed class TraceMonitorUpdateException : TraceObservationException
 {
-    internal TraceMonitorUpdateException(TraceEvaluationDiagnostic diagnostic) : base(diagnostic.Message) => Diagnostic = diagnostic;
-
-    /// <summary>Stable diagnostic identifying invalid input, a continuity breach, unsupported interpretation or exhausted bounds.</summary>
-    public TraceEvaluationDiagnostic Diagnostic { get; }
+    internal TraceMonitorUpdateException(TraceEvaluationDiagnostic diagnostic) : base(diagnostic) { }
 }
 
 /// <summary>Accepted capture and its producer provenance, independent of transport.</summary>

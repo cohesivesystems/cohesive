@@ -95,12 +95,12 @@ public sealed class AssuranceActivityTests
         var forged = batch with { Alternatives = [batch.Alternatives[0] with { Completeness = [
             new(Witness, "p", 100, 100, ObservationClosure.Closed, R("claimed-completeness"))] }] };
         Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope,
-            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.CreateEvent(forged)).Diagnostic.Code);
+            Assert.Throws<TraceObservationException>(() => AssuranceActivityAdapter.CreateEvent(forged)).Diagnostic.Code);
         using var activity = Capture(batch, activity => activity.AddEvent(new(AssuranceActivityAdapter.EventName,
             tags: new ActivityTagsCollection { { AssuranceActivityAdapter.PayloadTag, forged.Serialize() } })));
         var monitor = TraceMonitor.Start(Claim(), Batch());
         Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope,
-            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, activity, R("forged")).Monitor).Diagnostic.Code);
+            Assert.Throws<TraceObservationException>(() => AssuranceActivityAdapter.Apply(monitor, activity, R("forged")).Monitor).Diagnostic.Code);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
     }
 
@@ -227,6 +227,27 @@ public sealed class AssuranceActivityTests
         var empty = contract with { Requirements = [] };
         Assert.False(empty.SameContent(empty with { Requirements = default }));
         Assert.True((empty with { Requirements = default }).SameContent(empty with { Requirements = default }));
+    }
+
+    [Fact]
+    public void HostCanCatchProductionTransportAndMonitorRejectionsThroughOneContract()
+    {
+        var initial = Batch();
+        var monitor = TraceMonitor.Start(Claim(), initial);
+        var partial = initial with { Enumeration = EnumerationCompleteness.Partial };
+        using var oversized = Capture(Batch(Event("paid", 1)));
+        using var mismatched = Capture(initial with { Target = R("other-target") });
+        Action[] boundaries = [
+            () => AssuranceActivityAdapter.CreateEvent(partial),
+            () => AssuranceActivityAdapter.Apply(monitor, oversized, R("large"), maxPayloadCharacters: 1),
+            () => AssuranceActivityAdapter.Apply(monitor, mismatched, R("wrong-binding"))
+        ];
+        string[] expected = [TraceEvaluationCodes.TelemetryEnvelope, TraceEvaluationCodes.TelemetryPayloadLimit, TraceEvaluationCodes.TelemetryBinding];
+        for (var i = 0; i < boundaries.Length; i++)
+        {
+            var error = Assert.ThrowsAny<TraceObservationException>(boundaries[i]);
+            Assert.Equal(expected[i], error.Diagnostic.Code);
+        }
     }
 
     sealed class RecordingExporter(ExportResult result = ExportResult.Success) : BaseExporter<Activity>

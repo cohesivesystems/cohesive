@@ -118,7 +118,7 @@ public sealed record TraceObservationBatch(TraceObservationContract Contract, Cl
     EnumerationCompleteness Enumeration, ClaimReference EnumerationEvidence)
 {
     /// <summary>Validates the transport-neutral capture profile: one complete mapping and no completeness certificates.</summary>
-    /// <exception cref="TraceMonitorUpdateException">Required envelope fields are missing or the capture profile is unsupported.</exception>
+    /// <exception cref="TraceObservationException">Required envelope fields are missing or the capture profile is unsupported.</exception>
     /// <remarks>Does not validate individual observations or target binding; AdvanceCaptured owns those checks.</remarks>
     public void ValidateCapture()
     {
@@ -127,7 +127,7 @@ public sealed record TraceObservationBatch(TraceObservationContract Contract, Cl
             || Alternatives.Length != 1 || Alternatives[0] is not { } alternative
             || alternative.Reference is null || alternative.Observations.IsDefault || alternative.Completeness.IsDefault
             || !alternative.Completeness.IsEmpty)
-            throw new TraceMonitorUpdateException(new(TraceEvaluationCodes.TelemetryEnvelope, "/capture",
+            throw new TraceObservationException(new(TraceEvaluationCodes.TelemetryEnvelope, "/capture",
                 "Capture requires one complete mapping with initialized rows and no completeness certificates."));
     }
 
