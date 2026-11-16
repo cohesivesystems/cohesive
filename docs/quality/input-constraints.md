@@ -151,3 +151,62 @@ overload does not remove projection's trimming requirements. In a trimmed or
 NativeAOT consumer, load the pre-authored graph and use a separately qualified
 portable input decoder/projector. Ordinary JIT consumers may use the typed
 convenience API; do not suppress analyzer warnings without qualifying that path.
+
+## Shared and typed validator services
+
+For ordinary JIT-hosted inputs, configure one service and let calls infer the
+input type. With `Cohesive.Host.Services` in scope:
+
+```csharp
+services.AddCohesiveInputValidation(options => options
+    .UseDataAnnotations()
+    .For<FulfillmentRequest>());
+
+// Inject IInputValidator into the application service.
+var result = inputs.Validate(request);
+```
+
+`For<T>()` in registration prepares that type immediately, so unsupported
+attributes or configuration fail during registration. Unregistered types are
+prepared on first use. Each type has one lazy validator per service instance;
+concurrent first use shares the winner, including deterministic authoring errors.
+Dispatch uses the declared generic type, not `request.GetType()`. Configure and
+call with the intended contract type; runtime subtype properties do not silently
+change that contract.
+
+For special contracts, name the type once at registration:
+
+```csharp
+services.AddCohesiveInputValidation(options =>
+{
+    options.UseDataAnnotations();
+    options.For<SpecialRequest>(shape => shape.AddMetadataProvider(metadata));
+});
+```
+
+`Configure(...)` supplies common shape authoring configuration, before per-type
+configuration. Per-type configuration applies to that root's graph, not globally
+to nested uses of the same CLR type in other roots. Options collections are
+snapshotted; callbacks/providers must themselves be deterministic and thread-safe,
+with stable captured state. They configure shape authoring, not a replacement CLR
+projection/serialization pipeline. All registrations share the existing portable
+constraint evaluator; no second interpretation of validation attributes is added.
+
+Consumers may alternatively inject `IInputValidator<SpecialRequest>` and call
+`validator.Validate(request)`. Typed injection delegates to the same shared cache.
+Outside DI, use `InputValidator.Create(options => options.UseDataAnnotations())`
+and optionally retain `inputs.For<SpecialRequest>()`.
+
+Caches retain authored shapes and validators only, never request objects, mutable
+projections or validation results. Every call validates the current input. Cache
+size grows with the declared application type set; do not feed an unbounded set
+of generated types into a long-lived instance. Configuration instances are isolated;
+there is no process-global type-only cache. Duplicate DI registration and duplicate
+per-type registration fail explicitly rather than changing an existing policy.
+
+The typed APIs retain their trimming/dynamic-code annotations and per-request
+projection cost. `inputs.For<T>().ValidatePortable(value)` avoids projection for
+an existing portable value, but constructing the validator still requires CLR
+shape authoring. For NativeAOT, use the existing portable validator with an
+already-authored graph unless the CLR authoring/projection path is separately
+qualified. No input-validation service performs queue admission or domain execution.
