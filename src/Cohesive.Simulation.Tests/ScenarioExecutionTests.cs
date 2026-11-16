@@ -189,6 +189,10 @@ public sealed partial class ScenarioTests
         var json = ScenarioExecutionTraceJsonSerializer.Serialize(trace);
         var restored = ScenarioExecutionTraceJsonSerializer.Deserialize(json);
         Assert.Equal(finalCarrier, restored.ToFinalWorldSnapshot().GetActor("carrier").Observation);
+        Assert.Equal(initialWorld.GetActor("carrier").Observation,
+            restored.ToInitialWorldSnapshot().GetActor("carrier").Observation);
+        Assert.Equal(initialWorld.GetActor("carrier").OriginReplayToken,
+            restored.ToInitialWorldSnapshot().GetActor("carrier").OriginReplayToken);
         Assert.Equal(json, ScenarioExecutionTraceJsonSerializer.Serialize(restored));
 
         var staleSecond = new ScenarioActionOutcome(

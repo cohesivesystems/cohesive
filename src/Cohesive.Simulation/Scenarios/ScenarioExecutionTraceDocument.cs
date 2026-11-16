@@ -222,6 +222,21 @@ public sealed record ScenarioExecutionTraceDocument
         return new(CreateState(world.Scenario, interpreter, initialActors, outcomes));
     }
 
+    /// <summary>Reconstructs the retained initial actor world for a fresh execution.</summary>
+    /// <returns>The original actor observations and replay tokens with the exact scenario.</returns>
+    public ScenarioWorldSnapshot ToInitialWorldSnapshot()
+    {
+        var actors = ImmutableArray.CreateBuilder<ScenarioActorSnapshot>(InitialActors.Length);
+        for (var index = 0; index < InitialActors.Length; index++)
+        {
+            var actor = Scenario.Definition.Actors[index];
+            var initial = InitialActors[index];
+            actors.Add(new(actor, Scenario.Definition.InitialWorld.GetExemplar(actor.ExemplarId),
+                initial.EntityId, initial.Observation, initial.OriginReplayToken));
+        }
+        return ScenarioWorldSnapshot.Create(Scenario, actors.MoveToImmutable());
+    }
+
     /// <summary>Reconstructs the complete actor world after every retained action outcome has been applied.</summary>
     /// <returns>An immutable final-world snapshot retaining the scenario's actor and exemplar definitions.</returns>
     /// <exception cref="ArgumentException">

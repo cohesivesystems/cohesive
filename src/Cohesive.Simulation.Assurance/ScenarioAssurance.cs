@@ -179,14 +179,7 @@ public static class ScenarioAssurance
         TraceEvaluationLimits? limits = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(retained);
-        var definitions = retained.Scenario.Definition.Actors.ToDictionary(x => x.Id, StringComparer.Ordinal);
-        var actors = retained.InitialActors.Select(initial =>
-        {
-            var actor = definitions[initial.ActorId];
-            return new ScenarioActorSnapshot(actor, retained.Scenario.Definition.InitialWorld.GetExemplar(actor.ExemplarId),
-                initial.EntityId, initial.Observation, initial.OriginReplayToken);
-        });
-        return ExecuteAsync(claim, ScenarioWorldSnapshot.Create(retained.Scenario, [.. actors]), interpreter, binding, limits, cancellationToken);
+        return ExecuteAsync(claim, retained.ToInitialWorldSnapshot(), interpreter, binding, limits, cancellationToken);
     }
 
     static ImmutableDictionary<ClaimInputRole, ObservationValue> Values(ClaimInputRole role, ObservationValue value) =>

@@ -60,7 +60,7 @@ public sealed class MachineReactionAnalysisTests
     [Fact]
     public async Task Recovery_rejects_a_catalog_that_cannot_advance_its_prerequisite()
     {
-        var fixture = await MachineReactionEpisodeTests.Fixture.Create();
+        var fixture = await TenderEpisodeRuntime.Create();
         var exception = Assert.Throws<ArgumentException>(() => new MachineReactionRecovery(fixture.Store, [fixture.Confirmation()]));
         Assert.Contains(MachineReactionAnalysis.MissingPrerequisite, exception.Message);
         _ = new MachineReactionRecovery(fixture.Store, [fixture.Confirmation(), fixture.Acceptance()]);
@@ -68,8 +68,8 @@ public sealed class MachineReactionAnalysisTests
     [Fact]
     public async Task A_prerequisite_registered_for_another_authority_does_not_close_the_local_catalog()
     {
-        var local = await MachineReactionEpisodeTests.Fixture.Create();
-        var foreign = await MachineReactionEpisodeTests.Fixture.Create(authority: new("other", "test"));
+        var local = await TenderEpisodeRuntime.Create();
+        var foreign = await TenderEpisodeRuntime.Create(authority: new("other", "test"));
         foreign.Store = local.Store;
         Assert.Throws<ArgumentException>(() => new MachineReactionRecovery(local.Store, [local.Confirmation(), foreign.Acceptance()]));
         _ = new MachineReactionRecovery(local.Store, [local.Confirmation(), foreign.Acceptance(), local.Acceptance()]);

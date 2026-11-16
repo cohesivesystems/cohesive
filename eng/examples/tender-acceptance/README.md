@@ -94,3 +94,27 @@ The example's source remains the fluent machines, reactions and scenario builder
 and trace are derived artifacts. Hosts execute the existing canonical Process and Transition definitions;
 the simulation layer only selects the next explicit action and time. Static registration diagnostics
 are covered in `MachineReactionAnalysisTests`. See the [simulation profile and boundaries](../../../src/Cohesive.Simulation.Transitions/README.md).
+
+
+### Declarative fault replay
+
+`TenderEpisodeScenarios.ConfirmationFirst()` now declares a failure before confirmation target execution
+and a lost acknowledgement after it returns. Both are serialized action inputs; duplicate delivery and
+delay remain schedule declarations. `TenderEpisodeRuntime` is the shared native example realization.
+`TenderEpisodeScenarios.Environment()` and `Reconstruct(...)` define its versioned portable initial-state
+recipe. Capture a run with `ReactionScenarioReplay.Capture(...)`, persist the returned JSON, and replay it
+with `ReactionScenarioReplay.ReplayAsync(artifact, TenderEpisodeScenarios.Reconstruct)`.
+
+The regression tests verify fresh-run trace equality, stable operation identity through both failures,
+unchanged load concurrency after receipt replay, stale-episode rejection, cross-episode waiting,
+invalid fault placement, unexercised faults, and reconstruction mismatch. See the
+[replay contract and operating limits](../../../src/Cohesive.Simulation.Transitions/README.md#declare-target-faults-and-replay).
+
+
+The runtime's source-receipt preparation helper is deliberately a **fixture-only gap**, not a recommended
+application execution path. It uses `ExecuteTransitionOperation` for exact receipt lookup and commit,
+but still supplies the reference decision/projection callback. The native Process adapter owns richer
+execution and emission lowering; using it here would require inventing Process provenance. A shared
+direct executor that distills that mechanism is tracked in [#570](https://github.com/cohesivesystems/cohesive/issues/570).
+The runtime's repositories and targets are constructor-initialized read-only properties; only the
+Process store is replaceable to exercise durable restart.

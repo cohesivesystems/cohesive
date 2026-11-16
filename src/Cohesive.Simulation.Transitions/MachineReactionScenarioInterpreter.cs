@@ -15,7 +15,8 @@ namespace Cohesive.Simulation.Transitions;
 /// <summary>Selects an immutable source receipt and the host to which the scenario applies it.</summary>
 /// <param name="Host">Registered host alias.</param>
 /// <param name="Receipt">Registered source receipt alias; subsequent actions refer to the instance admitted by this pair.</param>
-public sealed record ReactionScenarioInput(string Host, string Receipt);
+/// <param name="Fault">Fault at this recovery action only; other operations require None.</param>
+public sealed record ReactionScenarioInput(string Host, string Receipt, ReactionScenarioFault Fault = ReactionScenarioFault.None);
 
 /// <summary>Portable evidence from the existing durable reaction interpreter.</summary>
 /// <param name="Policy">Exact policy fingerprint.</param>
@@ -29,8 +30,9 @@ public sealed record ReactionScenarioInput(string Host, string Receipt);
 /// <param name="ControlDisposition">Canonical cancellation outcome for abandonment actions, otherwise null.</param>
 /// <param name="Attempts">Number of retained target attempts.</param>
 /// <param name="Episode">Serialized typed episode value, or null for other identity scopes.</param>
+/// <param name="Fault">Fault boundary actually exercised by this action, or None.</param>
 public sealed record ReactionScenarioObservation(string Policy, string Source, string Instance,
-    MachineReactionStatus Status, string? Prerequisite, string? Diagnostic, TransitionDecisionKind? Decision, string? Operation, ProcessDurableRuntimeDisposition? ControlDisposition, int Attempts, string? Episode);
+    MachineReactionStatus Status, string? Prerequisite, string? Diagnostic, TransitionDecisionKind? Decision, string? Operation, ProcessDurableRuntimeDisposition? ControlDisposition, int Attempts, string? Episode, ReactionScenarioFault Fault);
 
 /// <summary>Interprets bounded virtual-time schedules through existing durable reaction hosts.</summary>
 /// <remarks>Use a fresh interpreter and isolated deterministic stores/targets for each run. This is not a sandbox:
@@ -55,6 +57,7 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
     readonly Dictionary<string, EntityTransitionOperationReceipt> receipts;
     readonly Dictionary<(string Host, string Receipt), ProcessInstanceId> admitted = [];
     readonly Func<OperationContext, ProcessStartRequest, CancelProcessCommand, ValueTask<bool>> authorizeAbandon;
+    readonly ReactionScenarioFaults faults = new();
     int nextSequence;
     string? scenarioFingerprint;
 
@@ -74,6 +77,7 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
         ArgumentException.ThrowIfNullOrWhiteSpace(environmentIdentity);
         ArgumentNullException.ThrowIfNull(hosts);
         ArgumentNullException.ThrowIfNull(receipts);
+        EnvironmentIdentity = environmentIdentity;
         this.hosts = new(hosts, StringComparer.Ordinal);
         this.receipts = new(receipts, StringComparer.Ordinal);
         foreach (var (alias, host) in this.hosts)
@@ -88,6 +92,8 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
         }
         // Reuse the runtime's registration authority, including store, recovery, revision and tenant checks.
         _ = new MachineReactionRecovery(store, [.. this.hosts.Values]);
+        foreach (var (alias, host) in this.hosts.ToArray())
+            this.hosts[alias] = host.DecorateTarget(target => faults.Bind(alias, target));
         this.authorizeAbandon = authorizeAbandon ?? ((_, _, _) => ValueTask.FromResult(false));
         var identity = JsonSerializer.Serialize(new
         {
@@ -95,11 +101,14 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
             Hosts = this.hosts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new { Alias = p.Key, Policy = p.Value.Policy.Document.Reference, p.Value.Authority }),
             Receipts = this.receipts.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => new { Alias = p.Key, p.Value.Commit.Fingerprint, p.Value.CommittedAtUtc })
         });
-        Identity = "cohesive-simulation-reactions/v1/sha256/" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
+        Identity = "cohesive-simulation-reactions/v4/sha256/" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
     }
 
     /// <summary>Profile identity pinning host policies, source commits and declared initial environment.</summary>
     public string Identity { get; }
+
+    /// <summary>Exact caller-owned environment recipe identity pinned by this interpreter.</summary>
+    public string EnvironmentIdentity { get; }
 
     /// <summary>Declares the four operations with their shared canonical input and output contracts.</summary>
     /// <param name="scenario">Scenario source being authored.</param>
@@ -137,6 +146,8 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
         var receiptAlias = input.Fields![nameof(ReactionScenarioInput.Receipt)].GetString()!;
         if (!hosts.TryGetValue(hostAlias, out var host) || !receipts.TryGetValue(receiptAlias, out var receipt))
             throw new InvalidOperationException("The action refers to an unregistered host or receipt.");
+        if (nextSequence == 0) ValidateSchedule(context.Scenario);
+        var fault = ReadFault(input);
         scenarioFingerprint = context.Scenario.Fingerprint.Value;
         nextSequence++;
         var operation = OperationContext.Create(timeProvider: new ActionClock(context.Action.ScheduledAtUtc), cancellationToken: cancellationToken);
@@ -151,7 +162,16 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
             throw new InvalidOperationException("Deliver the selected receipt before advancing or inspecting its reaction.");
         MachineReactionProgress? actionProgress = null;
         if (context.Operation.Id == Recover)
-            actionProgress = await host.RecoverAsync(operation, instance).ConfigureAwait(false);
+        {
+            faults.Begin(hostAlias, fault);
+            var completed = false;
+            try
+            {
+                actionProgress = await host.RecoverAsync(operation, instance).ConfigureAwait(false);
+                completed = true;
+            }
+            finally { faults.End(requireHit: completed); }
+        }
         var inspection = await host.InspectLifecycleAsync(operation, instance).ConfigureAwait(false)
             ?? throw new InvalidOperationException("Admitted reaction is missing from its store.");
         ProcessDurableRuntimeDisposition? controlDisposition = null;
@@ -170,9 +190,36 @@ public sealed class MachineReactionScenarioInterpreter : IScenarioActionInterpre
             instance.Value, progress.Status, progress.Prerequisite?.Value, progress.Diagnostic?.Code,
             progress.Receipt?.Commit.DecisionKind, progress.Operation is null ? null : JsonSerializer.Serialize(progress.Operation),
             controlDisposition, progress.Attempts.IsDefault ? 0 : progress.Attempts.Length,
-            inspection.Episode is null ? null : JsonSerializer.Serialize(inspection.Episode));
+            inspection.Episode is null ? null : JsonSerializer.Serialize(inspection.Episode), fault);
         return ScenarioActionResult.Unchanged(PortableValue.Concrete(OutputContract, ObservationValue.FromObject(observation)));
     }
+
+    void ValidateSchedule(ScenarioDefinitionDocument scenario)
+    {
+        HashSet<(string Host, string Receipt)> delivered = [];
+        foreach (var operation in scenario.Definition.Operations)
+            if (operation.Input != InputContract || operation.Output != OutputContract)
+                throw new InvalidOperationException("Reaction scenario contracts differ from the declared profile.");
+        foreach (var action in scenario.Definition.Actions)
+        {
+            var fields = action.Input.Fields!;
+            var host = fields[nameof(ReactionScenarioInput.Host)].GetString()!;
+            var receipt = fields[nameof(ReactionScenarioInput.Receipt)].GetString()!;
+            var fault = ReadFault(action.Input);
+            if (!hosts.ContainsKey(host) || !receipts.ContainsKey(receipt))
+                throw new InvalidOperationException("The schedule refers to an unregistered host or receipt.");
+            if (action.OperationId is not (Deliver or Recover or Inspect or Abandon))
+                throw new InvalidOperationException("Unknown reaction scenario operation.");
+            if (fault != ReactionScenarioFault.None && action.OperationId != Recover)
+                throw new InvalidOperationException("A fault requires a recovery action and an instrumented target alias.");
+            if (action.OperationId == Deliver) delivered.Add((host, receipt));
+            else if (!delivered.Contains((host, receipt)))
+                throw new InvalidOperationException("Deliver the selected receipt before advancing or inspecting its reaction.");
+        }
+    }
+
+    static ReactionScenarioFault ReadFault(ObservationValue input) =>
+        ReactionScenarioFaults.Parse(input.Fields![nameof(ReactionScenarioInput.Fault)].GetString());
 
     sealed class ActionClock(DateTimeOffset now) : TimeProvider
     {
