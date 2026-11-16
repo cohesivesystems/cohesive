@@ -40,8 +40,7 @@ public static class AssuranceActivityAdapter
     /// <returns>An activity event; add it to an activity from Source. Export and sampling remain host-controlled.</returns>
     /// <exception cref="ArgumentNullException">Observations are null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Payload bound is nonpositive.</exception>
-    /// <exception cref="TraceObservationException">Envelope profile is invalid; no monitor is involved.</exception>
-    /// <exception cref="AssuranceTelemetryException">Encoded payload exceeds its bound.</exception>
+    /// <exception cref="TraceObservationException">Envelope profile is invalid or encoded payload exceeds its bound; no monitor is involved.</exception>
     /// <exception cref="JsonException">A portable observation cannot be serialized.</exception>
     /// <exception cref="NotSupportedException">A retained representation is unsupported.</exception>
     public static ActivityEvent CreateEvent(TraceObservationBatch observations,
@@ -51,7 +50,7 @@ public static class AssuranceActivityAdapter
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxPayloadCharacters);
         observations.ValidateCapture();
         var json = observations.Serialize();
-        if (json.Length > maxPayloadCharacters) throw Capacity(TraceEvaluationCodes.TelemetryPayloadLimit);
+        if (json.Length > maxPayloadCharacters) throw Capacity();
         return new(EventName, tags: new ActivityTagsCollection { { PayloadTag, json } });
     }
 
@@ -69,9 +68,8 @@ public static class AssuranceActivityAdapter
     /// The host must persist its checkpoint and delivery position before acknowledging captured input.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Payload bound is nonpositive.</exception>
-    /// <exception cref="TraceObservationException">An envelope violates the capture profile.</exception>
-    /// <exception cref="TraceMonitorUpdateException">Binding fails or the monitor rejects the update.</exception>
-    /// <exception cref="AssuranceTelemetryException">Activity source, event payload or aggregate payload size is invalid.</exception>
+    /// <exception cref="TraceObservationException">Activity source, payload, capture profile or binding is invalid,
+    /// a capacity bound is exceeded, or the monitor rejects the update. Diagnostic identifies the failed boundary.</exception>
     /// <exception cref="OperationCanceledException">Processing is cancelled.</exception>
     public static TraceCapture Apply(TraceMonitor monitor, Activity activity, ClaimReference cumulativeReference,
         int maxPayloadCharacters = DefaultMaxPayloadCharacters, CancellationToken cancellationToken = default)
@@ -81,7 +79,7 @@ public static class AssuranceActivityAdapter
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxPayloadCharacters);
         cancellationToken.ThrowIfCancellationRequested();
         if (activity.Source.Name != ActivitySourceName)
-            throw Reject(TraceEvaluationCodes.TelemetryBinding, "Activity source is not the explicit Assurance observation source.");
+            throw Reject(TraceEvaluationCodes.TelemetrySource, "Activity source is not the explicit Assurance observation source.");
         return monitor.AdvanceCaptured(Decode(activity, maxPayloadCharacters, cancellationToken), cumulativeReference, cancellationToken);
     }
 
@@ -102,7 +100,7 @@ public static class AssuranceActivityAdapter
             }
             if (payload is null) throw Reject(TraceEvaluationCodes.TelemetryEnvelope, "Semantic event has no canonical payload.");
             characters += payload.Length;
-            if (characters > maxPayloadCharacters) throw Capacity(TraceEvaluationCodes.TelemetryPayloadLimit);
+            if (characters > maxPayloadCharacters) throw Capacity();
             TraceObservationBatch batch;
             try { batch = TraceObservationBatch.Deserialize(payload); }
             catch (JsonException error) { throw Reject(TraceEvaluationCodes.TelemetryEnvelope, error.Message); }
@@ -110,13 +108,7 @@ public static class AssuranceActivityAdapter
         }
     }
 
-    static AssuranceTelemetryException Capacity(string code) => Reject(code,
+    static TraceObservationException Capacity() => Reject(TraceEvaluationCodes.TelemetryPayloadLimit,
         "Semantic telemetry exceeds the configured payload character limit; no observations were accepted.");
-    static AssuranceTelemetryException Reject(string code, string message) => new(new(code, "/telemetry", message));
-}
-
-/// <summary>Transport decoding or payload rejection before semantic monitor ingestion.</summary>
-public sealed class AssuranceTelemetryException : TraceObservationException
-{
-    internal AssuranceTelemetryException(TraceEvaluationDiagnostic diagnostic) : base(diagnostic) { }
+    static TraceObservationException Reject(string code, string message) => new(new(code, "/telemetry", message));
 }

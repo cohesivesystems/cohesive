@@ -86,12 +86,12 @@ bounded by the monitor profile. Encoding checks length after serialization, so t
 preallocation guarantee. Collector/backend attribute limits may be smaller and must be qualified by
 the host; truncated documents are rejected. Retained monitor history remains bounded without eviction.
 
-All diagnostics are in core `TraceEvaluationCodes`. Hosts can catch `TraceObservationException`
-once across producer validation, transport decoding and monitor ingestion, and read its `Diagnostic`.
-Producer-neutral capture profile errors use that base exception directly, without implying a monitor
-ran. `AssuranceTelemetryException` and `TraceMonitorUpdateException` specialize the same contract
-for transport and monitor rejections. Boundary-specific types remain available when a host needs them;
-a shared diagnostic code does not require separate catch paths. There is no public exception factory. Cancellation or rejection leaves the immutable prior
+All observation rejections use the sealed `TraceObservationException`, carrying a `Diagnostic` from
+core `TraceEvaluationCodes`. There are no boundary-specific exception subtypes. `TelemetrySource`
+identifies a wrong activity source; `TelemetryBinding` identifies a mismatched semantic contract,
+target, epoch or mapping evidence. Both are permanent for unchanged input and configuration and
+follow the quarantine policy below. The public diagnostic constructor lets adapters report their
+boundary failures without pretending a monitor executed. Cancellation or rejection leaves the immutable prior
 checkpoint unchanged. Disposition belongs to the capture host:
 
 - Envelope, binding and `TelemetryPayloadLimit` rejections are permanent for unchanged input and

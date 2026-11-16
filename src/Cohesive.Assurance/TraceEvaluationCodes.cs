@@ -65,7 +65,10 @@ public static class TraceEvaluationCodes
     /// <summary>Transport envelope is malformed, unsupported or carries prohibited completeness assertions.</summary>
     public const string TelemetryEnvelope = "assurance.telemetry.envelope";
 
-    /// <summary>Transport source, contract, target, epoch or mapping evidence differs from the pinned binding.</summary>
+    /// <summary>Activity source is not the explicitly registered semantic observation source.</summary>
+    public const string TelemetrySource = "assurance.telemetry.source";
+
+    /// <summary>Contract, target, epoch or mapping evidence differs from the pinned binding.</summary>
     public const string TelemetryBinding = "assurance.telemetry.binding";
 
     /// <summary>Transport payload exceeds its configured per-event or aggregate activity bound.</summary>

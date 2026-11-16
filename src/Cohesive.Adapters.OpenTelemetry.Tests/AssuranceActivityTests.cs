@@ -116,7 +116,7 @@ public sealed class AssuranceActivityTests
         foreach (var mismatch in mismatches)
         {
             using var activity = Capture(Batch(Event("paid", 1)), activity => activity.AddEvent(AssuranceActivityAdapter.CreateEvent(mismatch)));
-            var error = Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, activity, R("rejected")).Monitor);
+            var error = Assert.Throws<TraceObservationException>(() => AssuranceActivityAdapter.Apply(monitor, activity, R("rejected")).Monitor);
             Assert.Equal(TraceEvaluationCodes.TelemetryBinding, error.Diagnostic.Code);
             Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
         }
@@ -136,7 +136,7 @@ public sealed class AssuranceActivityTests
         Assert.Equal(ClaimVerdict.Inconclusive, monitor.Evaluation.Verdict);
         Assert.Equal(SemanticObservationKind.UnknownOutcome, monitor.Evaluation.Batch.Alternatives[0].Observations[0].Kind);
         using var earlier = Capture(Batch(attempt with { Occurrence = "earlier", Step = 0, Ticks = 0 }));
-        Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, earlier, R("bad-order")).Monitor);
+        Assert.Throws<TraceObservationException>(() => AssuranceActivityAdapter.Apply(monitor, earlier, R("bad-order")).Monitor);
     }
 
     [Fact]
@@ -172,10 +172,10 @@ public sealed class AssuranceActivityTests
         using var malformed = Capture(Batch(Event("paid", 1)), span => span.AddEvent(new(AssuranceActivityAdapter.EventName,
             tags: new ActivityTagsCollection { { AssuranceActivityAdapter.PayloadTag, "not JSON" } })));
         Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope,
-            Assert.Throws<AssuranceTelemetryException>(() => AssuranceActivityAdapter.Apply(monitor, malformed, R("bad")).Monitor).Diagnostic.Code);
+            Assert.Throws<TraceObservationException>(() => AssuranceActivityAdapter.Apply(monitor, malformed, R("bad")).Monitor).Diagnostic.Code);
         using var valid = Capture(Batch(Event("paid", 1)));
         Assert.Equal(TraceEvaluationCodes.TelemetryPayloadLimit,
-            Assert.Throws<AssuranceTelemetryException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("big"), maxPayloadCharacters: 10).Monitor).Diagnostic.Code);
+            Assert.Throws<TraceObservationException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("big"), maxPayloadCharacters: 10).Monitor).Diagnostic.Code);
         Assert.Throws<OperationCanceledException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("cancelled"), cancellationToken: new(canceled: true)).Monitor);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
     }
@@ -206,7 +206,7 @@ public sealed class AssuranceActivityTests
         var limit = batch.Serialize().Length;
         using var activity = Capture(batch, span => span.AddEvent(AssuranceActivityAdapter.CreateEvent(batch, limit)));
         var monitor = TraceMonitor.Start(Claim(), Batch());
-        var error = Assert.Throws<AssuranceTelemetryException>(() =>
+        var error = Assert.Throws<TraceObservationException>(() =>
             AssuranceActivityAdapter.Apply(monitor, activity, R("oversized"), maxPayloadCharacters: limit));
         Assert.Equal(TraceEvaluationCodes.TelemetryPayloadLimit, error.Diagnostic.Code);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
@@ -237,15 +237,17 @@ public sealed class AssuranceActivityTests
         var partial = initial with { Enumeration = EnumerationCompleteness.Partial };
         using var oversized = Capture(Batch(Event("paid", 1)));
         using var mismatched = Capture(initial with { Target = R("other-target") });
+        using var ordinary = new Activity("ordinary-span");
         Action[] boundaries = [
             () => AssuranceActivityAdapter.CreateEvent(partial),
             () => AssuranceActivityAdapter.Apply(monitor, oversized, R("large"), maxPayloadCharacters: 1),
-            () => AssuranceActivityAdapter.Apply(monitor, mismatched, R("wrong-binding"))
+            () => AssuranceActivityAdapter.Apply(monitor, mismatched, R("wrong-binding")),
+            () => AssuranceActivityAdapter.Apply(monitor, ordinary, R("wrong-source"))
         ];
-        string[] expected = [TraceEvaluationCodes.TelemetryEnvelope, TraceEvaluationCodes.TelemetryPayloadLimit, TraceEvaluationCodes.TelemetryBinding];
+        string[] expected = [TraceEvaluationCodes.TelemetryEnvelope, TraceEvaluationCodes.TelemetryPayloadLimit, TraceEvaluationCodes.TelemetryBinding, TraceEvaluationCodes.TelemetrySource];
         for (var i = 0; i < boundaries.Length; i++)
         {
-            var error = Assert.ThrowsAny<TraceObservationException>(boundaries[i]);
+            var error = Assert.Throws<TraceObservationException>(boundaries[i]);
             Assert.Equal(expected[i], error.Diagnostic.Code);
         }
     }
