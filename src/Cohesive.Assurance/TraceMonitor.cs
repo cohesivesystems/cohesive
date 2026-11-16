@@ -11,9 +11,12 @@ namespace Cohesive.Assurance;
 /// Rejected updates leave this snapshot unchanged and must not be acknowledged as consumed.</remarks>
 public sealed class TraceMonitor
 {
+    readonly Lazy<ClaimReference> reference;
+
     TraceMonitor(TraceEvaluation evaluation, ClaimReference? predecessor = null, ClaimReference? correctionEvidence = null)
     {
         Evaluation = evaluation; Predecessor = predecessor; CorrectionEvidence = correctionEvidence;
+        reference = new(CreateReference, LazyThreadSafetyMode.ExecutionAndPublication);
     }
 
     /// <summary>Evaluation of this accepted prefix only; later rejected deliveries are not covered.</summary>
@@ -64,22 +67,16 @@ public sealed class TraceMonitor
         if ((long)update.Observations.Length + update.Completeness.Length > Evaluation.Limits.MaxObservations)
             throw Capacity();
         Dictionary<(string Partition, string Occurrence), SemanticObservation> seen = [];
-        foreach (var observation in prior.Observations) seen.TryAdd((observation.Partition, observation.Occurrence), observation);
+        foreach (var observation in prior.Observations) seen.TryAdd(TraceObservationValidation.Key(observation), observation);
         var observations = prior.Observations.ToBuilder();
-        var frontiers = prior.Completeness.ToDictionary(x => (x.Selector, x.Partition));
+        var frontiers = prior.Completeness.ToDictionary(TraceObservationValidation.Key);
         var changed = false;
         foreach (var observation in update.Observations)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (observation is null || observation.Values is null || observation.Selector is null
-                || string.IsNullOrWhiteSpace(observation.Partition) || string.IsNullOrWhiteSpace(observation.Occurrence))
-                throw Reject(TraceEvaluationCodes.InvalidObservation, "/observations", "Observation identity, selector and values are required.");
-            if (seen.TryGetValue((observation.Partition, observation.Occurrence), out var previous))
-            {
-                if (!previous.SameContent(observation))
-                    throw Reject(TraceEvaluationCodes.InvalidObservation, observation.Occurrence, "Occurrence redelivery changes content; use an explicit correction epoch.");
-                continue;
-            }
+            if (TraceObservationValidation.Observe(observation, seen, out var duplicate) is { } invalid)
+                throw new TraceMonitorUpdateException(invalid);
+            if (duplicate) continue;
             if (frontiers.TryGetValue((observation.Selector, observation.Partition), out var frontier)
                 && (frontier.Closure == ObservationClosure.Closed || observation.Step <= frontier.ThroughStep
                     || observation.Ticks <= frontier.ThroughTicks))
@@ -87,17 +84,15 @@ public sealed class TraceMonitor
                     "New occurrence contradicts previously certified inclusive completeness; correct the epoch explicitly.");
             if ((long)observations.Count + frontiers.Count >= Evaluation.Limits.MaxObservations) throw Capacity();
             observations.Add(observation);
-            seen.Add((observation.Partition, observation.Occurrence), observation);
             changed = true;
         }
-        HashSet<(ClaimReference, string)> updatedFrontiers = [];
+        Dictionary<(ClaimReference Selector, string Partition), ObservationCompleteness> updatedFrontiers = [];
         foreach (var frontier in update.Completeness)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (frontier is null || frontier.Selector is null || string.IsNullOrWhiteSpace(frontier.Partition)
-                || !updatedFrontiers.Add((frontier.Selector, frontier.Partition)))
-                throw Reject(TraceEvaluationCodes.InvalidObservation, "/completeness", "Frontier updates need unique selector/partition keys.");
-            var key = (frontier.Selector, frontier.Partition);
+            if (TraceObservationValidation.Register(frontier, updatedFrontiers) is { } invalid)
+                throw new TraceMonitorUpdateException(invalid);
+            var key = TraceObservationValidation.Key(frontier);
             if (frontiers.TryGetValue(key, out var previous))
             {
                 if (frontier.ThroughStep < previous.ThroughStep || frontier.ThroughTicks < previous.ThroughTicks
@@ -116,11 +111,13 @@ public sealed class TraceMonitor
         }
         if (update.Reference == prior.Reference && changed)
             throw Reject(TraceEvaluationCodes.InvalidObservation, "/reference", "Changed cumulative content requires a new exact alternative reference.");
+        cancellationToken.ThrowIfCancellationRequested();
+        if (update.Reference == prior.Reference) return this; // Every supplied record was validated; nothing changed.
         var alternative = new TraceObservationAlternative(update.Reference, observations.ToImmutable(),
             [.. frontiers.Values.OrderBy(x => x.Selector, ClaimReference.CanonicalComparer).ThenBy(x => x.Partition, StringComparer.Ordinal)]);
         var batch = Evaluation.Batch with { Alternatives = [alternative] };
         var evaluated = Evaluate(Evaluation.Claim, batch, Evaluation.Limits, cancellationToken);
-        return update.Reference == prior.Reference ? this : new(evaluated, Reference());
+        return new(evaluated, Reference());
     }
 
     /// <summary>Replaces the retained history in a new epoch, explicitly superseding the current snapshot.</summary>
@@ -168,30 +165,34 @@ public sealed class TraceMonitor
     public string Serialize() => Encoding.UTF8.GetString(StrictDocumentJson.GetCanonicalBytes(Payload(), AssuranceJson.Options));
 
     /// <summary>Identifies this exact checkpoint, including its evaluation and predecessor.</summary>
-    /// <returns>Content fingerprint for checkpoint storage and correction lineage.</returns>
+    /// <returns>Lazily computed, thread-safe cached content fingerprint for checkpoint storage and correction lineage.</returns>
     /// <exception cref="JsonException">Retained values cannot be encoded.</exception>
     /// <exception cref="NotSupportedException">A retained representation is unsupported.</exception>
-    public ClaimReference Reference() => new(new("assurance-monitor://checkpoint"), "1",
+    public ClaimReference Reference() => reference.Value;
+
+    ClaimReference CreateReference() => new(new("assurance-monitor://checkpoint"), "1",
         Convert.ToHexString(StrictDocumentJson.ComputeCanonicalSha256(Payload(), AssuranceJson.Options)));
 
     /// <summary>Restores a checkpoint and independently re-evaluates its retained trace.</summary>
     /// <param name="json">Canonical checkpoint from durable storage.</param>
     /// <returns>Monitor pinned to the restored claim, target, contract, limits and epoch; inspect these before binding a live source.</returns>
-    /// <exception cref="JsonException">Checkpoint is malformed, incompatible, or fails independent re-evaluation.</exception>
+    /// <exception cref="TraceMonitorUpdateException">Checkpoint parsing, verification, profile or correction validation fails; Diagnostic retains a stable code.</exception>
     /// <remarks>A predecessor reference is provenance, not proof that the predecessor was retained or that an adapter's
     /// completeness declarations are true. The host must retain the referenced checkpoints separately.</remarks>
     public static TraceMonitor Restore(string json)
     {
         if (!StrictDocumentJson.TryReadCanonicalObject(json, AssuranceJson.Options, "reference monitor checkpoint",
                 out Checkpoint? checkpoint, out var error) || checkpoint is null || checkpoint.Evaluation is null)
-            throw new JsonException($"{error.Failure} at {error.Location}: {error.Message}");
+            throw Reject(TraceEvaluationCodes.MonitorCheckpoint, error.Location, $"{error.Failure}: {error.Message}");
         var evaluation = checkpoint.Evaluation; // The TraceEvaluation converter independently verifies persisted results.
-        if (checkpoint.Schema != "cohesive-assurance-reference-monitor/v1"
-            || evaluation.Status != AssuranceAttemptStatus.Completed || evaluation.Batch.Alternatives.Length != 1
-            || evaluation.Batch.Enumeration != EnumerationCompleteness.Complete
-            || checkpoint.CorrectionEvidence is not null && (checkpoint.Predecessor is null
-                || checkpoint.CorrectionEvidence != evaluation.Batch.EnumerationEvidence))
-            throw new JsonException("Checkpoint does not satisfy the reference monitor profile or correction contract.");
+        if (checkpoint.Schema != "cohesive-assurance-reference-monitor/v1")
+            throw Reject(TraceEvaluationCodes.MonitorCheckpoint, "/schema", "Unsupported monitor checkpoint schema.");
+        if (evaluation.Status != AssuranceAttemptStatus.Completed || evaluation.Batch.Alternatives.Length != 1
+            || evaluation.Batch.Enumeration != EnumerationCompleteness.Complete)
+            throw Reject(TraceEvaluationCodes.MonitorProfile, "/evaluation", "Checkpoint does not satisfy the reference monitor mapping profile.");
+        if (checkpoint.CorrectionEvidence is not null && (checkpoint.Predecessor is null
+            || checkpoint.CorrectionEvidence != evaluation.Batch.EnumerationEvidence))
+            throw Reject(TraceEvaluationCodes.MonitorCorrection, "/correctionEvidence", "Correction requires a predecessor and matching enumeration evidence.");
         return new(evaluation, checkpoint.Predecessor, checkpoint.CorrectionEvidence);
     }
 }

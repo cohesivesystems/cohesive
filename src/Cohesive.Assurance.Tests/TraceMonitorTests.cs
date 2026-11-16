@@ -196,6 +196,63 @@ public sealed class TraceMonitorTests
     }
 
     [Fact]
+    public void BatchAndMonitorShareMalformedRecordDiagnostics()
+    {
+        var monitor = TraceMonitor.Start(Invariant(), Batch());
+        var valid = State("one", 1, 1);
+        SemanticObservation[] malformed = [null!, valid with { Partition = " " }, valid with { Occurrence = "" },
+            valid with { Values = null! }, valid with { Selector = null! }, valid with { Step = -1 },
+            valid with { Ticks = -1 }, valid with { Kind = (SemanticObservationKind)99 },
+            valid with { EventPayload = ObservationValue.FromBool(true) },
+            valid with { Kind = SemanticObservationKind.Event }];
+        foreach (var observation in malformed)
+        {
+            var update = Update("bad", [observation]);
+            var batch = TraceClaimEvaluator.Evaluate(Invariant(), Batch() with { Alternatives = [update] });
+            var error = Assert.Throws<TraceMonitorUpdateException>(() => monitor.Advance(update));
+            Assert.Equal(batch.Diagnostics[0], error.Diagnostic);
+        }
+        var frontier = Frontier(Selection, 1, 1);
+        ObservationCompleteness[][] invalidFrontiers = [[null!], [frontier with { Partition = " " }],
+            [frontier with { Evidence = null! }], [frontier with { ThroughStep = -1 }],
+            [frontier with { Closure = (ObservationClosure)99 }], [frontier, frontier]];
+        foreach (var frontiers in invalidFrontiers)
+        {
+            var update = Update("bad", frontiers: frontiers);
+            var batch = TraceClaimEvaluator.Evaluate(Invariant(), Batch() with { Alternatives = [update] });
+            var error = Assert.Throws<TraceMonitorUpdateException>(() => monitor.Advance(update));
+            Assert.Equal(batch.Diagnostics[0], error.Diagnostic);
+        }
+    }
+
+    [Fact]
+    public void RestorePreservesStableCodesForWireProfileAndCorrectionFailures()
+    {
+        var monitor = TraceMonitor.Start(Invariant(), Batch());
+        Assert.Equal(TraceEvaluationCodes.MonitorCheckpoint,
+            Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore("not JSON")).Diagnostic.Code);
+        var node = JsonNode.Parse(monitor.Serialize())!.AsObject();
+        var partial = TraceClaimEvaluator.Evaluate(Invariant(), Batch() with { Enumeration = EnumerationCompleteness.Partial });
+        node["evaluation"] = JsonNode.Parse(partial.Serialize());
+        Assert.Equal(TraceEvaluationCodes.MonitorProfile,
+            Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore(node.ToJsonString())).Diagnostic.Code);
+        var corrected = monitor.Correct(Update("replacement"), R("epoch-2"), R("evidence"));
+        var correction = JsonNode.Parse(corrected.Serialize())!.AsObject();
+        correction["predecessor"] = null;
+        Assert.Equal(TraceEvaluationCodes.MonitorCorrection,
+            Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore(correction.ToJsonString())).Diagnostic.Code);
+    }
+
+    [Fact]
+    public async Task ConcurrentReferenceReadsShareOneImmutableFingerprint()
+    {
+        var monitor = TraceMonitor.Start(Invariant(), Batch()).Advance(Update("one", [State("one", 1, 1)]));
+        var references = await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(monitor.Reference)));
+        Assert.All(references, reference => Assert.Same(references[0], reference));
+        Assert.Equal(references[0], TraceMonitor.Restore(monitor.Serialize()).Reference());
+    }
+
+    [Fact]
     public void ReferenceReuseCancellationAndUnsupportedMappingsDoNotCreateAcceptedState()
     {
         var monitor = TraceMonitor.Start(Invariant(), Batch());
@@ -206,7 +263,7 @@ public sealed class TraceMonitorTests
         Assert.Throws<TraceMonitorUpdateException>(() => monitor.Correct(Update("new"), R("epoch"), R("evidence")));
         var invalid = JsonNode.Parse(monitor.Serialize())!.AsObject();
         invalid["evaluation"]!["verdict"] = "Satisfied";
-        Assert.Throws<JsonException>(() => TraceMonitor.Restore(invalid.ToJsonString()));
-        Assert.Throws<JsonException>(() => TraceMonitor.Restore(monitor.Serialize().Replace("reference-monitor/v1", "reference-monitor/v9")));
+        Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore(invalid.ToJsonString()));
+        Assert.Throws<TraceMonitorUpdateException>(() => TraceMonitor.Restore(monitor.Serialize().Replace("reference-monitor/v1", "reference-monitor/v9")));
     }
 }

@@ -116,14 +116,9 @@ public static class TraceClaimEvaluator
             foreach (var observation in alternative.Observations)
             {
                 cancellation.ThrowIfCancellationRequested();
-                if (observation is null || observation.Selector is null || observation.Values is null
-                    || string.IsNullOrWhiteSpace(observation.Occurrence) || string.IsNullOrWhiteSpace(observation.Partition)
-                    || observation.Step < 0 || observation.Ticks < 0 || !Enum.IsDefined(observation.Kind)
-                    || observation.Values.Keys.Any(x => !Enum.IsDefined(x))
-                    || observation.Kind == SemanticObservationKind.Event && observation.Values.Count != 0
-                    || observation.Kind != SemanticObservationKind.Event && observation.EventPayload is not null)
+                if (TraceObservationValidation.Observe(observation, seen, out var duplicate) is { } invalid)
                 {
-                    Invalid("/observations", "An observation has invalid identity, role, time, kind or selector.");
+                    Invalid(invalid.Location, invalid.Message);
                     return observations;
                 }
                 if (!CompatibleKind(observation) || observation.Kind == SemanticObservationKind.InitialState && observation.Step != 0)
@@ -131,18 +126,11 @@ public static class TraceClaimEvaluator
                     Invalid(observation.Occurrence, "Observation kind does not match the selected claim form or initial boundary.");
                     return observations;
                 }
-                var key = (observation.Partition, observation.Occurrence);
-                if (seen.TryGetValue(key, out var previous))
+                if (duplicate)
                 {
-                    if (!previous.SameContent(observation))
-                    {
-                        Invalid(observation.Occurrence, "Duplicate identity has contradictory content; append a new correction epoch instead.");
-                        return observations;
-                    }
                     duplicates++;
                     continue;
                 }
-                seen.Add(key, observation);
                 if (observation.Step < previousStep || observation.Ticks < previousTime
                     || observation.Step == previousStep && observation.Ticks != previousTime)
                 {
@@ -162,11 +150,9 @@ public static class TraceClaimEvaluator
             frontiers.Clear();
             foreach (var frontier in alternative.Completeness)
             {
-                if (frontier is null || frontier.Selector is null || frontier.Evidence is null
-                    || frontier.ThroughStep < 0 || frontier.ThroughTicks < 0 || !Enum.IsDefined(frontier.Closure)
-                    || !frontiers.TryAdd((frontier.Selector, frontier.Partition), frontier))
+                if (TraceObservationValidation.Register(frontier, frontiers) is { } invalid)
                 {
-                    Invalid("/completeness", "Frontiers require unique source/selector keys, nonnegative bounds and exact evidence.");
+                    Invalid(invalid.Location, invalid.Message);
                     return observations;
                 }
                 var requirement = requirements.GetValueOrDefault(frontier.Selector);

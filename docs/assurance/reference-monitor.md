@@ -4,6 +4,11 @@
 four-form batch evaluator. It accepts one complete mapping of a declared ordered atomic scope.
 Claim, observation contract, target and evaluation limits are pinned at session creation.
 
+The intended live host is the optional #558 production-capture adapter/worker. It owns source
+positions, atomic checkpoint persistence, acknowledgment, backpressure and correction propagation.
+Simulation provides conformance and reconstruction scenarios; it does not own the live consumer
+lifecycle. This PR supplies the reference profile and tests; a production consumer is not yet implemented.
+
 ```csharp
 var monitor = TraceMonitor.Start(claim, initialBatch, limits);
 
@@ -40,7 +45,10 @@ correctness. A completed evaluation may still have an inconclusive verdict or pe
   predicate and event-candidate budgets as the batch interpreter. Capacity or evaluation exhaustion,
   invalid observations, unsupported evaluation and cancellation do not accept any part of the update.
 
-`TraceMonitorUpdateException.Diagnostic` identifies rejection; cancellation uses
+`TraceMonitorUpdateException.Diagnostic` identifies update and restore rejection. Restore uses
+`assurance.monitor.checkpoint` for malformed/incompatible or unverifiable artifacts,
+`assurance.monitor.profile` for mapping-profile violations, and `assurance.monitor.correction`
+for invalid correction lineage. Cancellation uses
 `OperationCanceledException`. The monitor is immutable, so a rejected operation leaves the accepted
 checkpoint unchanged. Do not acknowledge rejected deliveries or treat the prior checkpoint as
 covering them. Apply backpressure and retry, or explicitly start a session with revised limits.
@@ -48,7 +56,8 @@ A source that drops records must report incomplete capture rather than issue fal
 
 The update's exact alternative reference identifies the resulting cumulative alternative. A producer
 must not reuse historical references for changed content. Reuse of the current reference is checked:
-identical redelivery returns the current snapshot, while changed content is rejected. This monitor
+identical redelivery returns the current snapshot after record validation, without rebuilding or
+re-evaluating the batch. Changed content is rejected. This monitor
 does not retain an unbounded catalog of earlier reference identities.
 
 The retained history collapses newly received duplicate deliveries; batch duplicate-delivery counts
@@ -56,6 +65,11 @@ are not a durable transport metric. Equivalence is to the same retained semantic
 latest frontier set, not to a concatenation of every transport delivery.
 
 ## Checkpoint and correction
+
+`Reference()` computes the immutable checkpoint fingerprint once on first use and caches it with
+thread-safe publication. Cache state is excluded from serialization. Observation/frontier shape and
+identity validation are shared with the batch evaluator; changed cumulative batches still pass through
+that same validator defensively. Monitor continuity rules remain separate.
 
 Checkpoints retain the exact evaluated batch, limits, prior checkpoint fingerprint and any correction
 reference. Restoration independently re-evaluates the trace through the verified `TraceEvaluation`

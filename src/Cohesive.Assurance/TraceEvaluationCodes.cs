@@ -56,5 +56,11 @@ public static class TraceEvaluationCodes
     /// <summary>An update regresses completeness or changes a previously closed boundary.</summary>
     public const string MonitorFrontierRegression = "assurance.monitor.frontierRegression";
 
+    /// <summary>A retained monitor checkpoint is malformed, incompatible or fails independent verification.</summary>
+    public const string MonitorCheckpoint = "assurance.monitor.checkpoint";
+
+    /// <summary>A retained correction lacks its required lineage or mapping evidence.</summary>
+    public const string MonitorCorrection = "assurance.monitor.correction";
+
     internal static string Expression(PortableExpressionEvaluationError error) => "assurance.expression." + error;
 }
