@@ -11,7 +11,7 @@ public sealed class MachineReactionPreparationTests
     [Fact]
     public async Task Episode_selection_has_bounded_cold_cost_and_allocation_free_reuse()
     {
-        var f = await MachineReactionEpisodeTests.Fixture.Create();
+        var f = await TenderEpisodeRuntime.Create();
         var receipts = await f.TwoCycles();
         var id = Assert.Single(await f.Acceptance().AdmitAsync(f.Context, receipts.Acceptance1));
         var start = (await f.Store.LoadAsync(f.Context, id))!.Checkpoint.Start.Request;
