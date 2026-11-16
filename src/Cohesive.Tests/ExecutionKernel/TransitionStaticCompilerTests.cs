@@ -14,6 +14,28 @@ public sealed class TransitionStaticCompilerTests
     static readonly ValueContract Int64Contract = new(new ScalarTypeRef(ScalarTypeKind.Int64));
 
     [Fact]
+    public void Compile_ParameterMetadataRetainsShapeFieldConstraints()
+    {
+        ShapeId inputShape = new("constrained-input");
+        ShapeGraph graph = new(new("parameter-contracts"),
+            [new(inputShape, [new(new FieldName("name"), StringContract.Type!,
+                constraints: [new MaxLengthConstraint(2)])])]);
+        var input = ValueContract.FromShape(graph.GetShape(inputShape), graph.Qualify(inputShape));
+        CanonicalTransitionDefinition definition = new(input,
+            new(new JsonTypeRef(JsonTypeKind.Object)), StringContract, [],
+            Sequence("root", Outcome("outcome")), []);
+        var result = TransitionStaticCompiler.Compile(Document(definition), graph);
+        Assert.True(result.IsSuccessful, Format(result.Validation));
+        var parameter = result.Plan!.Parameters["name"];
+        Assert.Equal(FieldPath.FromField("name"), parameter.Path);
+        Assert.Equal(new ExecutionNodeId("input/name"), parameter.Node);
+        Assert.False(PortableExecutionValidator.Validate(PortableValue.Concrete(
+            parameter.Contract, ObservationValue.FromString("long")), graph).IsValid);
+        Assert.True(PortableExecutionValidator.Validate(PortableValue.Concrete(
+            parameter.Contract, ObservationValue.FromString("ok")), graph).IsValid);
+    }
+
+    [Fact]
     public void Compile_NestedChoiceMatchAndParentLet_ProducesPathSensitiveRequirements()
     {
         var definition = RoutingDefinition();

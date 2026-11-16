@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 using Cohesive.Execution;
@@ -804,7 +805,8 @@ public sealed class CompiledTransitionPlan
         TransitionSemanticAnalysis analysis,
         ShapeGraph? shapeGraph,
         ImmutableArray<CompiledTransitionDerivedField> derivedFields,
-        ImmutableArray<TransitionMachineEdgeLink> machineEdges)
+        ImmutableArray<TransitionMachineEdgeLink> machineEdges,
+        ImmutableArray<ExprScopeParameter> parameters)
     {
         Document = document;
         Definition = definition;
@@ -812,6 +814,61 @@ public sealed class CompiledTransitionPlan
         ShapeGraph = shapeGraph;
         DerivedFields = derivedFields.IsDefault ? [] : derivedFields;
         MachineEdges = machineEdges.IsDefault ? [] : machineEdges;
+        var prepared = new Dictionary<string, (FieldPath Path, ValueContract Contract, ExecutionNodeId Node)>(StringComparer.Ordinal);
+        foreach (var parameter in parameters)
+        {
+            // Use the same field resolver as dynamic navigation, including shape-field constraints.
+            // Unresolvable metadata retains the interpreter's existing diagnostic path.
+            if (ResolveFieldContract(definition.Input, parameter.Name) is { } contract)
+                prepared.Add(parameter.Name, (FieldPath.FromField(parameter.Name), contract, new($"input/{parameter.Name}")));
+        }
+        Parameters = prepared.ToFrozenDictionary(StringComparer.Ordinal);
+    }
+
+    /// <summary>Immutable parameter navigation and validation metadata; never retains activation values.</summary>
+    internal FrozenDictionary<string, (FieldPath Path, ValueContract Contract, ExecutionNodeId Node)> Parameters { get; }
+
+    /// <summary>Resolves one field using the plan's pinned shape graph and original contract semantics.</summary>
+    /// <param name="parent">Contract owning the field.</param>
+    /// <param name="name">Ordinal field name.</param>
+    /// <returns>The field contract, including shape constraints, or null when unresolved.</returns>
+    internal ValueContract? ResolveFieldContract(ValueContract parent, string name)
+    {
+        if (parent.Shape is { } shapeIdentity
+            && ShapeGraph?.TryGetShape(shapeIdentity, out var shape) == true
+            && shape.TryGetField(name, out var shapeField))
+        {
+            return ValueContract.FromField(shapeField);
+        }
+
+        var type = parent.Type;
+        if (type is NamedTypeRef named && ShapeGraph?.TryGetType(named.TypeId, out var definition) == true)
+        {
+            if (definition is TypeDefinition.Structural structural
+                && structural.TryGetField(name, out var field))
+            {
+                return new(
+                    field.Type,
+                    cardinality: field.Cardinality,
+                    presence: field.Presence,
+                    nullability: field.Nullability);
+            }
+            return null;
+        }
+        if (type is ObjectTypeRef objectType)
+        {
+            var field = objectType.Fields.FirstOrDefault(candidate =>
+                string.Equals(candidate.Name, name, StringComparison.Ordinal));
+            if (field is not null)
+            {
+                return new(
+                    field.Type,
+                    cardinality: field.Cardinality,
+                    presence: field.Presence,
+                    nullability: field.Nullability);
+            }
+        }
+        return null;
     }
 
     /// <summary>Exact fingerprinted Transition definition document.</summary>

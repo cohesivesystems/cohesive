@@ -990,6 +990,8 @@ public sealed class TransitionReferenceInterpreterTests
         const int seed = 158_108;
         var random = new Random(seed);
         var fixture = Ek01Fixture();
+        var unprepared = WithoutParameterMetadata(fixture.Plan);
+        Assert.NotEmpty(fixture.Plan.Parameters);
         for (var iteration = 0; iteration < 96; iteration++)
         {
             var isPending = random.Next(4) != 0;
@@ -1050,10 +1052,43 @@ public sealed class TransitionReferenceInterpreterTests
                 sparse,
                 freshSparse);
 
+            Assert.Equivalent(full, TransitionReferenceInterpreter.DecideFullState(
+                unprepared, activationId, input, state, freshState), strict: true);
             Assert.Equivalent(full, sparseDecision, strict: true);
             Assert.Equal(conflict ? TransitionDecisionKind.Conflict : full.Kind, sparseDecision.Kind);
         }
     }
+
+    [Fact]
+    public void PreparedParameters_PreserveInvalidInputDiagnosticsAndRetainedDecisions()
+    {
+        var fixture = Ek01Fixture();
+        var unprepared = WithoutParameterMetadata(fixture.Plan);
+        var state = Object(fixture.Definition.Observation,
+            ("status", ObservationValue.FromString("pending")),
+            ("eligible", ObservationValue.FromBool(true)),
+            ("caseId", ObservationValue.FromString("case-1")),
+            ("unused", ObservationValue.FromString("unused")));
+        foreach (var value in new[] { ObservationValue.Null, ObservationValue.Undefined,
+                     ObservationValue.FromInt64(1), ObservationValue.FromString("invalid"),
+                     ObservationValue.FromString("approve"), ObservationValue.FromString("hold") })
+        {
+            var input = Object(fixture.Definition.Input,
+                ("approved", ObservationValue.FromBool(true)), ("decision", value));
+            var expected = TransitionReferenceInterpreter.DecideFullState(
+                unprepared, new("parameter-validation"), input, state);
+            var actual = TransitionReferenceInterpreter.DecideFullState(
+                fixture.Plan, new("parameter-validation"), input, state);
+            Parallel.For(0, 16, _ => Assert.Equivalent(expected,
+                TransitionReferenceInterpreter.DecideFullState(
+                    fixture.Plan, new("parameter-validation"), input, state), strict: true));
+            Assert.Equivalent(expected, actual, strict: true);
+        }
+    }
+
+    static CompiledTransitionPlan WithoutParameterMetadata(CompiledTransitionPlan plan) => new(
+        plan.Document, plan.Definition, plan.Analysis, plan.ShapeGraph,
+        plan.DerivedFields, plan.MachineEdges, parameters: []);
 
     static (
         CanonicalTransitionDefinition Definition,
