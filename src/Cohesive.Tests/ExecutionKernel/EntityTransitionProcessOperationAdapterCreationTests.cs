@@ -641,7 +641,7 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
             status);
 
         internal EntityTransitionOperationRequest RequestFor(ProcessTransitionInvocation invocation) => new(
-            new(
+            new ProcessOperationOccurrence(
                 invocation.Continuation,
                 invocation.Activation,
                 invocation.Token,
@@ -779,7 +779,7 @@ public sealed class EntityTransitionProcessOperationAdapterCreationTests
                 ObservedAtUtc,
                 ActivationContext());
             var request = new EntityTransitionOperationRequest(
-                new(continuation, activation, token, node, occurrence: 0),
+                new ProcessOperationOccurrence(continuation, activation, token, node, occurrence: 0),
                 invocation.Context.AuthorityScope,
                 plan.DefinitionReference,
                 new(new(repository.EntityType), new("customer/1")),

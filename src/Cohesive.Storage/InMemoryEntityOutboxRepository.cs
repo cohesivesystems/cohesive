@@ -13,7 +13,7 @@ public sealed class InMemoryEntityOutboxRepository : IEntityOutboxRepository, IE
     readonly Lock gate = new();
     readonly Dictionary<string, EntitySnapshot> snapshotsByKey = new(StringComparer.Ordinal);
     readonly Dictionary<string, HashSet<string>> partitionKeysByObservationId = new(StringComparer.Ordinal);
-    readonly Dictionary<ProcessOperationOccurrence, EntityTransitionOperationReceipt> transitionOperationReceipts = [];
+    readonly Dictionary<EntityTransitionOperationIdentity, EntityTransitionOperationReceipt> transitionOperationReceipts = [];
     readonly Dictionary<string, EntityTransitionOperationReceipt> creationTransitionOperationReceiptsBySubject =
         new(StringComparer.Ordinal);
     readonly List<InteractionEnvelope> outboxEnvelopes = [];

@@ -11,9 +11,12 @@ using Cohesive.Transitions.IR;
 
 namespace Cohesive.Storage;
 
-/// <summary>Stable diagnostics for atomic Process-invoked Transition operation commits.</summary>
+/// <summary>Stable diagnostics for atomic Transition operation commits.</summary>
 public static class EntityTransitionOperationDiagnosticCodes
 {
+    /// <summary>The host denied scope, resource access or receipt disclosure for a direct invocation.</summary>
+    public const string AuthorizationDenied = "storage.entityTransition.authorization.denied";
+
     /// <summary>The entity repository cannot atomically commit entity state and a Transition operation receipt.</summary>
     public const string CapabilityInsufficient = "storage.entityTransition.operation.capability.insufficient";
 
@@ -38,7 +41,7 @@ public static class EntityTransitionOperationDiagnosticCodes
 
 /// <summary>Native atomic Transition operation behavior supported by an entity repository.</summary>
 /// <param name="SupportsAtomicStateAndReceipt">
-/// Whether entity state and one Process Transition operation receipt share one indivisible commit boundary.
+/// Whether entity state and one Transition operation receipt share one indivisible commit boundary.
 /// </param>
 /// <param name="PartitionKey">Optional trusted fixed physical partition; null means context-dependent placement.</param>
 public sealed record EntityTransitionOperationCapabilities(bool SupportsAtomicStateAndReceipt, string? PartitionKey = null)
@@ -61,7 +64,10 @@ public enum EntityTransitionEmissionPublicationAuthority
     /// <summary>
     /// The entity receipt is durable handoff evidence; the invoking Process outbox is the sole publication authority.
     /// </summary>
-    ProcessOutbox = 1
+    ProcessOutbox = 1,
+
+    /// <summary>The caller owns delivery from the durable receipt; no Process outbox is involved.</summary>
+    ReceiptHandoff = 2
 }
 
 /// <summary>Authoritative subject-state condition required by one Transition operation commit.</summary>
@@ -81,13 +87,13 @@ public enum EntityTransitionSubjectCondition
 public sealed record EntityTransitionOperationReference
 {
     /// <summary>Creates an exact receipt locator from retained execution evidence.</summary>
-    /// <param name="operation">Original Process operation occurrence.</param>
+    /// <param name="operation">Original direct or Process operation identity.</param>
     /// <param name="authorityScope">Original logical authority and tenant.</param>
     /// <param name="subject">Original entity subject and placement identity.</param>
     /// <param name="fingerprint">Fingerprint of the complete original request, including input.</param>
     /// <exception cref="ArgumentNullException">A required reference is null.</exception>
     /// <exception cref="ArgumentException">The fingerprint is empty.</exception>
-    public EntityTransitionOperationReference(ProcessOperationOccurrence operation,
+    public EntityTransitionOperationReference(EntityTransitionOperationIdentity operation,
         InteractionAuthorityScope authorityScope, InteractionEntityReference subject,
         ProcessCommitFingerprint fingerprint)
     {
@@ -98,7 +104,7 @@ public sealed record EntityTransitionOperationReference
         Fingerprint = fingerprint;
     }
     /// <summary>Exact occurrence identifying the retained receipt.</summary>
-    public ProcessOperationOccurrence Operation { get; }
+    public EntityTransitionOperationIdentity Operation { get; }
     /// <summary>Logical authority that must match the receipt.</summary>
     public InteractionAuthorityScope AuthorityScope { get; }
     /// <summary>Entity subject used for placement and exact comparison.</summary>
@@ -208,11 +214,11 @@ public static class EntityTransitionReceiptReferences
     }
 }
 
-/// <summary>Exact replay lookup identity for one Process-invoked Transition operation.</summary>
+/// <summary>Exact replay lookup identity for one direct or Process-invoked Transition operation.</summary>
 public sealed record EntityTransitionOperationRequest
 {
     /// <summary>Creates an exact Transition operation request identity.</summary>
-    /// <param name="operation">Attempt-, activation-, token-, node-, and occurrence-scoped Process operation.</param>
+    /// <param name="operation">Stable direct activation or complete Process operation coordinates.</param>
     /// <param name="authorityScope">Authority and optional tenant within which the operation is meaningful.</param>
     /// <param name="transition">Exact invoked Transition definition.</param>
     /// <param name="subject">Authoritative aggregate subject.</param>
@@ -220,7 +226,7 @@ public sealed record EntityTransitionOperationRequest
     /// <exception cref="ArgumentNullException">Any reference argument is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentException"><paramref name="input"/> is unknown or failed.</exception>
     public EntityTransitionOperationRequest(
-        ProcessOperationOccurrence operation,
+        EntityTransitionOperationIdentity operation,
         InteractionAuthorityScope authorityScope,
         ExecutionDefinitionReference transition,
         InteractionEntityReference subject,
@@ -234,8 +240,8 @@ public sealed record EntityTransitionOperationRequest
         Fingerprint = EntityTransitionOperationFingerprints.Request(this);
     }
 
-    /// <summary>Exact Process operation occurrence.</summary>
-    public ProcessOperationOccurrence Operation { get; }
+    /// <summary>Exact direct activation or Process operation occurrence.</summary>
+    public EntityTransitionOperationIdentity Operation { get; }
 
     /// <summary>Authority and optional tenant within which this operation and its natural idempotency are meaningful.</summary>
     public InteractionAuthorityScope AuthorityScope { get; }
@@ -293,7 +299,7 @@ public sealed record EntityTransitionOperationCommit
     /// <exception cref="ArgumentException">
     /// The write contradicts the subject condition or does not address <paramref name="request"/>'s subject, the
     /// decision is not committable, the result is not successful, the evidence does not identify the exact
-    /// Transition and activation, or canonical envelope provenance does not identify the exact Process operation
+    /// Transition and activation, or canonical envelope provenance does not identify the exact operation
     /// and Transition.
     /// </exception>
     public EntityTransitionOperationCommit(
@@ -324,14 +330,14 @@ public sealed record EntityTransitionOperationCommit
             && write.ExpectedConcurrencyToken is null)
         {
             throw new ArgumentException(
-                "An existing-subject Process Transition commit requires an entity concurrency fence.",
+                "An existing-subject Transition commit requires an entity concurrency fence.",
                 nameof(write));
         }
         if (subjectCondition == EntityTransitionSubjectCondition.MustBeAbsent
             && write.ExpectedConcurrencyToken is not null)
         {
             throw new ArgumentException(
-                "An absent-subject Process Transition commit cannot carry an existing-entity concurrency fence.",
+                "An absent-subject Transition commit cannot carry an existing-entity concurrency fence.",
                 nameof(write));
         }
         if (!string.Equals(
@@ -383,7 +389,7 @@ public sealed record EntityTransitionOperationCommit
             || evidence.Activation != request.Operation.Activation)
         {
             throw new ArgumentException(
-                "Transition execution evidence must identify the exact invoked definition and Process activation.",
+                "Transition execution evidence must identify the exact invoked definition and activation.",
                 nameof(evidence));
         }
         var outcomeTrace = evidence.Trace.LastOrDefault(static trace =>
@@ -399,7 +405,9 @@ public sealed record EntityTransitionOperationCommit
         ValidateEmissions(request, result, evidence, outcomeTrace.Node);
         SubjectCondition = subjectCondition;
         DecisionKind = decisionKind;
-        PublicationAuthority = EntityTransitionEmissionPublicationAuthority.ProcessOutbox;
+        PublicationAuthority = request.Operation.Continuation is null
+            ? EntityTransitionEmissionPublicationAuthority.ReceiptHandoff
+            : EntityTransitionEmissionPublicationAuthority.ProcessOutbox;
     }
 
     /// <summary>Exact replay lookup identity.</summary>
@@ -453,27 +461,31 @@ public sealed record EntityTransitionOperationCommit
                     "A Transition operation result cannot contain duplicate logical emission identities.",
                     nameof(result));
             }
-            if (emission.Context.Origin is not ProcessInteractionOrigin origin
-                || emission.Context.AuthorityScope != request.AuthorityScope
-                || origin.Continuation != request.Operation.Continuation
-                || origin.Activation != request.Operation.Activation
-                || origin.Token != request.Operation.Token
-                || origin.Node != request.Operation.Node
-                || origin.Entity != request.Subject
-                || origin.Transition != request.Transition
-                || origin.Outcome != outcome
-                || origin.TransitionNode is not { } transitionNode
-                || !evidence.EmittedIntents.Contains(transitionNode))
+            var matchesOrigin = (request.Operation, emission.Context.Origin) switch
+            {
+                ({ Continuation: not null } process, ProcessInteractionOrigin origin) =>
+                    origin.Continuation == process.Continuation && origin.Activation == process.Activation
+                    && origin.Token == process.Token && origin.Node == process.Node
+                    && origin.Entity == request.Subject && origin.Transition == request.Transition
+                    && origin.Outcome == outcome && origin.TransitionNode is { } node
+                    && evidence.EmittedIntents.Contains(node),
+                ({ Continuation: null }, TransitionInteractionOrigin origin) =>
+                    origin.Definition == request.Transition && origin.Entity == request.Subject
+                    && origin.Outcome == outcome && evidence.EmittedIntents.Contains(origin.Node)
+                    && emission.Context.EmissionId == EntityTransitionOperationFingerprints.DirectEmission(request, origin.Node),
+                _ => false
+            };
+            if (!matchesOrigin || emission.Context.AuthorityScope != request.AuthorityScope)
             {
                 throw new ArgumentException(
-                    "Every retained envelope must identify the exact authority, Process operation, Transition emission, subject, and outcome.",
+                    "Every retained envelope must identify the exact authority, operation, Transition emission, subject, and outcome.",
                     nameof(result));
             }
         }
     }
 }
 
-/// <summary>Durable entity-side receipt for one exact Process-invoked Transition operation.</summary>
+/// <summary>Durable entity-side receipt for one exact Transition operation.</summary>
 public sealed record EntityTransitionOperationReceipt
 {
     /// <summary>Creates immutable atomic commit evidence.</summary>
@@ -532,7 +544,7 @@ public sealed record EntityTransitionOperationReceipt
         return Request.Fingerprint == request.Fingerprint
             ? EntityTransitionOperationResult.Replayed(this)
             : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
-                "The Process operation occurrence is retained for another Transition, subject, or input.", "/request");
+                "The operation identity is retained for another Transition, subject, or input.", "/request");
     }
 
     /// <summary>Resolves an exact locator against this immutable receipt, without reading later state.</summary>
@@ -562,7 +574,7 @@ public sealed record EntityTransitionOperationReceipt
         if (request.Disposition != EntityTransitionOperationDisposition.Replayed) return request;
         return Commit.Fingerprint == commit.Fingerprint ? request
             : EntityTransitionOperationRepositoryExtensions.IdentityConflict(
-                "The Process operation occurrence is retained with another candidate state or normalized result.", "/commit");
+                "The operation identity is retained with another candidate state or normalized result.", "/commit");
     }
 
     /// <summary>Matches authority-scoped creation intent independently of a replacement Process attempt.</summary>
@@ -757,7 +769,7 @@ public interface IEntityTransitionOperationRepository : IEntityRepository
         EntityTransitionOperationCommit commit);
 }
 
-/// <summary>Capability-aware replay and commit operations for Process-invoked entity Transitions.</summary>
+/// <summary>Capability-aware replay and commit operations for entity Transitions.</summary>
 public static class EntityTransitionOperationRepositoryExtensions
 {
     /// <summary>Looks up an exact operation through a capability-checked entity repository.</summary>
@@ -904,7 +916,7 @@ public static class EntityTransitionOperationRepositoryExtensions
             EntityTransitionOperationDisposition.CapabilityInsufficient,
             Error(
                 EntityTransitionOperationDiagnosticCodes.CapabilityInsufficient,
-                $"Entity repository '{repository.EntityType}' cannot atomically commit entity state and a Process Transition operation receipt.",
+                $"Entity repository '{repository.EntityType}' cannot atomically commit entity state and a Transition operation receipt.",
                 "/repository/transitionOperationCapabilities"));
 
     static DocumentValidationDiagnostic Error(string code, string message, string location) =>
@@ -913,6 +925,9 @@ public static class EntityTransitionOperationRepositoryExtensions
 
 static class EntityTransitionOperationFingerprints
 {
+    internal static EmissionId DirectEmission(EntityTransitionOperationRequest request, ExecutionNodeId node) =>
+        new($"transition:{request.Fingerprint.Value}:{node.Value}");
+
     static readonly System.Text.Json.JsonSerializerOptions EntityOptions = EntityStorageJson.CreateOptions();
     // Derived evidence stays outside record equality and is retained only while its immutable owner is live.
     // The shared preparation primitive publishes successes once and leaves failed factories retryable.
@@ -947,7 +962,7 @@ static class EntityTransitionOperationFingerprints
             owner.PublicationAuthority), EntityOptions, profile: "sha256-entity-v2"));
 
     sealed record RequestContent(
-        ProcessOperationOccurrence Operation,
+        EntityTransitionOperationIdentity Operation,
         InteractionAuthorityScope AuthorityScope,
         ExecutionDefinitionReference Transition,
         InteractionEntityReference Subject,

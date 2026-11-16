@@ -284,7 +284,7 @@ public sealed partial class PostgresEntityRepository
         RequireReceipts(context);
         if (request.Subject.EntityType.Value != EntityType) throw new ArgumentException("Receipt entity authority differs.", nameof(request));
     }
-    static string OperationKey(ProcessOperationOccurrence operation) => Hash(StrictDocumentJson.GetCanonicalBytes(operation, ReceiptJson));
+    static string OperationKey(EntityTransitionOperationIdentity operation) => Hash(StrictDocumentJson.GetCanonicalBytes(operation, ReceiptJson));
     static string Hash(byte[] bytes) => EntityStorageJson.Hash(bytes);
     static void Add(NpgsqlCommand command, params object[] values)
     {

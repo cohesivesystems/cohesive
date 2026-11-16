@@ -111,10 +111,29 @@ invalid fault placement, unexercised faults, and reconstruction mismatch. See th
 [replay contract and operating limits](../../../src/Cohesive.Simulation.Transitions/README.md#declare-target-faults-and-replay).
 
 
-The runtime's source-receipt preparation helper is deliberately a **fixture-only gap**, not a recommended
-application execution path. It uses `ExecuteTransitionOperation` for exact receipt lookup and commit,
-but still supplies the reference decision/projection callback. The native Process adapter owns richer
-execution and emission lowering; using it here would require inventing Process provenance. A shared
-direct executor that distills that mechanism is tracked in [#570](https://github.com/cohesivesystems/cohesive/issues/570).
+The runtime prepares source receipts with `DirectTransitionExecutor`. It shares the Process adapter's
+read/decide/project/atomic-commit implementation, but uses a caller-assigned direct activation instead of
+inventing Process provenance. A retry reuses that activation and returns the original receipt even if the
+entity has changed. The two-cycle replay recipe is now `v2` because its source receipt identities changed.
+
+```csharp
+var plan = model.Accept.Compile().Plan!;
+var executor = new DirectTransitionExecutor(plan, tenders, contracts, authority,
+    authorize: AuthorizeTenderAcceptance, partitionKey: organization);
+
+var execution = await executor.ExecuteAsync(context,
+    new DirectTransitionOperation(new ActivationId(requestId)),
+    new InteractionEntityReference(new(tenders.EntityType), new(tenderId)),
+    PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new EpisodeCommand(1))));
+var receipt = execution.Receipt; // Atomic state/decision evidence, or null on execution failure.
+```
+
+The host's `AuthorizeTenderAcceptance` must authorize scope, resource access and receipt disclosure on
+every call, including replay. The isolated example explicitly permits its own fixture operations; that policy
+is not application authorization. Direct emissions are retained in the receipt with Transition provenance;
+the caller owns delivery. Existing-subject rejected decisions are replayable. Direct creation is rejected
+at binding time until a separate durable operation ledger can retain rejection without an entity.
+See the [direct execution contract](../../../src/Cohesive.Storage/README.md#direct-receipt-backed-transition-execution).
+
 The runtime's repositories and targets are constructor-initialized read-only properties; only the
 Process store is replaceable to exercise durable restart.

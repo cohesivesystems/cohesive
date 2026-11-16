@@ -96,7 +96,6 @@ public sealed class ProcessTransitionOperationBinding
     {
         Plan = plan ?? throw new ArgumentNullException(nameof(plan));
         Repository = repository ?? throw new ArgumentNullException(nameof(repository));
-        Cohesive.Transitions.Machines.EntityMachineBinding.RequireSame(repository.EntityDefinition, plan.Definition.MachineBinding);
         InteractionContracts = interactionContracts ?? throw new ArgumentNullException(nameof(interactionContracts));
         this.resolveSubject = resolveSubject;
         this.createRequestTarget = createRequestTarget;
@@ -110,12 +109,8 @@ public sealed class ProcessTransitionOperationBinding
                 || field.Nullability != FieldNullability.NonNullable)
                 throw new ArgumentException("A captured concurrency token requires an existing subject and a required non-null string input field.", nameof(expectedConcurrencyTokenField));
         }
-        if (partitionKey is not null) ArgumentException.ThrowIfNullOrWhiteSpace(partitionKey);
-        var trustedPartition = repository.TransitionOperationCapabilities.PartitionKey;
-        if (partitionKey is not null && trustedPartition is not null && partitionKey != trustedPartition)
-            throw new ArgumentException("Subject-read partition differs from the repository receipt partition.", nameof(partitionKey));
-        PartitionKey = trustedPartition ?? partitionKey;
-        SubjectReadOptions = PartitionKey is null ? EntityReadOptions.Full : new(partitionKey: PartitionKey);
+        SubjectReadOptions = EntityTransitionExecutor.ReadOptions(plan, repository, partitionKey);
+        PartitionKey = SubjectReadOptions.PartitionKey;
         ExpectedConcurrencyTokenField = expectedConcurrencyTokenField;
     }
 
@@ -152,17 +147,7 @@ public sealed class ProcessTransitionOperationBinding
 
     /// <summary>Checks native receipt capability and observation authority without performing IO.</summary>
     /// <returns>Independent, coded diagnostics for each unsatisfied binding requirement.</returns>
-    DocumentValidationResult ValidateDefinitionLink()
-    {
-        var diagnostics = new List<DocumentValidationDiagnostic>();
-        if (!Repository.TransitionOperationCapabilities.SupportsAtomicStateAndReceipt)
-            diagnostics.Add(new(ProcessTransitionBindingDiagnosticCodes.ReceiptCapabilityMissing, DiagnosticSeverity.Error,
-                "The repository must support atomic state and receipt commits.", "/binding/repository"));
-        if (Plan.Definition.Observation != ValueContract.FromShape(Repository.EntityDefinition.Shape))
-            diagnostics.Add(new(ProcessTransitionBindingDiagnosticCodes.ObservationMismatch, DiagnosticSeverity.Error,
-                "The plan observation contract must match the bound entity state contract.", "/binding/entity"));
-        return new([.. diagnostics]);
-    }
+    DocumentValidationResult ValidateDefinitionLink() => EntityTransitionExecutor.ValidateBinding(Plan, Repository);
 
     internal EntityConcurrencyToken? ResolveExpectedConcurrencyToken(ProcessTransitionInvocation invocation)
     {
@@ -333,158 +318,16 @@ public sealed class EntityTransitionProcessOperationAdapter : IProcessTransition
             subject,
             invocation.Input);
 
-        var lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
-        if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
-        {
-            return Result(context, lookup);
-        }
-
-        EntitySnapshot? snapshot;
-        try
-        {
-            snapshot = await binding.Repository.TryGet(context, subject.EntityId.Value,
-                expectedConcurrencyToken is null ? binding.SubjectReadOptions
-                    : new EntityReadOptions(partitionKey: binding.PartitionKey, expectedConcurrencyToken: expectedConcurrencyToken)).ConfigureAwait(false);
-        }
-        catch (ObservationConcurrencyConflictException) when (expectedConcurrencyToken is not null)
-        {
-            return await ChangedSubjectAsync(binding, context, request).ConfigureAwait(false);
-        }
-        // Preserve the binding's guarantee even when a provider does not enforce read preconditions.
-        if (snapshot is not null && expectedConcurrencyToken is { } expected && snapshot.ConcurrencyToken != expected)
-            return await ChangedSubjectAsync(binding, context, request).ConfigureAwait(false);
-
-        async ValueTask<ProcessOperationResult> ChangedSubjectAsync(
-            ProcessTransitionOperationBinding binding, OperationContext context, EntityTransitionOperationRequest request)
-        {
-            var raced = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
-            return raced.Disposition != EntityTransitionOperationDisposition.NotFound ? Result(context, raced)
-                : Failure(ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged,
-                    "The authoritative subject changed after its concurrency token was captured.", "/invocation/input");
-        }
-        var createsSubject = binding.Plan.Definition.SubjectCreation is not null;
-        if (snapshot is null && !createsSubject)
-        {
-            // A matching entity commit may have raced the first lookup and a later delete. Prefer its durable
-            // handoff evidence over reporting the now-absent subject.
-            lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
-            if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
+        var execution = await EntityTransitionExecutor.ExecuteAsync(context, binding.Repository, binding.Plan,
+            binding.SubjectReadOptions, request, expectedConcurrencyToken, decision =>
             {
-                return Result(context, lookup);
-            }
-            return Failure(
-                ProcessTransitionOperationAdapterDiagnosticCodes.SubjectMissing,
-                $"No authoritative entity exists for subject '{subject.EntityId.Value}'.",
-                "/invocation/subject/entityId");
-        }
-        if (snapshot is not null && createsSubject)
-        {
-            // Prefer exact handoff evidence if the same operation won a race after the first lookup.
-            lookup = await binding.Repository.TryGetTransitionOperation(context, request).ConfigureAwait(false);
-            if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
-            {
-                return Result(context, lookup);
-            }
-
-            // A replacement Process attempt has a fresh exact occurrence, but unique-subject creation is naturally
-            // idempotent when the retained authority, Transition, subject, and input are identical. Replaying the
-            // original receipt also preserves its canonical envelopes and target-deduplication identities.
-            lookup = await binding.Repository.TryGetCreationTransitionOperation(context, request).ConfigureAwait(false);
-            if (lookup.Disposition != EntityTransitionOperationDisposition.NotFound)
-            {
-                return Result(context, lookup);
-            }
-            return Failure(
-                ProcessTransitionOperationAdapterDiagnosticCodes.SubjectPresent,
-                $"Authoritative entity '{subject.EntityId.Value}' already exists for a creation Transition.",
-                "/invocation/subject/entityId");
-        }
-
-        var decision = createsSubject
-            ? TransitionReferenceInterpreter.DecideCreation(
-                binding.Plan,
-                invocation.Activation,
-                invocation.Input)
-            : TransitionReferenceInterpreter.DecideFullState(
-                binding.Plan,
-                invocation.Activation,
-                invocation.Input,
-                PortableValue.Concrete(
-                    binding.Plan.Definition.Observation,
-                    ObservationValue.FromObject(snapshot!.Entity.Observation.Fields)));
-        if (decision.Kind is not (TransitionDecisionKind.Applied
-            or TransitionDecisionKind.NoChange
-            or TransitionDecisionKind.AdmissionRejected
-            or TransitionDecisionKind.DomainRejected)
-            || decision.Outcome is null)
-        {
-            return decision.Diagnostics.IsEmpty
-                ? Failure(
-                    ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
-                    $"Transition '{invocation.Definition.DefinitionId.Value}' produced non-committable decision '{decision.Kind}'.",
-                    "/decision/kind")
-                : ProcessOperationResult.Failed(decision.Diagnostics[0]);
-        }
-
-        var lowering = ProcessTransitionEmissionEnvelopeLowerer.TryLower(
-            invocation,
-            subject,
-            decision,
-            binding.InteractionContracts,
-            (intent, index) => binding.CreateRequestTarget(invocation, intent, index),
-            out var envelopes);
-        if (!lowering.IsValid)
-        {
-            return ProcessOperationResult.Failed(lowering.Diagnostics[0]);
-        }
-
-        var result = ProcessOperationResult.Completed(decision.Outcome, envelopes);
-        if (createsSubject && decision.Kind != TransitionDecisionKind.Applied)
-        {
-            // A rejected creation is pure: no subject exists to mutate, and the enclosing Process commit retains
-            // the deterministic result and any Process-owned envelope handoff.
-            return result;
-        }
-
-        EntityState candidateState;
-        try
-        {
-            candidateState = TransitionStateProjector.ApplyToEntity(binding.Repository.EntityDefinition,
-                subject.EntityId.Value, decision, createsSubject ? null : snapshot!.Entity);
-        }
-        catch (TransitionStatePreparationException exception)
-        {
-            return Failure(exception.Code, exception.Message, exception.Location);
-        }
-        var candidate = candidateState.Snapshot;
-
-        var commit = new EntityTransitionOperationCommit(
-            request,
-            new(candidate, createsSubject ? null : snapshot!.ConcurrencyToken),
-            decision.Kind,
-            result,
-            decision.GuaranteeDemands,
-            decision.Evidence,
-            createsSubject
-                ? EntityTransitionSubjectCondition.MustBeAbsent
-                : EntityTransitionSubjectCondition.MustExist);
-        var committed = await binding.Repository.CommitTransitionOperation(context, commit).ConfigureAwait(false);
-        return Result(context, committed);
-    }
-
-    ProcessOperationResult Result(OperationContext context, EntityTransitionOperationResult operation)
-    {
-        if (operation.Receipt is { } receipt)
-            return receipt.Result.WithReceiptReference(EntityTransitionReceiptReferences.Project(receipt.Request.Reference));
-        RecordFailure(context, operation);
-        return ProcessOperationResult.Failed(operation.Diagnostics.FirstOrDefault() is { } diagnostic
-            ? new(diagnostic.Code, diagnostic.Severity,
-                "The entity operation could not be committed.", diagnostic.Location)
-            : new(
-                ProcessTransitionOperationAdapterDiagnosticCodes.DecisionNotCommittable,
-                DiagnosticSeverity.Error,
-                $"Entity Transition operation ended with '{operation.Disposition}' without receipt or diagnostic evidence.",
-                "/entityOperation"));
+                var validation = ProcessTransitionEmissionEnvelopeLowerer.TryLower(invocation, subject, decision,
+                    binding.InteractionContracts, (intent, index) => binding.CreateRequestTarget(invocation, intent, index),
+                    out var envelopes);
+                return (validation, envelopes);
+            }).ConfigureAwait(false);
+        if (execution.Operation is { Receipt: null } operationResult) RecordFailure(context, operationResult);
+        return execution.Result;
     }
 
     static ProcessOperationResult Failure(string code, string message, string location) =>
