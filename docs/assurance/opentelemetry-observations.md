@@ -78,6 +78,9 @@ need a separately qualified capture protocol with explicit completeness evidence
 that evidence through the monitor's native update boundary. Passing observed obligations is still
 sampled execution evidence, not proof of universal correctness or backend isolation.
 
+The [reference capture host](capture-host.md) demonstrates bounded local journal publication,
+acknowledgment recovery and permanent-rejection quarantine without adding a public hosting API.
+
 ## Bounds, recovery and remaining work
 
 The default payload limit is 1,048,576 UTF-16 characters, configurable per call. Ingestion checks the

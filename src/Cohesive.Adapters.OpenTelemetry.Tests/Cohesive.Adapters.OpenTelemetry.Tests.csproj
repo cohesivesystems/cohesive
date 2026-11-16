@@ -17,6 +17,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../../eng/examples/assurance/FileCaptureHost.cs" Link="Examples/FileCaptureHost.cs" />
     <Using Include="Xunit" />
   </ItemGroup>
 
