@@ -22,3 +22,8 @@ are a single local run, not a throughput guarantee. The semantic reason for the 
 core-owned comparison rule; the speed/allocation improvement follows from removing serialization.
 Exact sequence order is preserved, including requirement and partition order. This does not claim
 semantic equivalence of reordered contracts.
+
+After extracting the ordered array traversal into the shared internal helper, a repeat run measured
+0.121 / 1.449 / 12.292 µs for 1 / 16 / 128 requirements, still 0 B per comparison. Corresponding
+JSON baselines were 13.178 / 94.416 / 430.855 µs with unchanged allocation. These local runs are
+not statistically controlled; the helper preserves the allocation result without claiming an additional speedup.

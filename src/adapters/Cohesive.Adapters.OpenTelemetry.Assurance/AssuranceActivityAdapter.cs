@@ -1,4 +1,3 @@
-using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text.Json;
 using Cohesive.Assurance;
@@ -41,7 +40,8 @@ public static class AssuranceActivityAdapter
     /// <returns>An activity event; add it to an activity from Source. Export and sampling remain host-controlled.</returns>
     /// <exception cref="ArgumentNullException">Observations are null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Payload bound is nonpositive.</exception>
-    /// <exception cref="TraceMonitorUpdateException">Envelope profile is invalid or payload exceeds its bound.</exception>
+    /// <exception cref="TraceMonitorUpdateException">Envelope profile is invalid.</exception>
+    /// <exception cref="AssuranceTelemetryException">Encoded payload exceeds its bound.</exception>
     /// <exception cref="JsonException">A portable observation cannot be serialized.</exception>
     /// <exception cref="NotSupportedException">A retained representation is unsupported.</exception>
     public static ActivityEvent CreateEvent(TraceObservationBatch observations,
@@ -49,7 +49,7 @@ public static class AssuranceActivityAdapter
     {
         ArgumentNullException.ThrowIfNull(observations);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxPayloadCharacters);
-        ValidateEnvelope(observations);
+        observations.ValidateCapture();
         var json = observations.Serialize();
         if (json.Length > maxPayloadCharacters) throw Capacity(TraceEvaluationCodes.TelemetryPayloadLimit);
         return new(EventName, tags: new ActivityTagsCollection { { PayloadTag, json } });
@@ -62,17 +62,17 @@ public static class AssuranceActivityAdapter
     /// <param name="monitor">Accepted reference-monitor prefix.</param>
     /// <param name="activity">Captured activity from the explicit observation source. Span timing, status and Recorded flag
     /// are not semantic order, commit outcome or evidence of completeness.</param>
-    /// <param name="cumulativeReference">Exact host-owned reference identifying the resulting cumulative alternative.</param>
+    /// <param name="cumulativeReference">Exact host-owned reference identifying the resulting cumulative alternative, including empty captures.</param>
     /// <param name="maxPayloadCharacters">Positive maximum UTF-16 payload characters across all semantic events.</param>
     /// <param name="cancellationToken">Cancellation rejects the entire activity.</param>
     /// <returns>The accepted monitor and every producer envelope reference in delivery order, including empty envelopes and duplicates.
     /// The host must persist its checkpoint and delivery position before acknowledging captured input.</returns>
     /// <exception cref="ArgumentNullException">A required argument is null.</exception>
     /// <exception cref="ArgumentOutOfRangeException">Payload bound is nonpositive.</exception>
-    /// <exception cref="TraceMonitorUpdateException">An envelope is malformed, exceeds bounds, carries completeness,
-    /// mismatches the pinned binding, or the monitor rejects the resulting update.</exception>
+    /// <exception cref="TraceMonitorUpdateException">An envelope violates the capture profile or binding, or the monitor rejects the update.</exception>
+    /// <exception cref="AssuranceTelemetryException">Activity source, event payload or aggregate payload size is invalid.</exception>
     /// <exception cref="OperationCanceledException">Processing is cancelled.</exception>
-    public static AssuranceActivityCapture Apply(TraceMonitor monitor, Activity activity, ClaimReference cumulativeReference,
+    public static TraceCapture Apply(TraceMonitor monitor, Activity activity, ClaimReference cumulativeReference,
         int maxPayloadCharacters = DefaultMaxPayloadCharacters, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(monitor); ArgumentNullException.ThrowIfNull(activity);
@@ -81,9 +81,11 @@ public static class AssuranceActivityAdapter
         cancellationToken.ThrowIfCancellationRequested();
         if (activity.Source.Name != ActivitySourceName)
             throw Reject(TraceEvaluationCodes.TelemetryBinding, "Activity source is not the explicit Assurance observation source.");
-        var expected = monitor.Evaluation.Batch;
-        var references = ImmutableArray.CreateBuilder<ClaimReference>();
-        var observations = ImmutableArray.CreateBuilder<SemanticObservation>();
+        return monitor.AdvanceCaptured(Decode(activity, maxPayloadCharacters, cancellationToken), cumulativeReference, cancellationToken);
+    }
+
+    static IEnumerable<TraceObservationBatch> Decode(Activity activity, int maxPayloadCharacters, CancellationToken cancellationToken)
+    {
         long characters = 0;
         foreach (var item in activity.Events)
         {
@@ -103,38 +105,19 @@ public static class AssuranceActivityAdapter
             TraceObservationBatch batch;
             try { batch = TraceObservationBatch.Deserialize(payload); }
             catch (JsonException error) { throw Reject(TraceEvaluationCodes.TelemetryEnvelope, error.Message); }
-            ValidateEnvelope(batch);
-            if (batch.Target != expected.Target || batch.Epoch != expected.Epoch
-                || batch.EnumerationEvidence != expected.EnumerationEvidence
-                || !expected.Contract.SameContent(batch.Contract))
-                throw Reject(TraceEvaluationCodes.TelemetryBinding, "Telemetry does not match the monitor's exact contract, target, epoch and mapping evidence.");
-            var rows = batch.Alternatives[0].Observations;
-            if ((long)observations.Count + rows.Length > monitor.Evaluation.Limits.MaxObservations) throw Capacity(TraceEvaluationCodes.BudgetExceeded);
-            references.Add(batch.Alternatives[0].Reference);
-            observations.AddRange(rows);
+            yield return batch;
         }
-        cancellationToken.ThrowIfCancellationRequested();
-        var accepted = observations.Count == 0 ? monitor
-            : monitor.Advance(new(cumulativeReference, observations.ToImmutable(), []), cancellationToken);
-        return new(accepted, references.ToImmutable());
     }
 
-    static void ValidateEnvelope(TraceObservationBatch batch)
-    {
-        if (batch.Contract is null || batch.Target is null || batch.Epoch is null || batch.EnumerationEvidence is null
-            || batch.Enumeration != EnumerationCompleteness.Complete || batch.Alternatives.IsDefault
-            || batch.Alternatives.Length != 1 || batch.Alternatives[0] is not { } alternative
-            || alternative.Reference is null || alternative.Observations.IsDefault || alternative.Completeness.IsDefault
-            || !alternative.Completeness.IsEmpty)
-            throw Reject(TraceEvaluationCodes.TelemetryEnvelope, "Telemetry requires one complete mapping with initialized rows and no completeness certificates.");
-    }
-    static TraceMonitorUpdateException Capacity(string code) => Reject(code,
+    static AssuranceTelemetryException Capacity(string code) => Reject(code,
         "Semantic telemetry exceeds the explicit payload or observation bound; no observations were accepted.");
-    static TraceMonitorUpdateException Reject(string code, string message) => TraceMonitorUpdateException.FromDiagnostic(new(code, "/telemetry", message));
+    static AssuranceTelemetryException Reject(string code, string message) => new(new(code, "/telemetry", message));
 }
 
-/// <summary>Accepted activity ingestion and producer references for host-owned delivery provenance.</summary>
-/// <param name="Monitor">Accepted immutable monitor; unchanged when no new semantic rows were supplied.</param>
-/// <param name="EnvelopeReferences">Exact producer references in event order, including duplicates and empty envelopes.
-/// References are retained assertions, not verification of their fingerprints. Persist them with delivery position and checkpoint.</param>
-public sealed record AssuranceActivityCapture(TraceMonitor Monitor, ImmutableArray<ClaimReference> EnvelopeReferences);
+/// <summary>Transport decoding or payload rejection before semantic monitor ingestion.</summary>
+public sealed class AssuranceTelemetryException : InvalidOperationException
+{
+    internal AssuranceTelemetryException(TraceEvaluationDiagnostic diagnostic) : base(diagnostic.Message) => Diagnostic = diagnostic;
+    /// <summary>Stable transport diagnostic from the shared trace code catalog.</summary>
+    public TraceEvaluationDiagnostic Diagnostic { get; }
+}

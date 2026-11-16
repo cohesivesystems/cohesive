@@ -172,10 +172,10 @@ public sealed class AssuranceActivityTests
         using var malformed = Capture(Batch(Event("paid", 1)), span => span.AddEvent(new(AssuranceActivityAdapter.EventName,
             tags: new ActivityTagsCollection { { AssuranceActivityAdapter.PayloadTag, "not JSON" } })));
         Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope,
-            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, malformed, R("bad")).Monitor).Diagnostic.Code);
+            Assert.Throws<AssuranceTelemetryException>(() => AssuranceActivityAdapter.Apply(monitor, malformed, R("bad")).Monitor).Diagnostic.Code);
         using var valid = Capture(Batch(Event("paid", 1)));
         Assert.Equal(TraceEvaluationCodes.TelemetryPayloadLimit,
-            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("big"), maxPayloadCharacters: 10).Monitor).Diagnostic.Code);
+            Assert.Throws<AssuranceTelemetryException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("big"), maxPayloadCharacters: 10).Monitor).Diagnostic.Code);
         Assert.Throws<OperationCanceledException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("cancelled"), cancellationToken: new(canceled: true)).Monitor);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
     }
@@ -194,7 +194,8 @@ public sealed class AssuranceActivityTests
         Assert.Equal(result.EnvelopeReferences.ToArray(), replay.EnvelopeReferences.ToArray());
         using var emptyActivity = Capture(empty);
         var emptyResult = AssuranceActivityAdapter.Apply(result.Monitor, emptyActivity, R("unused"));
-        Assert.Same(result.Monitor, emptyResult.Monitor);
+        Assert.Equal(R("unused"), emptyResult.Monitor.Evaluation.Batch.Alternatives[0].Reference);
+        Assert.Equal(R("unused"), TraceMonitor.Restore(emptyResult.Monitor.Serialize()).Evaluation.Batch.Alternatives[0].Reference);
         Assert.Equal(empty.Alternatives[0].Reference, Assert.Single(emptyResult.EnvelopeReferences));
     }
 
@@ -205,7 +206,7 @@ public sealed class AssuranceActivityTests
         var limit = batch.Serialize().Length;
         using var activity = Capture(batch, span => span.AddEvent(AssuranceActivityAdapter.CreateEvent(batch, limit)));
         var monitor = TraceMonitor.Start(Claim(), Batch());
-        var error = Assert.Throws<TraceMonitorUpdateException>(() =>
+        var error = Assert.Throws<AssuranceTelemetryException>(() =>
             AssuranceActivityAdapter.Apply(monitor, activity, R("oversized"), maxPayloadCharacters: limit));
         Assert.Equal(TraceEvaluationCodes.TelemetryPayloadLimit, error.Diagnostic.Code);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);

@@ -46,10 +46,17 @@ keep their existing nested batch payload under their own versioned envelope. Use
 when transporting unevaluated inputs; use `TraceEvaluation` or `TraceMonitor` serialization APIs
 when retaining evaluated results/checkpoints. Both reuse the same batch shape and `AssuranceJson`
 policy; there is no second portable-value schema. `TraceObservationContract.SameContent` owns
-exact ordered contract comparison, independently of JSON formatting.
+exact ordered contract comparison, independently of JSON formatting. Nested ordered arrays use one
+internal sequence-comparison helper, including default-versus-empty behavior. Content comparison is
+explicit; generated record equality is not advertised as deep content equality. Dictionary comparison
+for semantic observations remains unordered and therefore has a distinct contract.
 
-Ingestion checks the complete observation contract, target, epoch and mapping-evidence reference
-against the pinned monitor. Exactly one completely enumerated mapping is accepted. Complete mapping
+`TraceMonitor.AdvanceCaptured(batches, cumulativeReference)` owns the shared capture boundary for
+OTel, future OTLP decoders and durable transports. It validates the capture profile, checks the complete
+observation contract, target, epoch and mapping-evidence reference against the pinned monitor, and
+bounds both total supplied observations and envelope count by `MaxObservations`.
+`TraceObservationBatch.ValidateCapture` is the same profile check used by producers.
+The adapter only decodes activity events and enforces transport source/payload bounds. Exactly one completely enumerated mapping is accepted. Complete mapping
 enumeration says how the supplied records are interpreted; it does **not** assert complete capture.
 All semantic events in one activity are applied atomically. Invalid later events cannot partially
 advance the monitor. Duplicate occurrence handling, semantic ordering and predicate evaluation
@@ -74,8 +81,10 @@ bounded by the monitor profile. Encoding checks length after serialization, so t
 preallocation guarantee. Collector/backend attribute limits may be smaller and must be qualified by
 the host; truncated documents are rejected. Retained monitor history remains bounded without eviction.
 
-All diagnostics are in core `TraceEvaluationCodes`; adapters create structured exceptions through
-`TraceMonitorUpdateException.FromDiagnostic`. Cancellation or rejection leaves the immutable prior
+All diagnostics are in core `TraceEvaluationCodes`. Malformed transport, wrong activity source or
+payload size raises `AssuranceTelemetryException`; core capture/profile/binding/update rejection raises
+`TraceMonitorUpdateException`. Both expose `Diagnostic`; neither has a public constructor or exception
+factory. Cancellation or rejection leaves the immutable prior
 checkpoint unchanged. Disposition belongs to the capture host:
 
 - Envelope, binding and `TelemetryPayloadLimit` rejections are permanent for unchanged input and
@@ -93,10 +102,16 @@ semantic event per activity where practical. Multiple individually valid events 
 this is a permanent payload-limit rejection under the current configuration, covered by a regression test.
 A host may explicitly revise the bound and replay the quarantined activity, retaining the original rejection.
 
-The host owns cumulative alternative references. `Apply` returns `AssuranceActivityCapture`, containing
+The host owns cumulative alternative references. `Apply` returns the core `TraceCapture`, containing
 both the accepted monitor and each producer envelope reference in event order, including empty envelopes
 and duplicates. Persist these references with the source delivery position and checkpoint. They are
 producer assertions, not content-digest verification; the adapter checks presence and retains exact values.
+Empty captures (including activities with no semantic events) still honor `cumulativeReference` through
+the native monitor update. A new reference creates a checkpoint with identical observations and the
+new alternative reference; replay with the current reference returns the existing monitor. The exact
+checkpoint artifact identity remains `capture.Monitor.Reference()`, distinct from the alternative reference.
+Persist the returned monitor, not an assumed checkpoint synthesized from the call's arguments.
+
 The host still retains raw captures and trace/span correlation for auditing conflicting producer references.
 The monitor retains semantic occurrences, not original transport envelopes or an unbounded provenance ledger.
 

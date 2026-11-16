@@ -120,6 +120,43 @@ public sealed class TraceMonitor
         return new(evaluated, Reference());
     }
 
+    /// <summary>Atomically accepts transport-neutral capture envelopes without completeness assertions.</summary>
+    /// <param name="batches">Lazily decoded envelopes; enumeration or validation failure rejects the entire update.
+    /// Envelope count and total supplied rows are each bounded by MaxObservations.</param>
+    /// <param name="cumulativeReference">Exact resulting alternative reference, honored even for empty captures.</param>
+    /// <param name="cancellationToken">Cancellation rejects the entire capture.</param>
+    /// <returns>Accepted monitor and producer references in delivery order, including empty envelopes and duplicates.</returns>
+    /// <exception cref="ArgumentNullException">Batches or cumulative reference is null.</exception>
+    /// <exception cref="TraceMonitorUpdateException">Profile, binding, observation budget or semantic update is invalid.</exception>
+    /// <exception cref="OperationCanceledException">Capture is cancelled.</exception>
+    /// <remarks>Decoder exceptions propagate unchanged. No partial result is published. This path cannot advance completeness;
+    /// qualified completeness protocols use the native alternative-update overload.</remarks>
+    public TraceCapture AdvanceCaptured(IEnumerable<TraceObservationBatch> batches, ClaimReference cumulativeReference,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(batches);
+        ArgumentNullException.ThrowIfNull(cumulativeReference);
+        cancellationToken.ThrowIfCancellationRequested();
+        var expected = Evaluation.Batch;
+        var references = ImmutableArray.CreateBuilder<ClaimReference>();
+        var observations = ImmutableArray.CreateBuilder<SemanticObservation>();
+        foreach (var batch in batches)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (batch is null) throw Reject(TraceEvaluationCodes.TelemetryEnvelope, "/capture", "Capture batch is null.");
+            batch.ValidateCapture();
+            if (batch.Target != expected.Target || batch.Epoch != expected.Epoch
+                || batch.EnumerationEvidence != expected.EnumerationEvidence || !expected.Contract.SameContent(batch.Contract))
+                throw Reject(TraceEvaluationCodes.TelemetryBinding, "/capture", "Capture does not match the pinned contract, target, epoch and mapping evidence.");
+            var alternative = batch.Alternatives[0];
+            if (references.Count >= Evaluation.Limits.MaxObservations) throw Capacity();
+            if ((long)observations.Count + alternative.Observations.Length > Evaluation.Limits.MaxObservations) throw Capacity();
+            references.Add(alternative.Reference);
+            observations.AddRange(alternative.Observations);
+        }
+        return new(Advance(new(cumulativeReference, observations.ToImmutable(), []), cancellationToken), references.ToImmutable());
+    }
+
     /// <summary>Replaces the retained history in a new epoch, explicitly superseding the current snapshot.</summary>
     /// <param name="replacement">Complete replacement prefix and frontiers; missing old records are deliberately removed.</param>
     /// <param name="newEpoch">New exact epoch, different from the current one.</param>
@@ -202,15 +239,12 @@ public sealed class TraceMonitorUpdateException : InvalidOperationException
 {
     internal TraceMonitorUpdateException(TraceEvaluationDiagnostic diagnostic) : base(diagnostic.Message) => Diagnostic = diagnostic;
 
-    /// <summary>Creates a structured ingestion rejection for an adapter before monitor evaluation.</summary>
-    /// <param name="diagnostic">Diagnostic using the shared trace evaluation code catalog.</param>
-    /// <returns>An exception describing a rejected ingestion boundary, not evidence that the monitor executed.</returns>
-    /// <exception cref="ArgumentNullException">Diagnostic is null.</exception>
-    public static TraceMonitorUpdateException FromDiagnostic(TraceEvaluationDiagnostic diagnostic)
-    {
-        ArgumentNullException.ThrowIfNull(diagnostic);
-        return new(diagnostic);
-    }
     /// <summary>Stable diagnostic identifying invalid input, a continuity breach, unsupported interpretation or exhausted bounds.</summary>
     public TraceEvaluationDiagnostic Diagnostic { get; }
 }
+
+/// <summary>Accepted capture and its producer provenance, independent of transport.</summary>
+/// <param name="Monitor">Accepted monitor whose alternative uses the requested cumulative reference, even with zero rows.</param>
+/// <param name="EnvelopeReferences">Producer assertions in delivery order, including duplicates and empty envelopes.
+/// Persist alongside the checkpoint and delivery position; these are not independently verified content digests.</param>
+public sealed record TraceCapture(TraceMonitor Monitor, ImmutableArray<ClaimReference> EnvelopeReferences);

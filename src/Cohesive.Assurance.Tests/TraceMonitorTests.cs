@@ -51,6 +51,45 @@ public sealed class TraceMonitorTests
     }
 
     [Fact]
+    public void CapturedBatchesShareBindingProfileBudgetAndAtomicityWithoutTransport()
+    {
+        var initial = Batch();
+        var monitor = TraceMonitor.Start(Invariant(), initial, new(MaxObservations: 2));
+        var first = initial with { Alternatives = [Update("producer", [State("first", 1, 4)])] };
+        var accepted = monitor.AdvanceCaptured([first], R("accepted"));
+        Assert.Equal(R("producer"), Assert.Single(accepted.EnvelopeReferences));
+        Assert.Single(accepted.Monitor.Evaluation.Batch.Alternatives[0].Observations);
+        Assert.Equal(TraceEvaluationCodes.TelemetryBinding, Assert.Throws<TraceMonitorUpdateException>(() =>
+            monitor.AdvanceCaptured([first, initial with { Target = R("different") }], R("bad"))).Diagnostic.Code);
+        var certified = initial with { Alternatives = [Update("certified", frontiers: [Frontier(Selection, 1, 1)])] };
+        Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope, Assert.Throws<TraceMonitorUpdateException>(() =>
+            monitor.AdvanceCaptured([first, certified], R("bad"))).Diagnostic.Code);
+        Assert.Equal(TraceEvaluationCodes.BudgetExceeded, Assert.Throws<TraceMonitorUpdateException>(() =>
+            monitor.AdvanceCaptured([first, first, first], R("too-many"))).Diagnostic.Code);
+        Assert.Equal(TraceEvaluationCodes.BudgetExceeded, Assert.Throws<TraceMonitorUpdateException>(() =>
+            monitor.AdvanceCaptured([initial, initial, initial], R("too-many-empty"))).Diagnostic.Code);
+        Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
+    }
+
+    [Fact]
+    public void EmptyCaptureHonorsReferenceAndLazyDecoderFailureDoesNotAdvance()
+    {
+        var initial = Batch();
+        var monitor = TraceMonitor.Start(Invariant(), initial);
+        var empty = monitor.AdvanceCaptured([], R("empty"));
+        Assert.Equal(R("empty"), empty.Monitor.Evaluation.Batch.Alternatives[0].Reference);
+        Assert.Equal(R("empty"), TraceMonitor.Restore(empty.Monitor.Serialize()).Evaluation.Batch.Alternatives[0].Reference);
+        Assert.Same(empty.Monitor, empty.Monitor.AdvanceCaptured([], R("empty")).Monitor);
+        Assert.Throws<FormatException>(() => monitor.AdvanceCaptured(BrokenDecoder(), R("failed")));
+        Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
+        IEnumerable<TraceObservationBatch> BrokenDecoder()
+        {
+            yield return initial with { Alternatives = [Update("producer", [State("first", 1, 4)])] };
+            throw new FormatException("Decoder failure after a valid envelope.");
+        }
+    }
+
+    [Fact]
     public void InvariantPrefixesAndRestoredContinuationMatchIndependentBatches()
     {
         var initial = Batch();

@@ -58,23 +58,10 @@ public sealed record TraceObservationContract(ClaimReference Reference, ClaimRef
     /// <remarks>This is representation equality, not equivalence under reordered requirements. It does not validate a contract.</remarks>
     public bool SameContent(TraceObservationContract? other)
     {
-        if (other is null || Reference != other.Reference || Scope != other.Scope
-            || Requirements.IsDefault != other.Requirements.IsDefault) return false;
-        if (Requirements.IsDefault) return true;
-        if (Requirements.Length != other.Requirements.Length) return false;
-        for (var i = 0; i < Requirements.Length; i++)
-        {
-            var left = Requirements[i];
-            var right = other.Requirements[i];
-            if (left is null || right is null)
-            {
-                if (left != right) return false;
-                continue;
-            }
-            if (left.Selector != right.Selector || left.Partitions.IsDefault != right.Partitions.IsDefault) return false;
-            if (!left.Partitions.IsDefault && !left.Partitions.AsSpan().SequenceEqual(right.Partitions.AsSpan())) return false;
-        }
-        return true;
+        return other is not null && Reference == other.Reference && Scope == other.Scope
+            && ObservationContent.SequenceEqual(Requirements, other.Requirements, static (left, right) =>
+                left is null || right is null ? left == right : left.Selector == right.Selector
+                    && ObservationContent.SequenceEqual(left.Partitions, right.Partitions, static (a, b) => a == b));
     }
 }
 
@@ -130,6 +117,20 @@ public sealed record TraceObservationBatch(TraceObservationContract Contract, Cl
     ClaimReference Epoch, ImmutableArray<TraceObservationAlternative> Alternatives,
     EnumerationCompleteness Enumeration, ClaimReference EnumerationEvidence)
 {
+    /// <summary>Validates the transport-neutral capture profile: one complete mapping and no completeness certificates.</summary>
+    /// <exception cref="TraceMonitorUpdateException">Required envelope fields are missing or the capture profile is unsupported.</exception>
+    /// <remarks>Does not validate individual observations or target binding; AdvanceCaptured owns those checks.</remarks>
+    public void ValidateCapture()
+    {
+        if (Contract is null || Target is null || Epoch is null || EnumerationEvidence is null
+            || Enumeration != EnumerationCompleteness.Complete || Alternatives.IsDefault
+            || Alternatives.Length != 1 || Alternatives[0] is not { } alternative
+            || alternative.Reference is null || alternative.Observations.IsDefault || alternative.Completeness.IsDefault
+            || !alternative.Completeness.IsEmpty)
+            throw new TraceMonitorUpdateException(new(TraceEvaluationCodes.TelemetryEnvelope, "/capture",
+                "Capture requires one complete mapping with initialized rows and no completeness certificates."));
+    }
+
     sealed record Wire(string Schema, TraceObservationBatch Batch);
     const string WireSchema = "cohesive-assurance-observations/v1";
 
@@ -152,5 +153,17 @@ public sealed record TraceObservationBatch(TraceObservationContract Contract, Cl
             throw new JsonException($"{error.Failure} at {error.Location}: {error.Message}");
         if (wire.Schema != WireSchema) throw new JsonException("Unsupported observation wire schema.");
         return wire.Batch;
+    }
+}
+
+// Shared ordered immutable-content comparison. Kept internal until needed beyond observations.
+static class ObservationContent
+{
+    internal static bool SequenceEqual<T>(ImmutableArray<T> left, ImmutableArray<T> right, Func<T, T, bool> equal)
+    {
+        if (left.IsDefault || right.IsDefault) return left.IsDefault == right.IsDefault;
+        if (left.Length != right.Length) return false;
+        for (var i = 0; i < left.Length; i++) if (!equal(left[i], right[i])) return false;
+        return true;
     }
 }
