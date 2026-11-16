@@ -58,15 +58,15 @@ public sealed class AssuranceActivityTests
         Assert.True(provider.ForceFlush(10_000));
         Assert.Equal(2, exporter.Activities.Count);
         var monitor = TraceMonitor.Start(Claim(), Batch());
-        monitor = AssuranceActivityAdapter.Apply(monitor, exporter.Activities[0], R("captured-payment"));
+        monitor = AssuranceActivityAdapter.Apply(monitor, exporter.Activities[0], R("captured-payment")).Monitor;
         Assert.Equal(ClaimVerdict.Inconclusive, monitor.Evaluation.Verdict);
         monitor = TraceMonitor.Restore(monitor.Serialize());
-        monitor = AssuranceActivityAdapter.Apply(monitor, exporter.Activities[1], R("captured-shipment"));
+        monitor = AssuranceActivityAdapter.Apply(monitor, exporter.Activities[1], R("captured-shipment")).Monitor;
         Assert.Equal(ClaimVerdict.Inconclusive, monitor.Evaluation.Verdict); // Open production scope.
         Assert.Equal(ClaimVerdict.Satisfied, Assert.Single(monitor.Evaluation.Alternatives[0].Obligations).Verdict);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Completeness);
         Assert.Equal(monitor.Serialize(), TraceMonitor.Restore(monitor.Serialize()).Serialize());
-        Assert.Same(monitor, AssuranceActivityAdapter.Apply(monitor, exporter.Activities[1], R("captured-shipment")));
+        Assert.Same(monitor, AssuranceActivityAdapter.Apply(monitor, exporter.Activities[1], R("captured-shipment")).Monitor);
     }
 
     [Theory]
@@ -83,7 +83,7 @@ public sealed class AssuranceActivityTests
         Assert.True(provider.ForceFlush(10_000));
         Assert.Equal(received, exporter.Activities.Count);
         var monitor = TraceMonitor.Start(Claim(), Batch());
-        foreach (var activity in exporter.Activities) monitor = AssuranceActivityAdapter.Apply(monitor, activity, R("received"));
+        foreach (var activity in exporter.Activities) monitor = AssuranceActivityAdapter.Apply(monitor, activity, R("received")).Monitor;
         Assert.Equal(ClaimVerdict.Inconclusive, monitor.Evaluation.Verdict);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Completeness);
     }
@@ -94,13 +94,13 @@ public sealed class AssuranceActivityTests
         var batch = Batch();
         var forged = batch with { Alternatives = [batch.Alternatives[0] with { Completeness = [
             new(Witness, "p", 100, 100, ObservationClosure.Closed, R("claimed-completeness"))] }] };
-        Assert.Equal(AssuranceActivityAdapter.InvalidEnvelope,
+        Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope,
             Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.CreateEvent(forged)).Diagnostic.Code);
         using var activity = Capture(batch, activity => activity.AddEvent(new(AssuranceActivityAdapter.EventName,
             tags: new ActivityTagsCollection { { AssuranceActivityAdapter.PayloadTag, forged.Serialize() } })));
         var monitor = TraceMonitor.Start(Claim(), Batch());
-        Assert.Equal(AssuranceActivityAdapter.InvalidEnvelope,
-            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, activity, R("forged"))).Diagnostic.Code);
+        Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope,
+            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, activity, R("forged")).Monitor).Diagnostic.Code);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
     }
 
@@ -116,8 +116,8 @@ public sealed class AssuranceActivityTests
         foreach (var mismatch in mismatches)
         {
             using var activity = Capture(Batch(Event("paid", 1)), activity => activity.AddEvent(AssuranceActivityAdapter.CreateEvent(mismatch)));
-            var error = Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, activity, R("rejected")));
-            Assert.Equal(AssuranceActivityAdapter.BindingMismatch, error.Diagnostic.Code);
+            var error = Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, activity, R("rejected")).Monitor);
+            Assert.Equal(TraceEvaluationCodes.TelemetryBinding, error.Diagnostic.Code);
             Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
         }
     }
@@ -132,11 +132,11 @@ public sealed class AssuranceActivityTests
             ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty.Add(ClaimInputRole.Before, ObservationValue.FromObject(new Stock(12m))));
         var monitor = TraceMonitor.Start(claim, Batch());
         using var activity = Capture(Batch(attempt), span => span.SetStatus(ActivityStatusCode.Ok));
-        monitor = AssuranceActivityAdapter.Apply(monitor, activity, R("unknown"));
+        monitor = AssuranceActivityAdapter.Apply(monitor, activity, R("unknown")).Monitor;
         Assert.Equal(ClaimVerdict.Inconclusive, monitor.Evaluation.Verdict);
         Assert.Equal(SemanticObservationKind.UnknownOutcome, monitor.Evaluation.Batch.Alternatives[0].Observations[0].Kind);
         using var earlier = Capture(Batch(attempt with { Occurrence = "earlier", Step = 0, Ticks = 0 }));
-        Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, earlier, R("bad-order")));
+        Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, earlier, R("bad-order")).Monitor);
     }
 
     [Fact]
@@ -148,7 +148,7 @@ public sealed class AssuranceActivityTests
         var commit = new SemanticObservation("commit-1", "p", 1, 1, Trigger, SemanticObservationKind.Commit,
             ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty.Add(ClaimInputRole.Before, ObservationValue.FromObject(new Stock(12m))));
         using var activity = Capture(Batch(commit));
-        var monitor = AssuranceActivityAdapter.Apply(TraceMonitor.Start(claim, Batch()), activity, R("violation"));
+        var monitor = AssuranceActivityAdapter.Apply(TraceMonitor.Start(claim, Batch()), activity, R("violation")).Monitor;
         Assert.Equal(ClaimVerdict.Violated, monitor.Evaluation.Verdict);
         var restored = TraceMonitor.Restore(monitor.Serialize());
         Assert.Equal(ClaimVerdict.Violated, restored.Evaluation.Verdict);
@@ -171,13 +171,61 @@ public sealed class AssuranceActivityTests
         var monitor = TraceMonitor.Start(Claim(), Batch());
         using var malformed = Capture(Batch(Event("paid", 1)), span => span.AddEvent(new(AssuranceActivityAdapter.EventName,
             tags: new ActivityTagsCollection { { AssuranceActivityAdapter.PayloadTag, "not JSON" } })));
-        Assert.Equal(AssuranceActivityAdapter.InvalidEnvelope,
-            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, malformed, R("bad"))).Diagnostic.Code);
+        Assert.Equal(TraceEvaluationCodes.TelemetryEnvelope,
+            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, malformed, R("bad")).Monitor).Diagnostic.Code);
         using var valid = Capture(Batch(Event("paid", 1)));
-        Assert.Equal(TraceEvaluationCodes.BudgetExceeded,
-            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("big"), maxPayloadCharacters: 10)).Diagnostic.Code);
-        Assert.Throws<OperationCanceledException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("cancelled"), cancellationToken: new(canceled: true)));
+        Assert.Equal(TraceEvaluationCodes.TelemetryPayloadLimit,
+            Assert.Throws<TraceMonitorUpdateException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("big"), maxPayloadCharacters: 10).Monitor).Diagnostic.Code);
+        Assert.Throws<OperationCanceledException>(() => AssuranceActivityAdapter.Apply(monitor, valid, R("cancelled"), cancellationToken: new(canceled: true)).Monitor);
         Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
+    }
+
+    [Fact]
+    public void CaptureReturnsEveryProducerReferenceIncludingEmptyEnvelopesAndRedelivery()
+    {
+        var initial = Batch();
+        var first = Batch(Event("paid", 1));
+        var empty = initial with { Alternatives = [initial.Alternatives[0] with { Reference = R("empty-envelope") }] };
+        using var activity = Capture(first, span => span.AddEvent(AssuranceActivityAdapter.CreateEvent(empty)));
+        var result = AssuranceActivityAdapter.Apply(TraceMonitor.Start(Claim(), initial), activity, R("accepted"));
+        Assert.Equal(new[] { first.Alternatives[0].Reference, empty.Alternatives[0].Reference }, result.EnvelopeReferences);
+        var replay = AssuranceActivityAdapter.Apply(result.Monitor, activity, R("accepted"));
+        Assert.Same(result.Monitor, replay.Monitor);
+        Assert.Equal(result.EnvelopeReferences.ToArray(), replay.EnvelopeReferences.ToArray());
+        using var emptyActivity = Capture(empty);
+        var emptyResult = AssuranceActivityAdapter.Apply(result.Monitor, emptyActivity, R("unused"));
+        Assert.Same(result.Monitor, emptyResult.Monitor);
+        Assert.Equal(empty.Alternatives[0].Reference, Assert.Single(emptyResult.EnvelopeReferences));
+    }
+
+    [Fact]
+    public void IndividuallyValidEventsCanExceedTheActivityBoundWithoutPartialAcceptance()
+    {
+        var batch = Batch(Event("paid", 1));
+        var limit = batch.Serialize().Length;
+        using var activity = Capture(batch, span => span.AddEvent(AssuranceActivityAdapter.CreateEvent(batch, limit)));
+        var monitor = TraceMonitor.Start(Claim(), Batch());
+        var error = Assert.Throws<TraceMonitorUpdateException>(() =>
+            AssuranceActivityAdapter.Apply(monitor, activity, R("oversized"), maxPayloadCharacters: limit));
+        Assert.Equal(TraceEvaluationCodes.TelemetryPayloadLimit, error.Diagnostic.Code);
+        Assert.Empty(monitor.Evaluation.Batch.Alternatives[0].Observations);
+    }
+
+    [Fact]
+    public void ContractContentComparisonUsesOrderedValuesRatherThanArrayIdentity()
+    {
+        var contract = Batch().Contract;
+        var restored = TraceObservationBatch.Deserialize(Batch().Serialize()).Contract;
+        Assert.True(contract.SameContent(restored));
+        Assert.False(contract.SameContent(null));
+        Assert.False(contract.SameContent(restored with { Reference = R("changed") }));
+        Assert.False(contract.SameContent(restored with { Scope = R("changed") }));
+        Assert.False(contract.SameContent(restored with { Requirements = [.. restored.Requirements.Reverse()] }));
+        Assert.False(contract.SameContent(restored with { Requirements = [new(Trigger, ["different"]), new(Witness, ["p"])] }));
+        Assert.False(contract.SameContent(restored with { Requirements = [new(R("different"), ["p"]), new(Witness, ["p"])] }));
+        var empty = contract with { Requirements = [] };
+        Assert.False(empty.SameContent(empty with { Requirements = default }));
+        Assert.True((empty with { Requirements = default }).SameContent(empty with { Requirements = default }));
     }
 
     sealed class RecordingExporter(ExportResult result = ExportResult.Success) : BaseExporter<Activity>

@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Text;
 using System.Text.Json;
 using Cohesive.Model;
 using Cohesive.Model.Serialization;
@@ -51,7 +50,33 @@ public sealed record ObservationRequirement(ClaimReference Selector, ImmutableAr
 /// <param name="Scope">Exact scope and linearization/clock contract; never inferred from arrival order.</param>
 /// <param name="Requirements">Required partitions for each supported selector.</param>
 public sealed record TraceObservationContract(ClaimReference Reference, ClaimReference Scope,
-    ImmutableArray<ObservationRequirement> Requirements);
+    ImmutableArray<ObservationRequirement> Requirements)
+{
+    /// <summary>Compares exact contract content without relying on immutable-array instance identity.</summary>
+    /// <param name="other">Contract to compare; null never matches.</param>
+    /// <returns>Whether references and ordered requirements/partitions match exactly. Default arrays differ from empty arrays.</returns>
+    /// <remarks>This is representation equality, not equivalence under reordered requirements. It does not validate a contract.</remarks>
+    public bool SameContent(TraceObservationContract? other)
+    {
+        if (other is null || Reference != other.Reference || Scope != other.Scope
+            || Requirements.IsDefault != other.Requirements.IsDefault) return false;
+        if (Requirements.IsDefault) return true;
+        if (Requirements.Length != other.Requirements.Length) return false;
+        for (var i = 0; i < Requirements.Length; i++)
+        {
+            var left = Requirements[i];
+            var right = other.Requirements[i];
+            if (left is null || right is null)
+            {
+                if (left != right) return false;
+                continue;
+            }
+            if (left.Selector != right.Selector || left.Partitions.IsDefault != right.Partitions.IsDefault) return false;
+            if (!left.Partitions.IsDefault && !left.Partitions.AsSpan().SequenceEqual(right.Partitions.AsSpan())) return false;
+        }
+        return true;
+    }
+}
 
 /// <summary>One mapped observation; this is an adapter input, not a Simulation run or world.</summary>
 /// <param name="Occurrence">Stable source occurrence identity; retries must have distinct identities.</param>
@@ -108,12 +133,13 @@ public sealed record TraceObservationBatch(TraceObservationContract Contract, Cl
     sealed record Wire(string Schema, TraceObservationBatch Batch);
     const string WireSchema = "cohesive-assurance-observations/v1";
 
-    /// <summary>Encodes observation inputs with the shared portable-value and canonical JSON policy.</summary>
+    /// <summary>Encodes a standalone, versioned observation-input document with the shared canonical JSON policy.</summary>
+    /// <remarks>Use this format for transport of unevaluated inputs. Evaluation/checkpoint artifacts embed the same batch
+    /// payload under their own versioned envelope; use their Serialize/Deserialize APIs for retained results instead.</remarks>
     /// <returns>Versioned canonical observation document; serialization does not establish semantic validity or completeness.</returns>
     /// <exception cref="JsonException">A retained observation cannot be encoded.</exception>
     /// <exception cref="NotSupportedException">A representation is unsupported.</exception>
-    public string Serialize() => Encoding.UTF8.GetString(
-        StrictDocumentJson.GetCanonicalBytes(new Wire(WireSchema, this), AssuranceJson.Options));
+    public string Serialize() => StrictDocumentJson.GetCanonicalText(new Wire(WireSchema, this), AssuranceJson.Options);
 
     /// <summary>Reads a canonical observation document without evaluating or trusting its assertions.</summary>
     /// <param name="json">Canonical versioned observation JSON.</param>

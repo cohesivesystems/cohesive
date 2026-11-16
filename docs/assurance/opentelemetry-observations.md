@@ -24,8 +24,9 @@ using (var activity = AssuranceActivityAdapter.Source.StartActivity("reservation
     activity?.AddEvent(AssuranceActivityAdapter.CreateEvent(mappedRows));
 
 // In the capture consumer; capturedActivity comes from the native SDK pipeline.
-var next = AssuranceActivityAdapter.Apply(monitor, capturedActivity, cumulativeReference);
-var checkpoint = next.Serialize();
+var capture = AssuranceActivityAdapter.Apply(monitor, capturedActivity, cumulativeReference);
+var checkpoint = capture.Monitor.Serialize();
+var producerReferences = capture.EnvelopeReferences;
 // Persist checkpoint AND source delivery position atomically before acknowledgment.
 var resumed = TraceMonitor.Restore(checkpoint);
 var evaluation = resumed.Evaluation; // Existing ClaimEvidence.FromTrace accepts this result.
@@ -39,9 +40,13 @@ implements a durable worker. SDK sampling and exporter delivery remain host-cont
 
 The event name is `cohesive.assurance.observations`; its string attribute
 `cohesive.assurance.observations.json` carries a versioned canonical observation document. The core
-`TraceObservationBatch.Serialize/Deserialize` pair owns this format and portable value encoding.
+`TraceObservationBatch.Serialize/Deserialize` pair owns this standalone input envelope and portable value encoding.
 Deserialization produces untrusted inputs, never verified evidence. Existing evaluation artifacts
-keep their existing nested batch format.
+keep their existing nested batch payload under their own versioned envelope. Use the batch APIs
+when transporting unevaluated inputs; use `TraceEvaluation` or `TraceMonitor` serialization APIs
+when retaining evaluated results/checkpoints. Both reuse the same batch shape and `AssuranceJson`
+policy; there is no second portable-value schema. `TraceObservationContract.SameContent` owns
+exact ordered contract comparison, independently of JSON formatting.
 
 Ingestion checks the complete observation contract, target, epoch and mapping-evidence reference
 against the pinned monitor. Exactly one completely enumerated mapping is accepted. Complete mapping
@@ -69,14 +74,31 @@ bounded by the monitor profile. Encoding checks length after serialization, so t
 preallocation guarantee. Collector/backend attribute limits may be smaller and must be qualified by
 the host; truncated documents are rejected. Retained monitor history remains bounded without eviction.
 
-Malformed envelopes and binding mismatches use stable `TraceMonitorUpdateException` diagnostic codes;
-capacity failures use the existing budget code. Cancellation or rejection leaves the immutable prior
-checkpoint unchanged. Hosts must not acknowledge rejected deliveries.
+All diagnostics are in core `TraceEvaluationCodes`; adapters create structured exceptions through
+`TraceMonitorUpdateException.FromDiagnostic`. Cancellation or rejection leaves the immutable prior
+checkpoint unchanged. Disposition belongs to the capture host:
 
-The host owns cumulative alternative references and must retain raw captures and transport correlation
-(trace/span IDs, delivery positions and producer envelope references) alongside checkpoints if needed.
-The monitor retains semantic occurrences, not the original transport envelopes. Provenance therefore
-requires both artifacts when tracing a result back to its original delivery.
+- Envelope, binding and `TelemetryPayloadLimit` rejections are permanent for unchanged input and
+  configuration. Durably quarantine the complete activity, delivery position and diagnostic, then
+  acknowledge that transport delivery. Record a capture gap; never advance the monitor or claim the
+  rejected observations were accepted. If quarantine persistence fails, retry persistence before acknowledgment.
+- Monitor budget exhaustion requires backpressure and an explicit capacity/profile decision; replaying
+  unchanged input against the same full monitor cannot help. Preserve the delivery until that decision,
+  or durably quarantine it with a capture gap. Never silently evict accepted history.
+- Cancellation and transient host storage/transport failures may be retried from the last durable position.
+  Semantic order, duplicate-content and frontier violations require diagnosis/correction, not blind retries.
+
+`CreateEvent` bounds each event, while `Apply` bounds the aggregate activity. Hosts should use one
+semantic event per activity where practical. Multiple individually valid events can exceed the total;
+this is a permanent payload-limit rejection under the current configuration, covered by a regression test.
+A host may explicitly revise the bound and replay the quarantined activity, retaining the original rejection.
+
+The host owns cumulative alternative references. `Apply` returns `AssuranceActivityCapture`, containing
+both the accepted monitor and each producer envelope reference in event order, including empty envelopes
+and duplicates. Persist these references with the source delivery position and checkpoint. They are
+producer assertions, not content-digest verification; the adapter checks presence and retains exact values.
+The host still retains raw captures and trace/span correlation for auditing conflicting producer references.
+The monitor retains semantic occurrences, not original transport envelopes or an unbounded provenance ledger.
 
 Tests exercise the native SDK and an in-process exporter, including sampling and export loss. Remote
 OTLP decoding, collector/backend qualification, durable checkpoint/position storage, completeness

@@ -200,11 +200,17 @@ public sealed class TraceMonitor
 /// <summary>Structured rejection of an entire monitor update; the accepted immutable prefix is unchanged.</summary>
 public sealed class TraceMonitorUpdateException : InvalidOperationException
 {
-    /// <summary>Creates a structured rejection, including rejections from qualified observation adapters.</summary>
-    /// <param name="diagnostic">Stable diagnostic identifying the failed ingestion boundary.</param>
+    internal TraceMonitorUpdateException(TraceEvaluationDiagnostic diagnostic) : base(diagnostic.Message) => Diagnostic = diagnostic;
+
+    /// <summary>Creates a structured ingestion rejection for an adapter before monitor evaluation.</summary>
+    /// <param name="diagnostic">Diagnostic using the shared trace evaluation code catalog.</param>
+    /// <returns>An exception describing a rejected ingestion boundary, not evidence that the monitor executed.</returns>
     /// <exception cref="ArgumentNullException">Diagnostic is null.</exception>
-    public TraceMonitorUpdateException(TraceEvaluationDiagnostic diagnostic)
-        : base((diagnostic ?? throw new ArgumentNullException(nameof(diagnostic))).Message) => Diagnostic = diagnostic;
+    public static TraceMonitorUpdateException FromDiagnostic(TraceEvaluationDiagnostic diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(diagnostic);
+        return new(diagnostic);
+    }
     /// <summary>Stable diagnostic identifying invalid input, a continuity breach, unsupported interpretation or exhausted bounds.</summary>
     public TraceEvaluationDiagnostic Diagnostic { get; }
 }
