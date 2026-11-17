@@ -36,3 +36,44 @@ not production commit receipts.
 
 See [finite checking](../../docs/assurance/finite-checking.md) and the executable
 [transition binding tests](../Cohesive.Assurance.Tests/TransitionAdmissionTests.cs).
+
+## Typed offline probes and boundary inputs
+
+```csharp
+var probe = TransitionAssurance.Prepare(domain.InventoryTransitions.Reserve);
+var cases = probe.GenerateInputs(stock, new StockQuantity(0));
+foreach (var input in cases.Inputs)
+{
+    var result = probe.Execute(stock, input, new ActivationId($"quantity-{input.Quantity}"));
+    // Assert independently supplied business requirements against result.State/result.Outcome.
+}
+```
+
+`Prepare` compiles once; `Execute` delegates to the existing reference interpreter and state
+projector. It preserves Applied, NoChange, AdmissionRejected and DomainRejected outcomes.
+Other decisions throw with interpreter diagnostics. Complete decision evidence remains available.
+No state is committed, no I/O occurs, and emission intents are not dispatched. This adapter is
+for bounded test workloads and uses standard observation/CLR conversion; it makes no allocation,
+trimming or NativeAOT guarantee.
+
+`GenerateInputs` is a narrow input-proposal profile, not a solver or proof:
+
+- It inspects every admission guard, including unreachable guards. Supported guards compare a
+  direct nonnullable Int32 command member with an Int32 constant or supplied pre-state field,
+  plus negated boolean pre-state fields. Operators are equality/inequality and ordered comparisons.
+- Each command member varies independently around each threshold (minus one, exact, plus one),
+  with Int32 extremes and -1/0/1. Other input members retain the seed. The seed is always included;
+  a guardless transition produces only the seed. Candidates are deduplicated deterministically.
+- State-only boolean guards are inspected but do not generate state variations. Callers supply
+  the state envelope, including both boolean values where needed. Multiple-input combinations,
+  body paths, string constraints, nullable values and arithmetic predicates are not generated.
+- Unsupported guards fail explicitly with the node identity. Exceeding `maxInputs` fails without
+  returning a partial set. A missing production guard can remove proposed cases: retain independent
+  requirements and baseline inputs when testing faulty models.
+- Results retain the exact transition reference and inspected node IDs. Inspection is not branch
+  coverage. Expected outcomes never come from generation.
+
+The existing Simulation generation/property/shrinking APIs remain the general tooling for caller-
+authored stochastic scenarios. This adapter supplies model-derived boundary proposals without
+adding a second property runner, expression evaluator, random generator or third-party dependency.
+See [typed probe tests](../Cohesive.Assurance.Tests/TransitionProbeTests.cs).
