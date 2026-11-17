@@ -11,7 +11,7 @@ namespace Cohesive.Transitions.Assurance;
 /// <summary>Binds the actual admission IR of a transition to a finite pre-state claim check.</summary>
 /// <remarks>This checks explicit admission soundness, not body paths, reachability, or storage commits.
 /// The first profile requires an existing entity, no machine binding, and state-only scalar predicates.</remarks>
-public static class TransitionAssurance
+public static partial class TransitionAssurance
 {
     /// <summary>Exact state-only admission-binding profile retained alongside the transition sources.</summary>
     public static ClaimReference Profile { get; } = new(new("assurance-binding://transition-admission"),
