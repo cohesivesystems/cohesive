@@ -19,7 +19,8 @@ internal sealed class TenderEpisodeRuntime
     internal InMemoryEntityOutboxRepository Loads { get; }
     internal MachineReactionTarget AcceptTarget { get; }
     internal MachineReactionTarget ConfirmTarget { get; }
-    readonly InteractionContractCatalog contracts;
+    internal EntityTransitions TenderTransitions { get; }
+    internal EntityTransitions LoadTransitions { get; }
     int operation;
     internal string OperationPrefix = "source";
 
@@ -31,7 +32,12 @@ internal sealed class TenderEpisodeRuntime
         Loads = new(Model.Load, EntityPartitionKeyPolicy.Fixed("test"));
         if (!InteractionContractCatalog.TryCreate([], out var contracts).IsValid)
             throw new InvalidOperationException("Empty interaction catalog did not validate.");
-        this.contracts = contracts!;
+        TenderTransitions = new(Tenders, Authority, authorize: static (_, _) => ValueTask.FromResult(true));
+        LoadTransitions = new(Loads, Authority, authorize: static (_, _) => ValueTask.FromResult(true));
+        TenderTransitions.Prepare(Model.Accept);
+        TenderTransitions.Prepare(Model.ConfirmReceipt);
+        TenderTransitions.Prepare(Model.Resubmit);
+        LoadTransitions.Prepare(Model.ReviseLoad);
         AcceptTarget = MachineReactionTarget.Local(new(Model.MarkPending.Compile().Plan!, Loads, contracts!), Authority,
             (_, _) => ValueTask.FromResult(true));
         ConfirmTarget = MachineReactionTarget.Local(new(Model.ConfirmLoad.Compile().Plan!, Loads, contracts!), Authority,
@@ -60,23 +66,19 @@ internal sealed class TenderEpisodeRuntime
     internal async Task<(EntityTransitionOperationReceipt Acceptance1, EntityTransitionOperationReceipt Confirmation1,
         EntityTransitionOperationReceipt Acceptance2, EntityTransitionOperationReceipt Confirmation2)> TwoCycles()
     {
-        var a1 = await Execute(Tenders, "tender-1", Model.Accept, new EpisodeCommand(1));
-        var c1 = await Execute(Tenders, "tender-1", Model.ConfirmReceipt, new EpisodeCommand(1));
-        await Execute(Tenders, "tender-1", Model.Resubmit, new EpisodeCommand(2));
-        var a2 = await Execute(Tenders, "tender-1", Model.Accept, new EpisodeCommand(2));
-        var c2 = await Execute(Tenders, "tender-1", Model.ConfirmReceipt, new EpisodeCommand(2));
+        var a1 = await Execute(TenderTransitions, "tender-1", Model.Accept, new EpisodeCommand(1));
+        var c1 = await Execute(TenderTransitions, "tender-1", Model.ConfirmReceipt, new EpisodeCommand(1));
+        await Execute(TenderTransitions, "tender-1", Model.Resubmit, new EpisodeCommand(2));
+        var a2 = await Execute(TenderTransitions, "tender-1", Model.Accept, new EpisodeCommand(2));
+        var c2 = await Execute(TenderTransitions, "tender-1", Model.ConfirmReceipt, new EpisodeCommand(2));
         return (a1, c1, a2, c2);
     }
 
-    internal async Task<EntityTransitionOperationReceipt> Execute<TState>(InMemoryEntityOutboxRepository repository,
+    internal async Task<EntityTransitionOperationReceipt> Execute<TState>(EntityTransitions transitions,
         string id, Transition<TState, EpisodeCommand, string> transition, EpisodeCommand command) where TState : notnull
     {
-        var plan = transition.Compile().Plan!;
-        var executor = new DirectTransitionExecutor(plan, repository, contracts, Authority,
-            authorize: static (_, _) => ValueTask.FromResult(true), partitionKey: "test");
-        var result = await executor.ExecuteAsync(Context, new(new(OperationPrefix + "/" + ++operation)),
-            new(new(repository.EntityType), new(id)),
-            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(command)));
+        var result = await transitions.ExecuteAsync(transition, id, command,
+            operationId: new(OperationPrefix + "/" + ++operation), context: Context);
         var receipt = result.Receipt ?? throw new InvalidOperationException("Tender replay setup did not produce an atomic receipt.");
         if (receipt.Commit.DecisionKind != TransitionDecisionKind.Applied)
             throw new InvalidOperationException("Tender replay setup transition was not applied.");

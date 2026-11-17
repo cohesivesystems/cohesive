@@ -257,6 +257,41 @@ bypasses validation of retained or externally modified evidence.
 
 ## Direct receipt-backed Transition execution
 
+For C# callers, `EntityTransitions` accepts the authored typed transition and a CLR command directly:
+
+```csharp
+var tenders = new EntityTransitions(repository, authority, authorize: AuthorizeOperation,
+    partitionKey: tenantPartition);
+tenders.Prepare(model.Accept); // Optional eager validation during host setup.
+
+var execution = await tenders.ExecuteAsync(model.Accept, tenderId, new EpisodeCommand(1),
+    operationId: new ActivationId(idempotencyKey), context: context,
+    expectedConcurrencyToken: observedToken);
+```
+
+The facade owns only preparation and CLR input projection. Each exact immutable document instance is
+compiled once per configured facade; simultaneous preparation shares that result, failed preparation can
+be retried, and weak ownership does not accumulate abandoned revisions. Caches never cross repositories,
+authorities, authorization policies, catalogs or compiler configuration. Equivalent separately reconstructed
+documents may compile separately; names are never cache keys. No input, permission or runtime decision is cached.
+
+`Prepare` performs compilation and native binding validation without IO or authorization. Omit it for
+lazy first-call preparation, or invoke it for each operation during host construction to surface unsupported
+plans before requests arrive. Compilation failures preserve their coded diagnostics through the existing
+`ProcessTransitionBindingException` preparation boundary (also used by the direct executor); the name does
+not imply Process execution. The optional `shapeGraph` is passed to compilation for referenced contracts.
+
+`TInput` is determined by the typed transition handle. Commands use the standard `ObservationValue.FromObject`
+projection and the compiled input contract, not a fresh CLR type mapper or inferred duplicate schema. Null
+commands are allowed only by that contract. Custom CLR encodings must already be supported by the standard
+portable projection; the facade does not introduce an independent serializer. Provide `interactionContracts`
+for emitting transitions and `createRequestTarget` for request response targets. The default empty catalog
+supports transitions without emissions; unresolved emissions fail through the existing lowerer before commit.
+
+The return type remains `EntityTransitionExecutionResult`, retaining canonical typed outcome and durable receipt
+rather than materializing a new CLR outcome DTO. Typed and lower-level calls can replay one another's receipts.
+Authorization, identity conflicts, concurrency, exceptions, diagnostics and delivery ownership are unchanged.
+
 `DirectTransitionExecutor` binds an exact compiled Transition, repository, interaction catalog, trusted
 authority and mandatory authorization callback. Construct it once per binding. It uses the same internal
 `EntityTransitionExecutor` as `EntityTransitionProcessOperationAdapter`: exact receipt lookup, current-state

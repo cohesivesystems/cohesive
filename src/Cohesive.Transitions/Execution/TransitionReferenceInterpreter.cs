@@ -284,7 +284,14 @@ public static class TransitionReferenceInterpreter
                     && changed.IsDefaultOrEmpty
                     && movements.Count == 0
                     && !subjectAbsent)
+                {
                     kind = TransitionDecisionKind.NoChange;
+                    // Receipt evidence describes the realized decision, including no-op normalization,
+                    // rather than retaining the authored Applied category after it has changed.
+                    var outcomeIndex = trace.FindLastIndex(static item => item.Kind == TransitionTraceEventKind.OutcomeReturned);
+                    trace[outcomeIndex] = new(trace[outcomeIndex].Sequence, TransitionTraceEventKind.OutcomeReturned,
+                        terminal.Node, detail: kind.ToString());
+                }
 
                 return Complete(
                     kind,

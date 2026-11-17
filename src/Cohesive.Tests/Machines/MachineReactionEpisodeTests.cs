@@ -33,7 +33,7 @@ public sealed class MachineReactionEpisodeTests
         Assert.Empty(stillWaiting.Attempts);
 
         f.Restart();
-        await f.Execute(f.Loads, "load-1", f.Model.ReviseLoad, new EpisodeCommand(2));
+        await f.Execute(f.LoadTransitions, "load-1", f.Model.ReviseLoad, new EpisodeCommand(2));
         var secondAcceptance = Assert.Single(await f.Acceptance().AdmitAsync(f.Context, receipts.Acceptance2));
         Assert.Equal(stillWaiting.Prerequisite, secondAcceptance);
         Assert.NotEqual(firstAcceptance, secondAcceptance);
@@ -126,7 +126,7 @@ public sealed class MachineReactionEpisodeTests
         var id = Assert.Single(await f.Acceptance().AdmitAsync(f.Context, receipts.Acceptance1));
         var alternate = await Fixture.Create();
         alternate.OperationPrefix = "different-source-operation";
-        var different = await alternate.Execute(alternate.Tenders, "tender-1", alternate.Model.Accept, new EpisodeCommand(1));
+        var different = await alternate.Execute(alternate.TenderTransitions, "tender-1", alternate.Model.Accept, new EpisodeCommand(1));
         await Assert.ThrowsAsync<InvalidOperationException>(() => f.Acceptance().AdmitAsync(f.Context, different));
         var start = (await f.Store.LoadAsync(f.Context, id))!.Checkpoint.Start.Request;
         var changed = new ProcessStartRequest(start.SchemaVersion, start.Definition, start.Context, start.InitialContinuation,
@@ -141,8 +141,8 @@ public sealed class MachineReactionEpisodeTests
     {
         var first = await Fixture.Create();
         var other = await Fixture.Create(authority: new("tests", "another-tenant"));
-        var firstReceipt = await first.Execute(first.Tenders, "tender-1", first.Model.Accept, new EpisodeCommand(1));
-        var otherReceipt = await other.Execute(other.Tenders, "tender-1", other.Model.Accept, new EpisodeCommand(1));
+        var firstReceipt = await first.Execute(first.TenderTransitions, "tender-1", first.Model.Accept, new EpisodeCommand(1));
+        var otherReceipt = await other.Execute(other.TenderTransitions, "tender-1", other.Model.Accept, new EpisodeCommand(1));
         Assert.NotEqual(Assert.Single(await first.Acceptance().AdmitAsync(first.Context, firstReceipt)),
             Assert.Single(await other.Acceptance().AdmitAsync(other.Context, otherReceipt)));
         Assert.Empty(await first.Acceptance().AdmitAsync(first.Context, otherReceipt));
@@ -215,7 +215,7 @@ public sealed class MachineReactionEpisodeTests
         var waiting = (await f.Confirmation().RecoverAsync(f.Context, next))!;
         Assert.Equal(MachineReactionStatus.Pending, waiting.Status);
         Assert.NotEqual(first, waiting.Prerequisite);
-        await f.Execute(f.Loads, "load-1", f.Model.ReviseLoad, new EpisodeCommand(2));
+        await f.Execute(f.LoadTransitions, "load-1", f.Model.ReviseLoad, new EpisodeCommand(2));
         var second = Assert.Single(await f.Acceptance().AdmitAsync(f.Context, receipts.Acceptance2));
         Assert.Equal(waiting.Prerequisite, second);
         await f.Acceptance().RecoverAsync(f.Context, second);
