@@ -191,7 +191,7 @@ public sealed class MachineReactionInvocation
                     "Resolve the exact target receipt before declaring completion or rejection."));
         if (operation.Result.ReceiptReference is null
             || EntityTransitionReceiptReferences.Read(operation.Result.ReceiptReference) != receipt.Request.Reference
-            || receipt.Request.Operation != operation.Key || receipt.Request.Transition != Policy.Payload.Target.Reference
+            || receipt.Request.Operation != (EntityTransitionOperationIdentity)operation.Key || receipt.Request.Transition != Policy.Payload.Target.Reference
             || receipt.Request.AuthorityScope != Source.AuthorityScope)
             throw new InvalidOperationException("Target receipt does not match the retained reaction operation.");
         var status = receipt.Commit.DecisionKind is TransitionDecisionKind.Applied or TransitionDecisionKind.NoChange

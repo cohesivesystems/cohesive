@@ -175,12 +175,12 @@ public sealed class EntityTransitionOperationRepositoryTests
             });
         var operation = fixture.Request.Operation;
         var reconstructedRequest = new EntityTransitionOperationRequest(
-            new(
-                operation.Continuation,
+            new ProcessOperationOccurrence(
+                operation.Continuation!,
                 operation.Activation,
-                operation.Token,
-                operation.Node,
-                operation.Occurrence),
+                operation.Token!.Value,
+                operation.Node!.Value,
+                operation.Occurrence!.Value),
             fixture.Request.AuthorityScope,
             fixture.Request.Transition,
             fixture.Request.Subject,
@@ -264,7 +264,7 @@ public sealed class EntityTransitionOperationRepositoryTests
             fixture.Context, fixture.Request.Reference,
             scenario == "transition" ? ProcessDurabilityTestFixture.DefinitionReference("wrong", '7') : fixture.Transition,
             scenario == "authority" ? new("foreign", "tenant/acme") : fixture.Request.AuthorityScope,
-            scenario == "attempt" ? new(fixture.Request.Operation.Continuation.ProcessInstanceId, new("other")) : fixture.Request.Operation.Continuation,
+            scenario == "attempt" ? new(fixture.Request.Operation.Continuation!.ProcessInstanceId, new("other")) : fixture.Request.Operation.Continuation!,
             scenario == "partition" ? "foreign" : "tenant/acme",
             (_, snapshot) => { authorizations++; Assert.Equal(committed.Entity, snapshot); return ValueTask.FromResult(scenario != "denied"); });
         if (scenario == "allowed")
@@ -664,10 +664,10 @@ public sealed class EntityTransitionOperationRepositoryTests
                     new("emission/customer-approved/1"),
                     new ProcessInteractionOrigin(
                         Process,
-                        request.Operation.Node,
-                        request.Operation.Continuation,
+                        request.Operation.Node!.Value,
+                        request.Operation.Continuation!,
                         request.Operation.Activation,
-                        request.Operation.Token,
+                        request.Operation.Token!.Value,
                         request.Subject,
                         request.Transition,
                         outcomeNode,

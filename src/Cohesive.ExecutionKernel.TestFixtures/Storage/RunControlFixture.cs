@@ -131,8 +131,8 @@ public static class RunControlFixture
         var policy = new TransitionEmissionLoweringPolicy((intent, _) => new(
             new($"emission:{request.Fingerprint.Value}:{intent.Node.Value}:{(direct ? "direct" : "process")}"),
             direct ? new TransitionInteractionOrigin(request.Transition, intent.Node, request.Subject, outcome)
-                : new ProcessInteractionOrigin(evidence.Process, request.Operation.Node, request.Operation.Continuation,
-                    request.Operation.Activation, request.Operation.Token, request.Subject, request.Transition, outcome, intent.Node),
+                : new ProcessInteractionOrigin(evidence.Process, request.Operation.Node!.Value, request.Operation.Continuation!,
+                    request.Operation.Activation, request.Operation.Token!.Value, request.Subject, request.Transition, outcome, intent.Node),
             new("correlation/run-1"), causationId: null, request.AuthorityScope,
             new($"idempotency/{request.Fingerprint.Value}/{intent.Node.Value}"), ordering: null,
             new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), Provenance));

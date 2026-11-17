@@ -20,7 +20,7 @@ public sealed partial class MachineReactionHost
         var identity = snapshot.Checkpoint.ContinuationIdentity.ProcessInstanceId.Value + "/prerequisite";
         var signal = new SignalEnvelope(InteractionEnvelope.CurrentSchemaVersion,
             new(new(identity), new ProcessInteractionOrigin(prerequisite!.Policy.Payload.Process.Reference,
-                operation.Node, operation.Continuation, operation.Activation, operation.Token),
+                operation.Node!.Value, operation.Continuation!, operation.Activation, operation.Token!.Value),
                 new(identity), causationId: null, Authority, new(identity), ordering: null,
                 new(InteractionDurabilityDemand.Durable, InteractionVisibilityDemand.AfterOriginCommit), Policy.Document.Metadata.Provenance),
             new SignalContractReference(Policy.PrerequisiteSignal!.Reference),

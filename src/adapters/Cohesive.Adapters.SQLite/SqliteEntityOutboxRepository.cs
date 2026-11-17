@@ -405,7 +405,7 @@ public sealed class SqliteEntityOutboxRepository : IEntityOutboxRepository, IEnt
     }
 
     static string OperationId(EntityTransitionOperationRequest request) => OperationId(request.Operation);
-    static string OperationId(Cohesive.Storage.Processes.ProcessOperationOccurrence operation) => ProcessIdPrefix + HashBytes(StrictDocumentJson.GetCanonicalBytes(operation, JsonOptions));
+    static string OperationId(EntityTransitionOperationIdentity operation) => ProcessIdPrefix + HashBytes(StrictDocumentJson.GetCanonicalBytes(operation, JsonOptions));
     static string HashBytes(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
     static bool SameEnvelopes(ImmutableArray<InteractionEnvelope> left, ImmutableArray<InteractionEnvelope> right)
     {

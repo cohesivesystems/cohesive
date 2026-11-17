@@ -1,12 +1,10 @@
 using Cohesive.Execution;
 using Cohesive.Model;
-using Cohesive.Processes.Execution;
 using Cohesive.Processes.Machines;
 using Cohesive.Storage;
 using Cohesive.Storage.Processes;
-using Cohesive.Transitions.Execution;
-using Cohesive.Transitions.IR;
 using Cohesive.Transitions.Model;
+using Cohesive.Transitions.IR;
 
 namespace Cohesive.Examples.TenderAcceptance;
 
@@ -21,6 +19,7 @@ internal sealed class TenderEpisodeRuntime
     internal InMemoryEntityOutboxRepository Loads { get; }
     internal MachineReactionTarget AcceptTarget { get; }
     internal MachineReactionTarget ConfirmTarget { get; }
+    readonly InteractionContractCatalog contracts;
     int operation;
     internal string OperationPrefix = "source";
 
@@ -32,6 +31,7 @@ internal sealed class TenderEpisodeRuntime
         Loads = new(Model.Load, EntityPartitionKeyPolicy.Fixed("test"));
         if (!InteractionContractCatalog.TryCreate([], out var contracts).IsValid)
             throw new InvalidOperationException("Empty interaction catalog did not validate.");
+        this.contracts = contracts!;
         AcceptTarget = MachineReactionTarget.Local(new(Model.MarkPending.Compile().Plan!, Loads, contracts!), Authority,
             (_, _) => ValueTask.FromResult(true));
         ConfirmTarget = MachineReactionTarget.Local(new(Model.ConfirmLoad.Compile().Plan!, Loads, contracts!), Authority,
@@ -60,36 +60,26 @@ internal sealed class TenderEpisodeRuntime
     internal async Task<(EntityTransitionOperationReceipt Acceptance1, EntityTransitionOperationReceipt Confirmation1,
         EntityTransitionOperationReceipt Acceptance2, EntityTransitionOperationReceipt Confirmation2)> TwoCycles()
     {
-        var a1 = await Execute(Tenders, Model.Tender, "tender-1", Model.Accept, new EpisodeCommand(1));
-        var c1 = await Execute(Tenders, Model.Tender, "tender-1", Model.ConfirmReceipt, new EpisodeCommand(1));
-        await Execute(Tenders, Model.Tender, "tender-1", Model.Resubmit, new EpisodeCommand(2));
-        var a2 = await Execute(Tenders, Model.Tender, "tender-1", Model.Accept, new EpisodeCommand(2));
-        var c2 = await Execute(Tenders, Model.Tender, "tender-1", Model.ConfirmReceipt, new EpisodeCommand(2));
+        var a1 = await Execute(Tenders, "tender-1", Model.Accept, new EpisodeCommand(1));
+        var c1 = await Execute(Tenders, "tender-1", Model.ConfirmReceipt, new EpisodeCommand(1));
+        await Execute(Tenders, "tender-1", Model.Resubmit, new EpisodeCommand(2));
+        var a2 = await Execute(Tenders, "tender-1", Model.Accept, new EpisodeCommand(2));
+        var c2 = await Execute(Tenders, "tender-1", Model.ConfirmReceipt, new EpisodeCommand(2));
         return (a1, c1, a2, c2);
     }
 
-    // Fixture preparation only: not an application execution API. The missing direct receipt-backed
-    // executor must reuse the native adapter's decision/projection/emission mechanism (see README).
     internal async Task<EntityTransitionOperationReceipt> Execute<TState>(InMemoryEntityOutboxRepository repository,
-        EntityDefinition entity, string id, Transition<TState, EpisodeCommand, string> transition, EpisodeCommand command) where TState : notnull
+        string id, Transition<TState, EpisodeCommand, string> transition, EpisodeCommand command) where TState : notnull
     {
-        var before = (await repository.TryGet(Context, id, EntityReadOptions.Full.WithPartitionKey("test")))!;
         var plan = transition.Compile().Plan!;
-        var occurrence = new ProcessOperationOccurrence(new(new(OperationPrefix + "/" + ++operation), new("attempt")),
-            new("activation"), new("token"), new("invoke"), occurrence: 0);
-        var input = PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(command));
-        var request = new EntityTransitionOperationRequest(occurrence, Authority, plan.DefinitionReference,
-            new(new(repository.EntityType), before.Entity.EntityId), input);
-        var result = await repository.ExecuteTransitionOperation(Context, request, () =>
-        {
-            var decision = TransitionReferenceInterpreter.DecideFullState(plan, occurrence.Activation, input,
-                PortableValue.Concrete(plan.Definition.Observation, ObservationValue.FromObject(before.Entity.Observation.Fields)));
-            if (decision.Kind != TransitionDecisionKind.Applied)
-                throw new InvalidOperationException("Tender replay setup transition was not applied.");
-            var candidate = TransitionStateProjector.ApplyToEntity(entity, id, decision, before.Entity);
-            return new(request, new(candidate.Snapshot, before.ConcurrencyToken),
-                decision.Kind, ProcessOperationResult.Completed(decision.Outcome!), decision.GuaranteeDemands, decision.Evidence);
-        });
-        return result.Receipt ?? throw new InvalidOperationException("Tender replay setup did not produce an atomic receipt.");
+        var executor = new DirectTransitionExecutor(plan, repository, contracts, Authority,
+            authorize: static (_, _) => ValueTask.FromResult(true), partitionKey: "test");
+        var result = await executor.ExecuteAsync(Context, new(new(OperationPrefix + "/" + ++operation)),
+            new(new(repository.EntityType), new(id)),
+            PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(command)));
+        var receipt = result.Receipt ?? throw new InvalidOperationException("Tender replay setup did not produce an atomic receipt.");
+        if (receipt.Commit.DecisionKind != TransitionDecisionKind.Applied)
+            throw new InvalidOperationException("Tender replay setup transition was not applied.");
+        return receipt;
     }
 }

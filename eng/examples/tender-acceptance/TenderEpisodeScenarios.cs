@@ -24,7 +24,7 @@ internal static class TenderEpisodeScenarios
     internal static readonly ReactionScenarioInput Confirmation2 = new(ConfirmationHost, "confirmation-2");
     internal static readonly DateTimeOffset StartsAtUtc = new(2030, 1, 2, 0, 0, 0, TimeSpan.Zero);
 
-    internal const string ReplayProfile = "tender/two-cycles/accepted-first-then-revise/v1";
+    internal const string ReplayProfile = "tender/two-cycles/accepted-first-then-revise/v2";
     internal sealed record ReplaySeed(int InitialLoadEpisode);
 
     // This versioned profile creates the tender in Offered/episode 1, generates both source cycles,
@@ -76,7 +76,7 @@ internal static class TenderEpisodeScenarios
         var receipts = await fixture.TwoCycles();
         var first = (await fixture.Acceptance().AdmitAsync(fixture.Context, receipts.Acceptance1)).Single();
         await fixture.Acceptance().RecoverAsync(fixture.Context, first);
-        await fixture.Execute(fixture.Loads, fixture.Model.Load, "load-1", fixture.Model.ReviseLoad, new EpisodeCommand(2));
+        await fixture.Execute(fixture.Loads, "load-1", fixture.Model.ReviseLoad, new EpisodeCommand(2));
         return new MachineReactionScenarioInterpreter(environment.Identity, fixture.Store,
             new Dictionary<string, MachineReactionHost>
             {

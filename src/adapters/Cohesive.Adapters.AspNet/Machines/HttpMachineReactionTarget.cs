@@ -57,7 +57,7 @@ public sealed class HttpMachineReactionTarget : MachineReactionTarget
         var request = receipt.Request;
         if (request.Transition != Transition || request.AuthorityScope != Authority
             || request.Input != invocation.Input || request.Subject.EntityId.Value != subject
-            || request.Operation != new ProcessOperationOccurrence(invocation.Continuation, invocation.Activation,
+            || request.Operation != (EntityTransitionOperationIdentity)new ProcessOperationOccurrence(invocation.Continuation, invocation.Activation,
                 invocation.Token, invocation.Node, invocation.Occurrence))
             throw new MachineReactionProtocolException(MachineReactionProtocolException.ReceiptMismatch,
                 "HTTP response does not prove the requested operation.");

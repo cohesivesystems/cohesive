@@ -255,6 +255,60 @@ cases used by memory, SQLite, PostgreSQL and the environment-gated Cosmos suite.
 cases remain with their providers. See `TransitionReceiptValidationBenchmarks` for warm encoding cost; no cache
 bypasses validation of retained or externally modified evidence.
 
+## Direct receipt-backed Transition execution
+
+`DirectTransitionExecutor` binds an exact compiled Transition, repository, interaction catalog, trusted
+authority and mandatory authorization callback. Construct it once per binding. It uses the same internal
+`EntityTransitionExecutor` as `EntityTransitionProcessOperationAdapter`: exact receipt lookup, current-state
+read, optional captured-token check, pure decision, emission lowering, state projection and atomic commit.
+It does not invent a Process definition, continuation, token or invocation node.
+
+```csharp
+var executor = new DirectTransitionExecutor(plan, repository, contracts, authority,
+    authorize: AuthorizeOperation, partitionKey: tenantPartition);
+var execution = await executor.ExecuteAsync(context,
+    new DirectTransitionOperation(new ActivationId(idempotencyKey)),
+    subject, typedInput, expectedConcurrencyToken: observedToken);
+```
+
+The host supplies a stable identity unique within the bound repository and reuses it after ambiguous failure.
+Authority, exact Transition revision/fingerprint, subject and typed input participate in the request fingerprint;
+reusing an identity for changed content fails with identity conflict. Exact replay precedes current-state reads
+and the optional concurrency check, preserving the original decision, snapshot and emission identities after
+later entity changes. Exceptions after an uncertain commit propagate; retry the same operation to resolve them.
+The executor does not retry automatically. Rejected admission, domain rejection and no-change decisions on
+existing subjects are retained just like applied decisions. Pre-commit validation errors have no receipt.
+
+Authorization belongs to the host. `authorize(context, request)` runs before **any executor repository access**
+on every call, even replay. It must authorize the trusted authority, requested entity operation, and disclosure
+of retained snapshots. It may perform its own resource-policy reads; identifiers and partition placement are
+not credentials. A false result yields a structured denied result with no receipt. The result's `Operation`
+contains trusted native diagnostics and receipt details; do not serialize it to untrusted callers. Its `Result`
+reuses the existing typed outcome/envelope contract, with safe storage-failure messages. No Process runs.
+
+Direct envelopes use `TransitionInteractionOrigin` and deterministic request/node-derived identities, with
+durable, after-commit delivery demands and the compiled document's provenance. The receipt's publication
+authority is `ReceiptHandoff`: the invoking host owns delivery from the receipt. This is **not** an automatic
+outbox publisher or a background receipt scanner. No second entity/direct-outbox write is performed. Process
+invocations keep `ProcessInteractionOrigin` and their sole `ProcessOutbox` publication authority. Request
+emissions require an explicit response-target policy; missing targets fail lowering before commit.
+
+Binding validates the machine contract, entity shape, atomic-receipt capability and trusted partition before IO.
+Direct subject creation is currently unsupported and fails at construction: a rejected creation has no entity
+whose concurrency fence can retain its outcome. Process creation keeps its existing durable enclosing-ledger
+semantics. Supporting direct creation requires a separately specified operation ledger, not a fabricated Process.
+
+Receipt identity is a validated structural projection, `EntityTransitionOperationIdentity`: activation plus
+all Process coordinates or none. Partial coordinates are rejected when rehydrating. Existing Process request,
+commit and storage-key canonical bytes/fingerprints remain unchanged (the published alpha144 vectors still
+pass). The portable receipt-reference **value contract** evolves to allow absent Process coordinates; persisted
+Process definitions/continuations pinned to the old required-coordinate locator contract need an explicit
+revision/migration and cannot be silently mixed with the new one. No in-flight definition migration is provided.
+
+Tests cover direct application and all retained rejection categories, exact replay after later writes, lost
+acknowledgements, commit races, fresh authorization, emission origin and serialization, and SQLite reopen.
+The tender two-cycle runtime uses this API, including out-of-order reaction delivery and deterministic replay.
+
 ## Optional instance authoring
 
 `StorageModel` groups any number of native offline bindings, including different databases or providers.

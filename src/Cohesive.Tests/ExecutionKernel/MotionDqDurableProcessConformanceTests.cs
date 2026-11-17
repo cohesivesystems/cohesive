@@ -110,7 +110,7 @@ public sealed class MotionDqDurableProcessConformanceTests
         var entityReceipt = await repository.TryGetTransitionOperation(
             Context(clock.Next()),
             new(
-                new(
+                new ProcessOperationOccurrence(
                     crashedInvocation.Continuation,
                     crashedInvocation.Activation,
                     crashedInvocation.Token,

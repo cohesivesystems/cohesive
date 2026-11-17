@@ -17,6 +17,35 @@ public sealed class SqlitePocoLifecycleReplayTests
 {
     static readonly OperationContext Context = OperationContext.Create();
 
+    [Fact]
+    public async Task Direct_executor_reopens_atomic_receipt_and_replays_original_envelopes()
+    {
+        using var file = new DatabaseFixture();
+        var repository = Repository(file);
+        var plan = RunControlFixture.Start.Compile().Plan!;
+        var contracts = RunControlFixture.Contracts();
+        var authority = new InteractionAuthorityScope("direct-tests", "tenant/a");
+        var subject = new InteractionEntityReference(new(repository.EntityType), new("run/1"));
+        var operation = new DirectTransitionOperation(new("direct/start/1"));
+        var input = PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new StartRun(0)));
+        var before = await repository.Upsert(Context, RunControlFixture.Write(RunControlFixture.Initial()));
+        var first = await new DirectTransitionExecutor(plan, repository, contracts, authority,
+            static (_, _) => ValueTask.FromResult(true)).ExecuteAsync(Context, operation, subject, input, before.ConcurrencyToken);
+        Assert.Equal(EntityTransitionOperationDisposition.Committed, first.Operation!.Disposition);
+        var later = await repository.Upsert(Context, RunControlFixture.Write(RunControlFixture.Initial() with { Status = "completed" }, version: 3));
+
+        var reopened = new SqliteEntityOutboxRepository(new(new(file.Path)), repository.Mapping);
+        var replay = await new DirectTransitionExecutor(plan, reopened, contracts, authority,
+            static (_, _) => ValueTask.FromResult(true)).ExecuteAsync(Context, operation, subject, input, before.ConcurrencyToken);
+        Assert.Equal(EntityTransitionOperationDisposition.Replayed, replay.Operation!.Disposition);
+        Assert.Equal(first.Receipt!.Commit.Fingerprint, replay.Receipt!.Commit.Fingerprint);
+        Assert.Equal(EntityTransitionEmissionPublicationAuthority.ReceiptHandoff, replay.Receipt.PublicationAuthority);
+        Assert.IsType<TransitionInteractionOrigin>(Assert.Single(replay.Result.Emissions).Context.Origin);
+        Assert.Equal(Assert.Single(first.Result.Emissions).Context.EmissionId, Assert.Single(replay.Result.Emissions).Context.EmissionId);
+        Assert.Equal(later, await reopened.TryGet(Context, "run/1"));
+        Assert.Empty(await reopened.ReadOutbox(Context)); // Explicit receipt handoff, not a Process or direct outbox commit.
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -941,7 +941,7 @@ public sealed class CosmosEntityOutboxRepository : IEntityOutboxRepository, IEnt
     static string CreateTransitionOperationReceiptId(EntityTransitionOperationRequest request) =>
         CreateTransitionOperationReceiptId(request.Operation);
 
-    static string CreateTransitionOperationReceiptId(Cohesive.Storage.Processes.ProcessOperationOccurrence operation) =>
+    static string CreateTransitionOperationReceiptId(EntityTransitionOperationIdentity operation) =>
         $"entity-transition-operation:v1:{HashIdentity(operation)}";
 
     static string CreateTransitionCreationReceiptIndexId(InteractionEntityReference subject) =>
