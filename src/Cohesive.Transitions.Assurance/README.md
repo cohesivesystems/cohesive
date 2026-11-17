@@ -60,9 +60,9 @@ trimming or NativeAOT guarantee.
 
 - It inspects every admission guard, including unreachable guards. Supported guards compare a
   direct nonnullable Int32 command member with an Int32 constant or supplied pre-state field,
-  plus negated boolean pre-state fields. Operators are equality/inequality and ordered comparisons.
+  plus direct/negated boolean pre-state or command fields. Operators are equality/inequality and ordered comparisons.
 - Each command member varies independently around each threshold (minus one, exact, plus one),
-  with Int32 extremes and -1/0/1. Other input members retain the seed. The seed is always included;
+  with configured inclusive bounds and -1/0/1, clipped to that range. Boolean commands propose both values. Other input members retain the seed. The seed is always included;
   a guardless transition produces only the seed. Candidates are deduplicated deterministically.
 - State-only boolean guards are inspected but do not generate state variations. Callers supply
   the state envelope, including both boolean values where needed. Multiple-input combinations,
@@ -70,10 +70,29 @@ trimming or NativeAOT guarantee.
 - Unsupported guards fail explicitly with the node identity. Exceeding `maxInputs` fails without
   returning a partial set. A missing production guard can remove proposed cases: retain independent
   requirements and baseline inputs when testing faulty models.
-- Results retain the exact transition reference and inspected node IDs. Inspection is not branch
+- Results retain the exact transition reference, profile, configured bounds/budget, inspected node IDs and motivating nodes for each candidate. Inspection is not branch
   coverage. Expected outcomes never come from generation.
 
 The existing Simulation generation/property/shrinking APIs remain the general tooling for caller-
 authored stochastic scenarios. This adapter supplies model-derived boundary proposals without
 adding a second property runner, expression evaluator, random generator or third-party dependency.
 See [typed probe tests](../Cohesive.Assurance.Tests/TransitionProbeTests.cs).
+
+## Reusable execution and portable interpretation contract
+
+`Cohesive.Transitions.Execution.OfflineTransition.Prepare(transition)` supplies the same typed
+`Execute(before, input, activationId)` API without depending on Assurance. The Assurance probe
+is a convenience over it, not a second executor. Storage-backed entity APIs additionally commit
+state and receipts; this offline API never makes those guarantees.
+
+Generation returns `Candidates` with `Input` and `MotivatingNodes`; `Inputs` is a convenience
+projection. Deduplication merges motivation lists rather than dropping their provenance. A
+`TransitionInputGenerationException` carries code `assurance.inputs.unsupported` and a node ID;
+interpret that node under the probe's exact reference. No partial result is returned on failure.
+Budgets and unsupported support are distinct from a business assertion failing.
+
+A future TypeScript implementation should match input/state/outcome observations, decision kinds,
+exact source identity, per-input node attribution, profile/bounds and explicit unsupported/limited
+coverage semantics. It need not mimic C# generics or CLR records. Compare portable reports and
+independent requirements using shared fixtures; do not infer correctness from model agreement.
+The TypeScript runtime port is follow-up work; #581 supplies and tests the .NET capability.

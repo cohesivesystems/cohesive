@@ -46,7 +46,7 @@ public sealed class TransitionProbeTests
         var cases = TransitionAssurance.Prepare(Model()).GenerateInputs(new("sku", limit, limit, false), new(0, ""));
         Assert.Contains(cases.Inputs, x => x.Quantity == limit);
         Assert.Contains(cases.Inputs, x => x.Quantity == (limit == int.MinValue ? limit + 1 : limit - 1));
-        Assert.Equal(cases.Inputs.Length, cases.Inputs.Distinct().Count());
+        Assert.Equal(cases.Candidates.Length, cases.Inputs.Distinct().Count());
     }
 
     [Theory]
@@ -81,7 +81,7 @@ public sealed class TransitionProbeTests
             ObjectEntityDefinition.For<Stock>(new("stock")).Shape, new("wide"), new("1"),
             t => t.Requires(new("positive"), (s, r) => r.Amount > 0L, (s, r) => false)
                 .Return(new("accepted"), TransitionOutcomeDisposition.Applied, true));
-        Assert.Throws<NotSupportedException>(() => TransitionAssurance.Prepare(model)
+        Assert.ThrowsAny<NotSupportedException>(() => TransitionAssurance.Prepare(model)
             .GenerateInputs(new("sku", 7, 4, false), new(0)));
     }
 
@@ -100,11 +100,89 @@ public sealed class TransitionProbeTests
     public void UnsupportedAndBudgetExhaustionNeverReturnPartialSuccess()
     {
         var state = new Stock("sku", 7, 4, true);
-        var error = Assert.Throws<NotSupportedException>(() => TransitionAssurance.Prepare(Model(unsupported: true))
+        var error = Assert.ThrowsAny<NotSupportedException>(() => TransitionAssurance.Prepare(Model(unsupported: true))
             .GenerateInputs(state, new(0, "")));
         Assert.Contains("compound", error.Message);
         var probe = TransitionAssurance.Prepare(Model());
         Assert.Throws<InvalidOperationException>(() => probe.GenerateInputs(state, new(0, ""), maxInputs: 2));
         Assert.Throws<ArgumentOutOfRangeException>(() => probe.GenerateInputs(state, new(0, ""), maxInputs: 0));
     }
+    [Fact]
+    public void OfflineExecutionDoesNotRequireAnAssuranceRunner()
+    {
+        var model = Model();
+        var direct = Cohesive.Transitions.Execution.OfflineTransition.Prepare(model);
+        var probe = TransitionAssurance.Prepare(model);
+        foreach (var quantity in new[] { 0, 3, 8 })
+        {
+            var state = new Stock("sku", 7, 4, false);
+            var a = direct.Execute(state, new(quantity, ""), new("case"));
+            var b = probe.Execute(state, new(quantity, ""), new("case"));
+            Assert.Equal(a.State, b.State);
+            Assert.Equal(a.Outcome, b.Outcome);
+            Assert.Equal(a.Decision.Kind, b.Decision.Kind);
+        }
+    }
+
+    [Fact]
+    public void BoundsAreExplicitAndDeduplicationPreservesAllMotivatingNodes()
+    {
+        var cases = TransitionAssurance.Prepare(Model()).GenerateInputs(new("sku", 4, 4, false),
+            new(1, "seed"), minimum: 1, maximum: 5);
+        Assert.All(cases.Inputs, input => Assert.InRange(input.Quantity, 1, 5));
+        var exact = Assert.Single(cases.Candidates.Where(x => x.Input.Quantity == 4));
+        Assert.Contains(exact.MotivatingNodes, x => x.Value == "limit");
+        Assert.Contains(exact.MotivatingNodes, x => x.Value == "stock");
+        Assert.NotEmpty(cases.CoverageLimits);
+        Assert.Throws<ArgumentOutOfRangeException>(() => TransitionAssurance.Prepare(Model())
+            .GenerateInputs(new("sku", 4, 4, false), new(0, ""), minimum: 1));
+    }
+
+    public sealed record BooleanRequest(bool Enabled, int Other);
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BooleanInputGuardsProposeBothValues(bool negate)
+    {
+        var model = TransitionAuthoring.Create<Stock, BooleanRequest, bool>(
+            ObjectEntityDefinition.For<Stock>(new("stock")).Shape, new("boolean"), new("1"), t =>
+            {
+                if (negate) t.Requires(new("flag"), (s, r) => !r.Enabled, (s, r) => false);
+                else t.Requires(new("flag"), (s, r) => r.Enabled, (s, r) => false);
+                t.Return(new("accepted"), TransitionOutcomeDisposition.Applied, true);
+            });
+        var result = TransitionAssurance.Prepare(model).GenerateInputs(new("sku", 4, 4, false), new(false, 17));
+        Assert.Equal(new[] { false, true }, result.Inputs.Select(x => x.Enabled));
+        Assert.All(result.Candidates, c =>
+        {
+            Assert.Equal(17, c.Input.Other);
+            Assert.Equal("flag", Assert.Single(c.MotivatingNodes).Value);
+        });
+    }
+
+    [Fact]
+    public void UnsupportedDiagnosticsAreStructuredAndAttributed()
+    {
+        var error = Assert.Throws<TransitionInputGenerationException>(() =>
+            TransitionAssurance.Prepare(Model(unsupported: true)).GenerateInputs(new("sku", 4, 4, false), new(0, "")));
+        Assert.Equal("assurance.inputs.unsupported", error.Code);
+        Assert.Equal("compound", error.Node.Value);
+    }
+
+    [Theory]
+    [InlineData(TransitionOutcomeDisposition.NoChange, TransitionDecisionKind.NoChange)]
+    [InlineData(TransitionOutcomeDisposition.DomainRejected, TransitionDecisionKind.DomainRejected)]
+    public void TypedOfflineExecutionRetainsExplicitNoChangeAndRejection(TransitionOutcomeDisposition disposition, TransitionDecisionKind kind)
+    {
+        var model = TransitionAuthoring.Create<Stock, Request, string>(
+            ObjectEntityDefinition.For<Stock>(new("stock")).Shape, new("decision"), new("1"),
+            t => t.Return(new("outcome"), disposition, "authored"));
+        var before = new Stock("sku", 7, 4, true);
+        var result = Cohesive.Transitions.Execution.OfflineTransition.Prepare(model).Execute(before, new(3, ""), new("case"));
+        Assert.Equal(kind, result.Decision.Kind);
+        Assert.Equal(before, result.State);
+        Assert.Equal("authored", result.Outcome);
+    }
+
 }
