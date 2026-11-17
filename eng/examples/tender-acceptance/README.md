@@ -111,29 +111,36 @@ invalid fault placement, unexercised faults, and reconstruction mismatch. See th
 [replay contract and operating limits](../../../src/Cohesive.Simulation.Transitions/README.md#declare-target-faults-and-replay).
 
 
-The runtime prepares source receipts with `DirectTransitionExecutor`. It shares the Process adapter's
-read/decide/project/atomic-commit implementation, but uses a caller-assigned direct activation instead of
-inventing Process provenance. A retry reuses that activation and returns the original receipt even if the
-entity has changed. The two-cycle replay recipe is now `v2` because its source receipt identities changed.
+The runtime prepares source receipts through `EntityTransitionClient`, the repository-bound typed facade over
+`DirectTransitionExecutor`. Configuration and preparation happen once; invocation accepts the authored
+transition handle, entity ID and ordinary command. The canonical document supplies the input contract.
+The execution still shares the Process adapter's read/decide/project/atomic-commit mechanism and creates
+no Process provenance. The replay recipe stays `v2`: typed and portable calls produce identical receipt identities.
 
 ```csharp
-var plan = model.Accept.Compile().Plan!;
-var executor = new DirectTransitionExecutor(plan, tenders, contracts, authority,
+var tenders = new EntityTransitionClient(repository, authority,
     authorize: AuthorizeTenderAcceptance, partitionKey: organization);
+tenders.Prepare(model.Accept); // Optional eager setup validation; no repository IO.
 
-var execution = await executor.ExecuteAsync(context,
-    new DirectTransitionOperation(new ActivationId(requestId)),
-    new InteractionEntityReference(new(tenders.EntityType), new(tenderId)),
-    PortableValue.Concrete(plan.Definition.Input, ObservationValue.FromObject(new EpisodeCommand(1))));
+var execution = await tenders.ExecuteAsync(
+    model.Accept,
+    tenderId,
+    new EpisodeCommand(1),
+    operationId: new ActivationId(requestId),
+    context: context);
 var receipt = execution.Receipt; // Atomic state/decision evidence, or null on execution failure.
 ```
+
+Preparation is scoped to this configured binding and shared safely for concurrent uses of the same document.
+Commands are projected afresh, and authorization is never cached. The existing canonical result retains
+its exact typed outcome contract, decision, diagnostics and receipt; this facade introduces no result DTO.
 
 The host's `AuthorizeTenderAcceptance` must authorize scope, resource access and receipt disclosure on
 every call, including replay. The isolated example explicitly permits its own fixture operations; that policy
 is not application authorization. Direct emissions are retained in the receipt with Transition provenance;
 the caller owns delivery. Existing-subject rejected decisions are replayable. Direct creation is rejected
 at binding time until a separate durable operation ledger can retain rejection without an entity.
-See the [direct execution contract](../../../src/Cohesive.Storage/README.md#direct-receipt-backed-transition-execution).
+See the [typed execution and direct execution contract](../../../src/Cohesive.Storage/README.md#direct-receipt-backed-transition-execution).
 
 The runtime's repositories and targets are constructor-initialized read-only properties; only the
 Process store is replaceable to exercise durable restart.

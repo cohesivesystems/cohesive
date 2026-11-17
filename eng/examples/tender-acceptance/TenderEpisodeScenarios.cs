@@ -76,7 +76,7 @@ internal static class TenderEpisodeScenarios
         var receipts = await fixture.TwoCycles();
         var first = (await fixture.Acceptance().AdmitAsync(fixture.Context, receipts.Acceptance1)).Single();
         await fixture.Acceptance().RecoverAsync(fixture.Context, first);
-        await fixture.Execute(fixture.Loads, "load-1", fixture.Model.ReviseLoad, new EpisodeCommand(2));
+        await fixture.Execute(fixture.LoadTransitions, "load-1", fixture.Model.ReviseLoad, new EpisodeCommand(2));
         return new MachineReactionScenarioInterpreter(environment.Identity, fixture.Store,
             new Dictionary<string, MachineReactionHost>
             {
