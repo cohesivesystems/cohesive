@@ -17,6 +17,75 @@ internal sealed record CancellationFinalizerDurabilityTestFixture(
         ProcessCancellationAcknowledgement> Protocol,
     DurableRequestBinding Binding)
 {
+    internal static (CancellationFinalizerDurabilityTestFixture Scope, ProcessInvocationProtocol<string, string> Child)
+        CreateTwoChildScope()
+    {
+        var finalizer = Create();
+        var child = ProcessAuthoring.Create<string, string>(
+            new(new("process/tests/scope-child"), new("revision/1"), new("return"),
+                ProcessRecoveryPolicy.ContinueAttempt, ProcessControlTestFixture.Provenance()),
+            process => process.Return(new("return"), process.Input.Value));
+        var childProtocol = child.InvocationProtocol(
+            new("request/tests/scope-child"), new("revision/1"),
+            ProcessInvocationResponsePolicy.ReconciledJoin(TimeSpan.FromDays(30)),
+            ProcessControlTestFixture.Provenance());
+        var scope = ProcessAuthoring.Create<string, string>(
+            new(new("process/tests/two-child-scope"), new("revision/1"), new("fork"),
+                ProcessRecoveryPolicy.ContinueAttempt, ProcessControlTestFixture.Provenance()),
+            process =>
+            {
+                process.OnCancellation(new("cancel/finalize"), finalizer.Protocol);
+                process.Fork(new("fork"),
+                [
+                    process.ForkBranch(new("branch/left"), process.Edge(new("fork"), "left", new("child/left"))),
+                    process.ForkBranch(new("branch/right"), process.Edge(new("fork"), "right", new("child/right")))
+                ], new("join"));
+                // This cancellation fixture observes all terminal child outcomes at the join.
+                // It does not claim business success or fail-fast settlement.
+                foreach (var name in new[] { "left", "right" })
+                {
+                    ExecutionNodeId node = new($"child/{name}");
+                    process.InvokeProcess(node, child.Reference, childProtocol.Request, childProtocol.OutcomeMapping,
+                        process.Input.Value, ProcessChildPurpose.Work, ProcessChildCancellationPolicy.Propagate,
+                    [
+                        process.RequestOutcome(new($"{node.Value}/completed"), childProtocol.OutcomeMapping.Completed,
+                            process.Continuation(process.Edge(node, "completed", new("join")))),
+                        process.RequestOutcome(new($"{node.Value}/failed"), childProtocol.OutcomeMapping.Failed,
+                            process.Continuation(process.Edge(node, "failed", new("join")))),
+                        process.RequestOutcome(new($"{node.Value}/cancelled"), childProtocol.OutcomeMapping.Cancelled,
+                            process.Continuation(process.Edge(node, "cancelled", new("join")))),
+                        process.RequestOutcome(new($"{node.Value}/terminated"), childProtocol.OutcomeMapping.Terminated,
+                            process.Continuation(process.Edge(node, "terminated", new("join"))))
+                    ]);
+                }
+                process.Join(new("join"), new("fork"),
+                    new(ProcessJoinMode.All, requiredCount: 0, ProcessJoinFailurePolicy.FailFast,
+                        ProcessJoinCancellationPolicy.AwaitRemaining, ProcessJoinCompletionOrder.Unobservable,
+                        ProcessJoinTieBreak.BranchIdentity),
+                    process.Edge(new("join"), "done", new("return")));
+                process.Return(new("return"), process.Input.Value);
+
+            });
+        var catalogValidation = InteractionContractCatalog.TryCreate(
+            [.. childProtocol.Documents, .. finalizer.Protocol.Documents], out var catalog);
+        if (!catalogValidation.IsValid || catalog is null)
+            throw new InvalidOperationException(Format(catalogValidation));
+        var childLinkValidation = ProcessDefinitionLink.TryCreateProcess(child.Document, out var childLink);
+        var finalizerLinkValidation = ProcessDefinitionLink.TryCreateProcess(finalizer.Protocol.Process.Document, out var finalizerLink);
+        if (!childLinkValidation.IsValid || childLink is null)
+            throw new InvalidOperationException(Format(childLinkValidation));
+        if (!finalizerLinkValidation.IsValid || finalizerLink is null)
+            throw new InvalidOperationException(Format(finalizerLinkValidation));
+        var compilation = scope.Compile(new(definitions: [childLink, finalizerLink], interactionContracts: catalog));
+        if (!compilation.IsSuccessful || compilation.Plan is null)
+            throw new InvalidOperationException(Format(compilation.Validation));
+        var original = finalizer.Start.Request;
+        var start = new ProcessStartReceipt(
+            new(original.SchemaVersion, compilation.Plan.DefinitionReference, original.Context,
+                original.InitialContinuation, original.Input), finalizer.Start.AcceptedAtUtc);
+        return (finalizer with { Plan = compilation.Plan, Start = start }, childProtocol);
+    }
+
     internal static CancellationFinalizerDurabilityTestFixture Create()
     {
         var stringContract = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));

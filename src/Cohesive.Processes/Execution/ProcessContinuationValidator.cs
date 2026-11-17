@@ -997,7 +997,10 @@ public static class ProcessContinuationValidator
             var ownerIsParked = ownerFound
                 && owner.Token.Node == fork.Join
                 && owner.Token.Disposition == ExecutionTokenDisposition.Waiting;
-            var attemptAllowsAbortedFork = state.Terminal is
+            // Authored cancellation closes normal tokens before the Process becomes terminal:
+            // propagated children and the finalizer still own work. ValidateCancellationFinalization
+            // independently checks the exact intent, phase, and closure of every normal token.
+            var attemptAllowsAbortedFork = state.CancellationFinalization is not null || state.Terminal is
             {
                 Kind: ExecutionTerminalOutcomeKind.Failed
                     or ExecutionTerminalOutcomeKind.Cancelled
@@ -1345,7 +1348,7 @@ public static class ProcessContinuationValidator
 
                 Error(
                     ProcessContinuationDiagnosticCodes.ForkStateMismatch,
-                    $"Terminal unresolved Fork registration '{fork.RegistrationId}' retains an incomplete Join selection.",
+                    $"Aborted unresolved Fork registration '{fork.RegistrationId}' retains an incomplete Join selection.",
                     Child(location, "selectedBranches"),
                     subject: fork.RegistrationId);
                 return;
