@@ -257,10 +257,10 @@ bypasses validation of retained or externally modified evidence.
 
 ## Direct receipt-backed Transition execution
 
-For C# callers, `EntityTransitions` accepts the authored typed transition and a CLR command directly:
+For C# callers, `EntityTransitionClient` accepts the authored typed transition and a CLR command directly:
 
 ```csharp
-var tenders = new EntityTransitions(repository, authority, authorize: AuthorizeOperation,
+var tenders = new EntityTransitionClient(repository, authority, authorize: AuthorizeOperation,
     partitionKey: tenantPartition);
 tenders.Prepare(model.Accept); // Optional eager validation during host setup.
 

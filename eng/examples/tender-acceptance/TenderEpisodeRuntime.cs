@@ -19,8 +19,8 @@ internal sealed class TenderEpisodeRuntime
     internal InMemoryEntityOutboxRepository Loads { get; }
     internal MachineReactionTarget AcceptTarget { get; }
     internal MachineReactionTarget ConfirmTarget { get; }
-    internal EntityTransitions TenderTransitions { get; }
-    internal EntityTransitions LoadTransitions { get; }
+    internal EntityTransitionClient TenderTransitions { get; }
+    internal EntityTransitionClient LoadTransitions { get; }
     int operation;
     internal string OperationPrefix = "source";
 
@@ -74,7 +74,7 @@ internal sealed class TenderEpisodeRuntime
         return (a1, c1, a2, c2);
     }
 
-    internal async Task<EntityTransitionOperationReceipt> Execute<TState>(EntityTransitions transitions,
+    internal async Task<EntityTransitionOperationReceipt> Execute<TState>(EntityTransitionClient transitions,
         string id, Transition<TState, EpisodeCommand, string> transition, EpisodeCommand command) where TState : notnull
     {
         var result = await transitions.ExecuteAsync(transition, id, command,

@@ -111,14 +111,14 @@ invalid fault placement, unexercised faults, and reconstruction mismatch. See th
 [replay contract and operating limits](../../../src/Cohesive.Simulation.Transitions/README.md#declare-target-faults-and-replay).
 
 
-The runtime prepares source receipts through `EntityTransitions`, the repository-bound typed facade over
+The runtime prepares source receipts through `EntityTransitionClient`, the repository-bound typed facade over
 `DirectTransitionExecutor`. Configuration and preparation happen once; invocation accepts the authored
 transition handle, entity ID and ordinary command. The canonical document supplies the input contract.
 The execution still shares the Process adapter's read/decide/project/atomic-commit mechanism and creates
 no Process provenance. The replay recipe stays `v2`: typed and portable calls produce identical receipt identities.
 
 ```csharp
-var tenders = new EntityTransitions(repository, authority,
+var tenders = new EntityTransitionClient(repository, authority,
     authorize: AuthorizeTenderAcceptance, partitionKey: organization);
 tenders.Prepare(model.Accept); // Optional eager setup validation; no repository IO.
 

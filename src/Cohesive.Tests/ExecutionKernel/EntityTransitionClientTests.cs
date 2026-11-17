@@ -8,11 +8,11 @@ using Cohesive.Transitions.Execution;
 
 namespace Cohesive.Tests.ExecutionKernel;
 
-public sealed class EntityTransitionsTests
+public sealed class EntityTransitionClientTests
 {
     static readonly InteractionAuthorityScope Authority = new("typed-transitions", "tenant/a");
     static InMemoryEntityOutboxRepository Repository() => new(RunControlFixture.Entity, EntityPartitionKeyPolicy.Fixed("tenant/a"));
-    static EntityTransitions Bind(IEntityRepository repository) => new(repository, Authority,
+    static EntityTransitionClient Bind(IEntityRepository repository) => new(repository, Authority,
         static (_, _) => ValueTask.FromResult(true), RunControlFixture.Contracts());
 
     [Theory]
@@ -51,7 +51,7 @@ public sealed class EntityTransitionsTests
         var repository = new ObservedRepository(Repository());
         var allowed = false;
         var authorizations = 0;
-        var transitions = new EntityTransitions(repository, Authority,
+        var transitions = new EntityTransitionClient(repository, Authority,
             (_, _) => { authorizations++; return ValueTask.FromResult(allowed); }, RunControlFixture.Contracts());
         await Task.WhenAll(Enumerable.Range(0, 16).Select(_ => Task.Run(() => transitions.Prepare(RunControlFixture.Start))));
         var definitionReads = repository.DefinitionReads;
@@ -85,7 +85,7 @@ public sealed class EntityTransitionsTests
         var allowed = Bind(repository);
         var foreignAuthority = new InteractionAuthorityScope("other", "tenant/a");
         EntityTransitionOperationRequest? seen = null;
-        var denied = new EntityTransitions(repository, foreignAuthority,
+        var denied = new EntityTransitionClient(repository, foreignAuthority,
             (_, request) => { seen = request; return ValueTask.FromResult(false); }, RunControlFixture.Contracts());
         allowed.Prepare(RunControlFixture.Start);
         denied.Prepare(RunControlFixture.Start);
@@ -100,7 +100,7 @@ public sealed class EntityTransitionsTests
         var repository = Repository();
         var context = OperationContext.Create();
         await repository.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial()));
-        var transitions = new EntityTransitions(repository, Authority, static (_, _) => ValueTask.FromResult(true));
+        var transitions = new EntityTransitionClient(repository, Authority, static (_, _) => ValueTask.FromResult(true));
         var first = Revision("1");
         var second = Revision("2");
         var command = new MutableCommand { Attempt = 1 };
@@ -144,7 +144,7 @@ public sealed class EntityTransitionsTests
             new("typed/incomplete"), new("1"), author => author.Set(new("attempt"), state => state.Attempt, (state, command) => command.ExpectedAttempt));
         var failure = Assert.Throws<ProcessTransitionBindingException>(() => Bind(repository).Prepare(incomplete));
         Assert.False(failure.Validation.IsValid);
-        var wrongPartition = new EntityTransitions(repository, Authority, static (_, _) => ValueTask.FromResult(true), partitionKey: "other");
+        var wrongPartition = new EntityTransitionClient(repository, Authority, static (_, _) => ValueTask.FromResult(true), partitionKey: "other");
         Assert.Throws<ArgumentException>(() => wrongPartition.Prepare(RunControlFixture.Start));
         Assert.Equal(0, repository.Reads);
     }
@@ -156,7 +156,7 @@ public sealed class EntityTransitionsTests
         var repository = Repository();
         var before = await repository.Upsert(context, RunControlFixture.Write(RunControlFixture.Initial() with { Enabled = false }));
         var authorizations = 0;
-        var transitions = new EntityTransitions(repository, Authority,
+        var transitions = new EntityTransitionClient(repository, Authority,
             (_, _) => { authorizations++; return ValueTask.FromResult(true); }, RunControlFixture.Contracts());
         var rejection = await transitions.ExecuteAsync(RunControlFixture.Start, "run/1", new StartRun(0), new("rejected/1"), context);
         Assert.Equal(TransitionDecisionKind.AdmissionRejected, rejection.Receipt!.Commit.DecisionKind);

@@ -15,7 +15,7 @@ namespace Cohesive.Storage;
 /// on every call and are never cached. Repositories and callbacks must support the host's concurrency. Call <see cref="Prepare{TEntity,TInput,TOutcome}"/> during host setup
 /// to diagnose unsupported plans before accepting requests. Outcomes and receipts retain the canonical result contract.
 /// </remarks>
-public sealed class EntityTransitions
+public sealed class EntityTransitionClient
 {
     static readonly InteractionContractCatalog EmptyContracts = CreateEmptyContracts();
     readonly IEntityRepository repository;
@@ -37,7 +37,7 @@ public sealed class EntityTransitions
     /// <param name="shapeGraph">Optional immutable graph used to resolve referenced contracts during compilation.</param>
     /// <param name="createRequestTarget">Optional response-target policy for request emissions, forwarded unchanged to the direct executor.</param>
     /// <exception cref="ArgumentNullException">The repository, authority or authorization callback is null.</exception>
-    public EntityTransitions(IEntityRepository repository, InteractionAuthorityScope authority,
+    public EntityTransitionClient(IEntityRepository repository, InteractionAuthorityScope authority,
         Func<OperationContext, EntityTransitionOperationRequest, ValueTask<bool>> authorize,
         InteractionContractCatalog? interactionContracts = null, string? partitionKey = null,
         ShapeGraph? shapeGraph = null,
