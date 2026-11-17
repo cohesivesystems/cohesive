@@ -1,7 +1,8 @@
 # End-to-end Assurance overhead: local baseline
 
 This preserves the original v1 full-rewrite baseline. See the
-[immutable-commit comparison](journal-persistence.md) for the subsequent persistence optimization.
+[immutable-commit comparison](journal-persistence.md) and
+[periodic-checkpoint comparison](journal-compaction.md) for subsequent persistence optimizations.
 
 Measured on November 16, 2026 (America/Los_Angeles). Runtime: .NET 10.0.13,
 macOS 27.0.1, Arm64, 18 logical processors. Local temporary-directory filesystem;

@@ -1,31 +1,36 @@
 # Reference capture host and delivery recovery
 
-The internal example in `eng/examples/assurance/FileCaptureHost.cs` supplies the next #558 capture
-host slice. It consumes native activities through the existing OpenTelemetry adapter and commits a
-bounded journal before acknowledging source delivery. It is linked into the OpenTelemetry test
-project rather than exposed as another public storage or hosting abstraction.
+The internal example in `eng/examples/assurance/FileCaptureHost.cs` consumes native activities through
+the OpenTelemetry adapter and persists a bounded source journal before acknowledgment. The source is
+linked into the integration tests and benchmark; it is not a new public hosting/storage abstraction.
 
-The executable recovery tests live in `CaptureHostTests.cs`. They cover checkpoint/position recovery,
-producer provenance, acknowledgment loss, permanent quarantine, partial publication failure,
-capacity backpressure, exclusive ownership and incompatible restoration.
+## Delivery commit and periodic checkpoint
 
-## One commit before acknowledgment
+The source must provide a stable identity and contiguous positions beginning at one. Each immutable
+`capture-NNNNNNNNNN.json` commit contains:
 
-The host requires a stable source identity and contiguous delivery positions beginning at one.
-For each delivery, one immutable numbered commit file includes:
+- source binding, exact initial-checkpoint reference, and source position;
+- raw activity source, trace/span IDs, ordered event names/tags, and producer references;
+- requested cumulative alternative reference and resulting monitor checkpoint reference;
+- an accepted-observation delta, or a quarantine diagnostic with no accepted delta.
 
-- source delivery position and supplied cumulative alternative reference;
-- raw activity source, trace/span IDs, and ordered event names/tags;
-- accepted monitor checkpoint and producer envelope references;
-- a rejection diagnostic and unchanged checkpoint for quarantined input.
+The delta is derived from the newly accepted suffix of the monitor's append-only observation history.
+It is not a second interpretation of activity tags. Duplicate occurrences add no rows; an empty accepted
+delivery still retains its cumulative reference. Delta replay uses core `AdvanceCaptured` and must
+reproduce the exact recorded checkpoint reference. A mismatch fails restoration.
 
-The input snapshot records the actual activity events and tags used at ingestion. It is not a full
-OTLP span dump: span timestamps/status and unrelated span attributes are excluded. It preserves the
-semantic envelope payloads and transport correlation without treating that correlation as semantic order.
+Every `checkpointInterval` deliveries (default **32**), the host attempts to publish
+`capture-checkpoint.json`: one full monitor artifact plus **all compact receipts** through that position.
+Each compact receipt retains raw input, provenance, quarantine disposition and the result reference,
+so old delivery positions still support exact redelivery checks. Historical full monitor artifacts and
+covered replay deltas are removed; their references and raw input remain. Recovery validates the current
+checkpoint rather than independently re-evaluating every historical prefix. Separately published evidence
+artifacts are not part of this journal and must retain their own lifecycle.
 
 ```csharp
-// Example-only internal type. The source owns stable positions and at-least-once redelivery.
-using var host = new FileCaptureHost(directory, "orders-capture", initialMonitor);
+using var host = new FileCaptureHost(
+    directory, "orders-capture", initialMonitor,
+    checkpointInterval: 32);
 
 var receipt = host.Process(
     position: delivery.Position,
@@ -33,84 +38,92 @@ var receipt = host.Process(
     cumulativeReference: delivery.CumulativeReference,
     acknowledge: source.Acknowledge);
 
-// This may remain inconclusive: receipt persistence never establishes capture completeness.
 var evaluation = host.Monitor.Evaluation;
 var hasCaptureGaps = host.HasCaptureGaps;
 ```
 
-The source mapping and cumulative reference must remain stable on redelivery. The source must retain
-its activity/envelope until acknowledged; this example does not make the SDK exporter itself durable.
-The host checks redelivered content against its retained input and retries acknowledgment without
-re-evaluating the monitor. Reusing a position with changed input or a different cumulative reference
-fails without acknowledgment. There is no inferred serialization order from delivery positions.
+The source must retain its input until acknowledged; this does not make SDK export durable. Span
+status/timestamps and unrelated span attributes are excluded from the stored activity snapshot. Delivery
+positions never establish application transaction order. Reusing a position with changed input or a
+different cumulative reference fails without acknowledgment, including after compaction.
 
-## Persistence and failure contract
+## Atomicity and crash boundaries
 
-The host holds an exclusive local lock file for its lifetime. Calls are serialized. One delivery's
-complete commit envelope is written to `capture.pending`, flushed, and atomically renamed to
-`capture-0000000001.json` (then 2, 3, ...). Rename refuses to overwrite an existing commit. Only then
-does the host update in-memory state and invoke acknowledgment. Receipt, checkpoint and position
-are in that same file: there is no independently updated cursor or manifest. Earlier committed files
-are never rewritten. The source binding and exact initial checkpoint reference accompany every commit.
+The host owns an exclusive local lock for its lifetime and serializes calls. It writes and flushes one
+pending file, then renames it to the numbered delivery filename **without overwrite**. The delivery is
+committed at that publication point. Checkpoint creation is a subsequent optional step:
 
-A write/publication failure makes the host unavailable until disposed and reopened: publication outcome
-may be ambiguous. On reopening, it reads the bounded sequence of numbered files and independently
-restores retained monitor checkpoints. A pending file—even a torn one—is ignored. A gap before a later
-commit, malformed filename, incompatible binding, invalid checkpoint or aggregate capacity excess is
-rejected. Checkpoint predecessor links and no-completeness restrictions are checked. No damaged
-committed receipt is silently skipped. Arbitrary deletion of a trailing suffix is not detectable without
-an independent watermark; protecting committed files remains a storage requirement.
+1. Write and flush a checkpoint containing the accepted prefix and every receipt through its position.
+2. Atomically replace the prior checkpoint file.
+3. Delete only numbered files covered by the published checkpoint.
+4. Acknowledge the delivery after this call's persistence work completes.
 
-The format is now `cohesive-assurance-file-capture-example/v2`. A directory containing the old v1
-`capture.json` is explicitly rejected instead of treated as empty or overwritten. Existing examples
-must use a new directory or an explicitly designed migration; automatic migration is outside this change.
+There is no separately updated cursor or manifest. A pending file is never a commit. No covered file is
+deleted before checkpoint publication. A persistence or cleanup failure makes the host unavailable
+until reopened; the delivery may already be committed, but the failed call never acknowledges it.
 
-An acknowledgment failure leaves a committed receipt. Redelivery can acknowledge it again without
-adding observations. The acknowledgment callback must be synchronous and must not re-enter the host.
-The host is intended for one source/atomic semantic scope, not concurrent distributed partitions.
+| Failure point | Recovery authority |
+|---|---|
+| Before delivery publication | Prior checkpoint plus committed tail; source redelivers the uncommitted position |
+| After delivery publication, before checkpoint publication | Prior checkpoint plus tail including the new delivery |
+| After checkpoint publication, before or during deletion | New checkpoint; covered files are obsolete and cleanup resumes |
+| After persistence, acknowledgment lost | Retained receipt; acknowledge redelivery without re-evaluating or writing |
 
-This is **process-crash recovery under atomic local rename**, not a power-loss guarantee. File data is
-flushed, but parent-directory fsync and network/filesystem-specific durability have not been qualified.
-Tests inject exceptions at the persistence boundaries; they do not kill a process or simulate disk
-hardware failures. The journal is not authenticated: schema/checkpoint validation is not protection
-against an adversary rewriting the whole history consistently.
+On reopen, the host checks storage bounds, restores the latest checkpoint, validates its receipt sequence
+and exact source/model binding, then replays only subsequent contiguous deltas. It compares every replayed
+result with the recorded checkpoint reference. Only after the entire surviving tail validates does it
+resume covered-file deletion. A corrupt published checkpoint fails closed; it does not fall back to
+covered logs that may already be deleted. Gaps before later tail files, malformed names, invalid deltas
+and incompatible bindings fail recovery. Arbitrary deletion of a trailing suffix cannot be detected
+without an independent watermark; storage must protect committed files.
 
-## Quarantine versus backpressure
+The acknowledgment callback is synchronous and must not re-enter the host. The profile supports one
+source/atomic semantic scope, not concurrent distributed partitions. The format is
+`cohesive-assurance-file-capture-example/v3`; v1 snapshots and uncheckpointed v2 commits are explicitly
+rejected. Use a new directory or a separately designed migration. No automatic migration or silent reset
+is performed.
 
-Malformed envelopes, wrong activity source, semantic binding mismatch, and payload-size rejection are
-permanent under the current input/configuration. The host retains the input and diagnostic in the
-journal with the old monitor checkpoint, publishes that quarantine receipt, then acknowledges delivery.
-A later valid delivery can proceed. `HasCaptureGaps` remains true, and quarantine never supplies a
-completeness certificate or means the rejected observations were evaluated.
+## Quarantine, bounds and retention
 
-If quarantine cannot be persisted, the input is not acknowledged. Monitor budget exhaustion, semantic
-ordering/identity failures, cancellation, and host storage/capacity failures do not automatically become
-quarantine receipts. The source must retain them while the operator resolves capacity or correctness.
-No observations are silently evicted. Correcting gaps or replaying quarantined inputs under revised
-contracts requires a separately attributed workflow; it is not implemented here.
+Permanent envelope/source/binding/payload failures retain raw input and diagnostic with the unchanged
+checkpoint reference and no delta. Publish that receipt before acknowledging. Compaction retains those
+receipts and `HasCaptureGaps`; it never converts a rejection into accepted evidence or completeness.
+If quarantine cannot be persisted, the source remains unacknowledged. Monitor exhaustion, semantic
+ordering/identity failures and storage/capacity failures require diagnosis or backpressure, not automatic
+quarantine. The host begins with an uncertified scope and adds no completeness certificates.
 
-## Bounds and next steps
+Defaults remain **256 lifetime deliveries** and **16 MiB of committed files**. Compaction removes redundant
+state/deltas but retains every receipt, so it does not reset delivery capacity, erase old redelivery
+identities, evict monitor observations or make the source session unbounded. Receipt/input storage and
+the current monitor still grow with history. No retention horizon is silently introduced.
 
-Defaults are 256 deliveries and 16 MiB summed across committed files. These are retention bounds;
-pending/lock files are not included. Every receipt still retains its cumulative checkpoint, so storage
-and restoration can grow quadratically with history even though each commit is written only once.
-Periodic checkpoints, log compaction and checkpoint deltas are deliberately deferred. Raw input and
-commit encoding occur before the encoded byte limit is checked; this is not a strict heap bound.
-There is still no production throughput or power-loss qualification.
-Journal limits are host policy, distinct from monitor row/envelope limits and adapter payload limits.
+The byte limit covers the peak committed state while the new checkpoint and covered logs coexist,
+net of the atomically replaced old checkpoint. Pending and lock files are excluded. If checkpoint
+publication lacks that headroom, optional compaction is skipped: the delivery log is already durable
+and can be acknowledged. Future deliveries still face ordinary byte-bound backpressure. Configure an
+interval and capacity with sufficient headroom; cleanup is never performed early to manufacture space.
+Failures before checkpoint publication can leave a longer replay tail until a later successful checkpoint.
 
-The example starts with no completeness certificates and never adds them. Retention of sampled evidence
-cannot prove storage isolation, complete production coverage, or universal correctness.
+`CommittedBytes` reports actual retained committed file sizes. `PublishedBytes` counts all logical bytes
+published by this open host, including replacement checkpoints; it never subtracts compaction deletions.
+Raw input/delta/checkpoint encoding happens before encoded-length checks, so these are not strict heap
+bounds. No final checkpoint is implicitly created by `Dispose`.
 
-Still outstanding in #558: a deployed durable source/exporter and remote OTLP decoder, storage-specific
-power-loss qualification, retention/compaction, correction propagation, qualified completeness protocols,
-rich operation/transaction histories, and executable faulty/repaired Simulation reconstruction. A replay
-of a captured artifact remains trace re-evaluation until a candidate executes and emits new observations.
+## Qualification and measured overhead
 
-## Measured overhead
+The guarantee remains **process-crash recovery under atomic local rename**, not power-loss durability.
+File data is flushed, but directory fsync and network/filesystem behavior are unqualified. A production
+store must make checkpoint directory metadata durable before deleting covered logs; this local example
+does not establish that guarantee. Tests inject exceptions at publication/deletion boundaries rather
+than killing processes or simulating hardware failures. The journal is not authenticated against an
+adversary rewriting its history consistently.
 
-The [original end-to-end baseline](../performance/assurance/end-to-end.md)
-and [immutable-commit comparison](../performance/assurance/journal-persistence.md) measure the native SDK,
-monitor, journal and restore paths across payload sizes, claim shapes, history sizes and delivery batches.
-It includes all raw local trials and identifies batching, encoding guards and journal write amplification
-as optimization targets. These are serial service-cost measurements, not a production throughput SLO.
+See the [original baseline](../performance/assurance/end-to-end.md),
+[immutable-commit optimization](../performance/assurance/journal-persistence.md), and
+[periodic-checkpoint/compaction comparison](../performance/assurance/journal-compaction.md).
+The reports retain raw trials and distinguish local service cost from production throughput/SLO claims.
+
+Still outstanding in #558: a deployed durable source/exporter, remote OTLP qualification, production
+storage/durability realization, correction/completeness protocols, richer transaction histories and
+executable faulty/repaired Simulation reconstruction. The core monitor still re-evaluates retained
+history on each changed update; this storage optimization does not make evaluation incremental.

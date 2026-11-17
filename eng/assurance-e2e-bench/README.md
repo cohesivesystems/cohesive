@@ -23,6 +23,10 @@ flush, rename, receipt and checkpoint path rather than a simulated persistence c
   and payment triggers with no shipment witnesses, which remain pending without completeness. All scopes stay open.
 - Histories: 128 and 256 retained rows; deliveries of 1 or 16 rows. No session resets during a measured trial.
 - Payloads: 32-character padding normally; a 2,048-character payload comparison at 256 rows/batch 16.
+- V3 persistence uses the host's default 32-delivery checkpoint interval. Single-row 128/256-row cases
+  end on checkpoints (4/8 publications); batch-16 cases have only 8/16 deliveries and restore entirely
+  from their delta tail. Two additional 254-row matched / 255-row pending cases measure recovery
+  with 30/31 deliveries after a checkpoint. No checkpoint is forced at trial end or during disposal.
 
 Claim creation, provider setup, initial monitor creation and directory/lock setup are outside the service
 measurement. Each scenario executes a 16-row warmup, then three fresh-history trials. Tiered compilation
@@ -43,9 +47,10 @@ collector, concurrent worker queue or request-serving application in this benchm
 The output includes producer and consumer p50/p95/p99 per delivery, first/last-quarter consumer means,
 summed service time and its implied attempted-row rate, process CPU, managed allocation, GC collection
 counts, exported payload bytes, final journal size, cumulative logical journal bytes written and separate
-restore time/allocation. Journal bytes are serialized committed-file sizes, not physical device writes. The v2 host
-reports committed bytes; per-delivery growth is the bytes published in the immutable commit.
-The original v1 baseline accumulated the full snapshot file size on each rewrite. Sampled-out
+restore time/allocation. Journal bytes are serialized logical publications, not physical device writes.
+V3 uses the host's monotone `PublishedBytes` counter, which includes delta files and periodic checkpoint
+replacement without subtracting deleted logs. Final retained size uses `CommittedBytes`. V2 measured
+retained-byte growth (no deletion); v1 accumulated full snapshot-file sizes on each rewrite. Sampled-out
 and plain-span rates describe attempted instrumentation, not observed/evaluated rows.
 
 Allocation is the process-wide managed-byte delta around timed producer and consumer operations. It
@@ -67,7 +72,8 @@ The implied service rate is not demonstrated sustainable ingress throughput. No 
 invented without deployment requirements.
 
 The original v1 journal benchmark allocated several GiB cumulatively while rewriting bounded histories.
-The v2 implementation writes each commit once; cumulative checkpoints still incur growing costs. It creates
+V2 wrote each commit once but retained cumulative checkpoints per receipt. V3 writes accepted deltas
+between periodic checkpoints and compacts covered files; raw receipts are still retained. The runner creates
 and deletes temporary directories; defaults in the benchmark allow up to 256 MiB per journal so the 256-row
 matrix can complete without treating capacity rejection as successful throughput. That override does not
 change the host's production/example defaults and is recorded here explicitly.

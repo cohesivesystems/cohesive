@@ -1,5 +1,8 @@
 # Journal persistence: immutable commit comparison
 
+This retains the v2 comparison. See [periodic checkpoints and compaction](journal-compaction.md)
+for the subsequent v3 storage/restore optimization.
+
 Measured November 16, 2026 (America/Los_Angeles), using the same 30-case/three-trial matrix,
 .NET 10.0.13, macOS 27.0.1 Arm64, 18 logical processors, and `DOTNET_TieredCompilation=0`
 as the [stored baseline](end-to-end.md). All [90 new measured trials](e2e-local-append-v2.json)
