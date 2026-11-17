@@ -48,12 +48,28 @@ omitted, exercising dynamic resolution of the same canonical definition.
 | Rejected | 3,569 | 3,249 | 1.319 μs | 1.291 μs |
 
 Applied decisions allocate approximately 528 fewer bytes (6.5%) and run 7.6% faster in this
-fixture. Rejected decisions allocate 320 fewer bytes (9.0%) and run 2.1% faster. Neither
-measured path regressed in latency. These warm measurements do not establish production
+fixture. Rejected decisions allocate 320 fewer bytes (9.0%) in this step, or 408 fewer
+bytes (3,657 → 3,249 B/op) across both metadata changes. The approximately 2% rejection
+latency difference is too small relative to observed run-to-run noise to claim a speedup.
+Neither measured path showed a reproducible latency regression. These warm measurements do not establish production
 percentile latency or cover every possible sparse observation pattern.
 
 Execution-kernel/model suite: **3,099 passed, 13 skipped**. The strengthened differential
 checks then passed with all **68** interpreter/compiler tests. Existing dependency audit warnings
 remain; dependencies were not changed.
 
-[Raw benchmark results and verification logs](evidence/transition-observation-metadata/).
+[Benchmark summaries and verification logs](evidence/transition-observation-metadata/).
+
+## Review hardening
+
+Parameter preparation now uses the same complete relative-path resolver, including root
+cardinality checks. Default parameter arrays normalize to empty; duplicate catalog entries
+reuse the canonical field contract. Validation locations carry a debug-only lease generation
+checked before the existing cursor-prefix assertions. The context remains internal, and its
+nested-lease tests use direct access rather than reflection. Segment-array retention is deferred
+pending separate measurement; Release validation hot-path behavior is unchanged by the debug guard.
+
+After these fixes: **3,100 Release tests passed, 13 skipped**, and **47 focused Debug tests
+passed**, including location invalidation across disposal and owner reuse. Benchmark figures
+above are the prior measurements; no new latency claim is made for these review fixes.
+Only CSV/Markdown benchmark summaries and verification logs are retained in the final tree.

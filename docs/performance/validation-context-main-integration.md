@@ -35,4 +35,4 @@ it does not establish either a speedup or regression. Zero allocation applies to
 fixtures, not arbitrary diagnostics, named-type bookkeeping, cold initialization or nested leases.
 The original isolated transition-runtime numbers are not claimed for this narrower main integration.
 
-[Raw benchmark results and verification logs](evidence/validation-context-main-integration/).
+[Benchmark summaries and verification logs](evidence/validation-context-main-integration/).

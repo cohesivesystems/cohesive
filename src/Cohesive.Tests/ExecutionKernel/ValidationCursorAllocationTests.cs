@@ -56,32 +56,48 @@ public sealed class ValidationCursorAllocationTests
     [Fact]
     public void Nested_leases_are_exclusive_and_exception_cleanup_preserves_results()
     {
-        // Exercise ownership directly: normal canonical values do not invoke arbitrary user callbacks.
-        // Keeping this seam private avoids exposing a reusable mutable context as framework API.
-        var type = typeof(PortableExecutionValidator).GetNestedType("ValidationContext", System.Reflection.BindingFlags.NonPublic)!;
-        var rent = type.GetMethod("Rent")!;
-        var validate = type.GetMethod("ValidatePortableValue")!;
-        var root = type.GetProperty("Root")!;
-        var result = type.GetMethod("ToResult")!;
+        // Canonical validation has no arbitrary callbacks, so exercise nested lease ownership directly.
         var bad = PortableValue.Concrete(new(new ScalarTypeRef(ScalarTypeKind.String)), ObservationValue.FromInt64(42));
         var good = PortableValue.Concrete(new(new ScalarTypeRef(ScalarTypeKind.String)), ObservationValue.FromString("ok"));
-        using var outer = (IDisposable)rent.Invoke(null, new object?[] { null, 0 })!;
-        validate.Invoke(outer, new[] { (object)bad, root.GetValue(outer)! });
-        var retained = (DocumentValidationResult)result.Invoke(outer, null)!;
+        using var outer = PortableExecutionValidator.ValidationContext.Rent(graph: null);
+        outer.ValidatePortableValue(bad, outer.Root);
+        var retained = outer.ToResult();
         Assert.False(retained.IsValid);
         var serialized = System.Text.Json.JsonSerializer.Serialize(retained);
         Assert.Throws<InvalidOperationException>((Action)(() =>
         {
-            using var inner = (IDisposable)rent.Invoke(null, new object?[] { null, 0 })!;
+            using var inner = PortableExecutionValidator.ValidationContext.Rent(graph: null);
             Assert.NotSame(outer, inner);
-            validate.Invoke(inner, new[] { (object)good, root.GetValue(inner)! });
-            Assert.True(((DocumentValidationResult)result.Invoke(inner, null)!).IsValid);
+            inner.ValidatePortableValue(good, inner.Root);
+            Assert.True(inner.ToResult().IsValid);
             throw new InvalidOperationException("exercise lease unwinding");
         }));
         Assert.True(PortableExecutionValidator.Validate(good).IsValid);
-        Assert.Equal(serialized, System.Text.Json.JsonSerializer.Serialize(result.Invoke(outer, null)));
+        Assert.Equal(serialized, System.Text.Json.JsonSerializer.Serialize(outer.ToResult()));
         Assert.Equal(serialized, System.Text.Json.JsonSerializer.Serialize(retained));
     }
+
+#if DEBUG
+    [Fact]
+    public void Locations_expire_on_disposal_and_do_not_revive_when_the_owner_is_reused()
+    {
+        var owner = PortableExecutionValidator.ValidationContext.Rent(graph: null);
+        var root = owner.Root;
+        var child = root.Append(new("old", 0));
+        Assert.True(root.IsCurrentLease);
+        Assert.True(child.IsCurrentLease);
+        owner.Dispose();
+        Assert.False(root.IsCurrentLease);
+        Assert.False(child.IsCurrentLease);
+        using var next = PortableExecutionValidator.ValidationContext.Rent(graph: null);
+        Assert.Same(owner, next);
+        var replacement = next.Root.Append(new("new", 0));
+        Assert.True(replacement.IsCurrentLease);
+        Assert.False(root.IsCurrentLease);
+        Assert.False(child.IsCurrentLease);
+        Assert.Equal("/new", replacement.ToString());
+    }
+#endif
 
     [Theory]
     [InlineData(1)]

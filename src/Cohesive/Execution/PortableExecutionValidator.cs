@@ -153,18 +153,26 @@ public static class PortableExecutionValidator
         Unresolved
     }
 
-    sealed class ValidationContext : IDisposable
+    internal sealed class ValidationContext : IDisposable
     {
         // Only cleared, idle owners are cached. Removing the owner before use makes nested validation
         // rent independently; no graph, diagnostic or semantic result is thread-local.
         [ThreadStatic] static ValidationContext? idle;
         ShapeGraph? graph;
         int jsonDepthLimit;
+#if DEBUG
+        long generation;
+        bool leased;
+#endif
 
         public static ValidationContext Rent(ShapeGraph? graph, int jsonDepthLimit = 0)
         {
             var context = idle ?? new ValidationContext();
             idle = null;
+#if DEBUG
+            context.generation = unchecked(context.generation + 1);
+            context.leased = true;
+#endif
             context.graph = graph;
             context.jsonDepthLimit = jsonDepthLimit;
             return context;
@@ -179,6 +187,9 @@ public static class PortableExecutionValidator
 
         public void Dispose()
         {
+#if DEBUG
+            leased = false;
+#endif
             if (segments is { } owned)
             {
                 segments = null;
@@ -1443,12 +1454,17 @@ public static class PortableExecutionValidator
         public readonly struct Location(ValidationContext owner, int depth)
         {
 #if DEBUG
+            readonly long generation = owner.generation;
+            internal bool IsCurrentLease => owner.leased && generation == owner.generation;
             readonly Segment[] expectedPrefix = depth == 0 ? [] : owner.segments!.AsSpan(0, depth).ToArray();
 #endif
             [Conditional("DEBUG")]
             void AssertCurrent()
             {
 #if DEBUG
+                Debug.Assert(IsCurrentLease,
+                    "A validation location was used after its owner's lease ended or the owner was rented again.");
+                if (!IsCurrentLease) return; // Do not inspect a returned or another lease's segment buffer.
                 for (var index = 0; index < depth; index++)
                     Debug.Assert(owner.segments![index] == expectedPrefix[index],
                         "A validation location was reused after a sibling overwrote its cursor. Build and consume child locations in traversal order.");

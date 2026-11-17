@@ -62,4 +62,4 @@ rejection measurement was noisy/multimodal and slower; repeating in reverse orde
 reproduce that slowdown. These runs show no reproducible latency regression, but do not
 establish a rejection-path speedup or a universal latency bound.
 
-[Raw results and verification logs](evidence/transition-parameter-metadata/).
+[Benchmark summaries and verification logs](evidence/transition-parameter-metadata/).

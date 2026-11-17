@@ -815,12 +815,14 @@ public sealed class CompiledTransitionPlan
         DerivedFields = derivedFields.IsDefault ? [] : derivedFields;
         MachineEdges = machineEdges.IsDefault ? [] : machineEdges;
         var prepared = new Dictionary<string, (FieldPath Path, ValueContract Contract, ExecutionNodeId Node)>(StringComparer.Ordinal);
-        foreach (var parameter in parameters)
+        foreach (var parameter in parameters.IsDefault ? [] : parameters)
         {
-            // Use the same field resolver as dynamic navigation, including shape-field constraints.
-            // Unresolvable metadata retains the interpreter's existing diagnostic path.
-            if (ResolveFieldContract(definition.Input, parameter.Name) is { } contract)
-                prepared.Add(parameter.Name, (FieldPath.FromField(parameter.Name), contract, new($"input/{parameter.Name}")));
+            // Use exactly the dynamic navigation checks, including root cardinality and field constraints.
+            // Invalid metadata retains the interpreter's diagnostic path. Duplicate catalog entries
+            // share the same canonical input-field contract; semantic validation owns duplicate errors.
+            var path = FieldPath.FromField(parameter.Name);
+            if (ResolveRelativeContract(definition.Input, path, out _) is { } contract)
+                prepared.TryAdd(parameter.Name, (path, contract, new($"input/{parameter.Name}")));
         }
         Parameters = prepared.ToFrozenDictionary(StringComparer.Ordinal);
         var observations = new Dictionary<FieldPath, ValueContract>();
