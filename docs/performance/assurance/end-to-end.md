@@ -1,5 +1,8 @@
 # End-to-end Assurance overhead: local baseline
 
+This preserves the original v1 full-rewrite baseline. See the
+[immutable-commit comparison](journal-persistence.md) for the subsequent persistence optimization.
+
 Measured on November 16, 2026 (America/Los_Angeles). Runtime: .NET 10.0.13,
 macOS 27.0.1, Arm64, 18 logical processors. Local temporary-directory filesystem;
 no remote collector or storage service. Host implementation is the #577 reference example, based on

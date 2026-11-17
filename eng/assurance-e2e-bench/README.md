@@ -43,7 +43,9 @@ collector, concurrent worker queue or request-serving application in this benchm
 The output includes producer and consumer p50/p95/p99 per delivery, first/last-quarter consumer means,
 summed service time and its implied attempted-row rate, process CPU, managed allocation, GC collection
 counts, exported payload bytes, final journal size, cumulative logical journal bytes written and separate
-restore time/allocation. Journal bytes are serialized file sizes, not physical device writes. Sampled-out
+restore time/allocation. Journal bytes are serialized committed-file sizes, not physical device writes. The v2 host
+reports committed bytes; per-delivery growth is the bytes published in the immutable commit.
+The original v1 baseline accumulated the full snapshot file size on each rewrite. Sampled-out
 and plain-span rates describe attempted instrumentation, not observed/evaluated rows.
 
 Allocation is the process-wide managed-byte delta around timed producer and consumer operations. It
@@ -64,7 +66,8 @@ of one. Three-run summaries use the median of each run's metric, with total-time
 The implied service rate is not demonstrated sustainable ingress throughput. No numeric pass/fail SLO is
 invented without deployment requirements.
 
-The journal benchmark can allocate several GiB cumulatively while rewriting bounded histories. It creates
+The original v1 journal benchmark allocated several GiB cumulatively while rewriting bounded histories.
+The v2 implementation writes each commit once; cumulative checkpoints still incur growing costs. It creates
 and deletes temporary directories; defaults in the benchmark allow up to 256 MiB per journal so the 256-row
 matrix can complete without treating capacity rejection as successful throughput. That override does not
 change the host's production/example defaults and is recorded here explicitly.

@@ -38,6 +38,7 @@ foreach (var item in cases)
 }
 File.WriteAllText(output, JsonSerializer.Serialize(new
 {
+    PersistenceFormat = "numbered-commit-v2",
     CapturedAt = DateTimeOffset.UtcNow, Runtime = RuntimeInformation.FrameworkDescription,
     OS = RuntimeInformation.OSDescription, Architecture = RuntimeInformation.ProcessArchitecture.ToString(),
     TieredCompilation = Environment.GetEnvironmentVariable("DOTNET_TieredCompilation") ?? "runtime default",
@@ -89,6 +90,7 @@ static Run Execute(Case scenario, int repetition)
                 if (tag.Key == AssuranceActivityAdapter.PayloadTag && tag.Value is string text)
                     payloadBytes += System.Text.Encoding.UTF8.GetByteCount(text);
             if (scenario.Mode is not ("monitor" or "journal")) continue;
+            var storedBefore = host?.CommittedBytes ?? 0;
             beforeAllocation = GC.GetTotalAllocatedBytes(precise: true);
             started = Stopwatch.GetTimestamp();
             var reference = Fixture.Ref("delivery-" + delivery);
@@ -96,7 +98,7 @@ static Run Execute(Case scenario, int repetition)
             else host.Process(delivery, captured, reference, _ => acknowledgments++);
             consumer.Add(Stopwatch.GetElapsedTime(started).TotalMilliseconds);
             allocations += GC.GetTotalAllocatedBytes(precise: true) - beforeAllocation;
-            if (host is not null) journalBytesWritten += new FileInfo(Path.Combine(directory, "capture.json")).Length;
+            if (host is not null) journalBytesWritten += host.CommittedBytes - storedBefore;
         }
         cpuTicks = (process.TotalProcessorTime - cpuStart).Ticks;
         var gc = Enumerable.Range(0, 3).Select(i => GC.CollectionCount(i) - gcStart[i]).ToArray();
@@ -118,7 +120,7 @@ static Run Execute(Case scenario, int repetition)
         long restoreBytes = 0, finalJournalBytes = 0;
         if (host is not null)
         {
-            finalJournalBytes = new FileInfo(Path.Combine(directory, "capture.json")).Length;
+            finalJournalBytes = host.CommittedBytes;
             host.Dispose(); host = null;
             var before = GC.GetTotalAllocatedBytes(precise: true);
             var started = Stopwatch.GetTimestamp();

@@ -23,7 +23,7 @@ public sealed partial class AssuranceActivityTests
         {
             var receipt = host.Process(1, paid, R("paid-checkpoint"), position =>
             {
-                Assert.True(File.Exists(Path.Combine(directory.Path, "capture.json")));
+                Assert.True(File.Exists(Path.Combine(directory.Path, FileCaptureHost.CommitName(1))));
                 Assert.Equal(1, position);
                 Assert.Equal(1, host.Position);
             });
@@ -64,7 +64,7 @@ public sealed partial class AssuranceActivityTests
     }
 
     [Fact]
-    public void FailedReplacementPreservesThePreviouslyCommittedCursorAndCheckpoint()
+    public void FailedAppendPreservesThePreviouslyCommittedCursorAndCheckpoint()
     {
         using var directory = new CaptureDirectory();
         var initial = TraceMonitor.Start(Claim(), Batch());
@@ -99,7 +99,7 @@ public sealed partial class AssuranceActivityTests
         using var tiny = new FileCaptureHost(tinyDirectory.Path, "source", initial, maxJournalBytes: 1);
         Assert.Throws<InvalidOperationException>(() => tiny.Process(1, first, R("first"), _ => Assert.Fail("Must not ack.")));
         Assert.Equal(0, tiny.Position);
-        Assert.False(File.Exists(Path.Combine(tinyDirectory.Path, "capture.json")));
+        Assert.False(File.Exists(Path.Combine(tinyDirectory.Path, FileCaptureHost.CommitName(1))));
     }
 
     [Fact]
@@ -111,8 +111,89 @@ public sealed partial class AssuranceActivityTests
         using (var host = new FileCaptureHost(directory.Path, "source", initial))
             host.Process(1, activity, R("first"), _ => { });
         Assert.Throws<InvalidDataException>(() => new FileCaptureHost(directory.Path, "other-source", initial));
-        File.WriteAllText(Path.Combine(directory.Path, "capture.json"), "broken");
+        File.WriteAllText(Path.Combine(directory.Path, FileCaptureHost.CommitName(1)), "broken");
         Assert.Throws<InvalidDataException>(() => new FileCaptureHost(directory.Path, "source", initial));
+    }
+
+    [Fact]
+    public void AppendsNeverRewriteCommittedFilesAndRestoredByteBoundsCoverTheWholeLog()
+    {
+        using var directory = new CaptureDirectory();
+        var initial = TraceMonitor.Start(Claim(), Batch());
+        using var paid = Capture(Batch(Event("paid", 1)));
+        using var shipped = Capture(Batch(Event("shipped", 2, shipped: true)));
+        long committedBytes;
+        using (var host = new FileCaptureHost(directory.Path, "source", initial))
+        {
+            host.Process(1, paid, R("first"), _ => { });
+            var first = Path.Combine(directory.Path, FileCaptureHost.CommitName(1));
+            var original = File.ReadAllBytes(first);
+            var sentinel = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            File.SetLastWriteTimeUtc(first, sentinel);
+            host.Process(2, shipped, R("second"), _ => { });
+            Assert.Equal(original, File.ReadAllBytes(first));
+            Assert.Equal(sentinel, File.GetLastWriteTimeUtc(first));
+            committedBytes = Directory.GetFiles(directory.Path, "capture-*.json").Sum(x => new FileInfo(x).Length);
+            Assert.Equal(committedBytes, host.CommittedBytes);
+        }
+        Assert.Throws<InvalidDataException>(() => new FileCaptureHost(directory.Path, "source", initial,
+            maxJournalBytes: checked((int)committedBytes - 1)));
+        using (var full = new FileCaptureHost(directory.Path, "source", initial, maxJournalBytes: checked((int)committedBytes)))
+        {
+            Assert.Throws<InvalidOperationException>(() => full.Process(3, shipped, R("third"), _ => Assert.Fail("Must not ack.")));
+            Assert.Equal(2, full.Position);
+            Assert.Equal(committedBytes, full.CommittedBytes);
+            Assert.False(File.Exists(Path.Combine(directory.Path, FileCaptureHost.CommitName(3))));
+        }
+        using var reopened = new FileCaptureHost(directory.Path, "source", initial);
+        Assert.Equal(committedBytes, reopened.CommittedBytes);
+        Assert.Equal(2, reopened.Position);
+    }
+
+    [Fact]
+    public void RestoreIgnoresTornPendingFilesButRejectsMissingCommittedPositions()
+    {
+        using var directory = new CaptureDirectory();
+        var initial = TraceMonitor.Start(Claim(), Batch());
+        using var activity = Capture(Batch(Event("paid", 1)));
+        using (var host = new FileCaptureHost(directory.Path, "source", initial))
+            host.Process(1, activity, R("first"), _ => { });
+        File.WriteAllText(Path.Combine(directory.Path, "capture.pending"), "{torn");
+        using (var restored = new FileCaptureHost(directory.Path, "source", initial))
+        {
+            Assert.Equal(1, restored.Position);
+            restored.Process(2, activity, R("second"), _ => { });
+        }
+        File.Delete(Path.Combine(directory.Path, FileCaptureHost.CommitName(1)));
+        Assert.Throws<InvalidDataException>(() => new FileCaptureHost(directory.Path, "source", initial));
+    }
+
+    [Fact]
+    public void LegacyJournalIsNeverSilentlyResetOrOverwritten()
+    {
+        using var directory = new CaptureDirectory();
+        Directory.CreateDirectory(directory.Path);
+        var legacy = Path.Combine(directory.Path, "capture.json");
+        File.WriteAllText(legacy, "legacy snapshot");
+        Assert.Throws<InvalidDataException>(() => new FileCaptureHost(directory.Path, "source", TraceMonitor.Start(Claim(), Batch())));
+        Assert.Equal("legacy snapshot", File.ReadAllText(legacy));
+        Assert.Empty(Directory.GetFiles(directory.Path, "capture-*.json"));
+    }
+
+    [Fact]
+    public void PublicationNeverOverwritesAnExistingCommitOrAcknowledgesItsCollision()
+    {
+        using var directory = new CaptureDirectory();
+        var initial = TraceMonitor.Start(Claim(), Batch());
+        using var activity = Capture(Batch(Event("paid", 1)));
+        var destination = Path.Combine(directory.Path, FileCaptureHost.CommitName(1));
+        using var host = new FileCaptureHost(directory.Path, "source", initial, fault: point =>
+        {
+            if (point == FileCaptureHost.PersistencePoint.BeforePublish) File.WriteAllText(destination, "conflicting file");
+        });
+        Assert.Throws<IOException>(() => host.Process(1, activity, R("first"), _ => Assert.Fail("Must not ack.")));
+        Assert.Equal("conflicting file", File.ReadAllText(destination));
+        Assert.Throws<ObjectDisposedException>(() => host.Process(1, activity, R("first"), _ => Assert.Fail("Must not ack.")));
     }
 
     [Fact]

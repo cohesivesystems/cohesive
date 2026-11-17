@@ -12,7 +12,7 @@ capacity backpressure, exclusive ownership and incompatible restoration.
 ## One commit before acknowledgment
 
 The host requires a stable source identity and contiguous delivery positions beginning at one.
-For each delivery, a single journal update includes:
+For each delivery, one immutable numbered commit file includes:
 
 - source delivery position and supplied cumulative alternative reference;
 - raw activity source, trace/span IDs, and ordered event names/tags;
@@ -46,16 +46,24 @@ fails without acknowledgment. There is no inferred serialization order from deli
 
 ## Persistence and failure contract
 
-The host holds an exclusive local lock file for its lifetime. Calls are serialized. A complete new
-journal is written to a same-directory pending file, flushed, and atomically renamed over the committed
-file. Only then does the host update in-memory state and invoke acknowledgment. All three persistent
-facts—receipt, checkpoint, position—are therefore published together. A pending file is never a commit.
+The host holds an exclusive local lock file for its lifetime. Calls are serialized. One delivery's
+complete commit envelope is written to `capture.pending`, flushed, and atomically renamed to
+`capture-0000000001.json` (then 2, 3, ...). Rename refuses to overwrite an existing commit. Only then
+does the host update in-memory state and invoke acknowledgment. Receipt, checkpoint and position
+are in that same file: there is no independently updated cursor or manifest. Earlier committed files
+are never rewritten. The source binding and exact initial checkpoint reference accompany every commit.
 
 A write/publication failure makes the host unavailable until disposed and reopened: publication outcome
-may be ambiguous. On reopening, it reads only the committed journal and independently restores retained
-monitor checkpoints. A source/initial-checkpoint mismatch, malformed journal or invalid checkpoint is
-rejected. Checkpoint predecessor links, pinned bindings and no-completeness restrictions are checked.
-There is no fallback that silently skips a damaged committed receipt.
+may be ambiguous. On reopening, it reads the bounded sequence of numbered files and independently
+restores retained monitor checkpoints. A pending file—even a torn one—is ignored. A gap before a later
+commit, malformed filename, incompatible binding, invalid checkpoint or aggregate capacity excess is
+rejected. Checkpoint predecessor links and no-completeness restrictions are checked. No damaged
+committed receipt is silently skipped. Arbitrary deletion of a trailing suffix is not detectable without
+an independent watermark; protecting committed files remains a storage requirement.
+
+The format is now `cohesive-assurance-file-capture-example/v2`. A directory containing the old v1
+`capture.json` is explicitly rejected instead of treated as empty or overwritten. Existing examples
+must use a new directory or an explicitly designed migration; automatic migration is outside this change.
 
 An acknowledgment failure leaves a committed receipt. Redelivery can acknowledge it again without
 adding observations. The acknowledgment callback must be synchronous and must not re-enter the host.
@@ -83,10 +91,12 @@ contracts requires a separately attributed workflow; it is not implemented here.
 
 ## Bounds and next steps
 
-Defaults are 256 deliveries and 16 MiB for the entire journal. Every receipt retains its cumulative
-checkpoint, and publication rewrites the bounded journal. This prioritizes an inspectable recovery
-contract over throughput. No throughput or production performance qualification is claimed. Raw input
-and journal encoding occur before the encoded byte limit is checked; this is not a strict heap bound.
+Defaults are 256 deliveries and 16 MiB summed across committed files. These are retention bounds;
+pending/lock files are not included. Every receipt still retains its cumulative checkpoint, so storage
+and restoration can grow quadratically with history even though each commit is written only once.
+Periodic checkpoints, log compaction and checkpoint deltas are deliberately deferred. Raw input and
+commit encoding occur before the encoded byte limit is checked; this is not a strict heap bound.
+There is still no production throughput or power-loss qualification.
 Journal limits are host policy, distinct from monitor row/envelope limits and adapter payload limits.
 
 The example starts with no completeness certificates and never adds them. Retention of sampled evidence
@@ -99,7 +109,8 @@ of a captured artifact remains trace re-evaluation until a candidate executes an
 
 ## Measured overhead
 
-The [end-to-end benchmark report](../performance/assurance/end-to-end.md) measures the native SDK,
+The [original end-to-end baseline](../performance/assurance/end-to-end.md)
+and [immutable-commit comparison](../performance/assurance/journal-persistence.md) measure the native SDK,
 monitor, journal and restore paths across payload sizes, claim shapes, history sizes and delivery batches.
 It includes all raw local trials and identifies batching, encoding guards and journal write amplification
 as optimization targets. These are serial service-cost measurements, not a production throughput SLO.
