@@ -96,3 +96,10 @@ Still outstanding in #558: a deployed durable source/exporter and remote OTLP de
 power-loss qualification, retention/compaction, correction propagation, qualified completeness protocols,
 rich operation/transaction histories, and executable faulty/repaired Simulation reconstruction. A replay
 of a captured artifact remains trace re-evaluation until a candidate executes and emits new observations.
+
+## Measured overhead
+
+The [end-to-end benchmark report](../performance/assurance/end-to-end.md) measures the native SDK,
+monitor, journal and restore paths across payload sizes, claim shapes, history sizes and delivery batches.
+It includes all raw local trials and identifies batching, encoding guards and journal write amplification
+as optimization targets. These are serial service-cost measurements, not a production throughput SLO.
