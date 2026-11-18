@@ -32,6 +32,15 @@ public sealed record TransitionInputCases<TInput>(ExecutionDefinitionReference R
     public ImmutableArray<string> CoverageLimits => ["caller-supplied states", "one input field at a time", "admission guards only", "no expected outcomes or completeness proof"];
 }
 
+/// <summary>The first admission guard outside the supported generation profile.</summary>
+/// <param name="Node">Guard identity in the probe's exact model revision.</param>
+/// <param name="Detail">Reason this guard cannot be inspected.</param>
+public sealed record TransitionGenerationDiagnostic(ExecutionNodeId Node, string Detail)
+{
+    /// <summary>Stable diagnostic code for reporting.</summary>
+    public string Code => "assurance.inputs.unsupported";
+}
+
 /// <summary>Structured unsupported-generation diagnostic; no partial candidate set is returned.</summary>
 public sealed class TransitionInputGenerationException : NotSupportedException
 {
@@ -39,11 +48,16 @@ public sealed class TransitionInputGenerationException : NotSupportedException
     /// <param name="node">Unsupported node identity within the exact source model.</param>
     /// <param name="detail">Unsupported construct and actionable profile limitation.</param>
     public TransitionInputGenerationException(ExecutionNodeId node, string detail)
-        : base($"Boundary generation at '{node.Value}': {detail}. No complete case set was generated.") => Node = node;
+        : base($"Boundary generation at '{node.Value}': {detail}. No complete case set was generated.")
+    {
+        Diagnostic = new(node, detail);
+    }
+    /// <summary>Structured diagnostic shared with inspection tools.</summary>
+    public TransitionGenerationDiagnostic Diagnostic { get; }
     /// <summary>Stable diagnostic code for language-independent reporting.</summary>
-    public string Code => "assurance.inputs.unsupported";
+    public string Code => Diagnostic.Code;
     /// <summary>Admission node that could not be inspected.</summary>
-    public ExecutionNodeId Node { get; }
+    public ExecutionNodeId Node => Diagnostic.Node;
 }
 
 public static partial class TransitionAssurance
@@ -68,11 +82,35 @@ public static partial class TransitionAssurance
 /// <typeparam name="TEntity">Complete existing entity record.</typeparam>
 /// <typeparam name="TInput">Typed input record.</typeparam>
 /// <typeparam name="TOutcome">Typed authored outcome.</typeparam>
-public sealed class TransitionProbe<TEntity, TInput, TOutcome> where TEntity : notnull
+public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEntity : notnull
 {
     readonly OfflineTransition<TEntity, TInput, TOutcome> execution;
     CompiledTransitionPlan plan => execution.Plan;
-    internal TransitionProbe(OfflineTransition<TEntity, TInput, TOutcome> execution) => this.execution = execution;
+    readonly Lazy<GuardInspection> generationGuards;
+    internal TransitionProbe(OfflineTransition<TEntity, TInput, TOutcome> execution)
+    {
+        this.execution = execution;
+        // Execution supports more expressions than bounded generation. Inspect on first generation.
+        generationGuards = new(InspectGuards);
+    }
+
+    /// <summary>Inspect the prepared model for bounded generation support before supplying any cases.</summary>
+    /// <exception cref="TransitionInputGenerationException">A guard falls outside the generation profile.</exception>
+    public void EnsureGenerationSupported() => _ = GenerationGuards;
+
+    /// <summary>Inspect once and return the first unsupported guard, or null when all guards are supported.</summary>
+    public TransitionGenerationDiagnostic? GenerationDiagnostic => generationGuards.Value.Diagnostic;
+
+    ImmutableArray<Guard> GenerationGuards
+    {
+        get
+        {
+            var inspection = generationGuards.Value;
+            if (inspection.Diagnostic is { } diagnostic)
+                throw new TransitionInputGenerationException(diagnostic.Node, diagnostic.Detail);
+            return inspection.Guards;
+        }
+    }
 
     /// <summary>Exact source authority used for both generation and execution.</summary>
     public ExecutionDefinitionReference Reference => plan.DefinitionReference;
@@ -95,11 +133,25 @@ public sealed class TransitionProbe<TEntity, TInput, TOutcome> where TEntity : n
     /// <param name="maximum">Inclusive upper bound for generated Int32 members.</param>
     /// <returns>Seed plus unique candidates with exact model and admission-node provenance; never expected answers.</returns>
     /// <exception cref="ArgumentOutOfRangeException">The budget/bounds are invalid or an inspected seed member lies outside them.</exception>
-    /// <exception cref="NotSupportedException">Any guard, binding, operand or input member is outside this profile.</exception>
+    /// <exception cref="TransitionInputGenerationException">Any guard, binding, operand or input member is outside this profile.</exception>
     /// <exception cref="InvalidOperationException">The case budget is exceeded or typed conversion fails.</exception>
     public TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int maxInputs = 1024, int minimum = int.MinValue, int maximum = int.MaxValue)
     {
-        if (maxInputs < 1) throw new ArgumentOutOfRangeException(nameof(maxInputs));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxInputs);
+        return GenerateInputs(before, seed, minimum, maximum, new CaseBudget(maxInputs, maxInputs));
+    }
+
+    readonly record struct CaseBudget(int Total, int Remaining)
+    {
+        public void RequireRoom(int used)
+        {
+            if (used >= Remaining) throw new InvalidOperationException($"Case budget {Total} exceeded.");
+        }
+    }
+
+    TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int minimum, int maximum, CaseBudget budget)
+    {
+        budget.RequireRoom(0);
         if (minimum > maximum) throw new ArgumentOutOfRangeException(nameof(minimum));
         var state = ObservationValue.FromObject(before);
         var template = ObservationValue.FromObject(seed);
@@ -109,49 +161,29 @@ public sealed class TransitionProbe<TEntity, TInput, TOutcome> where TEntity : n
         {
             if (!sources.TryGetValue(candidate, out var motivations))
             {
-                if (proposals.Count == maxInputs) throw new InvalidOperationException($"Boundary input budget {maxInputs} exceeded at '{node.Value}'.");
+                budget.RequireRoom(proposals.Count);
                 proposals.Add(candidate);
                 sources.Add(candidate, motivations = []);
             }
             if (!motivations.Contains(node)) motivations.Add(node);
         }
         var nodes = ImmutableArray.CreateBuilder<ExecutionNodeId>();
-        foreach (var rule in plan.Definition.Preconditions)
+        foreach (var rule in GenerationGuards)
         {
-            // No short-circuit: even an unreachable or currently false guard must be supported.
-            var expression = rule.Predicate;
-            var booleanExpression = expression is UnaryExpr { Operator: UnaryOperator.Not } negation ? negation.Operand : expression;
-            if (booleanExpression is ParameterExpr booleanInput && IsInput(booleanInput.Parameter, ScalarTypeKind.Bool)
-                && template.TryGetField(FieldPath.FromField(booleanInput.Parameter), out var inputFlag) && inputFlag.TryGetBoolean(out _))
+            nodes.Add(rule.Id);
+            if (rule.Input is not { } path) continue;
+            if (!template.TryGetField(path, out var original))
+                throw new ArgumentException($"Missing command field {path}.", nameof(seed));
+            if (rule.Boolean)
             {
-                foreach (var value in new[] { false, true }) Add(template.WithField(FieldPath.FromField(booleanInput.Parameter), ObservationValue.FromBool(value)), rule.Id);
-                nodes.Add(rule.Id);
+                if (!original.TryGetBoolean(out _)) throw new ArgumentException($"Invalid Boolean command field {path}.", nameof(seed));
+                foreach (var value in new[] { false, true })
+                    Add(template.WithField(path, ObservationValue.FromBool(value)), rule.Id);
                 continue;
             }
-            if (booleanExpression is FieldExpr boolean && IsState(boolean) && state.TryGetField(boolean.Path, out var flag) && flag.TryGetBoolean(out _))
-            {
-                nodes.Add(rule.Id);
-                continue;
-            }
-            if (expression is not BinaryExpr binary || binary.Operator is not
-                (BinaryOperator.Eq or BinaryOperator.Ne or BinaryOperator.Gt or BinaryOperator.Ge or BinaryOperator.Lt or BinaryOperator.Le))
-                throw Unsupported(rule.Id, "expected an Int32 comparison or direct/negated boolean");
-            var (left, right) = (binary.Left, binary.Right);
-            if (left is not ParameterExpr) (left, right) = (right, left);
-            if (left is not ParameterExpr parameter)
-                throw Unsupported(rule.Id, "expected one direct input parameter");
-            if (!IsInput(parameter.Parameter, ScalarTypeKind.Int32))
-                throw Unsupported(rule.Id, "input contract must declare a nonnullable Int32 member");
-            var path = FieldPath.FromField(parameter.Parameter);
-            if (!template.TryGetField(path, out var original) || !original.TryGetInt32(out var seedValue))
-                throw Unsupported(rule.Id, "input member must be a present Int32");
-            if (seedValue < minimum || seedValue > maximum)
-                throw new ArgumentOutOfRangeException(nameof(seed), "Seed member is outside the supplied Int32 bounds.");
-            ObservationValue boundary;
-            if (right is ConstantExpr constant) boundary = constant.Value;
-            else if (right is FieldExpr field && IsState(field) && state.TryGetField(field.Path, out var observed)) boundary = observed;
-            else throw Unsupported(rule.Id, "threshold must be a constant or supplied state field");
-            if (!boundary.TryGetInt32(out var number)) throw Unsupported(rule.Id, "threshold must be Int32");
+            if (!original.TryGetInt32(out var seedValue) || seedValue < minimum || seedValue > maximum)
+                throw new ArgumentOutOfRangeException(nameof(seed), "Invalid Int32 seed or outside supplied bounds.");
+            var number = rule.Constant ?? ReadInteger(state, rule.Fields.Single());
             // Use Int64 for neighbor arithmetic, then clip to the declared Int32 profile.
             long[] values = [minimum, -1, 0, 1, maximum, (long)number - 1, number, (long)number + 1];
             foreach (var value in values)
@@ -160,15 +192,80 @@ public sealed class TransitionProbe<TEntity, TInput, TOutcome> where TEntity : n
                 var candidate = template.WithField(path, ObservationValue.FromInt64(value));
                 Add(candidate, rule.Id);
             }
-            nodes.Add(rule.Id);
         }
         return new(Reference, [.. proposals.Select(p => new TransitionInputCandidate<TInput>(
-            p.Deserialize<TInput>() ?? throw new InvalidOperationException("No typed generated input."), [.. sources[p]]))], nodes.ToImmutable(), minimum, maximum, maxInputs);
+            p.Deserialize<TInput>() ?? throw new InvalidOperationException("No typed generated input."), [.. sources[p]]))], nodes.ToImmutable(), minimum, maximum, budget.Remaining);
     }
 
-    bool IsInput(string parameter, ScalarTypeKind kind) => plan.Definition.Input.Type is ObjectTypeRef input
-        && input.Fields.Any(f => f.Name == parameter && f.Type is ScalarTypeRef scalar && scalar.Kind == kind
-            && f.Cardinality == FieldCardinality.Single && f.Nullability == FieldNullability.NonNullable);
+    sealed record Guard(ExecutionNodeId Id, bool Boolean, FieldPath? Input, FieldPath[] Fields, int? Constant);
+
+    sealed record GuardInspection(ImmutableArray<Guard> Guards, TransitionGenerationDiagnostic? Diagnostic = null);
+
+    GuardInspection InspectGuards()
+    {
+        try
+        {
+            return new([.. plan.Definition.Preconditions.Select(r => Resolve(r.Id, r.Predicate))]);
+        }
+        catch (TransitionInputGenerationException error)
+        {
+            return new([], error.Diagnostic);
+        }
+    }
+
+    Guard Resolve(ExecutionNodeId id, Expr predicate)
+    {
+        List<FieldPath> fields = [];
+        FieldPath? input = null;
+        int? constant = null;
+        void Operand(Expr expression, ScalarTypeKind kind)
+        {
+            FieldPath path;
+            TypeRef contract;
+            switch (expression)
+            {
+                case ParameterExpr parameter when input is null:
+                    path = FieldPath.FromField(parameter.Parameter);
+                    input = path;
+                    contract = plan.Definition.Input.Type!;
+                    break;
+                case FieldExpr field when IsState(field):
+                    path = field.Path;
+                    fields.Add(path);
+                    contract = plan.Definition.Observation.Type!;
+                    break;
+                case ConstantExpr literal when kind == ScalarTypeKind.Int32 && literal.Value.TryGetInt32(out var number):
+                    constant = number;
+                    return;
+                default:
+                    throw Unsupported(id, "expected a declared member or Int32 threshold");
+            }
+            foreach (var segment in path.Segments)
+            {
+                var member = (contract as ObjectTypeRef)?.Fields.FirstOrDefault(f => FieldPathSegment.ForField(f.Name) == segment);
+                if (member is null || member.Cardinality != FieldCardinality.Single || member.Nullability != FieldNullability.NonNullable)
+                    throw Unsupported(id, $"expected a nonnullable scalar member at {path}");
+                contract = member.Type;
+            }
+            if (contract is not ScalarTypeRef scalar || scalar.Kind != kind)
+                throw Unsupported(id, $"expected {kind} member at {path}");
+        }
+        if (predicate is BinaryExpr binary)
+        {
+            if (binary.Operator is not (BinaryOperator.Eq or BinaryOperator.Ne or BinaryOperator.Gt or BinaryOperator.Ge or BinaryOperator.Lt or BinaryOperator.Le))
+                throw Unsupported(id, "expected an Int32 comparison");
+            Operand(binary.Left, ScalarTypeKind.Int32);
+            Operand(binary.Right, ScalarTypeKind.Int32);
+            if (input is null && fields.Count == 0) throw Unsupported(id, "comparison has no variable operand");
+            return new(id, false, input, [.. fields], constant);
+        }
+        Operand(predicate is UnaryExpr { Operator: UnaryOperator.Not } negation ? negation.Operand : predicate, ScalarTypeKind.Bool);
+        return new(id, true, input, [.. fields], null);
+    }
+
+    static int ReadInteger(ObservationValue state, FieldPath path) =>
+        state.TryGetField(path, out var value) && value.TryGetInt32(out var number)
+            ? number : throw new ArgumentException($"Missing or invalid Int32 state field {path}.");
 
     static bool IsState(FieldExpr field) => field.Binding is null || field.Binding == TransitionBindingIds.Observation;
     static TransitionInputGenerationException Unsupported(ExecutionNodeId node, string detail) => new(node, detail);

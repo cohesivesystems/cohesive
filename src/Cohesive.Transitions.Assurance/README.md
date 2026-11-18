@@ -96,3 +96,37 @@ exact source identity, per-input node attribution, profile/bounds and explicit u
 coverage semantics. It need not mimic C# generics or CLR records. Compare portable reports and
 independent requirements using shared fixtures; do not infer correctness from model agreement.
 The TypeScript runtime port is follow-up work; #581 supplies and tests the .NET capability.
+
+### Joint state and command proposals
+
+Configure integer domains with property selectors. JSON property names are resolved through
+`FieldPath.Capture`. Use `options.Range(path, minimum, maximum)` for explicit model paths.
+
+```csharp
+var domain = new StateCaseOptions<InventoryItem> { MaxCases = 1024 }
+    .Range(s => s.Available, 0, int.MaxValue)
+    .Range(s => s.MaxPerOrder, 1, int.MaxValue);
+var groups = probe.GenerateCases(template, inputSeed, domain);
+```
+
+Both generators resolve guards through the same Int32/Boolean profile. A comparison
+may read the command, state or a constant on either side. State-to-state comparisons
+vary both fields. An integer state field takes its template value and domain endpoints
+and their inward neighbors. A literal threshold also contributes its value and both
+neighbors, clipped to the domain. A peer state field contributes neighbors of its
+template value. This samples equality and its neighbors near that template, without enumerating
+every equal pair across the two domains. Unreferenced fields retain their template values. `ValidState` may
+filter cross-field combinations before commands count toward the joint budget.
+Every admitted state contributes at least the seed command.
+
+The exploration and output are bounded. Unsupported guards, an empty valid domain
+and exhausted budgets fail explicitly. These synthetic pre-states carry no history
+of how an application could reach them. Execute pairs against independently named
+coverage targets and business assertions to establish which behaviors they witness.
+
+Read `probe.GenerationDiagnostic` for the first unsupported guard’s code, node and detail; null means supported.
+Call `probe.EnsureGenerationSupported()` at setup to validate the guard profile. Both generators
+reuse the same inspection result and perform the check on first use if setup omitted it. Execution alone can use the full
+interpreter expression set. Unsupported guard syntax or operand types raise
+`TransitionInputGenerationException` with the guard node. Invalid caller configuration or
+missing template fields raise argument errors.
