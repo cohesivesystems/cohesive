@@ -49,7 +49,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
         ArgumentNullException.ThrowIfNull(options);
         var maxCases = options.MaxCases;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCases);
-        var guards = generationGuards.Value;
+        var guards = GenerationGuards;
         var root = ObservationValue.FromObject(template);
         if (!plan.Definition.Observation.IsSatisfiedByConstant(root))
             throw new ArgumentException("Template violates the observation contract.", nameof(template));
@@ -86,6 +86,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
             states = [.. states.SelectMany(state => values.Select(value => state.WithField(path, value)))];
         }
         var remaining = maxCases;
+        var budgetDescription = $"Joint case budget {maxCases}";
         var result = ImmutableArray.CreateBuilder<TransitionStateCases<TEntity, TInput>>();
         foreach (var observation in states)
         {
@@ -94,7 +95,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
             if (options.ValidState?.Invoke(state) == false) continue;
             if (remaining == 0)
                 throw new InvalidOperationException($"Joint case budget {maxCases} exceeded.");
-            var commands = GenerateInputs(state, input, remaining, int.MinValue, int.MaxValue, maxCases);
+            var commands = GenerateInputs(state, input, remaining, int.MinValue, int.MaxValue, budgetDescription);
             remaining -= commands.Candidates.Length;
             result.Add(new(state, commands));
         }

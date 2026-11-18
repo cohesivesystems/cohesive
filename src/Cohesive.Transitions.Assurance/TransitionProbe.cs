@@ -39,7 +39,12 @@ public sealed class TransitionInputGenerationException : NotSupportedException
     /// <param name="node">Unsupported node identity within the exact source model.</param>
     /// <param name="detail">Unsupported construct and actionable profile limitation.</param>
     public TransitionInputGenerationException(ExecutionNodeId node, string detail)
-        : base($"Boundary generation at '{node.Value}': {detail}. No complete case set was generated.") => Node = node;
+        : base($"Boundary generation at '{node.Value}': {detail}. No complete case set was generated.")
+    {
+        Node = node;
+        Detail = detail;
+    }
+    internal string Detail { get; }
     /// <summary>Stable diagnostic code for language-independent reporting.</summary>
     public string Code => "assurance.inputs.unsupported";
     /// <summary>Admission node that could not be inspected.</summary>
@@ -72,12 +77,27 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
 {
     readonly OfflineTransition<TEntity, TInput, TOutcome> execution;
     CompiledTransitionPlan plan => execution.Plan;
-    readonly Lazy<ImmutableArray<Guard>> generationGuards;
+    readonly Lazy<GuardInspection> generationGuards;
     internal TransitionProbe(OfflineTransition<TEntity, TInput, TOutcome> execution)
     {
         this.execution = execution;
         // Execution supports more expressions than bounded generation. Inspect on first generation.
-        generationGuards = new(ResolveGuards);
+        generationGuards = new(InspectGuards);
+    }
+
+    /// <summary>Inspect the prepared model for bounded generation support before supplying any cases.</summary>
+    /// <exception cref="TransitionInputGenerationException">A guard falls outside the generation profile.</exception>
+    public void EnsureGenerationSupported() => _ = GenerationGuards;
+
+    ImmutableArray<Guard> GenerationGuards
+    {
+        get
+        {
+            var inspection = generationGuards.Value;
+            if (inspection.UnsupportedNode is { } node)
+                throw new TransitionInputGenerationException(node, inspection.Detail!);
+            return inspection.Guards;
+        }
     }
 
     /// <summary>Exact source authority used for both generation and execution.</summary>
@@ -101,13 +121,13 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
     /// <param name="maximum">Inclusive upper bound for generated Int32 members.</param>
     /// <returns>Seed plus unique candidates with exact model and admission-node provenance; never expected answers.</returns>
     /// <exception cref="ArgumentOutOfRangeException">The budget/bounds are invalid or an inspected seed member lies outside them.</exception>
-    /// <exception cref="NotSupportedException">Any guard, binding, operand or input member is outside this profile.</exception>
+    /// <exception cref="TransitionInputGenerationException">Any guard, binding, operand or input member is outside this profile.</exception>
     /// <exception cref="InvalidOperationException">The case budget is exceeded or typed conversion fails.</exception>
     public TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int maxInputs = 1024, int minimum = int.MinValue, int maximum = int.MaxValue)
-        => GenerateInputs(before, seed, maxInputs, minimum, maximum, jointBudget: null);
+        => GenerateInputs(before, seed, maxInputs, minimum, maximum, $"Boundary input budget {maxInputs}");
 
     TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int maxInputs, int minimum, int maximum,
-        int? jointBudget)
+        string budgetDescription)
     {
         if (maxInputs < 1) throw new ArgumentOutOfRangeException(nameof(maxInputs));
         if (minimum > maximum) throw new ArgumentOutOfRangeException(nameof(minimum));
@@ -121,8 +141,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
             {
                 if (proposals.Count == maxInputs)
                 {
-                    var budget = jointBudget.HasValue ? $"Joint case budget {jointBudget}" : $"Boundary input budget {maxInputs}";
-                    throw new InvalidOperationException($"{budget} exceeded at '{node.Value}'.");
+                    throw new InvalidOperationException($"{budgetDescription} exceeded at '{node.Value}'.");
                 }
                 proposals.Add(candidate);
                 sources.Add(candidate, motivations = []);
@@ -130,7 +149,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
             if (!motivations.Contains(node)) motivations.Add(node);
         }
         var nodes = ImmutableArray.CreateBuilder<ExecutionNodeId>();
-        foreach (var rule in generationGuards.Value)
+        foreach (var rule in GenerationGuards)
         {
             nodes.Add(rule.Id);
             if (rule.Input is not { } path) continue;
@@ -161,7 +180,19 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
 
     sealed record Guard(ExecutionNodeId Id, bool Boolean, FieldPath? Input, FieldPath[] Fields, int? Constant);
 
-    ImmutableArray<Guard> ResolveGuards() => [.. plan.Definition.Preconditions.Select(r => Resolve(r.Id, r.Predicate))];
+    sealed record GuardInspection(ImmutableArray<Guard> Guards, ExecutionNodeId? UnsupportedNode = null, string? Detail = null);
+
+    GuardInspection InspectGuards()
+    {
+        try
+        {
+            return new([.. plan.Definition.Preconditions.Select(r => Resolve(r.Id, r.Predicate))]);
+        }
+        catch (TransitionInputGenerationException error)
+        {
+            return new([], error.Node, error.Detail);
+        }
+    }
 
     Guard Resolve(ExecutionNodeId id, Expr predicate)
     {

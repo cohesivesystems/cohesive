@@ -124,7 +124,8 @@ and exhausted budgets fail explicitly. These synthetic pre-states carry no histo
 of how an application could reach them. Execute pairs against independently named
 coverage targets and business assertions to establish which behaviors they witness.
 
-The probe caches guard inspection at the first generation call. Execution alone can use the full
+Call `probe.EnsureGenerationSupported()` at setup to validate the guard profile. Both generators
+reuse the same inspection result and perform the check on first use if setup omitted it. Execution alone can use the full
 interpreter expression set. Unsupported guard syntax or operand types raise
 `TransitionInputGenerationException` with the guard node. Invalid caller configuration or
 missing template fields raise argument errors.

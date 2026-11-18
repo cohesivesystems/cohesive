@@ -56,8 +56,9 @@ public sealed class TransitionProbeTests
         var cases = probe.GenerateCases(new("fixed", 10, 12, false), new(1, ""), options);
         foreach (var threshold in new[] { 4, 5, 6 })
             Assert.Contains(cases, group => group.State.Available == threshold);
+        probe.EnsureGenerationSupported();
         foreach (var threshold in new[] { 9, 10, 11 })
-            Assert.Contains(cases, group => group.State.Limit == threshold);
+            Assert.Contains(cases, group => group.State.Available == 10 && group.State.Limit == threshold);
         Assert.All(cases, group => Assert.Single(group.Commands.Inputs));
     }
 
@@ -94,7 +95,7 @@ public sealed class TransitionProbeTests
     {
         var options = new StateCaseOptions<Stock> { MaxCases = 12 }
             .Range(s => s.Available, 4, 4).Range(s => s.Limit, 4, 4);
-        Assert.Contains("Joint case budget", Assert.Throws<InvalidOperationException>(() =>
+        Assert.Equal("Joint case budget 12 exceeded at 'positive'.", Assert.Throws<InvalidOperationException>(() =>
             TransitionAssurance.Prepare(Model()).GenerateCases(new("s", 4, 4, false), new(0, ""), options)).Message);
     }
 
@@ -125,9 +126,15 @@ public sealed class TransitionProbeTests
         var state = new Stock("s", 4, 4, false);
         var input = new Request(2, "");
         Assert.Equal("reserved", probe.Execute(state, input, new("case")).Outcome);
-        var error = Assert.Throws<TransitionInputGenerationException>(() => probe.GenerateInputs(state, input));
-        Assert.Same(error, Assert.Throws<TransitionInputGenerationException>(() =>
-            probe.GenerateCases(state, input, new StateCaseOptions<Stock>())));
+        var setup = Assert.Throws<TransitionInputGenerationException>(probe.EnsureGenerationSupported);
+        var command = Assert.Throws<TransitionInputGenerationException>(() => probe.GenerateInputs(state, input));
+        var joint = Assert.Throws<TransitionInputGenerationException>(() =>
+            probe.GenerateCases(state, input, new StateCaseOptions<Stock>()));
+        Assert.Equal("compound", setup.Node.Value);
+        Assert.Equal(setup.Message, command.Message);
+        Assert.Equal(setup.Message, joint.Message);
+        Assert.NotSame(setup, command);
+        Assert.NotSame(command, joint);
     }
 
     public sealed record WideStock(long Available);
