@@ -144,3 +144,25 @@ See the [typed execution and direct execution contract](../../../src/Cohesive.St
 
 The runtime's repositories and targets are constructor-initialized read-only properties; only the
 Process store is replaceable to exercise durable restart.
+
+### Deliver committed tender movements
+
+When the tender repository uses Cosmos, run one change-feed processor for each hosted reaction.
+For example, bind the acceptance reaction to the repository that handles the direct tender command:
+
+```csharp
+var source = new CosmosMachineReactionSource(tenderRepository, leases, acceptanceHost,
+    processorName: "tender-acceptance", instanceName: workerId, fromUtc: initialObservationTime);
+await source.RunAsync(createWorkerContext, stoppingToken);
+```
+
+Choose an initial observation time that covers the first relevant receipt and retain receipts through
+the recovery window. The Cosmos lease records progress for the policy revision and authority. Each batch
+decodes immutable receipts and calls `MachineReactionHost.AdmitBatchAsync`. The host authorizes and
+durably admits matching movements before invoking the source's checkpoint callback. A supervised recovery
+worker then dispatches pending reactions. Confirmation has its own processor and waits for acceptance in
+the same episode. Other transports can supply ordered receipt batches and their durable checkpoint callback.
+
+The direct-acceptance restart test in `MachineReactionHostTests` exercises a commit before delivery,
+a failed checkpoint after admission, a restarted worker, and duplicate delivery after load acknowledgement
+has entered the pending state.
