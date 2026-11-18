@@ -99,14 +99,24 @@ The TypeScript runtime port is follow-up work; #581 supplies and tests the .NET 
 
 ### Joint state and command proposals
 
-Call `probe.GenerateCases(template, inputSeed, ranges, maxCases: 1024)` to vary state
-fields referenced by the supported admission guards. Supply inclusive integer domains
-keyed by the model's serialized field paths. Identity and other unrelated fields come
-from the template. Each Boolean takes both values. Integer thresholds take the template
-value, endpoints and their inward neighbors. For each resulting state the existing
-command generator proposes values around its thresholds. The result groups commands
-and their guard provenance by pre-state. An optional predicate further filters states
-for cross-field invariants.
+Configure integer domains with property selectors. JSON property names are resolved through
+`FieldPath.Capture`. A dictionary overload accepts explicit model paths.
+
+```csharp
+var domain = new StateCaseOptions<InventoryItem> { MaxCases = 1024 }
+    .Range(s => s.Available, 0, int.MaxValue)
+    .Range(s => s.MaxPerOrder, 1, int.MaxValue);
+var groups = probe.GenerateCases(template, inputSeed, domain);
+```
+
+Both generators resolve guards through the same Int32/Boolean profile. A comparison
+may read the command, state or a constant on either side. State-to-state comparisons
+vary both fields. An integer state field takes its template value and domain endpoints
+and their inward neighbors. A literal threshold also contributes its value and both
+neighbors, clipped to the domain. A peer state field contributes neighbors of its
+template value. Unreferenced fields retain their template values. `ValidState` may
+filter cross-field combinations before commands count toward the joint budget.
+Every admitted state contributes at least the seed command.
 
 The exploration and output are bounded. Unsupported guards, an empty valid domain
 and exhausted budgets fail explicitly. These synthetic pre-states carry no history

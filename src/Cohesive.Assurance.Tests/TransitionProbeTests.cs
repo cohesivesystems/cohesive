@@ -28,11 +28,7 @@ public sealed class TransitionProbeTests
     public void JointCasesCoverOverlapExactExhaustionAndIsolatedRejections()
     {
         var probe = TransitionAssurance.Prepare(Model());
-        Dictionary<Cohesive.Model.FieldPath, StateIntegerRange> ranges = new()
-        {
-            [Cohesive.Model.FieldPath.FromField("Available")] = new(0, 8),
-            [Cohesive.Model.FieldPath.FromField("Limit")] = new(1, 8)
-        };
+        var ranges = new StateCaseOptions<Stock>().Range(s => s.Available, 0, 8).Range(s => s.Limit, 1, 8);
         var cases = probe.GenerateCases(new("sku", 4, 4, false), new(0, "keep"), ranges);
         var observations = (from groupOfCases in cases from command in groupOfCases.Commands.Inputs
             let state = groupOfCases.State
@@ -42,7 +38,91 @@ public sealed class TransitionProbeTests
         Assert.Contains(observations, c => c.outcome == "short");
         Assert.Contains(observations, c => c.outcome == "limit");
         Assert.All(observations, c => Assert.Equal("keep", c.command.Note));
-        Assert.Throws<InvalidOperationException>(() => probe.GenerateCases(new("sku", 4, 4, false), new(0, ""), ranges, 12));
+        Assert.All(cases, group => Assert.Equal("sku", group.State.Sku));
+    }
+
+    static TransitionProbe<Stock, Request, string> StateComparisons() =>
+        TransitionAssurance.Prepare(TransitionAuthoring.Create<Stock, Request, string>(
+            ObjectEntityDefinition.For<Stock>(new("stock")).Shape, new("inspect"), new("1"), t => t
+                .Requires(new("five"), (s, r) => s.Available >= 5, (s, r) => "small")
+                .Requires(new("both"), (s, r) => s.Available <= s.Limit, (s, r) => "limit")
+                .Return(new("ok"), TransitionOutcomeDisposition.Applied, "ok")));
+
+    [Fact]
+    public void StateOnlyComparisonsUseInteriorThresholdsAndBothFields()
+    {
+        var probe = StateComparisons();
+        var options = new StateCaseOptions<Stock>().Range(s => s.Available, 0, 20).Range(s => s.Limit, 0, 20);
+        var cases = probe.GenerateCases(new("fixed", 10, 12, false), new(1, ""), options);
+        foreach (var threshold in new[] { 4, 5, 6 })
+            Assert.Contains(cases, group => group.State.Available == threshold);
+        foreach (var threshold in new[] { 9, 10, 11 })
+            Assert.Contains(cases, group => group.State.Limit == threshold);
+        Assert.All(cases, group => Assert.Single(group.Commands.Inputs));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MissingOrOutOfRangeStateDomainIsCallerError(bool missing)
+    {
+        var options = new StateCaseOptions<Stock>().Range(s => s.Available, 0, 20);
+        if (!missing) options.Range(s => s.Limit, 0, 3);
+        Assert.Throws<ArgumentException>(() => StateComparisons().GenerateCases(new("s", 4, 4, false), new(1, ""), options));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void StateInvariantFiltersBeforeChargingForCommands(bool admit)
+    {
+        var options = new StateCaseOptions<Stock> { ValidState = s => admit && s.Available == s.Limit }
+            .Range(s => s.Available, 0, 8).Range(s => s.Limit, 0, 8);
+        var probe = StateComparisons();
+        if (admit)
+        {
+            var groups = probe.GenerateCases(new("s", 4, 4, false), new(1, ""), options);
+            Assert.NotEmpty(groups);
+            Assert.All(groups, g => Assert.Equal(g.State.Available, g.State.Limit));
+        }
+        else Assert.Contains("No candidate state", Assert.Throws<InvalidOperationException>(() =>
+            probe.GenerateCases(new("s", 4, 4, false), new(1, ""), options)).Message);
+    }
+
+    [Fact]
+    public void JointBudgetCountsPairsAcrossStates()
+    {
+        var options = new StateCaseOptions<Stock> { MaxCases = 12 }
+            .Range(s => s.Available, 4, 4).Range(s => s.Limit, 4, 4);
+        Assert.Contains("Joint case budget", Assert.Throws<InvalidOperationException>(() =>
+            TransitionAssurance.Prepare(Model()).GenerateCases(new("s", 4, 4, false), new(0, ""), options)).Message);
+    }
+
+    [Fact]
+    public void FilteredStateAfterExactBudgetDoesNotChargeForCommands()
+    {
+        var probe = TransitionAssurance.Prepare(Model());
+        var seed = new Stock("s", 4, 4, false);
+        var input = new Request(0, "");
+        var count = probe.GenerateInputs(seed, input).Candidates.Length;
+        var options = new StateCaseOptions<Stock> { MaxCases = count, ValidState = s => !s.Quarantined }
+            .Range(s => s.Available, 4, 4).Range(s => s.Limit, 4, 4);
+        Assert.Equal(count, Assert.Single(probe.GenerateCases(seed, input, options)).Commands.Candidates.Length);
+    }
+
+    public sealed record WideStock(long Available);
+
+    [Fact]
+    public void WideStateAndCompoundGuardsAreUnsupportedEvenWithoutRanges()
+    {
+        var wide = TransitionAuthoring.Create<WideStock, Request, bool>(
+            ObjectEntityDefinition.For<WideStock>(new("wide")).Shape, new("check"), new("1"),
+            t => t.Requires(new("wide"), (s, r) => s.Available > 1L, (s, r) => false)
+                .Return(new("ok"), TransitionOutcomeDisposition.Applied, true));
+        Assert.Equal("wide", Assert.Throws<TransitionInputGenerationException>(() =>
+            TransitionAssurance.Prepare(wide).GenerateCases(new(2), new(1, ""), new StateCaseOptions<WideStock>())).Node.Value);
+        Assert.Equal("compound", Assert.Throws<TransitionInputGenerationException>(() =>
+            TransitionAssurance.Prepare(Model(unsupported: true)).GenerateCases(new("s", 4, 4, false), new(1, ""), new StateCaseOptions<Stock>())).Node.Value);
     }
 
     [Fact]

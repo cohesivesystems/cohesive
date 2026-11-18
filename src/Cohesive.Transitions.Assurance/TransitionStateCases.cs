@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Linq.Expressions;
 using Cohesive.Model;
 using Cohesive.Transitions.IR;
 
@@ -7,11 +8,40 @@ namespace Cohesive.Transitions.Assurance;
 /// <summary>Inclusive valid domain for an integer pre-state field.</summary>
 public readonly record struct StateIntegerRange(int Minimum, int Maximum);
 
+/// <summary>Typed state domains and exploration limits for joint generation.</summary>
+public sealed class StateCaseOptions<TEntity>
+{
+    readonly Dictionary<FieldPath, StateIntegerRange> ranges = [];
+    internal IReadOnlyDictionary<FieldPath, StateIntegerRange> Ranges => ranges;
+
+    /// <summary>Maximum states explored and maximum state/command pairs returned.</summary>
+    public int MaxCases { get; init; } = 1024;
+    /// <summary>Optional cross-field invariant applied before proposing commands.</summary>
+    public Func<TEntity, bool>? ValidState { get; init; }
+
+    /// <summary>Declare the inclusive domain of a typed integer property.</summary>
+    public StateCaseOptions<TEntity> Range(Expression<Func<TEntity, int>> field, int minimum, int maximum)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        if (minimum > maximum) throw new ArgumentOutOfRangeException(nameof(minimum));
+        var boxed = Expression.Lambda<Func<TEntity, object?>>(Expression.Convert(field.Body, typeof(object)), field.Parameters);
+        ranges.Add(FieldPath.Capture(boxed), new(minimum, maximum));
+        return this;
+    }
+}
+
 /// <summary>One synthetic pre-state and the guard-derived commands for it. Contains no expected outcomes.</summary>
 public sealed record TransitionStateCases<TEntity, TInput>(TEntity State, TransitionInputCases<TInput> Commands);
 
 public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
 {
+    /// <summary>Generate joint cases from typed ranges, exploration budget and optional invariant.</summary>
+    public ImmutableArray<TransitionStateCases<TEntity, TInput>> GenerateCases(TEntity template, TInput input, StateCaseOptions<TEntity> options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return GenerateCases(template, input, options.Ranges, options.MaxCases, options.ValidState);
+    }
+
     /// <summary>Varies inspected Boolean fields and bounded integer thresholds, then proposes commands at each state.</summary>
     /// <param name="template">Valid initial example. Fields outside the inspected guards retain their template values.</param>
     /// <param name="input">Command template for boundary generation.</param>
@@ -25,41 +55,41 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
     {
         ArgumentNullException.ThrowIfNull(ranges);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCases);
-        // Validate the supported guard profile using the same authority as command generation.
-        var initial = GenerateInputs(template, input, maxCases);
+        var guards = ResolveGuards();
         var root = ObservationValue.FromObject(template);
         if (!plan.Definition.Observation.IsSatisfiedByConstant(root))
             throw new ArgumentException("Template violates the observation contract.", nameof(template));
         var states = new List<ObservationValue> { root };
-        var visited = new HashSet<FieldPath>();
-        foreach (var rule in plan.Definition.Preconditions)
+        var fields = guards.SelectMany(rule => rule.Fields.Select(path => (path, rule))).GroupBy(pair => pair.path);
+        foreach (var group in fields)
         {
-            var field = rule.Predicate switch
-            {
-                FieldExpr direct => direct,
-                UnaryExpr { Operand: FieldExpr flag } => flag,
-                BinaryExpr { Right: FieldExpr right } => right,
-                BinaryExpr { Left: FieldExpr left } => left,
-                _ => null
-            };
-            if (field is null || !visited.Add(field.Path)) continue;
-            if (!root.TryGetField(field.Path, out var original))
-                throw Unsupported(rule.Id, "missing template state field");
+            var path = group.Key;
             ObservationValue[] values;
-            if (original.TryGetBoolean(out _))
+            if (group.First().rule.Boolean)
                 values = [ObservationValue.FromBool(false), ObservationValue.FromBool(true)];
             else
             {
-                if (!original.TryGetInt32(out var seed) || !ranges.TryGetValue(field.Path, out var range)
-                    || seed < range.Minimum || seed > range.Maximum)
-                    throw new ArgumentException($"Provide a valid integer range containing the template at {field.Path}.", nameof(ranges));
-                long[] boundaries = [range.Minimum, (long)range.Minimum + 1, seed, (long)range.Maximum - 1, range.Maximum];
-                values = boundaries.Where(n => n >= range.Minimum && n <= range.Maximum)
-                    .Distinct().Order().Select(ObservationValue.FromInt64).ToArray();
+                var seed = ReadInteger(root, path);
+                if (!ranges.TryGetValue(path, out var range) || seed < range.Minimum || seed > range.Maximum)
+                    throw new ArgumentException($"Provide a valid integer range containing the template at {path}.", nameof(ranges));
+                SortedSet<long> boundaries = [range.Minimum, (long)range.Minimum + 1, seed, (long)range.Maximum - 1, range.Maximum];
+                foreach (var (_, guard) in group)
+                {
+                    if (guard.Constant is int threshold) AddNeighbors(threshold);
+                    foreach (var peer in guard.Fields.Where(peer => peer != path))
+                        AddNeighbors(ReadInteger(root, peer));
+                }
+                void AddNeighbors(int threshold)
+                {
+                    boundaries.Add((long)threshold - 1);
+                    boundaries.Add(threshold);
+                    boundaries.Add((long)threshold + 1);
+                }
+                values = [.. boundaries.Where(n => n >= range.Minimum && n <= range.Maximum).Select(ObservationValue.FromInt64)];
             }
             if ((long)states.Count * values.Length > maxCases)
-                throw new InvalidOperationException($"State exploration budget {maxCases} exceeded at {rule.Id.Value}.");
-            states = [.. states.SelectMany(state => values.Select(value => state.WithField(field.Path, value)))];
+                throw new InvalidOperationException($"State exploration budget {maxCases} exceeded at {path}.");
+            states = [.. states.SelectMany(state => values.Select(value => state.WithField(path, value)))];
         }
         var remaining = maxCases;
         var result = ImmutableArray.CreateBuilder<TransitionStateCases<TEntity, TInput>>();
@@ -68,10 +98,10 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
             if (!plan.Definition.Observation.IsSatisfiedByConstant(observation)) continue;
             var state = observation.Deserialize<TEntity>() ?? throw new InvalidOperationException("No typed generated state.");
             if (validState is not null && !validState(state)) continue;
-            if (remaining == 0) throw new InvalidOperationException($"Joint case budget {maxCases} exceeded.");
-            var commands = observation.Equals(root) ? initial : GenerateInputs(state, input, remaining);
+            var commands = GenerateInputs(state, input, maxCases, int.MinValue, int.MaxValue, guards);
+            if (commands.Candidates.Length > remaining)
+                throw new InvalidOperationException($"Joint case budget {maxCases} exceeded.");
             remaining -= commands.Candidates.Length;
-            if (remaining < 0) throw new InvalidOperationException($"Joint case budget {maxCases} exceeded.");
             result.Add(new(state, commands));
         }
         if (result.Count == 0) throw new InvalidOperationException("No candidate state satisfies the supplied domain.");
