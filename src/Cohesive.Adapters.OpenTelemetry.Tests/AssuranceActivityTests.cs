@@ -10,7 +10,7 @@ using OpenTelemetry.Trace;
 namespace Cohesive.Adapters.OpenTelemetry.Tests;
 
 [Collection("OpenTelemetry listeners")]
-public sealed class AssuranceActivityTests
+public sealed partial class AssuranceActivityTests
 {
     public sealed record Order(string Id);
     public sealed record Stock(decimal Reserved);
