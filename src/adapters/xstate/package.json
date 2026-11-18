@@ -1,0 +1,9 @@
+{
+  "name": "@cohesivesystems/xstate",
+  "private": true,
+  "type": "module",
+  "exports": "./machine.mjs",
+  "dependencies": {
+    "xstate": "^5.20.0"
+  }
+}

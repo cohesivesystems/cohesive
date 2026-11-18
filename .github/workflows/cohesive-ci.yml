@@ -91,6 +91,12 @@ jobs:
       - name: Install frontend dependencies
         run: corepack pnpm install --frozen-lockfile
 
+      - name: Compare Cohesive and XState machine admission
+        run: |
+          npm ci --prefix src/adapters/xstate --ignore-scripts
+          dotnet run --project eng/xstate-conformance -c Release -- "$RUNNER_TEMP/xstate-cases.json"
+          node src/adapters/xstate/conformance.test.mjs "$RUNNER_TEMP/xstate-cases.json"
+
       - name: Check logistics API generation and browser client
         run: |
           dotnet run --project eng/examples/load-actions -- --check-generated
