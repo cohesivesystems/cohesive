@@ -44,6 +44,7 @@ public sealed record TransitionStateCases<TEntity, TInput>(TEntity State, Transi
 public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
 {
     /// <summary>Generate joint cases from typed ranges, exploration budget and optional invariant.</summary>
+    /// <exception cref="TransitionInputGenerationException">A guard falls outside the generation profile.</exception>
     public ImmutableArray<TransitionStateCases<TEntity, TInput>> GenerateCases(TEntity template, TInput input, StateCaseOptions<TEntity> options)
     {
         ArgumentNullException.ThrowIfNull(options);
@@ -86,16 +87,13 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
             states = [.. states.SelectMany(state => values.Select(value => state.WithField(path, value)))];
         }
         var remaining = maxCases;
-        var budgetDescription = $"Joint case budget {maxCases}";
         var result = ImmutableArray.CreateBuilder<TransitionStateCases<TEntity, TInput>>();
         foreach (var observation in states)
         {
             if (!plan.Definition.Observation.IsSatisfiedByConstant(observation)) continue;
             var state = observation.Deserialize<TEntity>() ?? throw new InvalidOperationException("No typed generated state.");
             if (options.ValidState?.Invoke(state) == false) continue;
-            if (remaining == 0)
-                throw new InvalidOperationException($"Joint case budget {maxCases} exceeded.");
-            var commands = GenerateInputs(state, input, remaining, int.MinValue, int.MaxValue, budgetDescription);
+            var commands = GenerateInputs(state, input, int.MinValue, int.MaxValue, new CaseBudget(maxCases, remaining));
             remaining -= commands.Candidates.Length;
             result.Add(new(state, commands));
         }

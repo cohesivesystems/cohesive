@@ -32,6 +32,15 @@ public sealed record TransitionInputCases<TInput>(ExecutionDefinitionReference R
     public ImmutableArray<string> CoverageLimits => ["caller-supplied states", "one input field at a time", "admission guards only", "no expected outcomes or completeness proof"];
 }
 
+/// <summary>The first admission guard outside the supported generation profile.</summary>
+/// <param name="Node">Guard identity in the probe's exact model revision.</param>
+/// <param name="Detail">Reason this guard cannot be inspected.</param>
+public sealed record TransitionGenerationDiagnostic(ExecutionNodeId Node, string Detail)
+{
+    /// <summary>Stable diagnostic code for reporting.</summary>
+    public string Code => "assurance.inputs.unsupported";
+}
+
 /// <summary>Structured unsupported-generation diagnostic; no partial candidate set is returned.</summary>
 public sealed class TransitionInputGenerationException : NotSupportedException
 {
@@ -41,14 +50,14 @@ public sealed class TransitionInputGenerationException : NotSupportedException
     public TransitionInputGenerationException(ExecutionNodeId node, string detail)
         : base($"Boundary generation at '{node.Value}': {detail}. No complete case set was generated.")
     {
-        Node = node;
-        Detail = detail;
+        Diagnostic = new(node, detail);
     }
-    internal string Detail { get; }
+    /// <summary>Structured diagnostic shared with inspection tools.</summary>
+    public TransitionGenerationDiagnostic Diagnostic { get; }
     /// <summary>Stable diagnostic code for language-independent reporting.</summary>
-    public string Code => "assurance.inputs.unsupported";
+    public string Code => Diagnostic.Code;
     /// <summary>Admission node that could not be inspected.</summary>
-    public ExecutionNodeId Node { get; }
+    public ExecutionNodeId Node => Diagnostic.Node;
 }
 
 public static partial class TransitionAssurance
@@ -89,13 +98,16 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
     /// <exception cref="TransitionInputGenerationException">A guard falls outside the generation profile.</exception>
     public void EnsureGenerationSupported() => _ = GenerationGuards;
 
+    /// <summary>Inspect once and return the first unsupported guard, or null when all guards are supported.</summary>
+    public TransitionGenerationDiagnostic? GenerationDiagnostic => generationGuards.Value.Diagnostic;
+
     ImmutableArray<Guard> GenerationGuards
     {
         get
         {
             var inspection = generationGuards.Value;
-            if (inspection.UnsupportedNode is { } node)
-                throw new TransitionInputGenerationException(node, inspection.Detail!);
+            if (inspection.Diagnostic is { } diagnostic)
+                throw new TransitionInputGenerationException(diagnostic.Node, diagnostic.Detail);
             return inspection.Guards;
         }
     }
@@ -124,12 +136,22 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
     /// <exception cref="TransitionInputGenerationException">Any guard, binding, operand or input member is outside this profile.</exception>
     /// <exception cref="InvalidOperationException">The case budget is exceeded or typed conversion fails.</exception>
     public TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int maxInputs = 1024, int minimum = int.MinValue, int maximum = int.MaxValue)
-        => GenerateInputs(before, seed, maxInputs, minimum, maximum, $"Boundary input budget {maxInputs}");
-
-    TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int maxInputs, int minimum, int maximum,
-        string budgetDescription)
     {
-        if (maxInputs < 1) throw new ArgumentOutOfRangeException(nameof(maxInputs));
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxInputs);
+        return GenerateInputs(before, seed, minimum, maximum, new CaseBudget(maxInputs, maxInputs));
+    }
+
+    readonly record struct CaseBudget(int Total, int Remaining)
+    {
+        public void RequireRoom(int used)
+        {
+            if (used >= Remaining) throw new InvalidOperationException($"Case budget {Total} exceeded.");
+        }
+    }
+
+    TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int minimum, int maximum, CaseBudget budget)
+    {
+        budget.RequireRoom(0);
         if (minimum > maximum) throw new ArgumentOutOfRangeException(nameof(minimum));
         var state = ObservationValue.FromObject(before);
         var template = ObservationValue.FromObject(seed);
@@ -139,10 +161,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
         {
             if (!sources.TryGetValue(candidate, out var motivations))
             {
-                if (proposals.Count == maxInputs)
-                {
-                    throw new InvalidOperationException($"{budgetDescription} exceeded at '{node.Value}'.");
-                }
+                budget.RequireRoom(proposals.Count);
                 proposals.Add(candidate);
                 sources.Add(candidate, motivations = []);
             }
@@ -175,12 +194,12 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
             }
         }
         return new(Reference, [.. proposals.Select(p => new TransitionInputCandidate<TInput>(
-            p.Deserialize<TInput>() ?? throw new InvalidOperationException("No typed generated input."), [.. sources[p]]))], nodes.ToImmutable(), minimum, maximum, maxInputs);
+            p.Deserialize<TInput>() ?? throw new InvalidOperationException("No typed generated input."), [.. sources[p]]))], nodes.ToImmutable(), minimum, maximum, budget.Remaining);
     }
 
     sealed record Guard(ExecutionNodeId Id, bool Boolean, FieldPath? Input, FieldPath[] Fields, int? Constant);
 
-    sealed record GuardInspection(ImmutableArray<Guard> Guards, ExecutionNodeId? UnsupportedNode = null, string? Detail = null);
+    sealed record GuardInspection(ImmutableArray<Guard> Guards, TransitionGenerationDiagnostic? Diagnostic = null);
 
     GuardInspection InspectGuards()
     {
@@ -190,7 +209,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
         }
         catch (TransitionInputGenerationException error)
         {
-            return new([], error.Node, error.Detail);
+            return new([], error.Diagnostic);
         }
     }
 

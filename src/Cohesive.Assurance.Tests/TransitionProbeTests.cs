@@ -52,11 +52,12 @@ public sealed class TransitionProbeTests
     public void StateOnlyComparisonsUseInteriorThresholdsAndBothFields()
     {
         var probe = StateComparisons();
+        Assert.Null(probe.GenerationDiagnostic);
+        probe.EnsureGenerationSupported();
         var options = new StateCaseOptions<Stock>().Range(s => s.Available, 0, 20).Range(s => s.Limit, 0, 20);
         var cases = probe.GenerateCases(new("fixed", 10, 12, false), new(1, ""), options);
         foreach (var threshold in new[] { 4, 5, 6 })
             Assert.Contains(cases, group => group.State.Available == threshold);
-        probe.EnsureGenerationSupported();
         foreach (var threshold in new[] { 9, 10, 11 })
             Assert.Contains(cases, group => group.State.Available == 10 && group.State.Limit == threshold);
         Assert.All(cases, group => Assert.Single(group.Commands.Inputs));
@@ -90,13 +91,21 @@ public sealed class TransitionProbeTests
             probe.GenerateCases(new("s", 4, 4, false), new(1, ""), options)).Message);
     }
 
-    [Fact]
-    public void JointBudgetCountsPairsAcrossStates()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(2)]
+    public void JointBudgetReportsTheSameLimitBeforeOrPartwayThroughTheSecondState(int spare)
     {
-        var options = new StateCaseOptions<Stock> { MaxCases = 12 }
+        var probe = TransitionAssurance.Prepare(Model());
+        var seed = new Stock("s", 4, 4, false);
+        var input = new Request(0, "");
+        int firstStateCount = probe.GenerateInputs(seed, input).Candidates.Length;
+        Assert.True(firstStateCount > spare);
+        int limit = firstStateCount + spare;
+        var options = new StateCaseOptions<Stock> { MaxCases = limit }
             .Range(s => s.Available, 4, 4).Range(s => s.Limit, 4, 4);
-        Assert.Equal("Joint case budget 12 exceeded at 'positive'.", Assert.Throws<InvalidOperationException>(() =>
-            TransitionAssurance.Prepare(Model()).GenerateCases(new("s", 4, 4, false), new(0, ""), options)).Message);
+        Assert.Equal($"Case budget {limit} exceeded.", Assert.Throws<InvalidOperationException>(() =>
+            probe.GenerateCases(seed, input, options)).Message);
     }
 
     [Fact]
@@ -126,11 +135,14 @@ public sealed class TransitionProbeTests
         var state = new Stock("s", 4, 4, false);
         var input = new Request(2, "");
         Assert.Equal("reserved", probe.Execute(state, input, new("case")).Outcome);
+        var diagnostic = Assert.IsType<TransitionGenerationDiagnostic>(probe.GenerationDiagnostic);
+        Assert.Equal("compound", diagnostic.Node.Value);
+        Assert.False(string.IsNullOrWhiteSpace(diagnostic.Detail));
         var setup = Assert.Throws<TransitionInputGenerationException>(probe.EnsureGenerationSupported);
         var command = Assert.Throws<TransitionInputGenerationException>(() => probe.GenerateInputs(state, input));
         var joint = Assert.Throws<TransitionInputGenerationException>(() =>
             probe.GenerateCases(state, input, new StateCaseOptions<Stock>()));
-        Assert.Equal("compound", setup.Node.Value);
+        Assert.Equal(diagnostic, setup.Diagnostic);
         Assert.Equal(setup.Message, command.Message);
         Assert.Equal(setup.Message, joint.Message);
         Assert.NotSame(setup, command);
