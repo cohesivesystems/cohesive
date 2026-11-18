@@ -106,13 +106,17 @@ changes require a new session; carrying obligations across those boundaries is o
 
 ## Scope and cost
 
-This first [#557](https://github.com/cohesivesystems/cohesive/issues/557) delivery re-evaluates all retained
-history for every accepted update. It deliberately shares the batch interpreter's semantics rather
-than introducing a second obligation evaluator. Each update performs history-sized validation,
-allocation and evaluation; a long series of single-record updates can have quadratic total work,
-plus the batch matcher's own costs. Checkpoints retain the full bounded history. Record budgets do
-not bound serialized bytes or wall-clock time. This is a correctness/reference implementation,
-not a qualified high-throughput production monitor.
+State invariant and transition contract appends reuse previously evaluated obligations in semantic order.
+Each retained predicate still counts toward the cumulative evaluation budget. The evaluator retains
+predicate diagnostics and computes closure, vacuity and the overall verdict against the updated frontiers.
+Event forms still evaluate the entire retained mapping. Start, correction and checkpoint verification
+run full batch evaluation. Append validation and result construction still traverse history, so repeated
+single-row appends can require quadratic total work. Checkpoints retain the full bounded history.
+
+In the local Release monitor benchmark (tiered compilation disabled, five warmups, 30 measured
+appends from the same snapshot), appending one state to 100 retained rows went from 0.135 to
+0.029 ms and 119,240 to 59,672 allocated bytes per operation. At 2,000 rows it went from
+1.159 to 0.499 ms and 2,328,272 to 1,120,755 bytes. These measurements exclude journal I/O.
 
 The conformance tests cover all four forms, partitioned deadline absence, inclusive deadlines,
 checkpoint continuation, late evidence, corrections, duplicate content, closure, resource rejection,
