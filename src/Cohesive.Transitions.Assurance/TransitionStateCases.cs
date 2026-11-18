@@ -6,7 +6,7 @@ using Cohesive.Transitions.IR;
 namespace Cohesive.Transitions.Assurance;
 
 /// <summary>Inclusive valid domain for an integer pre-state field.</summary>
-public readonly record struct StateIntegerRange(int Minimum, int Maximum);
+internal readonly record struct StateIntegerRange(int Minimum, int Maximum);
 
 /// <summary>Typed state domains and exploration limits for joint generation.</summary>
 public sealed class StateCaseOptions<TEntity>
@@ -23,9 +23,17 @@ public sealed class StateCaseOptions<TEntity>
     public StateCaseOptions<TEntity> Range(Expression<Func<TEntity, int>> field, int minimum, int maximum)
     {
         ArgumentNullException.ThrowIfNull(field);
-        if (minimum > maximum) throw new ArgumentOutOfRangeException(nameof(minimum));
         var boxed = Expression.Lambda<Func<TEntity, object?>>(Expression.Convert(field.Body, typeof(object)), field.Parameters);
-        ranges.Add(FieldPath.Capture(boxed), new(minimum, maximum));
+        return Range(FieldPath.Capture(boxed), minimum, maximum);
+    }
+
+    /// <summary>Declare an integer domain using its exact model field path.</summary>
+    public StateCaseOptions<TEntity> Range(FieldPath path, int minimum, int maximum)
+    {
+        if (path.Segments.IsDefaultOrEmpty) throw new ArgumentException("Specify a state field path.", nameof(path));
+        if (minimum > maximum) throw new ArgumentOutOfRangeException(nameof(minimum));
+        if (!ranges.TryAdd(path, new(minimum, maximum)))
+            throw new ArgumentException($"A range is already configured for state field '{path}'.", nameof(path));
         return this;
     }
 }
@@ -39,23 +47,9 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
     public ImmutableArray<TransitionStateCases<TEntity, TInput>> GenerateCases(TEntity template, TInput input, StateCaseOptions<TEntity> options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        return GenerateCases(template, input, options.Ranges, options.MaxCases, options.ValidState);
-    }
-
-    /// <summary>Varies inspected Boolean fields and bounded integer thresholds, then proposes commands at each state.</summary>
-    /// <param name="template">Valid initial example. Fields outside the inspected guards retain their template values.</param>
-    /// <param name="input">Command template for boundary generation.</param>
-    /// <param name="ranges">Inclusive domains for integer state fields referenced by supported guards.</param>
-    /// <param name="maxCases">Positive bound on generated state/command pairs. Overflow fails without partial results.</param>
-    /// <param name="validState">Optional independent predicate for joint state invariants.</param>
-    /// <returns>Deterministic synthetic state groups with exact model and input-node provenance.</returns>
-    public ImmutableArray<TransitionStateCases<TEntity, TInput>> GenerateCases(
-        TEntity template, TInput input, IReadOnlyDictionary<FieldPath, StateIntegerRange> ranges,
-        int maxCases = 1024, Func<TEntity, bool>? validState = null)
-    {
-        ArgumentNullException.ThrowIfNull(ranges);
+        var maxCases = options.MaxCases;
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCases);
-        var guards = ResolveGuards();
+        var guards = generationGuards.Value;
         var root = ObservationValue.FromObject(template);
         if (!plan.Definition.Observation.IsSatisfiedByConstant(root))
             throw new ArgumentException("Template violates the observation contract.", nameof(template));
@@ -70,8 +64,8 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
             else
             {
                 var seed = ReadInteger(root, path);
-                if (!ranges.TryGetValue(path, out var range) || seed < range.Minimum || seed > range.Maximum)
-                    throw new ArgumentException($"Provide a valid integer range containing the template at {path}.", nameof(ranges));
+                if (!options.Ranges.TryGetValue(path, out var range) || seed < range.Minimum || seed > range.Maximum)
+                    throw new ArgumentException($"Provide a valid integer range containing the template at {path}.", nameof(options));
                 SortedSet<long> boundaries = [range.Minimum, (long)range.Minimum + 1, seed, (long)range.Maximum - 1, range.Maximum];
                 foreach (var (_, guard) in group)
                 {
@@ -97,10 +91,10 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
         {
             if (!plan.Definition.Observation.IsSatisfiedByConstant(observation)) continue;
             var state = observation.Deserialize<TEntity>() ?? throw new InvalidOperationException("No typed generated state.");
-            if (validState is not null && !validState(state)) continue;
-            var commands = GenerateInputs(state, input, maxCases, int.MinValue, int.MaxValue, guards);
-            if (commands.Candidates.Length > remaining)
+            if (options.ValidState?.Invoke(state) == false) continue;
+            if (remaining == 0)
                 throw new InvalidOperationException($"Joint case budget {maxCases} exceeded.");
+            var commands = GenerateInputs(state, input, remaining, int.MinValue, int.MaxValue, maxCases);
             remaining -= commands.Candidates.Length;
             result.Add(new(state, commands));
         }

@@ -72,7 +72,13 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
 {
     readonly OfflineTransition<TEntity, TInput, TOutcome> execution;
     CompiledTransitionPlan plan => execution.Plan;
-    internal TransitionProbe(OfflineTransition<TEntity, TInput, TOutcome> execution) => this.execution = execution;
+    readonly Lazy<ImmutableArray<Guard>> generationGuards;
+    internal TransitionProbe(OfflineTransition<TEntity, TInput, TOutcome> execution)
+    {
+        this.execution = execution;
+        // Execution supports more expressions than bounded generation. Inspect on first generation.
+        generationGuards = new(ResolveGuards);
+    }
 
     /// <summary>Exact source authority used for both generation and execution.</summary>
     public ExecutionDefinitionReference Reference => plan.DefinitionReference;
@@ -98,10 +104,10 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
     /// <exception cref="NotSupportedException">Any guard, binding, operand or input member is outside this profile.</exception>
     /// <exception cref="InvalidOperationException">The case budget is exceeded or typed conversion fails.</exception>
     public TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int maxInputs = 1024, int minimum = int.MinValue, int maximum = int.MaxValue)
-        => GenerateInputs(before, seed, maxInputs, minimum, maximum, ResolveGuards());
+        => GenerateInputs(before, seed, maxInputs, minimum, maximum, jointBudget: null);
 
     TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int maxInputs, int minimum, int maximum,
-        ImmutableArray<Guard> guards)
+        int? jointBudget)
     {
         if (maxInputs < 1) throw new ArgumentOutOfRangeException(nameof(maxInputs));
         if (minimum > maximum) throw new ArgumentOutOfRangeException(nameof(minimum));
@@ -113,14 +119,18 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
         {
             if (!sources.TryGetValue(candidate, out var motivations))
             {
-                if (proposals.Count == maxInputs) throw new InvalidOperationException($"Boundary input budget {maxInputs} exceeded at '{node.Value}'.");
+                if (proposals.Count == maxInputs)
+                {
+                    var budget = jointBudget.HasValue ? $"Joint case budget {jointBudget}" : $"Boundary input budget {maxInputs}";
+                    throw new InvalidOperationException($"{budget} exceeded at '{node.Value}'.");
+                }
                 proposals.Add(candidate);
                 sources.Add(candidate, motivations = []);
             }
             if (!motivations.Contains(node)) motivations.Add(node);
         }
         var nodes = ImmutableArray.CreateBuilder<ExecutionNodeId>();
-        foreach (var rule in guards)
+        foreach (var rule in generationGuards.Value)
         {
             nodes.Add(rule.Id);
             if (rule.Input is not { } path) continue;

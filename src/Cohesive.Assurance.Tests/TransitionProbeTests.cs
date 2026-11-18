@@ -110,6 +110,26 @@ public sealed class TransitionProbeTests
         Assert.Equal(count, Assert.Single(probe.GenerateCases(seed, input, options)).Commands.Candidates.Length);
     }
 
+    [Fact]
+    public void RawAndTypedRangesShareOneEntryPerPath()
+    {
+        var options = new StateCaseOptions<Stock>().Range(Cohesive.Model.FieldPath.FromField("Limit"), 1, 8);
+        var error = Assert.Throws<ArgumentException>(() => options.Range(s => s.Limit, 1, 4));
+        Assert.Contains("already configured for state field 'Limit'", error.Message);
+    }
+
+    [Fact]
+    public void UnsupportedGenerationDoesNotPreventExecution()
+    {
+        var probe = TransitionAssurance.Prepare(Model(unsupported: true));
+        var state = new Stock("s", 4, 4, false);
+        var input = new Request(2, "");
+        Assert.Equal("reserved", probe.Execute(state, input, new("case")).Outcome);
+        var error = Assert.Throws<TransitionInputGenerationException>(() => probe.GenerateInputs(state, input));
+        Assert.Same(error, Assert.Throws<TransitionInputGenerationException>(() =>
+            probe.GenerateCases(state, input, new StateCaseOptions<Stock>())));
+    }
+
     public sealed record WideStock(long Available);
 
     [Fact]
