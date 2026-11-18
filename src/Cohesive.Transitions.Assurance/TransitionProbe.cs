@@ -68,7 +68,7 @@ public static partial class TransitionAssurance
 /// <typeparam name="TEntity">Complete existing entity record.</typeparam>
 /// <typeparam name="TInput">Typed input record.</typeparam>
 /// <typeparam name="TOutcome">Typed authored outcome.</typeparam>
-public sealed class TransitionProbe<TEntity, TInput, TOutcome> where TEntity : notnull
+public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEntity : notnull
 {
     readonly OfflineTransition<TEntity, TInput, TOutcome> execution;
     CompiledTransitionPlan plan => execution.Plan;

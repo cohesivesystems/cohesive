@@ -96,3 +96,19 @@ exact source identity, per-input node attribution, profile/bounds and explicit u
 coverage semantics. It need not mimic C# generics or CLR records. Compare portable reports and
 independent requirements using shared fixtures; do not infer correctness from model agreement.
 The TypeScript runtime port is follow-up work; #581 supplies and tests the .NET capability.
+
+### Joint state and command proposals
+
+Call `probe.GenerateCases(template, inputSeed, ranges, maxCases: 1024)` to vary state
+fields referenced by the supported admission guards. Supply inclusive integer domains
+keyed by the model's serialized field paths. Identity and other unrelated fields come
+from the template. Each Boolean takes both values. Integer thresholds take the template
+value, endpoints and their inward neighbors. For each resulting state the existing
+command generator proposes values around its thresholds. The result groups commands
+and their guard provenance by pre-state. An optional predicate further filters states
+for cross-field invariants.
+
+The exploration and output are bounded. Unsupported guards, an empty valid domain
+and exhausted budgets fail explicitly. These synthetic pre-states carry no history
+of how an application could reach them. Execute pairs against independently named
+coverage targets and business assertions to establish which behaviors they witness.

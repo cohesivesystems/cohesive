@@ -25,6 +25,27 @@ public sealed class TransitionProbeTests
             });
 
     [Fact]
+    public void JointCasesCoverOverlapExactExhaustionAndIsolatedRejections()
+    {
+        var probe = TransitionAssurance.Prepare(Model());
+        Dictionary<Cohesive.Model.FieldPath, StateIntegerRange> ranges = new()
+        {
+            [Cohesive.Model.FieldPath.FromField("Available")] = new(0, 8),
+            [Cohesive.Model.FieldPath.FromField("Limit")] = new(1, 8)
+        };
+        var cases = probe.GenerateCases(new("sku", 4, 4, false), new(0, "keep"), ranges);
+        var observations = (from groupOfCases in cases from command in groupOfCases.Commands.Inputs
+            let state = groupOfCases.State
+            select (state, command, outcome: probe.Execute(state, command, new("case")).Outcome)).ToArray();
+        Assert.Contains(observations, c => c.state.Quarantined && c.command.Quantity > c.state.Limit && c.outcome == "quarantine");
+        Assert.Contains(observations, c => c.command.Quantity == c.state.Available && c.outcome == "reserved");
+        Assert.Contains(observations, c => c.outcome == "short");
+        Assert.Contains(observations, c => c.outcome == "limit");
+        Assert.All(observations, c => Assert.Equal("keep", c.command.Note));
+        Assert.Throws<InvalidOperationException>(() => probe.GenerateCases(new("sku", 4, 4, false), new(0, ""), ranges, 12));
+    }
+
+    [Fact]
     public void BoundariesComeFromProductionGuardsAndRetainOtherInputFields()
     {
         var model = Model();
