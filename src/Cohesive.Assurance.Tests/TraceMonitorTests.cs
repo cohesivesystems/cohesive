@@ -50,6 +50,47 @@ public sealed class TraceMonitorTests
         Assert.Equal(batch.Serialize(), monitor.Evaluation.Serialize());
     }
 
+    [Theory]
+    [InlineData(2, 10)]
+    [InlineData(10, 2)]
+    [InlineData(3, 3)]
+    public void BoundedAppendChargesRetainedMatchesInBatchOrder(int predicates, int visits)
+    {
+        var first = Event("a", 1, 1) with { EventPayload = ObservationValue.FromObject(new Order("other")) };
+        var second = Event("b", 1, 1);
+        var priorWitness = Event("release", 1, 1, witness: true);
+        var claim = Events();
+        var limits = new TraceEvaluationLimits(MaxPredicateEvaluations: predicates, MaxEventCandidateVisits: visits);
+        var initial = Batch(events: true) with { Alternatives = [Update("prior", [first, second, priorWitness])] };
+        var monitor = TraceMonitor.Restore(TraceMonitor.Start(claim, initial, limits).Serialize());
+        var newWitness = Event("release2", 2, 11, witness: true) with { EventPayload = first.EventPayload };
+        var batch = initial with { Alternatives = [Update("next", [first, second, priorWitness, newWitness])] };
+        var expected = TraceClaimEvaluator.Evaluate(claim, batch, limits);
+        var update = Update("next", [newWitness]);
+        if (expected.Status == AssuranceAttemptStatus.BudgetExceeded)
+            Assert.Equal(expected.Diagnostics[0], Assert.Throws<TraceObservationException>(() => monitor.Advance(update)).Diagnostic);
+        else
+            Assert.Equal(expected.Serialize(), monitor.Advance(update).Evaluation.Serialize());
+    }
+
+    [Fact]
+    public void BoundedAppendMatchesBatchAtEachPrefixIncludingMissingPayloadAndFirstWitness()
+    {
+        var initial = Batch(events: true);
+        var monitor = TraceMonitor.Start(Events(), initial);
+        SemanticObservation[] rows = [Event("a", 1, 1), Event("b", 1, 1),
+            Event("unknown", 2, 4, witness: true) with { EventPayload = null },
+            Event("first", 3, 11, witness: true), Event("second", 3, 11, witness: true)];
+        for (var length = 1; length <= rows.Length; length++)
+        {
+            var reference = "prefix-" + length;
+            monitor = monitor.Advance(Update(reference, [rows[length - 1]]));
+            MatchesBatch(monitor, initial with { Alternatives = [Update(reference, rows[..length])] });
+            monitor = TraceMonitor.Restore(monitor.Serialize());
+        }
+        Assert.All(monitor.Evaluation.Alternatives[0].Obligations, o => Assert.Equal("first", o.WitnessOccurrence));
+    }
+
     [Fact]
     public void RestoredStatePrefixRetainsDiagnosticsAndChargesOriginalPredicateBudget()
     {
