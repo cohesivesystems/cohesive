@@ -57,7 +57,8 @@ public static class TraceClaimEvaluator
         AssuranceAttemptStatus status = AssuranceAttemptStatus.Completed;
         long predicateEvaluations;
         long candidateVisits;
-        Dictionary<(string Partition, string Occurrence), int>? priorWitnessIndices;
+        sealed record ResponsePrefix(ImmutableArray<ClaimObligationResult> Obligations,
+            Dictionary<(string Partition, string Occurrence), int> WitnessIndices);
         readonly Dictionary<ValueBindingId, int> inputIndices = document.Definition.Inputs
             .Select((input, index) => (input.Id, index)).ToDictionary(x => x.Id, x => x.index);
         // Invocation-owned, bounded by observations × declared inputs; cleared between alternatives.
@@ -204,26 +205,38 @@ public static class TraceClaimEvaluator
         {
             preparedInputs.Clear();
             List<ClaimObligationResult> obligations = [];
-            if (prefix is not null && claim.Form == ClaimForm.BoundedResponse)
+            var localObligations = ImmutableArray<ClaimObligationResult>.Empty;
+            ResponsePrefix? response = null;
+            if (prefix is not null)
             {
-                priorWitnessIndices = [];
-                foreach (var row in prefix.Batch.Alternatives[0].Observations)
-                    if (row.Selector == claim.Witness)
-                        priorWitnessIndices.Add(TraceObservationValidation.Key(row), priorWitnessIndices.Count);
+                if (claim.Form == ClaimForm.BoundedResponse)
+                    response = new(prefix.Alternatives[0].Obligations, []);
+                else
+                {
+                    localObligations = prefix.Alternatives[0].Obligations;
+                    foreach (var diagnostic in prefix.Diagnostics)
+                        if (diagnostic.Code != TraceEvaluationCodes.ScopeOpen) diagnostics.Add(diagnostic);
+                }
             }
-            else if (prefix is not null)
-                foreach (var diagnostic in prefix.Diagnostics)
-                    if (diagnostic.Code != TraceEvaluationCodes.ScopeOpen) diagnostics.Add(diagnostic);
-            var candidates = observations.Where(x => x.Kind == SemanticObservationKind.Event && x.Selector == claim.Witness).ToList();
+            var candidates = new List<SemanticObservation>();
+            int priorRows = prefix?.Batch.Alternatives[0].Observations.Length ?? 0;
+            for (var i = 0; i < observations.Count; i++)
+            {
+                var row = observations[i];
+                if (row.Kind != SemanticObservationKind.Event || row.Selector != claim.Witness) continue;
+                if (response is not null && i < priorRows)
+                    response.WitnessIndices.Add(TraceObservationValidation.Key(row), candidates.Count);
+                candidates.Add(row);
+            }
             foreach (var observation in observations)
             {
                 if (observation.Selector != claim.Selection || !Selects(observation.Kind)) continue;
                 cancellation.ThrowIfCancellationRequested();
                 // A selected occurrence in the retained prefix has the same inputs and position.
                 // Charge its original logical work so limits agree with a fresh batch run.
-                if (priorWitnessIndices is null && prefix is not null && obligations.Count < prefix.Alternatives[0].Obligations.Length)
+                if (obligations.Count < localObligations.Length)
                 {
-                    obligations.Add(prefix.Alternatives[0].Obligations[obligations.Count]);
+                    obligations.Add(localObligations[obligations.Count]);
                     if (observation.Kind != SemanticObservationKind.UnknownOutcome) predicateEvaluations++;
                     continue;
                 }
@@ -231,7 +244,7 @@ public static class TraceClaimEvaluator
                     ? Obligation(observation, ClaimVerdict.Inconclusive, TraceEvaluationCodes.CommitOutcomeUnknown)
                     : claim.Form is ClaimForm.StateInvariant or ClaimForm.TransitionContract
                         ? Obligation(observation, Predicate(observation, null), TraceEvaluationCodes.Predicate)
-                        : Match(observation, candidates, obligations.Count);
+                        : Match(observation, candidates, obligations.Count, response);
                 obligations.Add(result);
                 if (status == AssuranceAttemptStatus.BudgetExceeded) break;
             }
@@ -251,7 +264,7 @@ public static class TraceClaimEvaluator
             _ => kind == SemanticObservationKind.Event
         };
 
-        ClaimObligationResult Match(SemanticObservation trigger, List<SemanticObservation> observations, int obligationIndex)
+        ClaimObligationResult Match(SemanticObservation trigger, List<SemanticObservation> observations, int obligationIndex, ResponsePrefix? response)
         {
             long deadline = 0;
             if (claim.Form == ClaimForm.BoundedResponse)
@@ -271,12 +284,12 @@ public static class TraceClaimEvaluator
             var end = claim.Form == ClaimForm.HistoricalRequirement
                 ? Bound(observations, trigger.Step, byTime: false, inclusive: false)
                 : Bound(observations, deadline, byTime: true, inclusive: true);
-            if (priorWitnessIndices is not null && obligationIndex < prefix!.Alternatives[0].Obligations.Length)
+            if (response is not null && obligationIndex < response.Obligations.Length)
             {
-                var previous = prefix.Alternatives[0].Obligations[obligationIndex];
+                var previous = response.Obligations[obligationIndex];
                 var resume = previous.WitnessOccurrence is { } occurrence
-                    ? priorWitnessIndices[(previous.WitnessPartition!, occurrence)] + 1
-                    : Math.Clamp(priorWitnessIndices.Count, start, end);
+                    ? response.WitnessIndices[(previous.WitnessPartition!, occurrence)] + 1
+                    : Math.Clamp(response.WitnessIndices.Count, start, end);
                 var visits = resume - start;
                 // New work on an earlier trigger may have consumed the remaining budget.
                 // In that case replay this range to report the same first failure as batch.

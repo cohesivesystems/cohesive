@@ -113,6 +113,9 @@ For bounded responses, a previously matched trigger keeps its first witness. An 
 resumes after its previously checked candidates and uses current completeness to decide absence.
 Skipped comparisons count against both cumulative budgets in trigger order. Prefixes with predicate
 diagnostics or duplicate input rows use full matching to preserve batch diagnostics and identity.
+A missing payload can therefore cause every subsequent append in the epoch to use full matching
+while the retained comparisons continue emitting predicate diagnostics. Shared input preparation
+affects which diagnostic is emitted first. A fresh epoch can resume from a clean prefix.
 Historical requirements use full matching. Start, correction and checkpoint verification
 run full batch evaluation. Append validation and result construction still traverse history, so repeated
 single-row appends can require quadratic total work. Checkpoints retain the full bounded history.
@@ -148,3 +151,9 @@ after five warmups. Values are means over 30 appends and include cumulative moni
 
 All four workloads allocated less. The small matched workload ran slower in this timing sample.
 The monitor still visits retained triggers and constructs a witness index on each optimized append.
+
+After deriving the resume offsets directly from the candidate list, the same benchmark measured
+0.149/0.049 ms at 100 triggers and 0.766/1.531 ms at 2,000 triggers (matched/pending).
+The 100-trigger matched timings span both sides of the baseline. A separate allocation regression
+test uses 64 pending triggers and 32 mismatching witnesses and requires the resolving append to
+allocate less than half as much as evaluating the cumulative batch.
