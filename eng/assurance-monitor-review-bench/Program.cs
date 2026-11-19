@@ -21,6 +21,9 @@ foreach (var count in new[] { 100, 2000 })
         [new(R("current"), observations, [])], EnumerationCompleteness.Complete, R("enumeration"));
     var monitor = TraceMonitor.Start(claim, batch);
     var replay = new TraceObservationAlternative(R("current"), [observations[^1]], []);
+    var append = new TraceObservationAlternative(R("next"),
+        [observations[^1] with { Occurrence = "next", Step = count + 1, Ticks = count + 1 }], []);
+    Measure("Append", () => monitor.Advance(append));
     Measure("Replay", () => monitor.Advance(replay));
     Measure("Reference", () => monitor.Reference());
 

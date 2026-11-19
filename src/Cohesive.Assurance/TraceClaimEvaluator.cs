@@ -31,8 +31,13 @@ public static class TraceClaimEvaluator
         return new Evaluation(claim, batch, limits, cancellationToken).Run();
     }
 
+    // Advance constructs the batch by appending to this exact accepted prefix.
+    internal static TraceEvaluation EvaluateAppend(TraceEvaluation prefix, TraceObservationBatch batch,
+        CancellationToken cancellation) => new Evaluation(prefix.Claim, batch, prefix.Limits, cancellation,
+            prefix.Claim.Definition.Form is ClaimForm.StateInvariant or ClaimForm.TransitionContract ? prefix : null).Run();
+
     sealed class Evaluation(ClaimDocument document, TraceObservationBatch batch,
-        TraceEvaluationLimits limits, CancellationToken cancellation)
+        TraceEvaluationLimits limits, CancellationToken cancellation, TraceEvaluation? prefix = null)
     {
         static readonly PortableExpressionValue Missing = new(PortableValueState.Missing, default);
         readonly ClaimDefinition claim = document.Definition;
@@ -188,11 +193,22 @@ public static class TraceClaimEvaluator
         {
             preparedInputs.Clear();
             List<ClaimObligationResult> obligations = [];
+            if (prefix is not null)
+                foreach (var diagnostic in prefix.Diagnostics)
+                    if (diagnostic.Code != TraceEvaluationCodes.ScopeOpen) diagnostics.Add(diagnostic);
             var candidates = observations.Where(x => x.Kind == SemanticObservationKind.Event && x.Selector == claim.Witness).ToList();
             foreach (var observation in observations)
             {
                 if (observation.Selector != claim.Selection || !Selects(observation.Kind)) continue;
                 cancellation.ThrowIfCancellationRequested();
+                // A selected occurrence in the retained prefix has the same inputs and position.
+                // Charge its original logical work so limits agree with a fresh batch run.
+                if (prefix is not null && obligations.Count < prefix.Alternatives[0].Obligations.Length)
+                {
+                    obligations.Add(prefix.Alternatives[0].Obligations[obligations.Count]);
+                    if (observation.Kind != SemanticObservationKind.UnknownOutcome) predicateEvaluations++;
+                    continue;
+                }
                 var result = observation.Kind == SemanticObservationKind.UnknownOutcome
                     ? Obligation(observation, ClaimVerdict.Inconclusive, TraceEvaluationCodes.CommitOutcomeUnknown)
                     : claim.Form is ClaimForm.StateInvariant or ClaimForm.TransitionContract

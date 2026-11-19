@@ -51,6 +51,18 @@ public sealed class TraceMonitorTests
     }
 
     [Fact]
+    public void RestoredStatePrefixRetainsDiagnosticsAndChargesOriginalPredicateBudget()
+    {
+        var missing = State("missing", 1, 0) with { Values = ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty };
+        var first = TraceMonitor.Start(Invariant(), Batch(), new(MaxPredicateEvaluations: 2))
+            .Advance(Update("first", [missing]));
+        var second = TraceMonitor.Restore(first.Serialize()).Advance(Update("second", [State("bad", 2, 11)]));
+        MatchesBatch(second, second.Evaluation.Batch);
+        Assert.Equal(ClaimVerdict.Violated, second.Evaluation.Verdict);
+        Assert.Throws<TraceObservationException>(() => second.Advance(Update("third", [State("extra", 3, 1)])));
+    }
+
+    [Fact]
     public void CapturedBatchesShareBindingProfileBudgetAndAtomicityWithoutTransport()
     {
         var initial = Batch();

@@ -6,8 +6,7 @@ using Cohesive.Model.Serialization;
 namespace Cohesive.Assurance;
 
 /// <summary>Immutable bounded reference monitor for one ordered mapping of an exact observation scope.</summary>
-/// <remarks>Each accepted update re-evaluates retained history through the batch interpreter. This is an
-/// incremental ingestion contract, not an optimized streaming evaluator. No observations or obligations are evicted.
+/// <remarks>Appends reuse prior state and transition obligations. Event matching evaluates the retained history. No observations or obligations are evicted.
 /// Rejected updates leave this snapshot unchanged and must not be acknowledged as consumed.</remarks>
 public sealed class TraceMonitor
 {
@@ -116,7 +115,7 @@ public sealed class TraceMonitor
         var alternative = new TraceObservationAlternative(update.Reference, observations.ToImmutable(),
             [.. frontiers.Values.OrderBy(x => x.Selector, ClaimReference.CanonicalComparer).ThenBy(x => x.Partition, StringComparer.Ordinal)]);
         var batch = Evaluation.Batch with { Alternatives = [alternative] };
-        var evaluated = Evaluate(Evaluation.Claim, batch, Evaluation.Limits, cancellationToken);
+        var evaluated = RequireCompleted(TraceClaimEvaluator.EvaluateAppend(Evaluation, batch, cancellationToken));
         return new(evaluated, Reference());
     }
 
@@ -183,9 +182,10 @@ public sealed class TraceMonitor
     }
 
     static TraceEvaluation Evaluate(ClaimDocument claim, TraceObservationBatch batch, TraceEvaluationLimits? limits,
-        CancellationToken cancellation)
+        CancellationToken cancellation) => RequireCompleted(TraceClaimEvaluator.Evaluate(claim, batch, limits, cancellation));
+
+    static TraceEvaluation RequireCompleted(TraceEvaluation result)
     {
-        var result = TraceClaimEvaluator.Evaluate(claim, batch, limits, cancellation);
         if (result.Status != AssuranceAttemptStatus.Completed)
             throw new TraceObservationException(result.Diagnostics.FirstOrDefault()
                 ?? new(TraceEvaluationCodes.InvalidObservation, "/batch", "Monitor update could not be evaluated completely."));
