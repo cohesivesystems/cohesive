@@ -228,7 +228,8 @@ public static class TransitionStaticCompiler
                         field.Expression,
                         field.DirectDependencies))],
                     [.. usedMachineEdges.Values
-                        .OrderBy(static edge => edge, TransitionStructuralOrdering.MachineEdges)])
+                        .OrderBy(static edge => edge, TransitionStructuralOrdering.MachineEdges)],
+                    parameters)
                 : null;
 
             return new(document, definition, analysis, plan, validation);

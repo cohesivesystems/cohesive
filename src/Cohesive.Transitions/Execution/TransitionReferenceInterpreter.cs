@@ -174,8 +174,7 @@ public static class TransitionReferenceInterpreter
         readonly List<TransitionEmissionIntent> emissions = [];
         readonly List<TransitionMachineMovement> movements = [];
         readonly List<(ExecutionNodeId Node, TransitionMachineEdgeLink Link, Dictionary<ValueBindingId, PortableExpressionValue> Scope)> machineTargets = [];
-        readonly Dictionary<FieldPath, ValueContract> observationContracts = [];
-        readonly Dictionary<string, ValueContract> inputContracts = new(StringComparer.Ordinal);
+        Dictionary<FieldPath, ValueContract>? additionalObservationContracts;
         TransitionObservationFrame observation;
 
         public Engine(
@@ -1022,10 +1021,14 @@ public static class TransitionReferenceInterpreter
 
         PortableExpressionValue ResolveParameter(string parameter)
         {
-            var path = FieldPath.FromField(parameter);
-            var contract = ResolveInputContract(parameter);
-            var value = PortableExpressionValue.FromPortable(activation.Input).Project(path);
-            _ = ValidateTyped(value, contract, new($"input/{parameter}"));
+            // Metadata belongs to the compiled plan; values and validation remain invocation-local.
+            if (!plan.Parameters.TryGetValue(parameter, out var prepared))
+            {
+                var path = FieldPath.FromField(parameter);
+                prepared = (path, ResolveRelativeContract(plan.Definition.Input, path), new($"input/{parameter}"));
+            }
+            var value = PortableExpressionValue.FromPortable(activation.Input).Project(prepared.Path);
+            _ = ValidateTyped(value, prepared.Contract, prepared.Node);
             return value;
         }
 
@@ -1339,92 +1342,24 @@ public static class TransitionReferenceInterpreter
 
         ValueContract ResolveObservationContract(FieldPath path)
         {
-            if (!observationContracts.TryGetValue(path, out var contract))
+            if (plan.ObservationContracts.TryGetValue(path, out var contract))
+                return contract;
+
+            // Caller-supplied covering or extra observations may lie outside the compiler catalog.
+            // Retain invocation-local caching for those paths without allocating it on the common path.
+            additionalObservationContracts ??= [];
+            if (!additionalObservationContracts.TryGetValue(path, out contract))
             {
                 contract = ResolveRelativeContract(plan.Definition.Observation, path);
-                observationContracts.Add(path, contract);
+                additionalObservationContracts.Add(path, contract);
             }
             return contract;
         }
 
-        ValueContract ResolveInputContract(string parameter)
-        {
-            if (!inputContracts.TryGetValue(parameter, out var contract))
-            {
-                contract = ResolveRelativeContract(plan.Definition.Input, FieldPath.FromField(parameter));
-                inputContracts.Add(parameter, contract);
-            }
-            return contract;
-        }
-
-        ValueContract ResolveRelativeContract(ValueContract root, FieldPath path)
-        {
-            var current = root;
-            for (var index = 0; index < path.Segments.Length; index++)
-            {
-                var segment = path.Segments[index];
-                if (segment.Kind != SegmentKind.Field || string.IsNullOrWhiteSpace(segment.Segment))
-                {
-                    throw Invalid(
-                        TransitionExecutionDiagnosticCodes.ResultContractViolated,
-                        $"Field path '{path}' contains unsupported collection-element navigation.",
-                        new("contract/resolution"));
-                }
-                if (current.Cardinality == FieldCardinality.Many)
-                {
-                    throw Invalid(
-                        TransitionExecutionDiagnosticCodes.ResultContractViolated,
-                        $"Field path '{path}' navigates through a collection without an element scope.",
-                        new("contract/resolution"));
-                }
-
-                current = ResolveFieldContract(current, segment.Segment)
-                    ?? throw Invalid(
-                        TransitionExecutionDiagnosticCodes.ResultContractViolated,
-                        $"Field path '{path}' is absent from the compiled aggregate contract.",
-                        new("contract/resolution"));
-            }
-            return current;
-        }
-
-        ValueContract? ResolveFieldContract(ValueContract parent, string name)
-        {
-            if (parent.Shape is { } shapeIdentity
-                && plan.ShapeGraph?.TryGetShape(shapeIdentity, out var shape) == true
-                && shape.TryGetField(name, out var shapeField))
-            {
-                return ValueContract.FromField(shapeField);
-            }
-
-            var type = parent.Type;
-            if (type is NamedTypeRef named && plan.ShapeGraph?.TryGetType(named.TypeId, out var definition) == true)
-            {
-                if (definition is TypeDefinition.Structural structural
-                    && structural.TryGetField(name, out var field))
-                {
-                    return new(
-                        field.Type,
-                        cardinality: field.Cardinality,
-                        presence: field.Presence,
-                        nullability: field.Nullability);
-                }
-                return null;
-            }
-            if (type is ObjectTypeRef objectType)
-            {
-                var field = objectType.Fields.FirstOrDefault(candidate =>
-                    string.Equals(candidate.Name, name, StringComparison.Ordinal));
-                if (field is not null)
-                {
-                    return new(
-                        field.Type,
-                        cardinality: field.Cardinality,
-                        presence: field.Presence,
-                        nullability: field.Nullability);
-                }
-            }
-            return null;
-        }
+        ValueContract ResolveRelativeContract(ValueContract root, FieldPath path) =>
+            plan.ResolveRelativeContract(root, path, out var error)
+                ?? throw Invalid(TransitionExecutionDiagnosticCodes.ResultContractViolated,
+                    error!, new("contract/resolution"));
 
         ValueContract? FindExpressionContract(
             ExecutionNodeId node,

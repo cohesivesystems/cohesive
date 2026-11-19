@@ -175,12 +175,12 @@ internal sealed class EntityTransitionEndToEnd : IDisposable
         }
     }
 
-    static ShipmentState InitialState(DateTimeOffset now) => new(
+    internal static ShipmentState InitialState(DateTimeOffset now) => new(
         Id: ShipmentId, Tenant: Tenant, Status: "Booked", Carrier: "unassigned", Origin: "Chicago, IL",
         Destination: "Dallas, TX", Reference: "PO-2026-000123", WeightKg: 1234.5600m, Pieces: 24, Hazmat: false,
         PickupAtUtc: now.AddDays(1), DeliverByUtc: now.AddDays(3), UpdatedAtUtc: now);
 
-    static CompiledTransitionPlan CompileAssign(ShipmentEntity entity)
+    internal static CompiledTransitionPlan CompileAssign(ShipmentEntity entity)
     {
         var authored = TransitionAuthoring.Create<ShipmentEntity, ShipmentEntity.AssignInput, bool>(
             entity.Definition.Shape,
