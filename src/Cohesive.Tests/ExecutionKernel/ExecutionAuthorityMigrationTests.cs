@@ -1,7 +1,6 @@
 using Cohesive.Adapters.AspNet.Entities;
 using Cohesive.Api;
 using Cohesive.Host.Services;
-using Cohesive.Transitions.Compilation;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.IR;
 
@@ -14,24 +13,12 @@ public sealed class ExecutionAuthorityMigrationTests
     {
         Assert.Null(typeof(ApiOperation).Assembly.GetType("Cohesive.Transitions.Model.TransitionDefinition"));
 
-        var bindings = typeof(EntityApiOperationBinding)
-            .GetMethods()
-            .Where(static method => method.Name == nameof(EntityApiOperationBinding.Transition))
-            .ToArray();
-        Assert.NotEmpty(bindings);
-        // The authored overload prepares its canonical document at registration. Both accepted
-        // forms retain exact authority; names and retired flat definitions remain forbidden.
-        Assert.All(bindings, static binding =>
-        {
-            Assert.Contains(
-                binding.GetParameters(),
-                static parameter => parameter.ParameterType == typeof(CompiledTransitionPlan)
-                    || (parameter.ParameterType.IsGenericType
-                        && parameter.ParameterType.GetGenericTypeDefinition() == typeof(Transition<,,>)));
-            Assert.DoesNotContain(
-                binding.GetParameters(),
-                static parameter => string.Equals(parameter.Name, "transitionName", StringComparison.Ordinal));
-        });
+        Assert.DoesNotContain(typeof(EntityApiOperationBinding).GetMethods(),
+            static method => method.Name == "Transition");
+        var binding = Assert.Single(typeof(EntityTransitionCommandExtensions).GetMethods(),
+            static method => method.Name == nameof(EntityTransitionCommandExtensions.BindTransition));
+        Assert.Contains(binding.GetParameters(), static parameter => parameter.ParameterType.IsGenericType
+            && parameter.ParameterType.GetGenericTypeDefinition() == typeof(Transition<,,>));
     }
 
     [Fact]
