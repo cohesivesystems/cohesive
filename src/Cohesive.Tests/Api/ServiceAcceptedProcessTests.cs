@@ -34,10 +34,11 @@ public sealed class ServiceAcceptedProcessTests
     public void Repeated_outcomes_are_diagnosed_at_api_construction()
     {
         var fixture = new Fixture();
-        var outcomes = AcceptedProcessResponses.Receipt(link => link.ResultToken).Pending(202).Pending(202);
+        var outcomes = AcceptedProcessResponses.Receipt(link => link.ResultToken).Pending(202).Pending(202).Missing(404).Missing(404);
         var error = Assert.Throws<ServiceBindingValidationException>(() => fixture.Service.AcceptedApi<Command, string, string>(
             "start", "result", "/commands", "/results/{instanceId}", outcomes));
-        Assert.Contains("Duplicate", error.Message);
+        Assert.Contains("Poll.Accepted", error.Message);
+        Assert.Contains("Poll.NotFound", error.Message);
     }
 
     [Fact]
@@ -310,6 +311,8 @@ public sealed class ServiceAcceptedProcessTests
         var failed = await client.GetAsync(url);
         Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
         Assert.Equal("Failed", await failed.Content.ReadFromJsonAsync<string>());
+        fixture.Values.OnWait = fixture.Values.Current;
+        fixture.Values.Current = ProcessExecutionValueReadResult.InProgress(values);
         var waited = await client.PostAsJsonAsync("/prefix/commands", new Command("a/b", "text"));
         Assert.Equal(HttpStatusCode.InternalServerError, waited.StatusCode);
         Assert.Equal("Failed", await waited.Content.ReadFromJsonAsync<string>());
@@ -405,7 +408,7 @@ public sealed class ServiceAcceptedProcessTests
 
     [Theory]
     [InlineData("missing", 404)]
-    [InlineData("failed", 422)]
+    [InlineData("failed", 500)]
     [InlineData("wrong-definition", 404)]
     [InlineData("unavailable", 500)]
     public async Task Poll_preserves_failure_contract_without_dispatch(string state, int expected)
@@ -481,7 +484,7 @@ public sealed class ServiceAcceptedProcessTests
 
     sealed class PairApi : ApiModel
     {
-        public ServiceAcceptedProcessApi<Command, string> Add(ServiceBuilder service) =>
+        public ServiceAcceptedProcessApi<Command, string, ServiceProcessReceipt> Add(ServiceBuilder service) =>
             Endpoints.AcceptedProcess<Command, string>(service, "start", "result", "/commands", "/results/{instanceId}");
     }
 
@@ -489,7 +492,7 @@ public sealed class ServiceAcceptedProcessTests
     {
         public CompiledProcessPlan Plan { get; }
         public ServiceBuilder Service { get; }
-        public ServiceAcceptedProcessApi<Command, string> Api { get; }
+        public ServiceAcceptedProcessApi<Command, string, ServiceProcessReceipt> Api { get; }
         public ServiceRuntime Runtime { get; }
         public Values Values { get; } = new();
         public Authorization Authorization { get; } = new();
@@ -549,7 +552,14 @@ public sealed class ServiceAcceptedProcessTests
     {
         public ProcessExecutionValueReadResult Current = ProcessExecutionValueReadResult.NotFound();
         public int Reads;
-        public ValueTask<bool> WaitForCompletionAsync(OperationContext context, InteractionAuthorityScope scope, ProcessInstanceId instance, TimeSpan maximumWait) => ValueTask.FromResult(false);
+        public ProcessExecutionValueReadResult? OnWait;
+        public ValueTask<bool> WaitForCompletionAsync(OperationContext context, InteractionAuthorityScope scope, ProcessInstanceId instance, TimeSpan maximumWait)
+        {
+            if (OnWait is null) return ValueTask.FromResult(false);
+            Current = OnWait;
+            OnWait = null;
+            return ValueTask.FromResult(true);
+        }
         public ValueTask<ProcessExecutionValueReadResult> GetValuesAsync(OperationContext context, InteractionAuthorityScope authorityScope, ProcessInstanceId processInstanceId)
         { Reads++; return ValueTask.FromResult(Current); }
     }

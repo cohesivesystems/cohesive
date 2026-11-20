@@ -55,10 +55,10 @@ public sealed class OrderApi : ApiModel
     }
 
     /// <summary>Admits durable cancellation and exposes its authorized result; null in the host-only profile.</summary>
-    public ColocatedProcessApi<ServiceProcessCommand<CancelOrder>, CancelOrder, CancellationResult>? Cancellation { get; }
+    public ColocatedProcessApi<ServiceProcessCommand<CancelOrder>, CancelOrder, CancellationResult, ServiceProcessReceipt>? Cancellation { get; }
 
     /// <summary>Acknowledges fulfillment and exposes its independently authorized result.</summary>
-    public ColocatedProcessApi<ServiceProcessCommand<FulfillOrder>, FulfillOrder, FulfillmentResult> Fulfill { get; }
+    public ColocatedProcessApi<ServiceProcessCommand<FulfillOrder>, FulfillOrder, FulfillmentResult, ServiceProcessReceipt> Fulfill { get; }
     /// <summary>Creates a fresh order.</summary>
     public ApiEndpoint<OrderCreated> Create { get; }
     /// <summary>Reads an existing order.</summary>

@@ -4199,11 +4199,18 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             (await client.AdmitCohesiveProcessAsync(Admission(winner, "same"), timeout.Token)).Disposition);
         Assert.Equal(ProcessStartDisposition.CommandIdentityConflict,
             (await client.AdmitCohesiveProcessAsync(Admission(winner, "changed"), timeout.Token)).Disposition);
-        var legacy = Admission("legacy", "new");
-        Assert.Equal(ProcessStartDisposition.QuotaExceeded,
-            (await client.AdmitCohesiveProcessAsync(new(legacy.Request, legacy.ActivationContext, legacy.Invocation,
-                maximumRetainedInstances: 100), timeout.Token)).Disposition);
         await worker.StopAsync(timeout.Token);
+        foreach (int? mismatchedLimit in new int?[] { null, 100 })
+        {
+            using var replacement = SchedulerHost(Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")!,
+                new DurableTaskSequentialProcessPlanCatalog([Physical(plan)], maximumRetainedInstances: mismatchedLimit), RejectingHost.Instance);
+            await replacement.StartAsync(timeout.Token);
+            var other = replacement.Services.GetRequiredService<DurableTaskClient>();
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                other.AdmitCohesiveProcessAsync(Admission("new", "value"), timeout.Token));
+            Assert.Contains("quota", error.Message, StringComparison.OrdinalIgnoreCase);
+            await replacement.StopAsync(timeout.Token);
+        }
     }
 
     [DurableTaskSchedulerFact]

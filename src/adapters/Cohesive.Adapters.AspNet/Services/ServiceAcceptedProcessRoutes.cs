@@ -40,25 +40,19 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         routes.MapApiEndpoint(api.Start, async (OperationContext context, HttpContext http) =>
         {
             (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency, ProcessContinuationIdentity Continuation, ObservationValue Input) intent;
+            TRequest? request = null;
             try
             {
-                var request = await ReadBody().ConfigureAwait(false);
+                request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation, context.CancellationToken)
+                    .ConfigureAwait(false) ?? throw new BadHttpRequestException("A Process command body is required.");
                 intent = bind(http, request);
             }
-            catch (BadHttpRequestException error) when (error.StatusCode == 400)
+            catch (Exception error) when (error is BadHttpRequestException { StatusCode: 400 }
+                || request is null && error is System.Text.Json.JsonException)
             {
                 if (Submission(ApiResultKind.ValidationFailed) is { } invalid) return invalid;
+                if (error is System.Text.Json.JsonException) throw new BadHttpRequestException("Invalid process command JSON.", error);
                 throw;
-            }
-
-            async ValueTask<TRequest> ReadBody()
-            {
-                try
-                {
-                    return await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation, context.CancellationToken)
-                        .ConfigureAwait(false) ?? throw new BadHttpRequestException("A Process command body is required.");
-                }
-                catch (System.Text.Json.JsonException error) { throw new BadHttpRequestException("Invalid process command JSON.", error); }
             }
             var outcome = await runtime.StartAsync(context, api.StartOperationId, intent.Command, intent.Idempotency,
                 intent.Continuation, intent.Input).ConfigureAwait(false);

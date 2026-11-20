@@ -8,10 +8,10 @@ namespace Cohesive.Api.Execution.Services;
 /// <typeparam name="TRequest">Transport input.</typeparam><typeparam name="TInput">Process input.</typeparam>
 /// <typeparam name="TResult">Process result.</typeparam>
 /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
-public class ColocatedProcessApi<TRequest, TInput, TResult, TReceipt> : ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> where TRequest : class
+public sealed class ColocatedProcessApi<TRequest, TInput, TResult, TReceipt> : ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> where TRequest : class
 {
     internal ColocatedProcessApi(ServiceBuilder service, ProcessModel<TInput, TResult> process,
-        string startOperationId, string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse response, AcceptedProcessResponses<TReceipt>? outcomes)
+        string startOperationId, string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse response, AcceptedProcessResponses<TReceipt> outcomes)
         : base(service.Build(), startOperationId, resultOperationId, startRoute, resultRoute, response, outcomes)
     {
         if (declarationMismatch())
@@ -29,14 +29,6 @@ public class ColocatedProcessApi<TRequest, TInput, TResult, TReceipt> : ServiceA
     public ServiceBuilder Service { get; }
     /// <summary>Generated process and dependency recipes; no executor is constructed.</summary>
     public ProcessModel<TInput, TResult> Process { get; }
-}
-
-/// <summary>A colocated process with the standard admission receipt.</summary>
-public sealed class ColocatedProcessApi<TRequest, TInput, TResult> : ColocatedProcessApi<TRequest, TInput, TResult, ServiceProcessReceipt> where TRequest : class
-{
-    internal ColocatedProcessApi(ServiceBuilder service, ProcessModel<TInput, TResult> process, string startOperationId,
-        string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse response)
-        : base(service, process, startOperationId, resultOperationId, startRoute, resultRoute, response, null) { }
 }
 
 /// <summary>Selects a generated process for colocated service/API authoring.</summary>
@@ -69,16 +61,11 @@ public sealed class ColocatedProcessApiBuilder<TInput, TResult>
     /// <param name="startRoute">POST route.</param><param name="resultRoute">GET route with {instanceId}.</param>
     /// <param name="response">Response timing, independent of execution lifetime.</param>
     /// <returns>The linked declaration and its reusable host recipe.</returns>
-    public ColocatedProcessApi<TRequest, TInput, TResult> Accepted<TRequest>(ExecutionDefinitionId id, ExecutionRevisionId revision,
+    public ColocatedProcessApi<TRequest, TInput, TResult, ServiceProcessReceipt> Accepted<TRequest>(ExecutionDefinitionId id, ExecutionRevisionId revision,
         Func<ServiceBuilder, ServiceBuilder> configure, string startOperationId, string resultOperationId,
         string startRoute, string resultRoute, ServiceProcessResponse? response = null) where TRequest : class
-    {
-        var service = Configure(configure, id, revision);
-        var pair = new ColocatedProcessApi<TRequest, TInput, TResult>(service, process, startOperationId, resultOperationId,
-            startRoute, resultRoute, response ?? ServiceProcessResponse.Acknowledge);
-        endpoints.Include(pair.Definition);
-        return pair;
-    }
+        => Accepted<TRequest, ServiceProcessReceipt>(id, revision, configure, startOperationId, resultOperationId,
+            startRoute, resultRoute, new(), response);
 
     /// <summary>Declares a colocated pair with a typed admission receipt.</summary>
     public ColocatedProcessApi<TRequest, TInput, TResult, TReceipt> Accepted<TRequest, TReceipt>(ExecutionDefinitionId id, ExecutionRevisionId revision,

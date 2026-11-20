@@ -234,7 +234,7 @@ public static class ServiceApiProjection
                 new(ApiResultKind.Forbidden, typeof(ApiProblem)),
                 new(ApiResultKind.Conflict, typeof(ApiProblem)), new(ApiResultKind.PreconditionFailed, typeof(ApiProblem)),
                 new(ApiResultKind.NotFound, typeof(ApiProblem)), new(ApiResultKind.DomainError, typeof(ApiProblem)),
-                new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);
+                new(ApiResultKind.ExecutionFailed, typeof(ApiProblem)), new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);
         if (http is not null) projected = projected.WithHttp(http);
         return new ApiDefinition([projected]).Endpoints[0];
     }

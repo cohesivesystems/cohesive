@@ -58,7 +58,7 @@ public sealed partial class ServiceRuntime
             if (read.State == ProcessExecutionValueReadState.InProgress)
                 return Reject(ApiResultKind.Accepted, "services.process.inProgress", "The execution has not completed.");
             if (read.State == ProcessExecutionValueReadState.ExecutionFailed)
-                return Reject(ApiResultKind.InfrastructureError, "services.process.engineFailed", "The execution provider retained a terminal failure.") with { TerminalFailure = ServiceProcessFailureKind.EngineFailed };
+                return Reject(ApiResultKind.ExecutionFailed, "services.process.engineFailed", "The execution provider retained a terminal failure.") with { TerminalFailure = ServiceProcessFailureKind.EngineFailed };
             if (read.State != ProcessExecutionValueReadState.Available || values.TerminalContinuation is null || values.Evidence.IsDefault)
                 return Reject(ApiResultKind.InfrastructureError, "services.process.evidenceUnavailable", "Exact terminal execution evidence is unavailable.");
             evidence.Record("terminalValuesRead");
@@ -81,7 +81,7 @@ public sealed partial class ServiceRuntime
                     evidence.Record("commitConflict", failure.Diagnostic.Code);
                     return new(ApiResultKind.Conflict, null, [failure.Diagnostic], evidence.Complete(ApiResultKind.Conflict));
                 }
-                return Reject(ApiResultKind.DomainError, "services.process.notCompleted", "The Process did not complete successfully.") with { TerminalFailure = ServiceProcessFailureKind.UnsuccessfulOutcome };
+                return Reject(ApiResultKind.ExecutionFailed, "services.process.notCompleted", "The Process did not complete successfully.") with { TerminalFailure = ServiceProcessFailureKind.UnsuccessfulOutcome };
             }
             return await project(new(trusted, scope, authority, values), evidence).ConfigureAwait(false);
         }

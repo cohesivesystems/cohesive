@@ -1,4 +1,3 @@
-using System.Text.Json.Serialization;
 using Cohesive.Api.Execution;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
@@ -18,10 +17,6 @@ namespace Cohesive.Adapters.DurableTask;
 /// </remarks>
 public sealed record DurableTaskProcessStartAdmission
 {
-    /// <summary>Creates an unmetered start admission.</summary>
-    public DurableTaskProcessStartAdmission(ProcessStartRequest request, ProcessActivationContext activationContext,
-        ExecutionApiInvocationContext invocation) : this(request, activationContext, invocation, null) { }
-
     /// <summary>Creates one trusted Process-start admission input.</summary>
     /// <param name="request">Canonical caller request whose authority evidence will be rebound.</param>
     /// <param name="activationContext">Top-level execution correlation, delivery, causation, and ordering policy.</param>
@@ -30,16 +25,11 @@ public sealed record DurableTaskProcessStartAdmission
     /// <exception cref="UnauthorizedAccessException">
     /// <paramref name="invocation"/> does not grant canonical Process-start admission.
     /// </exception>
-    /// <param name="maximumRetainedInstances">Optional positive quota for quota-enabled starts in this authority, tenant and process definition ID.</param>
-    [JsonConstructor]
     public DurableTaskProcessStartAdmission(
         ProcessStartRequest request,
         ProcessActivationContext activationContext,
-        ExecutionApiInvocationContext invocation,
-        int? maximumRetainedInstances = null)
+        ExecutionApiInvocationContext invocation)
     {
-        if (maximumRetainedInstances <= 0) throw new ArgumentOutOfRangeException(nameof(maximumRetainedInstances));
-        MaximumRetainedInstances = maximumRetainedInstances;
         Request = request ?? throw new ArgumentNullException(nameof(request));
         ActivationContext = activationContext ?? throw new ArgumentNullException(nameof(activationContext));
         Invocation = invocation ?? throw new ArgumentNullException(nameof(invocation));
@@ -50,10 +40,6 @@ public sealed record DurableTaskProcessStartAdmission
                 $"Durable Task Process-start admission requires authorization grant '{requirement}'.");
         }
     }
-
-    /// <summary>Deployment quota captured in the start history for deterministic replay.</summary>
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public int? MaximumRetainedInstances { get; }
 
     /// <summary>Canonical caller request whose authority evidence will be rebound.</summary>
     public ProcessStartRequest Request { get; }
@@ -189,8 +175,11 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
         var instanceIndex = Index(scope, "instance", request.Context.ProcessInstanceId.Value);
         var quota = new EntityInstanceId(DurableTaskAdmissionQuota.Name,
             DurableTaskSequentialProcessIdentities.StartAdmissionIndex(scope, "quota", request.Definition.DefinitionId.Value));
-        // Legacy admission histories carry the original deployment limit in their input.
-        var maximum = catalog.MaximumRetainedInstances ?? input.MaximumRetainedInstances;
+        // Every worker checks the persisted policy, including workers configured for unlimited retention.
+        // Branch on the recorded entity response so orchestration replay uses the original decision.
+        var policy = await context.Entities.CallEntityAsync<AdmissionQuotaPolicy>(quota,
+            nameof(DurableTaskAdmissionQuota.RequirePolicy), new AdmissionQuotaPolicy(catalog.MaximumRetainedInstances));
+        var maximum = policy.Maximum;
         EntityInstanceId[] indices = maximum.HasValue
             ? [commandIndex, idempotencyIndex, instanceIndex, quota]
             : [commandIndex, idempotencyIndex, instanceIndex];
@@ -388,15 +377,28 @@ sealed class DurableTaskProcessStartIndexEntity : TaskEntity<DurableTaskProcessS
 }
 
 
+sealed record AdmissionQuotaPolicy(int? Maximum);
+sealed record AdmissionQuotaState(AdmissionQuotaPolicy? Policy, int Count);
+
 // Count and the outbound schedule action commit in the same entity turn.
-sealed class DurableTaskAdmissionQuota : TaskEntity<int>
+sealed class DurableTaskAdmissionQuota : TaskEntity<AdmissionQuotaState>
 {
     internal const string Name = "Cohesive.Processes.AdmissionQuota.v1";
-    public int Count() => State;
+    protected override AdmissionQuotaState InitializeState(TaskEntityOperation operation) => new(null, 0);
+
+    public AdmissionQuotaPolicy RequirePolicy(AdmissionQuotaPolicy requested)
+    {
+        if (State.Policy is null) State = State with { Policy = requested };
+        if (State.Policy != requested)
+            throw new InvalidOperationException("Workers disagree about the retained-instance quota for this admission scope.");
+        return State.Policy;
+    }
+
+    public int Count() => State.Count;
 
     public void Schedule(DurableTaskSequentialProcessStart start, TaskEntityContext context)
     {
-        State = checked(State + 1);
+        State = State with { Count = checked(State.Count + 1) };
         context.ScheduleNewOrchestration(new(DurableTaskSequentialProcessNames.Orchestration), start,
             DurableTaskSequentialProcessClientExtensions.CreateStartOptions(start));
     }
