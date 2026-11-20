@@ -457,7 +457,8 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             };
             AppendResultExtensions(response, statusCode, results);
 
-            var bodyResults = results.Where(static result => result.BodyType != typeof(void)).ToArray();
+            var bodyResults = results.Where(static result => result.BodyType != typeof(void))
+                .DistinctBy(static result => result.BodyType).ToArray();
             if (bodyResults.Length == 0)
                 return response;
 

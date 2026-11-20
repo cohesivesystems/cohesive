@@ -42,7 +42,11 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
     /// <summary>Maximum retained identities per authority, tenant and process definition on this deployment.</summary>
     public int? MaximumRetainedInstances { get; }
 
+    /// <summary>Optional expected prior finite quota for an explicit in-place increase.</summary>
+    public int? RaiseQuotaFrom { get; }
+
     /// <summary>Creates an immutable catalog from executable-qualified canonical Processes.</summary>
+    /// <param name="raiseQuotaFrom">When set, atomically raise this prior finite quota to the larger maximum as each scope is used.</param>
     /// <param name="maximumRetainedInstances">Optional fixed deployment limit for distinct retained identities in each scope.</param>
     /// <param name="plans">Exact Durable Task realization plans deployed to this worker.</param>
     /// <param name="requestBindings">
@@ -67,9 +71,13 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
         IEnumerable<DurableTaskProcessRealizationPlan> plans,
         IEnumerable<DurableRequestBinding>? requestBindings = null,
         IDomainEventPublisherResolver? domainEventPublisherResolver = null,
-        IDurableOperationAdapterCapabilityResolver? operationAdapterCapabilities = null, int? maximumRetainedInstances = null)
+        IDurableOperationAdapterCapabilityResolver? operationAdapterCapabilities = null, int? maximumRetainedInstances = null,
+        int? raiseQuotaFrom = null)
     {
         if (maximumRetainedInstances <= 0) throw new ArgumentOutOfRangeException(nameof(maximumRetainedInstances));
+        if (raiseQuotaFrom is int prior && (prior <= 0 || maximumRetainedInstances is not int next || next <= prior))
+            throw new ArgumentOutOfRangeException(nameof(raiseQuotaFrom), "A quota increase requires a positive prior limit and a larger finite maximum.");
+        RaiseQuotaFrom = raiseQuotaFrom;
         MaximumRetainedInstances = maximumRetainedInstances;
         ArgumentNullException.ThrowIfNull(plans);
         var bindingCatalog = new DurableRequestBindingCatalog(requestBindings ?? []);

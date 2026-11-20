@@ -152,7 +152,12 @@ public sealed record ServiceOperationResult<TOutcome>(ApiResultKind Kind, TOutco
     where TOutcome : class
 {
     /// <summary>Verified terminal failure when the retained execution reached an unsuccessful end.</summary>
-    public ServiceProcessFailureKind? TerminalFailure { get; init; }
+    public ServiceProcessFailureKind? TerminalFailure => Kind switch
+    {
+        ApiResultKind.ExecutionEngineFailed => ServiceProcessFailureKind.EngineFailed,
+        ApiResultKind.ExecutionFailed => ServiceProcessFailureKind.UnsuccessfulOutcome,
+        _ => null
+    };
 }
 
 /// <summary>Verified failure source for a retained process result.</summary>

@@ -40,18 +40,14 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         routes.MapApiEndpoint(api.Start, async (OperationContext context, HttpContext http) =>
         {
             (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency, ProcessContinuationIdentity Continuation, ObservationValue Input) intent;
-            TRequest? request = null;
             try
             {
-                request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation, context.CancellationToken)
-                    .ConfigureAwait(false) ?? throw new BadHttpRequestException("A Process command body is required.");
+                var request = await ReadBody(http, context.CancellationToken).ConfigureAwait(false);
                 intent = bind(http, request);
             }
-            catch (Exception error) when (error is BadHttpRequestException { StatusCode: 400 }
-                || request is null && error is System.Text.Json.JsonException)
+            catch (BadHttpRequestException error) when (error.StatusCode == 400)
             {
                 if (Submission(ApiResultKind.ValidationFailed) is { } invalid) return invalid;
-                if (error is System.Text.Json.JsonException) throw new BadHttpRequestException("Invalid process command JSON.", error);
                 throw;
             }
             var outcome = await runtime.StartAsync(context, api.StartOperationId, intent.Command, intent.Idempotency,
@@ -78,6 +74,19 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             (service, context, instance) => service.ReadProcessResultAsync(context, api.ResultOperationId, instance),
             (_, value) => project(value), authorizationPolicyResolver, "instanceId", ProjectRead,
             DecodeInstance, () => api.TryProjectMissing(out var missing) ? Render(missing) : null);
+
+        async ValueTask<TRequest> ReadBody(HttpContext http, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation, cancellationToken)
+                    .ConfigureAwait(false) ?? throw new BadHttpRequestException("A Process command body is required.");
+            }
+            catch (System.Text.Json.JsonException error)
+            {
+                throw new BadHttpRequestException("Invalid process command JSON.", error);
+            }
+        }
 
         IResult? Submission(ApiResultKind kind, AcceptedProcessLocation? location = null) =>
             api.TryProjectSubmission(kind, out var response, location) ? Render(response) : null;

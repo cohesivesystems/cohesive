@@ -51,7 +51,10 @@ public sealed class AcceptedProcessResponses<TReceipt>
 
     /// <summary>Project verified terminal failure. Storage and decoding failures retain their own handling.</summary>
     public AcceptedProcessResponses<TReceipt> ExecutionFailed<T>(int status, T body)
-        => Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionFailed, status, typeof(T), _ => body);
+    {
+        Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionEngineFailed, status, typeof(T), _ => body);
+        return Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionFailed, status, typeof(T), _ => body);
+    }
 
     internal Rule? Find(AcceptedProcessRoute route, ApiResultKind kind) => rules.GetValueOrDefault((route, kind));
 

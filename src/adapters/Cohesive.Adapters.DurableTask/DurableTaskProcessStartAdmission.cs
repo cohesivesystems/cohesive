@@ -177,8 +177,9 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
             DurableTaskSequentialProcessIdentities.StartAdmissionIndex(scope, "quota", request.Definition.DefinitionId.Value));
         // Every worker checks the persisted policy, including workers configured for unlimited retention.
         // Branch on the recorded entity response so orchestration replay uses the original decision.
-        var policy = await context.Entities.CallEntityAsync<AdmissionQuotaPolicy>(quota,
-            nameof(DurableTaskAdmissionQuota.RequirePolicy), new AdmissionQuotaPolicy(catalog.MaximumRetainedInstances));
+        var policy = await context.Entities.CallEntityAsync<AdmissionQuotaDecision>(quota,
+            nameof(DurableTaskAdmissionQuota.RequirePolicy), new AdmissionQuotaRequest(catalog.MaximumRetainedInstances, catalog.RaiseQuotaFrom));
+        if (!policy.Matches) return new(ProcessStartDisposition.QuotaPolicyMismatch);
         var maximum = policy.Maximum;
         EntityInstanceId[] indices = maximum.HasValue
             ? [commandIndex, idempotencyIndex, instanceIndex, quota]
@@ -378,6 +379,8 @@ sealed class DurableTaskProcessStartIndexEntity : TaskEntity<DurableTaskProcessS
 
 
 sealed record AdmissionQuotaPolicy(int? Maximum);
+sealed record AdmissionQuotaRequest(int? Maximum, int? RaiseFrom);
+sealed record AdmissionQuotaDecision(bool Matches, int? Maximum);
 sealed record AdmissionQuotaState(AdmissionQuotaPolicy? Policy, int Count);
 
 // Count and the outbound schedule action commit in the same entity turn.
@@ -386,12 +389,11 @@ sealed class DurableTaskAdmissionQuota : TaskEntity<AdmissionQuotaState>
     internal const string Name = "Cohesive.Processes.AdmissionQuota.v1";
     protected override AdmissionQuotaState InitializeState(TaskEntityOperation operation) => new(null, 0);
 
-    public AdmissionQuotaPolicy RequirePolicy(AdmissionQuotaPolicy requested)
+    public AdmissionQuotaDecision RequirePolicy(AdmissionQuotaRequest requested)
     {
-        if (State.Policy is null) State = State with { Policy = requested };
-        if (State.Policy != requested)
-            throw new InvalidOperationException("Workers disagree about the retained-instance quota for this admission scope.");
-        return State.Policy;
+        if (State.Policy is null || (requested.RaiseFrom is int prior && State.Policy.Maximum == prior && requested.Maximum > prior))
+            State = State with { Policy = new(requested.Maximum) };
+        return new(State.Policy.Maximum == requested.Maximum, State.Policy.Maximum);
     }
 
     public int Count() => State.Count;

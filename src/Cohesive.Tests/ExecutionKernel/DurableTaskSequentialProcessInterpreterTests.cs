@@ -4206,11 +4206,19 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
                 new DurableTaskSequentialProcessPlanCatalog([Physical(plan)], maximumRetainedInstances: mismatchedLimit), RejectingHost.Instance);
             await replacement.StartAsync(timeout.Token);
             var other = replacement.Services.GetRequiredService<DurableTaskClient>();
-            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                other.AdmitCohesiveProcessAsync(Admission("new", "value"), timeout.Token));
-            Assert.Contains("quota", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(ProcessStartDisposition.QuotaPolicyMismatch,
+                (await other.AdmitCohesiveProcessAsync(Admission("new", "value"), timeout.Token)).Disposition);
             await replacement.StopAsync(timeout.Token);
         }
+
+        using var upgraded = SchedulerHost(Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")!,
+            new DurableTaskSequentialProcessPlanCatalog([Physical(plan)], maximumRetainedInstances: 2, raiseQuotaFrom: 1), RejectingHost.Instance);
+        await upgraded.StartAsync(timeout.Token);
+        var raised = upgraded.Services.GetRequiredService<DurableTaskClient>();
+        Assert.Equal(ProcessStartDisposition.Accepted, (await raised.AdmitCohesiveProcessAsync(Admission("new", "value"), timeout.Token)).Disposition);
+        Assert.Equal(ProcessStartDisposition.QuotaExceeded, (await raised.AdmitCohesiveProcessAsync(Admission("third", "value"), timeout.Token)).Disposition);
+        Assert.Equal(ProcessStartDisposition.Replayed, (await raised.AdmitCohesiveProcessAsync(Admission(winner, "same"), timeout.Token)).Disposition);
+        await upgraded.StopAsync(timeout.Token);
     }
 
     [DurableTaskSchedulerFact]

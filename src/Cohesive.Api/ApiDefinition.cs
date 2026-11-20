@@ -320,7 +320,13 @@ public enum ApiResultKind
     CapacityExceeded = 13,
 
     /// <summary>An admitted process reached a verified unsuccessful terminal outcome.</summary>
-    ExecutionFailed = 14
+    ExecutionFailed = 14,
+
+    /// <summary>The execution provider retained a failed or terminated execution.</summary>
+    ExecutionEngineFailed = 15,
+
+    /// <summary>The configured provider cannot currently serve the operation.</summary>
+    ServiceUnavailable = 16
 }
 
 /// <summary>Stable host-language-independent wire names for closed API semantic categories.</summary>
@@ -357,6 +363,8 @@ public static class ApiWireNames
         ApiResultKind.RateLimited => "rateLimited",
         ApiResultKind.CapacityExceeded => "capacityExceeded",
         ApiResultKind.ExecutionFailed => "executionFailed",
+        ApiResultKind.ExecutionEngineFailed => "executionEngineFailed",
+        ApiResultKind.ServiceUnavailable => "serviceUnavailable",
         ApiResultKind.DomainError => "domainError",
         ApiResultKind.InfrastructureError => "infrastructureError",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported API result kind.")
@@ -803,9 +811,9 @@ public static class ApiHttpResultConventions
         ApiResultKind.Conflict => 409,
         ApiResultKind.PreconditionFailed => 412,
         ApiResultKind.RateLimited => 429,
-        ApiResultKind.CapacityExceeded => 503,
-        ApiResultKind.DomainError => 422,
-        ApiResultKind.InfrastructureError or ApiResultKind.ExecutionFailed => 500,
+        ApiResultKind.CapacityExceeded or ApiResultKind.ServiceUnavailable => 503,
+        ApiResultKind.DomainError or ApiResultKind.ExecutionFailed => 422,
+        ApiResultKind.InfrastructureError or ApiResultKind.ExecutionEngineFailed => 500,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown API result kind.")
     };
 }

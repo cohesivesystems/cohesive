@@ -56,7 +56,7 @@ public sealed class ServiceAcceptedProcessTests
         var post = paths.GetProperty("/commands").GetProperty("post").GetProperty("responses");
         Assert.Equal("string", post.GetProperty("202").GetProperty("content").GetProperty("application/json")
             .GetProperty("schema").GetProperty("type").GetString());
-        Assert.False(post.GetProperty("503").TryGetProperty("content", out _));
+        Assert.True(post.GetProperty("503").TryGetProperty("content", out _));
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
         await using var app = builder.Build();
@@ -88,6 +88,10 @@ public sealed class ServiceAcceptedProcessTests
         var full = await client.PostAsJsonAsync("/commands", new Command("new", "value"));
         Assert.Equal(HttpStatusCode.ServiceUnavailable, full.StatusCode);
         Assert.Empty(await full.Content.ReadAsByteArrayAsync());
+        fixture.PolicyMismatch = true;
+        var mismatch = await client.PostAsJsonAsync("/commands", new Command("new", "value"));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, mismatch.StatusCode);
+        Assert.Equal(ProcessStartDisposition.QuotaPolicyMismatch, (await mismatch.Content.ReadFromJsonAsync<Cohesive.Execution.ProcessStartResult>())!.Disposition);
         fixture.Values.Current = new(ProcessExecutionValueReadState.ExecutionFailed, new(fixture.Plan.DefinitionReference, identity));
         Assert.Equal("Failed", await (await client.GetAsync(url)).Content.ReadFromJsonAsync<string>());
         fixture.Complete(identity.Value);
@@ -408,12 +412,14 @@ public sealed class ServiceAcceptedProcessTests
 
     [Theory]
     [InlineData("missing", 404)]
-    [InlineData("failed", 500)]
+    [InlineData("failed", 422)]
+    [InlineData("engineFailed", 500)]
     [InlineData("wrong-definition", 404)]
     [InlineData("unavailable", 500)]
     public async Task Poll_preserves_failure_contract_without_dispatch(string state, int expected)
     {
         var fixture = new Fixture();
+        if (state == "engineFailed") fixture.Values.Current = new(ProcessExecutionValueReadState.ExecutionFailed, new(fixture.Plan.DefinitionReference, new("id")));
         if (state == "failed") fixture.Complete("id", failed: true);
         if (state == "wrong-definition") fixture.Values.Current = ProcessExecutionValueReadResult.InProgress(
             new(new(fixture.Plan.DefinitionReference.DefinitionId, new("other"), fixture.Plan.DefinitionReference.Fingerprint), new("id")));
@@ -497,6 +503,7 @@ public sealed class ServiceAcceptedProcessTests
         public Values Values { get; } = new();
         public Authorization Authorization { get; } = new();
         public bool AtCapacity;
+        public bool PolicyMismatch;
         public int Starts;
         public bool ThrowAfterAdmission;
         public HostProcessWorker? Worker { get; }
@@ -525,6 +532,7 @@ public sealed class ServiceAcceptedProcessTests
                 [new ServiceProcessBinding("start", Plan, "tests", async (context, request, invocation) =>
                 {
                     Starts++;
+                    if (PolicyMismatch) return new(ProcessStartDisposition.QuotaPolicyMismatch);
                     if (AtCapacity) return new(ProcessStartDisposition.QuotaExceeded);
                     var result = Assert.IsType<Cohesive.Execution.ProcessStartResult>((await adapter.DispatchAsync(context, catalog.Start, request, invocation)).Body);
                     if (ThrowAfterAdmission) throw new IOException("Simulated response loss after native receipt commit.");

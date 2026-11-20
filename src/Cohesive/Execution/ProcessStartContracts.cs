@@ -211,7 +211,10 @@ public enum ProcessStartDisposition
     InstanceConflict = 5,
 
     /// <summary>The retained-instance quota was full before admitting a new identity.</summary>
-    QuotaExceeded = 6
+    QuotaExceeded = 6,
+
+    /// <summary>The worker policy disagrees with the policy retained for this scope.</summary>
+    QuotaPolicyMismatch = 7
 }
 
 /// <summary>Non-sensitive public admission summary returned for an accepted or replayed start.</summary>
