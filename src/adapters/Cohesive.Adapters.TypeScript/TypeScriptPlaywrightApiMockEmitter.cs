@@ -1459,6 +1459,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
             ApiResultKind.Conflict => 409,
             ApiResultKind.PreconditionFailed => 412,
             ApiResultKind.RateLimited => 429,
+            ApiResultKind.CapacityExceeded => 503,
             ApiResultKind.DomainError => 422,
             ApiResultKind.InfrastructureError => 500,
             _ => bodyType == typeof(void) ? 204 : 200

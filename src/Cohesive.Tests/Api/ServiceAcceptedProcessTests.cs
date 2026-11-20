@@ -222,6 +222,7 @@ public sealed class ServiceAcceptedProcessTests
     public async Task Typed_projections_preserve_location_and_only_classify_verified_failures()
     {
         var fixture = new Fixture();
+        Assert.Equal(503, fixture.Api.Start.Operation.Results.Single(r => r.Kind == ApiResultKind.CapacityExceeded).Http!.StatusCode);
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
         await using var app = builder.Build();

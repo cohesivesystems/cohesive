@@ -314,7 +314,10 @@ public enum ApiResultKind
     /// <summary>
     /// An unexpected infrastructure or system error occurred.
     /// </summary>
-    InfrastructureError = 12
+    InfrastructureError = 12,
+
+    /// <summary>The configured retained-resource capacity has been reached.</summary>
+    CapacityExceeded = 13
 }
 
 /// <summary>Stable host-language-independent wire names for closed API semantic categories.</summary>
@@ -349,6 +352,7 @@ public static class ApiWireNames
         ApiResultKind.Conflict => "conflict",
         ApiResultKind.PreconditionFailed => "preconditionFailed",
         ApiResultKind.RateLimited => "rateLimited",
+        ApiResultKind.CapacityExceeded => "capacityExceeded",
         ApiResultKind.DomainError => "domainError",
         ApiResultKind.InfrastructureError => "infrastructureError",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported API result kind.")
@@ -793,6 +797,7 @@ static class ApiHttpResultConventions
         ApiResultKind.Conflict => 409,
         ApiResultKind.PreconditionFailed => 412,
         ApiResultKind.RateLimited => 429,
+        ApiResultKind.CapacityExceeded => 503,
         ApiResultKind.DomainError => 422,
         ApiResultKind.InfrastructureError => 500,
         _ => 200

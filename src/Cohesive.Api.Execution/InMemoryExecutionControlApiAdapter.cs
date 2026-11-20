@@ -490,7 +490,7 @@ public sealed partial class InMemoryExecutionControlApiAdapter : IExecutionContr
                     "The authoritative Process-start dispatcher returned no canonical result.");
             return Result(
                 endpoint,
-                startResult.Disposition == ProcessStartDisposition.QuotaExceeded ? ApiResultKind.RateLimited
+                startResult.Disposition == ProcessStartDisposition.QuotaExceeded ? ApiResultKind.CapacityExceeded
                     : startResult.IsConflict ? ApiResultKind.Conflict : ApiResultKind.Success,
                 startResult);
         }

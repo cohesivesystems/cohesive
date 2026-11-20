@@ -134,7 +134,7 @@ public sealed class ExecutionControlApiCatalog
             .Accepts<ProcessStartRequest>()
             .Returns<ProcessStartResult>()
             .Result<ProcessStartResult>(ApiResultKind.Conflict)
-            .Result<ProcessStartResult>(ApiResultKind.RateLimited, httpStatusCode: 503, id: "admissionQuotaExceeded")
+            .Result<ProcessStartResult>(ApiResultKind.CapacityExceeded, id: "admissionQuotaExceeded")
             .Result<ExecutionApiProblem>(ApiResultKind.Forbidden)
             .Result<ExecutionApiProblem>(ApiResultKind.ValidationFailed)
             .Build();
