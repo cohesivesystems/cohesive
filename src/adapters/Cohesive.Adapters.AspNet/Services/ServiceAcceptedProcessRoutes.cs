@@ -51,13 +51,28 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         if (api.Response.MaximumWait is not null) runtime.RequireProcessResultWaiting(api.ResultOperationId);
         routes.MapApiEndpoint(api.Start, async (OperationContext context, HttpContext http) =>
         {
-            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation,
-                context.CancellationToken).ConfigureAwait(false)
-                ?? throw new BadHttpRequestException("A Process command body is required.");
-            var intent = bind(http, request);
+            TRequest request;
+            try
+            {
+                request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation,
+                    context.CancellationToken).ConfigureAwait(false)
+                    ?? throw new BadHttpRequestException("A Process command body is required.");
+            }
+            catch (Exception error) when (error is System.Text.Json.JsonException or BadHttpRequestException { StatusCode: 400 })
+            {
+                if (Map(true, ApiResultKind.ValidationFailed) is { } invalid) return invalid;
+                throw;
+            }
+            (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency, ProcessContinuationIdentity Continuation, ObservationValue Input) intent;
+            try { intent = bind(http, request); }
+            catch (BadHttpRequestException error) when (error.StatusCode == 400)
+            {
+                if (Map(true, ApiResultKind.ValidationFailed) is { } invalid) return invalid;
+                throw;
+            }
             var outcome = await runtime.StartAsync(context, api.StartOperationId, intent.Command, intent.Idempotency,
                 intent.Continuation, intent.Input).ConfigureAwait(false);
-            if (outcome.Kind != ApiResultKind.Accepted) return ProjectProcessOutcome(api.Start, outcome);
+            if (outcome.Kind != ApiResultKind.Accepted) return Map(true, outcome.Kind) ?? ProjectProcessOutcome(api.Start, outcome);
             var admission = outcome.Outcome ?? throw new InvalidOperationException("Accepted start requires admission evidence.");
             var instance = admission.Admission!.Continuation.ProcessInstanceId.Value;
             var token = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(instance));
@@ -70,14 +85,32 @@ public static partial class ServiceEndpointRouteBuilderExtensions
                 if (result.Kind == ApiResultKind.Success)
                     return Results.Json(project(result.Outcome!), statusCode: api.Result.Operation.PrimaryResult.Http!.StatusCode);
                 if (result.Kind != ApiResultKind.Accepted)
-                    return ProjectFailure(result.Diagnostics) ?? ProjectServiceProblem(api.Result, result.Kind, result.Diagnostics);
+                    return ProjectRead(result.Kind, result.Diagnostics) ?? DefaultRead(result.Kind, result.Diagnostics);
             }
             http.Response.Headers.RetryAfter = "1";
-            return projectReceipt?.Invoke(new(admission, token, location)) ?? Results.Json(new ServiceProcessReceipt(admission, location), statusCode: StatusCodes.Status202Accepted);
+            return Map(true, ApiResultKind.Accepted, new(token, location)) ?? projectReceipt?.Invoke(new(admission, token, location)) ?? Results.Json(new ServiceProcessReceipt(admission, location), statusCode: StatusCodes.Status202Accepted);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(api.Declaration);
         MapResultCore(routes, api.Declaration, api.Result, _ => runtime,
-            (service, context, instance) => service.ReadProcessResultAsync(context, api.ResultOperationId, DecodeInstance(instance.Value)),
-            (_, value) => project(value), authorizationPolicyResolver, "instanceId", ProjectFailure);
+            (service, context, instance) => service.ReadProcessResultAsync(context, api.ResultOperationId, instance),
+            (_, value) => project(value), authorizationPolicyResolver, "instanceId", ProjectRead,
+            DecodeInstance, () => Map(false, ApiResultKind.NotFound));
+
+        IResult? Map(bool start, ApiResultKind kind, AcceptedProcessLocation? receipt = null, bool failed = false)
+        {
+            if (!api.TryProject(start, kind, out var response, receipt, failed)) return null;
+            return response.BodyType == typeof(void) ? Results.StatusCode(response.Status)
+                : Results.Json(response.Body, statusCode: response.Status);
+        }
+
+        IResult DefaultRead(ApiResultKind kind, IReadOnlyList<DocumentValidationDiagnostic> diagnostics) =>
+            ProjectServiceProblem(api.Result, kind, diagnostics, api.Result.Operation.Results.First(item => item.Kind == kind).Id);
+
+        IResult? ProjectRead(ApiResultKind kind, IReadOnlyList<DocumentValidationDiagnostic> diagnostics)
+        {
+            if (diagnostics.FirstOrDefault()?.Code is "services.process.engineFailed" or "services.process.notCompleted")
+                return Map(false, kind, failed: true) ?? ProjectFailure(diagnostics);
+            return Map(false, kind);
+        }
 
         IResult? ProjectFailure(IReadOnlyList<DocumentValidationDiagnostic> diagnostics) =>
             diagnostics.FirstOrDefault()?.Code switch

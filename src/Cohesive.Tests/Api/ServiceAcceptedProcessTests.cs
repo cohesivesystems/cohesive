@@ -31,6 +31,48 @@ public sealed class ServiceAcceptedProcessTests
     static readonly ExecutionProvenance Provenance = new(new("tests"), new("tests/accepted"), DocumentOrigin.Generated);
 
     [Fact]
+    public async Task Declared_outcomes_drive_http_and_openapi()
+    {
+        var outcomes = new AcceptedProcessResponses().Receipt(location => location.ResultLocation)
+            .IdentityConflict(409, "Conflict").InvalidRequest(400, "Invalid").AtCapacity(503)
+            .Pending(202).Missing(404).ExecutionFailed(500, "Failed");
+        var fixture = new Fixture(outcomes: outcomes);
+        using var document = JsonDocument.Parse(new OpenApiEmitter().Emit(fixture.Api.Definition).Documents[0].Text);
+        var paths = document.RootElement.GetProperty("paths");
+        var post = paths.GetProperty("/commands").GetProperty("post").GetProperty("responses");
+        Assert.Equal("string", post.GetProperty("202").GetProperty("content").GetProperty("application/json")
+            .GetProperty("schema").GetProperty("type").GetString());
+        Assert.False(post.GetProperty("503").TryGetProperty("content", out _));
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
+        await using var app = builder.Build();
+        app.MapServiceAcceptedProcess(fixture.Api, fixture.Runtime,
+            (_, command) => AcceptedProcessIntent.FromRequestId(command.Id, ObservationValue.FromString(command.Text)),
+            value => throw new JsonException("Stored value decoding failed."));
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
+        var bad = await client.PostAsync("/commands", new StringContent("{", System.Text.Encoding.UTF8, "application/json"));
+        Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
+        Assert.Equal("Invalid", await bad.Content.ReadFromJsonAsync<string>());
+        var command = new Command("a/b", "value");
+        var accepted = await client.PostAsJsonAsync("/commands", command);
+        var url = accepted.Headers.Location!;
+        Assert.Equal(url.OriginalString, await accepted.Content.ReadFromJsonAsync<string>());
+        Assert.Equal(url, (await client.PostAsJsonAsync("/commands", command)).Headers.Location);
+        var conflict = await client.PostAsJsonAsync("/commands", command with { Text = "changed" });
+        Assert.Equal("Conflict", await conflict.Content.ReadFromJsonAsync<string>());
+        var missing = await client.GetAsync("/results/!");
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+        Assert.Empty(await missing.Content.ReadAsByteArrayAsync());
+        var identity = AcceptedProcessIntent.FromRequestId(command.Id, ObservationValue.FromString(command.Text)).Continuation.ProcessInstanceId;
+        fixture.Values.Current = new(ProcessExecutionValueReadState.ExecutionFailed, new(fixture.Plan.DefinitionReference, identity));
+        Assert.Equal("Failed", await (await client.GetAsync(url)).Content.ReadFromJsonAsync<string>());
+        fixture.Complete(identity.Value);
+        Assert.Equal(HttpStatusCode.InternalServerError, (await client.GetAsync(url)).StatusCode);
+    }
+
+    [Fact]
     public void Builder_owned_pair_registers_both_exact_handles_and_retains_response_policy()
     {
         var fixture = new Fixture();
@@ -430,7 +472,7 @@ public sealed class ServiceAcceptedProcessTests
         public int Starts;
         public bool ThrowAfterAdmission;
         public HostProcessWorker? Worker { get; }
-        public Fixture(bool hosted = false, ServiceProcessResponse? response = null)
+        public Fixture(bool hosted = false, ServiceProcessResponse? response = null, AcceptedProcessResponses? outcomes = null)
         {
             var text = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
             var document = ProcessDefinitionDocuments.Create(new("echo"), new("1"),
@@ -440,7 +482,7 @@ public sealed class ServiceAcceptedProcessTests
             Service = Cohesive.Api.Execution.Services.Service.Define(new("accepted"), new("1"), Provenance)
                 .Operation("start").Run(Plan).ReturnAfterAdmission(hosted ? ProcessExecutionLifetime.Host : ProcessExecutionLifetime.Durable)
                 .Operation("result").ReadResultOf(ProcessAuthoring.Project<string, string>(document));
-            Api = Service.AcceptedApi<Command, string>("start", "result", "/commands", "/results/{instanceId}", response);
+            Api = Service.AcceptedApi<Command, string>("start", "result", "/commands", "/results/{instanceId}", response, outcomes);
             if (hosted)
             {
                 var prepared = Service.PrepareProcess(ProcessAuthoring.Project<string, string>(document),

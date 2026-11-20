@@ -10,8 +10,8 @@ namespace Cohesive.Api.Execution.Services;
 public sealed class ColocatedProcessApi<TRequest, TInput, TResult> : ServiceAcceptedProcessApi<TRequest, TResult> where TRequest : class
 {
     internal ColocatedProcessApi(ServiceBuilder service, ProcessModel<TInput, TResult> process,
-        string startOperationId, string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse response)
-        : base(service.Build(), startOperationId, resultOperationId, startRoute, resultRoute, response)
+        string startOperationId, string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse response, AcceptedProcessResponses? outcomes)
+        : base(service.Build(), startOperationId, resultOperationId, startRoute, resultRoute, response, outcomes)
     {
         if (declarationMismatch())
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "Colocated operations must reference the selected exact process.");
@@ -58,17 +58,18 @@ public sealed class ColocatedProcessApiBuilder<TInput, TResult>
     /// <param name="configure">Service operations and policies; generated dependencies are already registered.</param>
     /// <param name="startOperationId">Admission operation.</param><param name="resultOperationId">Result operation.</param>
     /// <param name="startRoute">POST route.</param><param name="resultRoute">GET route with {instanceId}.</param>
+    /// <param name="outcomes">Optional accepted-process HTTP mappings.</param>
     /// <param name="response">Response timing, independent of execution lifetime.</param>
     /// <returns>The linked declaration and its reusable host recipe.</returns>
     public ColocatedProcessApi<TRequest, TInput, TResult> Accepted<TRequest>(ExecutionDefinitionId id, ExecutionRevisionId revision,
         Func<ServiceBuilder, ServiceBuilder> configure, string startOperationId, string resultOperationId,
-        string startRoute, string resultRoute, ServiceProcessResponse? response = null) where TRequest : class
+        string startRoute, string resultRoute, ServiceProcessResponse? response = null, AcceptedProcessResponses? outcomes = null) where TRequest : class
     {
         ArgumentNullException.ThrowIfNull(configure);
         var service = configure(Service.Define(id, revision, process.Provenance).Use(new ServiceDependencies().Process(process)));
         ArgumentNullException.ThrowIfNull(service);
         var pair = new ColocatedProcessApi<TRequest, TInput, TResult>(service, process, startOperationId, resultOperationId,
-            startRoute, resultRoute, response ?? ServiceProcessResponse.Acknowledge);
+            startRoute, resultRoute, response ?? ServiceProcessResponse.Acknowledge, outcomes);
         endpoints.Include(pair.Definition);
         return pair;
     }
