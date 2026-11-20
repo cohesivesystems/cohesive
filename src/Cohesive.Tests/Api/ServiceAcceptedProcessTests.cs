@@ -219,6 +219,39 @@ public sealed class ServiceAcceptedProcessTests
     }
 
     [Fact]
+    public async Task Typed_projections_preserve_location_and_only_classify_verified_failures()
+    {
+        var fixture = new Fixture();
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
+        await using var app = builder.Build();
+        app.UsePathBase("/prefix");
+        app.MapServiceAcceptedProcess(fixture.Api, fixture.Runtime,
+            (_, command) => (new(command.Id), new(command.Id), new(new(command.Id), new("attempt")), ObservationValue.FromString(command.Text)),
+            value => value.Value!.Value.GetRequiredString(),
+            authorizationPolicyResolver: null,
+            projectReceipt: receipt => Microsoft.AspNetCore.Http.Results.Json(new { receipt.ResultToken, receipt.ResultLocation }, statusCode: 202),
+            projectFailure: kind => Microsoft.AspNetCore.Http.Results.Json(kind.ToString(), statusCode: 500));
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
+        var started = await client.PostAsJsonAsync("/prefix/commands", new Command("a/b", "text"));
+        var body = await started.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("YS9i", body.GetProperty("resultToken").GetString());
+        var url = started.Headers.Location!.OriginalString;
+        Assert.Equal("/prefix/results/YS9i", url);
+        Assert.Equal(url, body.GetProperty("resultLocation").GetString());
+        var values = new ProcessExecutionValues(fixture.Plan.DefinitionReference, new("a/b"));
+        fixture.Values.Current = new(ProcessExecutionValueReadState.ExecutionFailed, values);
+        var failed = await client.GetAsync(url);
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.Equal("EngineFailed", await failed.Content.ReadFromJsonAsync<string>());
+        fixture.Values.Current = ProcessExecutionValueReadResult.TerminalArtifactUnavailable(values);
+        var unavailable = await client.GetAsync(url);
+        Assert.Equal("services.process.evidenceUnavailable", (await unavailable.Content.ReadFromJsonAsync<ApiProblem>())!.Code);
+    }
+
+    [Fact]
     public async Task Admission_replay_and_poll_share_exact_identity_without_restarting_execution()
     {
         var fixture = new Fixture();

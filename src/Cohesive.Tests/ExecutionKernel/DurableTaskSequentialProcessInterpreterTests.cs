@@ -4174,6 +4174,36 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [DurableTaskSchedulerFact]
+    public async Task SchedulerEmulator_RetainedQuotaSerializesDistinctStartsAndAllowsReplayAndConflictAtCapacity()
+    {
+        var run = Guid.NewGuid().ToString("N");
+        var plan = Compile(Definition("return", [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]),
+            definitionId: $"process/quota/{run}");
+        using var worker = SchedulerHost(Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")!,
+            new DurableTaskSequentialProcessPlanCatalog([Physical(plan)]), RejectingHost.Instance);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        await worker.StartAsync(timeout.Token);
+        var client = worker.Services.GetRequiredService<DurableTaskClient>();
+
+        DurableTaskProcessStartAdmission Admission(string id, string input)
+        {
+            var start = Start(plan, input, $"instance/{run}/{id}");
+            var admission = StartAdmission(start, $"command/{run}/{id}", $"retry/{run}/{id}");
+            return new(admission.Request, admission.ActivationContext, admission.Invocation, maximumRetainedInstances: 1);
+        }
+
+        var ids = new[] { "alpha", "beta" };
+        var decisions = await Task.WhenAll(ids.Select(id => client.AdmitCohesiveProcessAsync(Admission(id, "same"), timeout.Token)));
+        Assert.Single(decisions, decision => decision.Disposition == ProcessStartDisposition.QuotaExceeded);
+        var winner = ids[Array.FindIndex(decisions, decision => decision.Disposition == ProcessStartDisposition.Accepted)];
+        Assert.Equal(ProcessStartDisposition.Replayed,
+            (await client.AdmitCohesiveProcessAsync(Admission(winner, "same"), timeout.Token)).Disposition);
+        Assert.Equal(ProcessStartDisposition.CommandIdentityConflict,
+            (await client.AdmitCohesiveProcessAsync(Admission(winner, "changed"), timeout.Token)).Disposition);
+        await worker.StopAsync(timeout.Token);
+    }
+
+    [DurableTaskSchedulerFact]
     public async Task SchedulerEmulator_StartAdmissionIsLinearizableAndSurvivesWorkerReplacement()
     {
         var connectionString = Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")

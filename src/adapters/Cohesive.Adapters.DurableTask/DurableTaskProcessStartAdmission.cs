@@ -18,6 +18,10 @@ namespace Cohesive.Adapters.DurableTask;
 /// </remarks>
 public sealed record DurableTaskProcessStartAdmission
 {
+    /// <summary>Creates an unmetered start admission.</summary>
+    public DurableTaskProcessStartAdmission(ProcessStartRequest request, ProcessActivationContext activationContext,
+        ExecutionApiInvocationContext invocation) : this(request, activationContext, invocation, null) { }
+
     /// <summary>Creates one trusted Process-start admission input.</summary>
     /// <param name="request">Canonical caller request whose authority evidence will be rebound.</param>
     /// <param name="activationContext">Top-level execution correlation, delivery, causation, and ordering policy.</param>
@@ -26,12 +30,16 @@ public sealed record DurableTaskProcessStartAdmission
     /// <exception cref="UnauthorizedAccessException">
     /// <paramref name="invocation"/> does not grant canonical Process-start admission.
     /// </exception>
+    /// <param name="maximumRetainedInstances">Optional positive quota for quota-enabled starts in this authority, tenant and process definition ID.</param>
     [JsonConstructor]
     public DurableTaskProcessStartAdmission(
         ProcessStartRequest request,
         ProcessActivationContext activationContext,
-        ExecutionApiInvocationContext invocation)
+        ExecutionApiInvocationContext invocation,
+        int? maximumRetainedInstances = null)
     {
+        if (maximumRetainedInstances <= 0) throw new ArgumentOutOfRangeException(nameof(maximumRetainedInstances));
+        MaximumRetainedInstances = maximumRetainedInstances;
         Request = request ?? throw new ArgumentNullException(nameof(request));
         ActivationContext = activationContext ?? throw new ArgumentNullException(nameof(activationContext));
         Invocation = invocation ?? throw new ArgumentNullException(nameof(invocation));
@@ -42,6 +50,10 @@ public sealed record DurableTaskProcessStartAdmission
                 $"Durable Task Process-start admission requires authorization grant '{requirement}'.");
         }
     }
+
+    /// <summary>Deployment quota captured in the start history for deterministic replay.</summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? MaximumRetainedInstances { get; }
 
     /// <summary>Canonical caller request whose authority evidence will be rebound.</summary>
     public ProcessStartRequest Request { get; }
@@ -71,6 +83,11 @@ public delegate ProcessActivationContext DurableTaskProcessStartActivationContex
 /// <summary>Client operations for canonical Process-start admission through standalone Durable Task.</summary>
 public static class DurableTaskProcessStartAdmissionClientExtensions
 {
+    /// <summary>Creates a dispatcher using the original unmetered admission protocol.</summary>
+    public static ExecutionProcessStartDispatcher CreateCohesiveProcessStartDispatcher(this DurableTaskClient client,
+        DurableTaskProcessStartActivationContextFactory activationContextFactory) =>
+        CreateCohesiveProcessStartDispatcher(client, activationContextFactory, null);
+
     /// <summary>Creates the authoritative Process-start binding used by the canonical execution API dispatcher.</summary>
     /// <param name="client">Standalone Durable Task client for the admitted worker task hub.</param>
     /// <param name="activationContextFactory">
@@ -81,10 +98,12 @@ public static class DurableTaskProcessStartAdmissionClientExtensions
     /// <see cref="InMemoryExecutionControlApiAdapter"/> composition.
     /// </returns>
     /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
+    /// <param name="maximumRetainedInstances">Maximum distinct retained starts per scope and process definition ID. Configure consistently for every producer.</param>
     public static ExecutionProcessStartDispatcher CreateCohesiveProcessStartDispatcher(
         this DurableTaskClient client,
-        DurableTaskProcessStartActivationContextFactory activationContextFactory)
+        DurableTaskProcessStartActivationContextFactory activationContextFactory, int? maximumRetainedInstances)
     {
+        if (maximumRetainedInstances <= 0) throw new ArgumentOutOfRangeException(nameof(maximumRetainedInstances));
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(activationContextFactory);
         return DispatchAsync;
@@ -102,7 +121,7 @@ public static class DurableTaskProcessStartAdmissionClientExtensions
                 ?? throw new InvalidOperationException(
                     "The Durable Task Process-start activation context factory returned no context.");
             return await client.AdmitCohesiveProcessAsync(
-                    new(request, activationContext, invocation),
+                    new(request, activationContext, invocation, maximumRetainedInstances),
                     context.CancellationToken)
                 .ConfigureAwait(false);
         }
@@ -175,7 +194,11 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
         var commandIndex = Index(scope, "command", request.Context.CommandId.Value);
         var idempotencyIndex = Index(scope, "idempotency", request.Context.IdempotencyKey.Value);
         var instanceIndex = Index(scope, "instance", request.Context.ProcessInstanceId.Value);
-        EntityInstanceId[] indices = [commandIndex, idempotencyIndex, instanceIndex];
+        var quota = new EntityInstanceId(DurableTaskAdmissionQuota.Name,
+            DurableTaskSequentialProcessIdentities.StartAdmissionIndex(scope, "quota", request.Definition.DefinitionId.Value));
+        EntityInstanceId[] indices = input.MaximumRetainedInstances.HasValue
+            ? [commandIndex, idempotencyIndex, instanceIndex, quota]
+            : [commandIndex, idempotencyIndex, instanceIndex];
 
         await using (await context.Entities.LockEntitiesAsync(indices))
         {
@@ -193,6 +216,12 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
             if (!decision.RequiresPersistence)
                 return decision.Result;
 
+            // All four entities remain locked until the scheduling action is committed.
+            // Replays and conflicts were resolved above and never consume quota.
+            if (input.MaximumRetainedInstances is int limit
+                && await context.Entities.CallEntityAsync<int>(quota, nameof(DurableTaskAdmissionQuota.Count)) >= limit)
+                return new(ProcessStartDisposition.QuotaExceeded);
+
             var start = evaluated.AcceptedStart!;
             await ClaimAsync(
                 context,
@@ -205,7 +234,11 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
             await ClaimAsync(
                 context,
                 instanceIndex,
-                new(start, DurableTaskProcessStartIndexClaimKind.RetainAndSchedule)).ConfigureAwait(true);
+                new(start, input.MaximumRetainedInstances.HasValue
+                    ? DurableTaskProcessStartIndexClaimKind.Retain
+                    : DurableTaskProcessStartIndexClaimKind.RetainAndSchedule)).ConfigureAwait(true);
+            if (input.MaximumRetainedInstances.HasValue)
+                await context.Entities.CallEntityAsync(quota, nameof(DurableTaskAdmissionQuota.Schedule), start);
             return decision.Result;
         }
     }
@@ -356,5 +389,20 @@ sealed class DurableTaskProcessStartIndexEntity : TaskEntity<DurableTaskProcessS
                 DurableTaskSequentialProcessClientExtensions.CreateStartOptions(claim.Start));
         }
         return claim.Start;
+    }
+}
+
+
+// Count and the outbound schedule action commit in the same entity turn.
+sealed class DurableTaskAdmissionQuota : TaskEntity<int>
+{
+    internal const string Name = "Cohesive.Processes.AdmissionQuota.v1";
+    public int Count() => State;
+
+    public void Schedule(DurableTaskSequentialProcessStart start, TaskEntityContext context)
+    {
+        State = checked(State + 1);
+        context.ScheduleNewOrchestration(new(DurableTaskSequentialProcessNames.Orchestration), start,
+            DurableTaskSequentialProcessClientExtensions.CreateStartOptions(start));
     }
 }

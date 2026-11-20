@@ -178,7 +178,7 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         ExecutionDefinitionDocument declaration, ApiEndpoint projection, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
         Func<ServiceRuntime, OperationContext, ProcessInstanceId, ValueTask<ServiceOperationResult<TValue>>> read,
         Func<HttpContext, TValue, TResponse> project, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver,
-        string instanceParameter) where TValue : class
+        string instanceParameter, Func<IReadOnlyList<DocumentValidationDiagnostic>, IResult?>? failure = null) where TValue : class
     {
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
@@ -194,7 +194,7 @@ public static partial class ServiceEndpointRouteBuilderExtensions
                 var value = result.Outcome ?? throw new InvalidOperationException("Successful result resolution returned no value.");
                 return Results.Json(project(http, value), statusCode: status);
             }
-            return ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
+            return failure?.Invoke(result.Diagnostics) ?? ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
     }
 

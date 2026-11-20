@@ -208,7 +208,10 @@ public enum ProcessStartDisposition
     IdempotencyConflict = 4,
 
     /// <summary>The logical Process instance was already admitted by another start request.</summary>
-    InstanceConflict = 5
+    InstanceConflict = 5,
+
+    /// <summary>The retained-instance quota was full before admitting a new identity.</summary>
+    QuotaExceeded = 6
 }
 
 /// <summary>Non-sensitive public admission summary returned for an accepted or replayed start.</summary>

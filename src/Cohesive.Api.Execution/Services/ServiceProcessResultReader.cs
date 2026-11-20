@@ -57,6 +57,8 @@ public sealed partial class ServiceRuntime
                 return Reject(ApiResultKind.NotFound, "services.process.notFound", "No execution is visible at the declared exact definition.");
             if (read.State == ProcessExecutionValueReadState.InProgress)
                 return Reject(ApiResultKind.Accepted, "services.process.inProgress", "The execution has not completed.");
+            if (read.State == ProcessExecutionValueReadState.ExecutionFailed)
+                return Reject(ApiResultKind.InfrastructureError, "services.process.engineFailed", "The execution provider retained a terminal failure.");
             if (read.State != ProcessExecutionValueReadState.Available || values.TerminalContinuation is null || values.Evidence.IsDefault)
                 return Reject(ApiResultKind.InfrastructureError, "services.process.evidenceUnavailable", "Exact terminal execution evidence is unavailable.");
             evidence.Record("terminalValuesRead");

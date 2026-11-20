@@ -52,7 +52,10 @@ public enum ProcessExecutionValueReadState
     Available = 3,
 
     /// <summary>The execution is terminal but its canonical terminal result artifact is unavailable.</summary>
-    TerminalArtifactUnavailable = 4
+    TerminalArtifactUnavailable = 4,
+
+    /// <summary>The provider retained a failed or terminated engine status without a canonical result.</summary>
+    ExecutionFailed = 5
 }
 
 /// <summary>Canonical values retained for one logical Process execution.</summary>

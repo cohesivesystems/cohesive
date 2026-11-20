@@ -315,7 +315,9 @@ public sealed class DurableTaskProcessExecutionRepository :
         }
         var result = await ReadTerminalResultAsync(context, metadata, execution).ConfigureAwait(false);
         if (result is null)
-            return ProcessExecutionValueReadResult.TerminalArtifactUnavailable(values);
+            return metadata.RuntimeStatus is ModernOrchestrationStatus.Failed or ModernOrchestrationStatus.Terminated
+                ? new(ProcessExecutionValueReadState.ExecutionFailed, values)
+                : ProcessExecutionValueReadResult.TerminalArtifactUnavailable(values);
         return ProcessExecutionValueReadResult.Available(new(
             values.Definition,
             values.ProcessInstanceId,

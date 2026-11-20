@@ -14,6 +14,15 @@ namespace Cohesive.Adapters.AspNet.Services;
 
 public static partial class ServiceEndpointRouteBuilderExtensions
 {
+    /// <summary>Maps the native receipt and standard polling responses.</summary>
+    public static void MapServiceAcceptedProcess<TRequest, TResult>(this IEndpointRouteBuilder routes,
+        ServiceAcceptedProcessApi<TRequest, TResult> api, ServiceRuntime runtime,
+        Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
+            ProcessContinuationIdentity Continuation, ObservationValue Input)> bind,
+        Func<PortableValue, TResult> project,
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TRequest : class =>
+        MapServiceAcceptedProcess(routes, api, runtime, bind, project, authorizationPolicyResolver, null);
+
     /// <summary>Maps admission and its independently authorized polling endpoint as one linked contract.</summary>
     /// <remarks>No worker is started here. Cancellation or ambiguous admission is not retried. The caller must retain
     /// command, idempotency, continuation and input across retries. Pending reads never dispatch the process.</remarks>
@@ -24,12 +33,16 @@ public static partial class ServiceEndpointRouteBuilderExtensions
     /// <param name="project">Pure terminal value projection, invoked only after result authorization and validation.</param>
     /// <param name="authorizationPolicyResolver">Optional native policy mapping.</param>
     /// <exception cref="ServiceBindingValidationException">The runtime does not realize this exact service.</exception>
+    /// <param name="projectReceipt">Optional public receipt projection with the exact opaque route token and local polling URL.</param>
+    /// <param name="projectFailure">Optional response for verified terminal failures on polling or a bounded start wait.</param>
     public static void MapServiceAcceptedProcess<TRequest, TResult>(this IEndpointRouteBuilder routes,
         ServiceAcceptedProcessApi<TRequest, TResult> api, ServiceRuntime runtime,
         Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
             ProcessContinuationIdentity Continuation, ObservationValue Input)> bind,
         Func<PortableValue, TResult> project,
-        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TRequest : class
+        AspNetAuthorizationPolicyResolver? authorizationPolicyResolver,
+        Func<AcceptedProcessHttpReceipt, IResult>? projectReceipt,
+        Func<ServiceProcessFailureKind, IResult>? projectFailure = null) where TRequest : class
     {
         ArgumentNullException.ThrowIfNull(routes); ArgumentNullException.ThrowIfNull(api);
         ArgumentNullException.ThrowIfNull(runtime); ArgumentNullException.ThrowIfNull(bind); ArgumentNullException.ThrowIfNull(project);
@@ -47,8 +60,9 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             if (outcome.Kind != ApiResultKind.Accepted) return ProjectProcessOutcome(api.Start, outcome);
             var admission = outcome.Outcome ?? throw new InvalidOperationException("Accepted start requires admission evidence.");
             var instance = admission.Admission!.Continuation.ProcessInstanceId.Value;
+            var token = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(instance));
             var location = http.Request.PathBase + api.Result.Operation.Http!.Route.Replace("{instanceId}",
-                WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(instance)), StringComparison.Ordinal);
+                token, StringComparison.Ordinal);
             http.Response.Headers.Location = location;
             if (api.Response.MaximumWait is { } maximumWait)
             {
@@ -56,14 +70,22 @@ public static partial class ServiceEndpointRouteBuilderExtensions
                 if (result.Kind == ApiResultKind.Success)
                     return Results.Json(project(result.Outcome!), statusCode: api.Result.Operation.PrimaryResult.Http!.StatusCode);
                 if (result.Kind != ApiResultKind.Accepted)
-                    return ProjectServiceProblem(api.Result, result.Kind, result.Diagnostics);
+                    return ProjectFailure(result.Diagnostics) ?? ProjectServiceProblem(api.Result, result.Kind, result.Diagnostics);
             }
             http.Response.Headers.RetryAfter = "1";
-            return Results.Json(new ServiceProcessReceipt(admission, location), statusCode: StatusCodes.Status202Accepted);
+            return projectReceipt?.Invoke(new(admission, token, location)) ?? Results.Json(new ServiceProcessReceipt(admission, location), statusCode: StatusCodes.Status202Accepted);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(api.Declaration);
         MapResultCore(routes, api.Declaration, api.Result, _ => runtime,
             (service, context, instance) => service.ReadProcessResultAsync(context, api.ResultOperationId, DecodeInstance(instance.Value)),
-            (_, value) => project(value), authorizationPolicyResolver, "instanceId");
+            (_, value) => project(value), authorizationPolicyResolver, "instanceId", ProjectFailure);
+
+        IResult? ProjectFailure(IReadOnlyList<DocumentValidationDiagnostic> diagnostics) =>
+            diagnostics.FirstOrDefault()?.Code switch
+            {
+                "services.process.engineFailed" => projectFailure?.Invoke(ServiceProcessFailureKind.EngineFailed),
+                "services.process.notCompleted" => projectFailure?.Invoke(ServiceProcessFailureKind.UnsuccessfulOutcome),
+                _ => null
+            };
     }
 
     // Route segments use an opaque reversible token: ASP.NET deliberately leaves encoded slashes escaped.
@@ -86,3 +108,19 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         }
     }
 }
+
+
+/// <summary>Verified terminal classifications exposed to accepted-process HTTP projections.</summary>
+public enum ServiceProcessFailureKind
+{
+    /// <summary>The canonical process retained an unsuccessful terminal outcome.</summary>
+    UnsuccessfulOutcome,
+    /// <summary>The provider retained a failed or terminated execution without a canonical terminal result.</summary>
+    EngineFailed
+}
+
+/// <summary>Accepted admission with its exact opaque route segment and PathBase-aware polling address.</summary>
+/// <param name="Admission">Native accepted or replayed start.</param>
+/// <param name="ResultToken">Opaque route parameter that identifies the retained result.</param>
+/// <param name="ResultLocation">Local polling URL also emitted in the Location header.</param>
+public sealed record AcceptedProcessHttpReceipt(ProcessStartResult Admission, string ResultToken, string ResultLocation);

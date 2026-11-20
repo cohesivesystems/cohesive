@@ -147,6 +147,7 @@ public static class DurableTaskSequentialProcessWorkerBuilderExtensions
             tasks.AddOrchestrator(
                 DurableTaskSequentialProcessNames.ControlAdmissionOrchestration,
                 orchestratorActivation.CreateControlAdmission);
+            tasks.AddEntity<DurableTaskAdmissionQuota>(new(DurableTaskAdmissionQuota.Name));
             tasks.AddEntity<DurableTaskProcessStartIndexEntity>(
                 new(DurableTaskSequentialProcessNames.StartAdmissionIndexEntity));
             tasks.AddEntity<DurableTaskProcessControlResponseEntity>(

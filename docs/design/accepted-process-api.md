@@ -133,3 +133,9 @@ repeat service/process arguments. It never constructs an executor during authori
 Separately declared services remain supported for reusable contracts and independent composition.
 `ServiceApiBindingsBuilder` and its prepared `ServiceApiBindings` live in the ASP.NET adapter; these are
 route implementation/preparation objects, not a second semantic service model.
+
+## Durable admission capacity and HTTP projections
+
+Set `maximumRetainedInstances` on `CreateCohesiveProcessStartDispatcher` to bound new logical instances within an authority, tenant and process definition ID. Configure every producer consistently from the first admission into a fresh scope. Existing unmetered history is not backfilled. The limit includes completed and failed executions; a full scope still evaluates replays and identity conflicts. A distinct start at capacity returns `QuotaExceeded` (HTTP 503). Quota-enabled starts share a durable entity lock for that scope. The quota increment and the initial scheduling action commit in one entity turn. Omitting the option preserves the existing three-index protocol and its history.
+
+On `MapServiceAcceptedProcess`, `projectReceipt` receives the native decision, opaque result token and PathBase-aware location. `projectFailure` distinguishes a canonical unsuccessful outcome from a verified provider failure. Missing evidence alone never invokes that callback. Both hooks customize HTTP responses; applications with custom wire schemas should describe those schemas in their published API metadata.
