@@ -145,3 +145,70 @@ isolated alternating process runs allocated a median 466.0 -> 443.6 MB cold and
 and 1.393 -> 1.302 seconds repeated, with variation. Both pinned X12 fingerprints
 were unchanged. This includes Ari's projection adoption; it does not attribute
 the entire saving to raw-name comparison or establish a stable timing gain.
+
+## Temporary serializer ownership (2026-11-02)
+
+Compact type serialization also produced a temporary, fully owned `JsonElement`. Document creation
+immediately canonicalized it into a second independently owned element; canonical-wire validation
+only read it to compare bytes. Its unpooled parse arrays therefore became garbage after one use.
+The serializer now returns a disposable `JsonDocument` using System.Text.Json's existing pools. Both
+callers consume its root inside a `using` scope. Only the final canonical document remains independently
+owned. No new cache, public API, canonical format or admission exception is introduced.
+
+This extends the existing execution serializer and uses the existing canonical writer as-is. The
+canonical document and versioned contracts remain authoritative. Encoding, type numbering, cycle and
+unknown-member checks, contextual validation and fingerprints are unchanged. The new lifetime guard
+mutates the original input and performs 32 later serializations, then checks the retained bytes,
+fingerprint and typed projection. Existing generated/golden, malformed-input and round-trip tests pass.
+
+Representative creation guards use the median of seven batches of eight operations after eight warmups.
+Their inputs and provenance are prepared outside measurement. Results include the newly retained document.
+
+| Fields | Before bytes | After bytes | Ceiling |
+|---|---:|---:|---:|
+| 128 | 18,272 | 12,872 | 15,000 |
+| 512 | 63,040 | 41,896 | 48,000 |
+| 4,096 | 593,472 | 422,288 | 490,000 |
+
+All three ceilings fail on the unchanged alpha.158 implementation and pass after. Fixed limits have
+about 15–17% headroom. The dedicated `eng/runtime-performance/execution-documents` harness covers
+flat, nested/collection-heavy and bounded-large payloads. BenchmarkDotNet 0.15.8 ShortRun (one launch,
+three warmups/measurements, 100 ms target) reports approximately 30–31% less allocation: 19.04 → 13.07 KiB,
+22.36 → 15.70 KiB and 627.17 → 433.03 KiB. Timing error bounds are broad; no stable latency gain is claimed.
+These timing benchmarks are opt-in and do not run in the normal suite.
+
+For the original Ari X12 workflow, identical frozen harness copies differ only in `Cohesive.dll`,
+built before/after the same three-method patch on published alpha.158 source (`9808a4b6`). The Ari
+source is merged #253 (`88a29989`), including the previously reviewed seed-family change. Three
+alternating fresh-process pairs/source run 64 cases each. Warm is the median of each process's
+cases 33–64, then the median across three processes. MB is decimal MB.
+
+| Source / window | Before MB | After MB | Before CPU ms | After CPU ms |
+|---|---:|---:|---:|---:|
+| 004010 cold | 111.729 | 109.728 | 1,838.0 | 1,632.8 |
+| 005030 cold | 113.125 | 110.576 | 1,650.2 | 1,688.1 |
+| 004010 warm 33–64 | 3.397 | 3.383 | 44.8 | 46.7 |
+| 005030 warm 33–64 | 3.481 | 3.472 | 53.8 | 46.4 |
+
+Cold allocation falls 2.0–2.5 MB (1.8–2.3%); warm allocation is effectively unchanged. CPU and JIT
+counters vary across sources/windows, so this does not establish an application CPU improvement.
+Four independent before/after traces have zero lost events or missing allocation/managed-CPU stacks.
+The sampled `WriteElementAsObject` allocation disappears (about 2.6–2.8 MB before); sampling is not
+an exact component budget and is not an additional saving to add to the untraced counters.
+
+Current-main qualification: 5,273 Core tests with 60 existing gated skips, 1,186 Relations tests and
+233 SQLite tests pass. Controlled alpha.158 qualification: 30 execution-serialization tests, 1,014 Ari
+Engine tests with 18 existing gated skips, native recovery across nine protocol/interruption combinations,
+and 768 original X12 cases pass. Both X12 graph fingerprints are unchanged. Official package caches are
+untouched. These source-qualified Core overlays are not a new package publication or Ari adoption.
+
+[Manifest](evidence/execution-json-ownership/manifest.json),
+[focused guards](evidence/execution-json-ownership/focused-allocations.csv),
+[before](evidence/execution-json-ownership/benchmark-before.csv) / [after](evidence/execution-json-ownership/benchmark-after.csv) benchmarks,
+[X12 counters](evidence/execution-json-ownership/ari-windows.csv) and
+[trace quality](evidence/execution-json-ownership/trace-quality.csv) retain compact evidence.
+Raw files remain under `/tmp/cohesive-json-ownership-evidence`.
+
+This removes one temporary ownership cost. It does not remove the discovery serialization pass,
+per-document type-table reconstruction or all owned table-entry elements. Standard framework pools may
+retain buffers for reuse; cumulative allocation savings are not a retained-heap reduction claim.

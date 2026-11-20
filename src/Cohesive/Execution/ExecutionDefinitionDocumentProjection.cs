@@ -199,12 +199,12 @@ public sealed class ExecutionDefinitionDocumentProjection<TDefinition>
         ExecutionDefinitionDocument document,
         TDefinition definition)
     {
-        var projected = ExecutionDefinitionTypes.Serialize(definition);
+        using var projected = ExecutionDefinitionTypes.Serialize(definition);
         var persistedBytes = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(document);
         var projectedBytes = ExecutionDefinitionFingerprinter.GetNormalizedSemanticBytes(
             document.Metadata.SchemaVersion,
             document.Kind,
-            projected,
+            projected.RootElement,
             document.Extensions);
         return persistedBytes.AsSpan().SequenceEqual(projectedBytes)
             ? DocumentValidationResult.Valid

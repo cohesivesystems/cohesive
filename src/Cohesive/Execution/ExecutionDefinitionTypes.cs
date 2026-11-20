@@ -24,7 +24,9 @@ internal static class ExecutionDefinitionTypes
         .ToDictionary(static entry => entry.DerivedType, static entry => (string)entry.TypeDiscriminator!);
     static readonly IReadOnlyDictionary<string, Type> Types = Tags.ToDictionary(static entry => entry.Value, static entry => entry.Key, StringComparer.Ordinal);
 
-    internal static JsonElement Serialize<T>(T definition)
+    // Temporary serialization storage is consumed and disposed by the canonicalization or wire gate.
+    // The durable document keeps its own canonical element; this parse tree needs only pooled storage.
+    internal static JsonDocument Serialize<T>(T definition)
     {
         var pool = new TypePool();
         using var codec = Rent(pool);
@@ -34,7 +36,7 @@ internal static class ExecutionDefinitionTypes
             JsonSerializer.Serialize(writer, definition, options);
         if (pool.Entries.Count != 0)
             pool.Order();
-        return JsonSerializer.SerializeToElement(definition, codec.RootInfo(typeof(T), definition!.GetType()));
+        return JsonSerializer.SerializeToDocument(definition, codec.RootInfo(typeof(T), definition!.GetType()));
     }
 
     internal static T Deserialize<T>(JsonElement definition)
