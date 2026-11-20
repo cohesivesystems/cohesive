@@ -491,8 +491,8 @@ For a public DTO with one retry key, bind the command with
 exact UTF-8 key into the command, idempotency and instance identities and selects the first attempt.
 Use the explicit binder when those identities have independent lifetimes.
 
-Pass `outcomes: new AcceptedProcessResponses()` to the accepted API declaration to customize its
-HTTP contract. For example, `.Receipt(link => new Receipt(link.ResultToken, link.ResultLocation))
+Pass a typed `AcceptedProcessResponses.Receipt(...)` declaration to the accepted API declaration to customize its
+HTTP contract. For example, `AcceptedProcessResponses.Receipt(link => new Receipt(link.ResultToken, link.ResultLocation))
 .IdentityConflict(409, new Error("IdConflict")).AtCapacity(503).Pending(202).Missing(404)`
 describes both the HTTP responses and their OpenAPI alternatives. `InvalidRequest` covers POST
 decoding and binding. `ExecutionFailed` covers verified terminal failure, including bounded waits.

@@ -83,11 +83,6 @@ public delegate ProcessActivationContext DurableTaskProcessStartActivationContex
 /// <summary>Client operations for canonical Process-start admission through standalone Durable Task.</summary>
 public static class DurableTaskProcessStartAdmissionClientExtensions
 {
-    /// <summary>Creates a dispatcher using the original unmetered admission protocol.</summary>
-    public static ExecutionProcessStartDispatcher CreateCohesiveProcessStartDispatcher(this DurableTaskClient client,
-        DurableTaskProcessStartActivationContextFactory activationContextFactory) =>
-        CreateCohesiveProcessStartDispatcher(client, activationContextFactory, null);
-
     /// <summary>Creates the authoritative Process-start binding used by the canonical execution API dispatcher.</summary>
     /// <param name="client">Standalone Durable Task client for the admitted worker task hub.</param>
     /// <param name="activationContextFactory">
@@ -98,12 +93,10 @@ public static class DurableTaskProcessStartAdmissionClientExtensions
     /// <see cref="InMemoryExecutionControlApiAdapter"/> composition.
     /// </returns>
     /// <exception cref="ArgumentNullException">Either argument is <see langword="null"/>.</exception>
-    /// <param name="maximumRetainedInstances">Maximum distinct retained starts per scope and process definition ID. Configure consistently for every producer.</param>
     public static ExecutionProcessStartDispatcher CreateCohesiveProcessStartDispatcher(
         this DurableTaskClient client,
-        DurableTaskProcessStartActivationContextFactory activationContextFactory, int? maximumRetainedInstances)
+        DurableTaskProcessStartActivationContextFactory activationContextFactory)
     {
-        if (maximumRetainedInstances <= 0) throw new ArgumentOutOfRangeException(nameof(maximumRetainedInstances));
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(activationContextFactory);
         return DispatchAsync;
@@ -121,7 +114,7 @@ public static class DurableTaskProcessStartAdmissionClientExtensions
                 ?? throw new InvalidOperationException(
                     "The Durable Task Process-start activation context factory returned no context.");
             return await client.AdmitCohesiveProcessAsync(
-                    new(request, activationContext, invocation, maximumRetainedInstances),
+                    new(request, activationContext, invocation),
                     context.CancellationToken)
                 .ConfigureAwait(false);
         }
@@ -196,7 +189,9 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
         var instanceIndex = Index(scope, "instance", request.Context.ProcessInstanceId.Value);
         var quota = new EntityInstanceId(DurableTaskAdmissionQuota.Name,
             DurableTaskSequentialProcessIdentities.StartAdmissionIndex(scope, "quota", request.Definition.DefinitionId.Value));
-        EntityInstanceId[] indices = input.MaximumRetainedInstances.HasValue
+        // Legacy admission histories carry the original deployment limit in their input.
+        var maximum = catalog.MaximumRetainedInstances ?? input.MaximumRetainedInstances;
+        EntityInstanceId[] indices = maximum.HasValue
             ? [commandIndex, idempotencyIndex, instanceIndex, quota]
             : [commandIndex, idempotencyIndex, instanceIndex];
 
@@ -218,7 +213,7 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
 
             // All four entities remain locked until the scheduling action is committed.
             // Replays and conflicts were resolved above and never consume quota.
-            if (input.MaximumRetainedInstances is int limit
+            if (maximum is int limit
                 && await context.Entities.CallEntityAsync<int>(quota, nameof(DurableTaskAdmissionQuota.Count)) >= limit)
                 return new(ProcessStartDisposition.QuotaExceeded);
 
@@ -234,10 +229,10 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
             await ClaimAsync(
                 context,
                 instanceIndex,
-                new(start, input.MaximumRetainedInstances.HasValue
+                new(start, maximum.HasValue
                     ? DurableTaskProcessStartIndexClaimKind.Retain
                     : DurableTaskProcessStartIndexClaimKind.RetainAndSchedule)).ConfigureAwait(true);
-            if (input.MaximumRetainedInstances.HasValue)
+            if (maximum.HasValue)
                 await context.Entities.CallEntityAsync(quota, nameof(DurableTaskAdmissionQuota.Schedule), start);
             return decision.Result;
         }

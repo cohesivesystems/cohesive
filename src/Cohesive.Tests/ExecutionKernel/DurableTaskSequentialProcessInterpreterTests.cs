@@ -4180,7 +4180,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         var plan = Compile(Definition("return", [new ReturnProcessNode(new("return"), Expr.BoundValue(ProcessBindingIds.Input))]),
             definitionId: $"process/quota/{run}");
         using var worker = SchedulerHost(Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")!,
-            new DurableTaskSequentialProcessPlanCatalog([Physical(plan)]), RejectingHost.Instance);
+            new DurableTaskSequentialProcessPlanCatalog([Physical(plan)], maximumRetainedInstances: 1), RejectingHost.Instance);
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
         await worker.StartAsync(timeout.Token);
         var client = worker.Services.GetRequiredService<DurableTaskClient>();
@@ -4188,8 +4188,7 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         DurableTaskProcessStartAdmission Admission(string id, string input)
         {
             var start = Start(plan, input, $"instance/{run}/{id}");
-            var admission = StartAdmission(start, $"command/{run}/{id}", $"retry/{run}/{id}");
-            return new(admission.Request, admission.ActivationContext, admission.Invocation, maximumRetainedInstances: 1);
+            return StartAdmission(start, $"command/{run}/{id}", $"retry/{run}/{id}");
         }
 
         var ids = new[] { "alpha", "beta" };
@@ -4200,6 +4199,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
             (await client.AdmitCohesiveProcessAsync(Admission(winner, "same"), timeout.Token)).Disposition);
         Assert.Equal(ProcessStartDisposition.CommandIdentityConflict,
             (await client.AdmitCohesiveProcessAsync(Admission(winner, "changed"), timeout.Token)).Disposition);
+        var legacy = Admission("legacy", "new");
+        Assert.Equal(ProcessStartDisposition.QuotaExceeded,
+            (await client.AdmitCohesiveProcessAsync(new(legacy.Request, legacy.ActivationContext, legacy.Invocation,
+                maximumRetainedInstances: 100), timeout.Token)).Disposition);
         await worker.StopAsync(timeout.Token);
     }
 

@@ -178,7 +178,7 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         ExecutionDefinitionDocument declaration, ApiEndpoint projection, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
         Func<ServiceRuntime, OperationContext, ProcessInstanceId, ValueTask<ServiceOperationResult<TValue>>> read,
         Func<HttpContext, TValue, TResponse> project, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver,
-        string instanceParameter, Func<ApiResultKind, IReadOnlyList<DocumentValidationDiagnostic>, IResult?>? failure = null,
+        string instanceParameter, Func<ServiceOperationResult<TValue>, IResult?>? failure = null,
         Func<string, ProcessInstanceId>? decode = null, Func<IResult?>? invalidToken = null) where TValue : class
     {
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
@@ -196,14 +196,13 @@ public static partial class ServiceEndpointRouteBuilderExtensions
                 throw;
             }
             var result = await read(runtime, context, decoded).ConfigureAwait(false);
-            var alternative = projection.Operation.Results.First(item => item.Kind == result.Kind);
-            var status = alternative.Http!.StatusCode;
+
             if (result.Kind == ApiResultKind.Success)
             {
                 var value = result.Outcome ?? throw new InvalidOperationException("Successful result resolution returned no value.");
-                return Results.Json(project(http, value), statusCode: status);
+                return Results.Json(project(http, value), statusCode: projection.Operation.PrimaryResult.Http!.StatusCode);
             }
-            return failure?.Invoke(result.Kind, result.Diagnostics) ?? ProjectServiceProblem(projection, result.Kind, result.Diagnostics, alternative.Id);
+            return failure?.Invoke(result) ?? ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
     }
 

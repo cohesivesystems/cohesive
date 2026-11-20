@@ -39,7 +39,11 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
     readonly ImmutableDictionary<ExecutionDefinitionReference, DurableTaskProcessRealizationPlan> plans;
     readonly IDomainEventPublisherResolver domainEventPublisherResolver;
 
+    /// <summary>Maximum retained identities per authority, tenant and process definition on this deployment.</summary>
+    public int? MaximumRetainedInstances { get; }
+
     /// <summary>Creates an immutable catalog from executable-qualified canonical Processes.</summary>
+    /// <param name="maximumRetainedInstances">Optional fixed deployment limit for distinct retained identities in each scope.</param>
     /// <param name="plans">Exact Durable Task realization plans deployed to this worker.</param>
     /// <param name="requestBindings">
     /// Concrete durable Request bindings deployed to this worker. Every external operation and child Process Request
@@ -63,8 +67,10 @@ public sealed class DurableTaskSequentialProcessPlanCatalog
         IEnumerable<DurableTaskProcessRealizationPlan> plans,
         IEnumerable<DurableRequestBinding>? requestBindings = null,
         IDomainEventPublisherResolver? domainEventPublisherResolver = null,
-        IDurableOperationAdapterCapabilityResolver? operationAdapterCapabilities = null)
+        IDurableOperationAdapterCapabilityResolver? operationAdapterCapabilities = null, int? maximumRetainedInstances = null)
     {
+        if (maximumRetainedInstances <= 0) throw new ArgumentOutOfRangeException(nameof(maximumRetainedInstances));
+        MaximumRetainedInstances = maximumRetainedInstances;
         ArgumentNullException.ThrowIfNull(plans);
         var bindingCatalog = new DurableRequestBindingCatalog(requestBindings ?? []);
         this.domainEventPublisherResolver = domainEventPublisherResolver

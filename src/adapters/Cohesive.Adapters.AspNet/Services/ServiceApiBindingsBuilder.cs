@@ -202,7 +202,8 @@ public sealed class ServiceApiImplementation<TApi>
     /// <param name="bind">Pure input and retry-identity projection.</param><param name="project">Pure authorized terminal projection.</param>
     /// <returns>This contribution.</returns>
     /// <exception cref="ServiceBindingValidationException">Endpoints are foreign, duplicated, or reference a different service.</exception>
-    public ServiceApiImplementation<TApi> Bind<TRequest, TResult>(Func<TApi, ServiceAcceptedProcessApi<TRequest, TResult>> select,
+    /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+    public ServiceApiImplementation<TApi> Bind<TRequest, TResult, TReceipt>(Func<TApi, ServiceAcceptedProcessApi<TRequest, TResult, TReceipt>> select,
         ServiceRuntime runtime,
         Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
             ProcessContinuationIdentity Continuation, ObservationValue Input)> bind, Func<PortableValue, TResult> project)
@@ -231,8 +232,9 @@ public sealed class ServiceApiImplementation<TApi>
     /// <param name="logPrivateFailures">Opt in to scoped private operator diagnostics.</param>
     /// <param name="authorizationPolicyResolver">Optional existing native policies; otherwise scoped policies use authorization.</param>
     /// <returns>This contribution; preparation remains host-scoped.</returns>
-    public ServiceApiImplementation<TApi> BindHosted<TInput, TResult>(
-        Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult>> select,
+    /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+    public ServiceApiImplementation<TApi> BindHosted<TInput, TResult, TReceipt>(
+        Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult, TReceipt>> select,
         string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
         bool logPrivateFailures = false, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : notnull =>
         BindProcess(select, authority, authorization, maximumExecutions, ProcessExecutionLifetime.Host, logPrivateFailures, authorizationPolicyResolver);
@@ -244,14 +246,15 @@ public sealed class ServiceApiImplementation<TApi>
     /// <param name="logPrivateFailures">Opt in to scoped operator diagnostics.</param>
     /// <param name="authorizationPolicyResolver">Optional native authorization policy mapping.</param>
     /// <returns>This contribution; the registered durable provider is admitted during host preparation.</returns>
-    public ServiceApiImplementation<TApi> BindDurable<TInput, TResult>(
-        Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult>> select,
+    /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+    public ServiceApiImplementation<TApi> BindDurable<TInput, TResult, TReceipt>(
+        Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult, TReceipt>> select,
         string authority, IServiceInvocationAuthorization authorization, bool logPrivateFailures = false,
         AspNetAuthorizationPolicyResolver? authorizationPolicyResolver = null) where TResult : notnull =>
         BindProcess(select, authority, authorization, 0, ProcessExecutionLifetime.Durable, logPrivateFailures, authorizationPolicyResolver);
 
-    ServiceApiImplementation<TApi> BindProcess<TInput, TResult>(
-        Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult>> select,
+    ServiceApiImplementation<TApi> BindProcess<TInput, TResult, TReceipt>(
+        Func<TApi, ColocatedProcessApi<ServiceProcessCommand<TInput>, TInput, TResult, TReceipt>> select,
         string authority, IServiceInvocationAuthorization authorization, int maximumExecutions, ProcessExecutionLifetime executionLifetime,
         bool logPrivateFailures, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver) where TResult : notnull
     {
@@ -282,8 +285,9 @@ public sealed class ServiceApiImplementation<TApi>
     /// <param name="bind">Retry identities and input projection.</param><param name="project">Authorized result projection.</param>
     /// <param name="logPrivateFailures">Opt in to scoped operator diagnostics.</param>
     /// <param name="authorizationPolicyResolver">HTTP policy mapping.</param><returns>This contribution.</returns>
-    public ServiceApiImplementation<TApi> BindHosted<TRequest, TInput, TResult>(
-        Func<TApi, ColocatedProcessApi<TRequest, TInput, TResult>> select,
+    /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+    public ServiceApiImplementation<TApi> BindHosted<TRequest, TInput, TResult, TReceipt>(
+        Func<TApi, ColocatedProcessApi<TRequest, TInput, TResult, TReceipt>> select,
         string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
         Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
             ProcessContinuationIdentity Continuation, ObservationValue Input)> bind, Func<PortableValue, TResult> project,
@@ -305,8 +309,9 @@ public sealed class ServiceApiImplementation<TApi>
     /// <param name="logPrivateFailures">Opt in to scoped private operator diagnostics.</param>
     /// <param name="authorizationPolicyResolver">Native HTTP policy mapping for declared authorization requirements.</param>
     /// <returns>This contribution; no worker or storage is resolved during authoring.</returns>
-    public ServiceApiImplementation<TApi> BindHosted<TRequest, TInput, TResult>(
-        Func<TApi, ServiceAcceptedProcessApi<TRequest, TResult>> select, ServiceBuilder service,
+    /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+    public ServiceApiImplementation<TApi> BindHosted<TRequest, TInput, TResult, TReceipt>(
+        Func<TApi, ServiceAcceptedProcessApi<TRequest, TResult, TReceipt>> select, ServiceBuilder service,
         ProcessModel<TInput, TResult> process, string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
         Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
             ProcessContinuationIdentity Continuation, ObservationValue Input)> bind, Func<PortableValue, TResult> project,
@@ -314,8 +319,8 @@ public sealed class ServiceApiImplementation<TApi>
         BindProcess(select, service, process, authority, authorization, maximumExecutions, ProcessExecutionLifetime.Host,
             bind, project, logPrivateFailures, authorizationPolicyResolver);
 
-    ServiceApiImplementation<TApi> BindProcess<TRequest, TInput, TResult>(
-        Func<TApi, ServiceAcceptedProcessApi<TRequest, TResult>> select, ServiceBuilder service,
+    ServiceApiImplementation<TApi> BindProcess<TRequest, TInput, TResult, TReceipt>(
+        Func<TApi, ServiceAcceptedProcessApi<TRequest, TResult, TReceipt>> select, ServiceBuilder service,
         ProcessModel<TInput, TResult> process, string authority, IServiceInvocationAuthorization authorization, int maximumExecutions,
         ProcessExecutionLifetime executionLifetime,
         Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,

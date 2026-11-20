@@ -317,7 +317,10 @@ public enum ApiResultKind
     InfrastructureError = 12,
 
     /// <summary>The configured retained-resource capacity has been reached.</summary>
-    CapacityExceeded = 13
+    CapacityExceeded = 13,
+
+    /// <summary>An admitted process reached a verified unsuccessful terminal outcome.</summary>
+    ExecutionFailed = 14
 }
 
 /// <summary>Stable host-language-independent wire names for closed API semantic categories.</summary>
@@ -353,6 +356,7 @@ public static class ApiWireNames
         ApiResultKind.PreconditionFailed => "preconditionFailed",
         ApiResultKind.RateLimited => "rateLimited",
         ApiResultKind.CapacityExceeded => "capacityExceeded",
+        ApiResultKind.ExecutionFailed => "executionFailed",
         ApiResultKind.DomainError => "domainError",
         ApiResultKind.InfrastructureError => "infrastructureError",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported API result kind.")
@@ -781,8 +785,10 @@ public sealed class ApiOperation
     }
 }
 
-static class ApiHttpResultConventions
+/// <summary>Shared HTTP defaults for API projections and mock clients.</summary>
+public static class ApiHttpResultConventions
 {
+    /// <summary>Gets the default status or rejects an unknown result kind.</summary>
     public static int DefaultStatusCode(ApiResultKind kind, Type bodyType) => kind switch
     {
         ApiResultKind.Success when bodyType == typeof(void) => 204,
@@ -799,8 +805,8 @@ static class ApiHttpResultConventions
         ApiResultKind.RateLimited => 429,
         ApiResultKind.CapacityExceeded => 503,
         ApiResultKind.DomainError => 422,
-        ApiResultKind.InfrastructureError => 500,
-        _ => 200
+        ApiResultKind.InfrastructureError or ApiResultKind.ExecutionFailed => 500,
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown API result kind.")
     };
 }
 

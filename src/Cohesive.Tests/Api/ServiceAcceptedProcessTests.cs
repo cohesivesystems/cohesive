@@ -31,13 +31,26 @@ public sealed class ServiceAcceptedProcessTests
     static readonly ExecutionProvenance Provenance = new(new("tests"), new("tests/accepted"), DocumentOrigin.Generated);
 
     [Fact]
+    public void Repeated_outcomes_are_diagnosed_at_api_construction()
+    {
+        var fixture = new Fixture();
+        var outcomes = AcceptedProcessResponses.Receipt(link => link.ResultToken).Pending(202).Pending(202);
+        var error = Assert.Throws<ServiceBindingValidationException>(() => fixture.Service.AcceptedApi<Command, string, string>(
+            "start", "result", "/commands", "/results/{instanceId}", outcomes));
+        Assert.Contains("Duplicate", error.Message);
+    }
+
+    [Fact]
     public async Task Declared_outcomes_drive_http_and_openapi()
     {
-        var outcomes = new AcceptedProcessResponses().Receipt(location => location.ResultLocation)
+        var outcomes = AcceptedProcessResponses.Receipt(location => location.ResultLocation)
             .IdentityConflict(409, "Conflict").InvalidRequest(400, "Invalid").AtCapacity(503)
             .Pending(202).Missing(404).ExecutionFailed(500, "Failed");
-        var fixture = new Fixture(outcomes: outcomes);
-        using var document = JsonDocument.Parse(new OpenApiEmitter().Emit(fixture.Api.Definition).Documents[0].Text);
+        var fixture = new Fixture();
+        var api = fixture.Service.AcceptedApi<Command, string, string>("start", "result", "/commands", "/results/{instanceId}", outcomes);
+        ApiEndpoint<Command, string> typedStart = api.Start;
+        Assert.Equal(typeof(string), typedStart.Operation.PrimaryResult.BodyType);
+        using var document = JsonDocument.Parse(new OpenApiEmitter().Emit(api.Definition).Documents[0].Text);
         var paths = document.RootElement.GetProperty("paths");
         var post = paths.GetProperty("/commands").GetProperty("post").GetProperty("responses");
         Assert.Equal("string", post.GetProperty("202").GetProperty("content").GetProperty("application/json")
@@ -46,7 +59,7 @@ public sealed class ServiceAcceptedProcessTests
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
         await using var app = builder.Build();
-        app.MapServiceAcceptedProcess(fixture.Api, fixture.Runtime,
+        app.MapServiceAcceptedProcess(api, fixture.Runtime,
             (_, command) => AcceptedProcessIntent.FromRequestId(command.Id, ObservationValue.FromString(command.Text)),
             value => throw new JsonException("Stored value decoding failed."));
         app.Urls.Add("http://127.0.0.1:0");
@@ -66,6 +79,14 @@ public sealed class ServiceAcceptedProcessTests
         Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
         Assert.Empty(await missing.Content.ReadAsByteArrayAsync());
         var identity = AcceptedProcessIntent.FromRequestId(command.Id, ObservationValue.FromString(command.Text)).Continuation.ProcessInstanceId;
+        fixture.Values.Current = ProcessExecutionValueReadResult.InProgress(new(fixture.Plan.DefinitionReference, identity));
+        var pending = await client.GetAsync(url);
+        Assert.Equal(HttpStatusCode.Accepted, pending.StatusCode);
+        Assert.Empty(await pending.Content.ReadAsByteArrayAsync());
+        fixture.AtCapacity = true;
+        var full = await client.PostAsJsonAsync("/commands", new Command("new", "value"));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, full.StatusCode);
+        Assert.Empty(await full.Content.ReadAsByteArrayAsync());
         fixture.Values.Current = new(ProcessExecutionValueReadState.ExecutionFailed, new(fixture.Plan.DefinitionReference, identity));
         Assert.Equal("Failed", await (await client.GetAsync(url)).Content.ReadFromJsonAsync<string>());
         fixture.Complete(identity.Value);
@@ -264,17 +285,17 @@ public sealed class ServiceAcceptedProcessTests
     public async Task Typed_projections_preserve_location_and_only_classify_verified_failures()
     {
         var fixture = new Fixture();
-        Assert.Equal(503, fixture.Api.Start.Operation.Results.Single(r => r.Kind == ApiResultKind.CapacityExceeded).Http!.StatusCode);
+        var outcomes = AcceptedProcessResponses.Receipt(location => location).ExecutionFailed(500, "Failed");
+        var api = fixture.Service.AcceptedApi<Command, string, AcceptedProcessLocation>("start", "result", "/commands",
+            "/results/{instanceId}", outcomes, ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(1)));
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
         await using var app = builder.Build();
         app.UsePathBase("/prefix");
-        app.MapServiceAcceptedProcess(fixture.Api, fixture.Runtime,
+        app.MapServiceAcceptedProcess(api, fixture.Runtime,
             (_, command) => (new(command.Id), new(command.Id), new(new(command.Id), new("attempt")), ObservationValue.FromString(command.Text)),
-            value => value.Value!.Value.GetRequiredString(),
-            authorizationPolicyResolver: null,
-            projectReceipt: receipt => Microsoft.AspNetCore.Http.Results.Json(new { receipt.ResultToken, receipt.ResultLocation }, statusCode: 202),
-            projectFailure: kind => Microsoft.AspNetCore.Http.Results.Json(kind.ToString(), statusCode: 500));
+            value => value.Value!.Value.GetRequiredString());
+        fixture.Values.Current = ProcessExecutionValueReadResult.InProgress(new(fixture.Plan.DefinitionReference, new("a/b")));
         app.Urls.Add("http://127.0.0.1:0");
         await app.StartAsync();
         using var client = new HttpClient { BaseAddress = new(app.Urls.Single()) };
@@ -288,7 +309,10 @@ public sealed class ServiceAcceptedProcessTests
         fixture.Values.Current = new(ProcessExecutionValueReadState.ExecutionFailed, values);
         var failed = await client.GetAsync(url);
         Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
-        Assert.Equal("EngineFailed", await failed.Content.ReadFromJsonAsync<string>());
+        Assert.Equal("Failed", await failed.Content.ReadFromJsonAsync<string>());
+        var waited = await client.PostAsJsonAsync("/prefix/commands", new Command("a/b", "text"));
+        Assert.Equal(HttpStatusCode.InternalServerError, waited.StatusCode);
+        Assert.Equal("Failed", await waited.Content.ReadFromJsonAsync<string>());
         fixture.Values.Current = ProcessExecutionValueReadResult.TerminalArtifactUnavailable(values);
         var unavailable = await client.GetAsync(url);
         Assert.Equal("services.process.evidenceUnavailable", (await unavailable.Content.ReadFromJsonAsync<ApiProblem>())!.Code);
@@ -469,10 +493,11 @@ public sealed class ServiceAcceptedProcessTests
         public ServiceRuntime Runtime { get; }
         public Values Values { get; } = new();
         public Authorization Authorization { get; } = new();
+        public bool AtCapacity;
         public int Starts;
         public bool ThrowAfterAdmission;
         public HostProcessWorker? Worker { get; }
-        public Fixture(bool hosted = false, ServiceProcessResponse? response = null, AcceptedProcessResponses? outcomes = null)
+        public Fixture(bool hosted = false, ServiceProcessResponse? response = null)
         {
             var text = new ValueContract(new ScalarTypeRef(ScalarTypeKind.String));
             var document = ProcessDefinitionDocuments.Create(new("echo"), new("1"),
@@ -482,7 +507,7 @@ public sealed class ServiceAcceptedProcessTests
             Service = Cohesive.Api.Execution.Services.Service.Define(new("accepted"), new("1"), Provenance)
                 .Operation("start").Run(Plan).ReturnAfterAdmission(hosted ? ProcessExecutionLifetime.Host : ProcessExecutionLifetime.Durable)
                 .Operation("result").ReadResultOf(ProcessAuthoring.Project<string, string>(document));
-            Api = Service.AcceptedApi<Command, string>("start", "result", "/commands", "/results/{instanceId}", response, outcomes);
+            Api = Service.AcceptedApi<Command, string>("start", "result", "/commands", "/results/{instanceId}", response);
             if (hosted)
             {
                 var prepared = Service.PrepareProcess(ProcessAuthoring.Project<string, string>(document),
@@ -497,6 +522,7 @@ public sealed class ServiceAcceptedProcessTests
                 [new ServiceProcessBinding("start", Plan, "tests", async (context, request, invocation) =>
                 {
                     Starts++;
+                    if (AtCapacity) return new(ProcessStartDisposition.QuotaExceeded);
                     var result = Assert.IsType<Cohesive.Execution.ProcessStartResult>((await adapter.DispatchAsync(context, catalog.Start, request, invocation)).Body);
                     if (ThrowAfterAdmission) throw new IOException("Simulated response loss after native receipt commit.");
                     return result;
