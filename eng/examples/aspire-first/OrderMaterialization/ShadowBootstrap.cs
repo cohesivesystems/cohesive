@@ -1,7 +1,7 @@
 using System.Text;
 using AspireFirst.Orders;
 using Cohesive.Adapters.Postgres;
-using Cohesive.Prelude;
+using Cohesive.Storage.Materialization;
 using Npgsql;
 
 namespace AspireFirst.Materialization;
@@ -16,11 +16,16 @@ internal static class ShadowBootstrap
     {
         await model.Orders.Storage.Bindings.PrepareSchemaAsync(database, cancellationToken);
         await model.Storage.OrderDetails.InitializeSourcesAsync(database, cancellationToken);
+        await InitializeTargetAsync(model.Materializations.OrderDetails, elastic, cancellationToken);
+    }
+
+    internal static async Task InitializeTargetAsync(PreparedMaterialization declaration, HttpClient elastic, CancellationToken cancellationToken)
+    {
         using var existing = await elastic.GetAsync("/_index_template/" + ShadowElastic.TemplateName, cancellationToken);
         if (existing.StatusCode != System.Net.HttpStatusCode.NotFound)
         {
             existing.EnsureSuccessStatusCode();
-            await ShadowElastic.BindAsync(elastic, model.Materializations.OrderDetails, cancellationToken);
+            await ShadowElastic.BindAsync(elastic, declaration, cancellationToken);
         }
         else
         {

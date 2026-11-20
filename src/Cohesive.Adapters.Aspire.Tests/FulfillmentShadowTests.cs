@@ -24,7 +24,7 @@ using Npgsql.Replication;
 
 namespace Cohesive.Adapters.Aspire.Tests;
 
-public sealed class FulfillmentShadowTests
+public sealed partial class FulfillmentShadowTests
 {
     static readonly JsonSerializerOptions Json = new() { Converters = { new JsonStringEnumConverter() } };
 
