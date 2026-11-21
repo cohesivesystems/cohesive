@@ -52,6 +52,9 @@ public sealed class ServiceAcceptedProcessTests
         var fixture = new Fixture(response: ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(1)));
         Assert.True(fixture.Api.TryProjectAdmissionProblem(new(kind, null, [], null!), out _, out var diagnostics));
         Assert.Equal(code, Assert.Single(diagnostics).Code);
+        Assert.True(fixture.Api.TryProjectAdmissionProblem(new(kind, null, [], null!), out _, out var repeated));
+        Assert.Equal(diagnostics, repeated);
+        Assert.False(fixture.Api.TryProjectAdmissionProblem(new(ApiResultKind.CapacityExceeded, null, [], null!), out _, out _));
     }
 
     [Theory]

@@ -42,7 +42,7 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
         var output = ServiceApiProjection.ProjectProcessResult<TResult>(declaration, resultOperationId,
             new("GET", resultRoute, [new("instanceId", HttpParameterSource.Route, typeof(string))], body: null)).Operation;
         Outcomes.Validate(input, output);
-        var sharedAdmissionProblems = new Dictionary<ApiResultKind, ApiResultDefinition>();
+        var sharedAdmissionProblems = new Dictionary<ApiResultKind, AdmissionProblem>();
         // A bounded POST can return a rejection from either admission or its result read.
         // Use the standard read problem for shared kinds before applying public overrides.
         var alternatives = input.Results.Select(item =>
@@ -54,7 +54,7 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
             var admission = Outcomes.Apply(AcceptedProcessRoute.Submit,
                 new(item.Kind, body, item.IsPrimary, item.Id, item.Description, item.Http));
             if (body != item.BodyType && item.Kind != ApiResultKind.Accepted && Outcomes.Find(AcceptedProcessRoute.Submit, item.Kind) is null)
-                sharedAdmissionProblems.Add(item.Kind, admission);
+                sharedAdmissionProblems.Add(item.Kind, AdmissionProblem.Create(admission));
             return admission;
         }).ToList();
         admissionProblems = sharedAdmissionProblems.ToFrozenDictionary();
@@ -87,23 +87,39 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
         }
     }
 
-    readonly FrozenDictionary<ApiResultKind, ApiResultDefinition> admissionProblems;
+    readonly FrozenDictionary<ApiResultKind, AdmissionProblem> admissionProblems;
+
+    sealed record AdmissionProblem(ApiResultDefinition Definition, ImmutableArray<DocumentValidationDiagnostic> Defaults)
+    {
+        public static AdmissionProblem Create(ApiResultDefinition definition)
+        {
+            var (code, message) = definition.Kind switch
+            {
+                ApiResultKind.Forbidden => ("services.start.forbidden", "The caller is forbidden from starting this process."),
+                ApiResultKind.ValidationFailed => ("services.start.validationFailed", "The process start request is invalid."),
+                ApiResultKind.Conflict => ("services.start.conflict", "The process start conflicts with a retained identity."),
+                _ => throw ServiceImplementationPlan.Error("services.api.unsupportedAdmissionProblem",
+                    $"No admission problem contract is defined for '{definition.Kind}'.")
+            };
+            return new(definition, [new(code, DiagnosticSeverity.Error, message)]);
+        }
+    }
 
     /// <summary>Resolves a standard bounded-wait admission problem and preserves any diagnostics supplied by the runtime.</summary>
     public bool TryProjectAdmissionProblem(ServiceOperationResult<ProcessStartResult> outcome,
         [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ApiResultDefinition? problem, out ImmutableArray<DocumentValidationDiagnostic> diagnostics)
     {
         diagnostics = outcome.Diagnostics;
-        if (!admissionProblems.TryGetValue(outcome.Kind, out problem)) return false;
-        if (!diagnostics.IsDefaultOrEmpty) return true;
-        var (code, message) = outcome.Kind switch
+        if (!admissionProblems.TryGetValue(outcome.Kind, out var admission))
         {
-            ApiResultKind.Forbidden => ("services.start.forbidden", "The caller is forbidden from starting this process."),
-            ApiResultKind.ValidationFailed => ("services.start.validationFailed", "The process start request is invalid."),
-            ApiResultKind.Conflict => ("services.start.conflict", "The process start conflicts with a retained identity."),
-            _ => ("services.start.rejected", "The process start was rejected.")
-        };
-        diagnostics = [new(outcome.Outcome?.DiagnosticCode ?? code, DiagnosticSeverity.Error, message)];
+            problem = null;
+            return false;
+        }
+        problem = admission.Definition;
+        if (diagnostics.IsDefaultOrEmpty)
+            diagnostics = outcome.Outcome?.DiagnosticCode is { } code
+                ? [admission.Defaults[0] with { Code = code }]
+                : admission.Defaults;
         return true;
     }
 
