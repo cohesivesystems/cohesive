@@ -6,7 +6,9 @@ internal enum AcceptedProcessRoute { Submit, Poll }
 public sealed record AcceptedProcessLocation(string ResultToken, string ResultLocation);
 
 /// <summary>HTTP contracts for application-specific outcomes of an accepted process interaction.</summary>
-/// <remarks>Each projection supplies a body only. Its declared type and status drive both HTTP and API metadata.</remarks>
+/// <remarks>Each projection supplies a body only. Its declared type and status drive both HTTP and API metadata.
+/// A bounded-wait POST uses the standard polling problem body for rejection kinds shared by admission and polling.
+/// Explicit admission mappings are applied afterward. Every alternative on a route sharing a status must agree on its body type.</remarks>
 public sealed class AcceptedProcessResponses<TReceipt>
 {
     internal sealed record Rule(Type Body, ApiHttpResultBinding Http, Func<AcceptedProcessLocation?, object?> Project);
@@ -19,10 +21,15 @@ public sealed class AcceptedProcessResponses<TReceipt>
 
     readonly SortedSet<string> duplicates = new(StringComparer.Ordinal);
 
-    internal void Validate(ApiOperation start, ApiOperation result)
+    internal void Bind(ApiOperation start, ApiOperation result)
     {
         if (duplicates.Count > 0)
             throw ServiceImplementationPlan.Error("services.api.duplicateOutcome", $"Duplicate accepted-process mappings: {string.Join(", ", duplicates)}.");
+        var infrastructure = result.Results.Single(item => item.Kind == ApiResultKind.InfrastructureError);
+        if (Find(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionEngineFailed) is { } engine
+            && engine.Http.StatusCode == infrastructure.Http!.StatusCode)
+            rules.TryAdd((AcceptedProcessRoute.Poll, ApiResultKind.InfrastructureError), engine);
+
         foreach (var key in rules.Keys)
         {
             var operation = key.Route == AcceptedProcessRoute.Submit ? start : result;
@@ -56,7 +63,7 @@ public sealed class AcceptedProcessResponses<TReceipt>
     public AcceptedProcessResponses<TReceipt> ExecutionFailed<T>(int status, T body) =>
         Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionFailed, status, typeof(T), _ => body);
 
-    /// <summary>Project a verified execution engine failure.</summary>
+    /// <summary>Project a verified engine failure. Result infrastructure failures at the same default status inherit this projection unless explicitly mapped.</summary>
     public AcceptedProcessResponses<TReceipt> EngineFailed<T>(int status, T body) =>
         Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionEngineFailed, status, typeof(T), _ => body);
 

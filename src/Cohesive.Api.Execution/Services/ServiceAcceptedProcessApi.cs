@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using Cohesive.Api.Services;
 using Cohesive.Execution;
 
@@ -37,7 +38,8 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
             new("POST", startRoute, [], new(typeof(TRequest)))).Operation;
         var output = ServiceApiProjection.ProjectProcessResult<TResult>(declaration, resultOperationId,
             new("GET", resultRoute, [new("instanceId", HttpParameterSource.Route, typeof(string))], body: null)).Operation;
-        Outcomes.Validate(input, output);
+        Outcomes.Bind(input, output);
+        var sharedAdmissionProblems = new Dictionary<ApiResultKind, ApiResultDefinition>();
         // A bounded POST can return a rejection from either admission or its result read.
         // Use the standard read problem for shared kinds before applying public overrides.
         var alternatives = input.Results.Select(item =>
@@ -46,9 +48,13 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
             if (response.MaximumWait is not null && output.Results.SingleOrDefault(read => read.Kind == item.Kind) is { } shared
                 && item.Kind != ApiResultKind.Accepted)
                 body = shared.BodyType;
-            return Outcomes.Apply(AcceptedProcessRoute.Submit,
+            var admission = Outcomes.Apply(AcceptedProcessRoute.Submit,
                 new(item.Kind, body, item.IsPrimary, item.Id, item.Description, item.Http));
+            if (body != item.BodyType && item.Kind != ApiResultKind.Accepted && Outcomes.Find(AcceptedProcessRoute.Submit, item.Kind) is null)
+                sharedAdmissionProblems.Add(item.Kind, admission);
+            return admission;
         }).ToList();
+        AdmissionProblems = sharedAdmissionProblems.ToFrozenDictionary();
         var reads = output.Results.Select(item => Outcomes.Apply(AcceptedProcessRoute.Poll, item)).ToList();
         if (response.MaximumWait is not null)
             alternatives.AddRange(reads.Where(item => item.Kind != ApiResultKind.Accepted)
@@ -77,6 +83,9 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
                 $"{operation.Http!.Method} {operation.Http.Route} declares different bodies for HTTP {group.Key}: {alternatives}.");
         }
     }
+
+    /// <summary>Default admission problem contracts shared with reads on a bounded-wait POST, indexed before route composition.</summary>
+    public IReadOnlyDictionary<ApiResultKind, ApiResultDefinition> AdmissionProblems { get; }
 
     /// <summary>HTTP response timing, independent of the execution provider lifetime.</summary>
     public ServiceProcessResponse Response { get; }

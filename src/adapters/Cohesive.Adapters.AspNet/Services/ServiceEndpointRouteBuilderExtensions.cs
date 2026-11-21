@@ -219,6 +219,11 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(diagnostics);
         var result = endpoint.Operation.Results.Single(candidate => candidate.Kind == kind && (resultId is null || candidate.Id == resultId));
+        return ProjectServiceProblem(result, diagnostics);
+    }
+
+    static IResult ProjectServiceProblem(ApiResultDefinition result, IEnumerable<DocumentValidationDiagnostic> diagnostics)
+    {
         var status = result.Http?.StatusCode
             ?? throw new InvalidOperationException("A service problem requires a declared HTTP status.");
         var issues = diagnostics.ToArray();

@@ -55,14 +55,21 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             if (outcome.Kind != ApiResultKind.Accepted)
             {
                 if (Submission(outcome.Kind) is { } mapped) return mapped;
-                if (api.Response.MaximumWait is not null && outcome.Kind is ApiResultKind.Conflict or ApiResultKind.Forbidden or ApiResultKind.ValidationFailed)
+                if (api.AdmissionProblems.TryGetValue(outcome.Kind, out var problem))
                 {
-                    var alternative = api.Start.Operation.Results.Single(item => item.Kind == outcome.Kind
-                        && !item.Id.StartsWith("result-", StringComparison.Ordinal));
                     var diagnostics = outcome.Diagnostics;
-                    if (diagnostics.IsEmpty && outcome.Outcome?.DiagnosticCode is { } code)
-                        diagnostics = [new(code, DiagnosticSeverity.Error, "The process start conflicts with a retained identity.")];
-                    return ProjectServiceProblem(api.Start, outcome.Kind, diagnostics, alternative.Id);
+                    if (diagnostics.IsEmpty)
+                    {
+                        var message = outcome.Kind switch
+                        {
+                            ApiResultKind.Forbidden => "The caller is forbidden from starting this process.",
+                            ApiResultKind.ValidationFailed => "The process start request is invalid.",
+                            ApiResultKind.Conflict => "The process start conflicts with a retained identity.",
+                            _ => "The process start was rejected."
+                        };
+                        diagnostics = [new(outcome.Outcome?.DiagnosticCode ?? $"services.start.{outcome.Kind}", DiagnosticSeverity.Error, message)];
+                    }
+                    return ProjectServiceProblem(problem, diagnostics);
                 }
                 return ProjectProcessOutcome(api.Start, outcome);
             }
