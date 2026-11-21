@@ -109,7 +109,14 @@ changes require a new session; carrying obligations across those boundaries is o
 State invariant and transition contract appends reuse previously evaluated obligations in semantic order.
 Each retained predicate still counts toward the cumulative evaluation budget. The evaluator retains
 predicate diagnostics and computes closure, vacuity and the overall verdict against the updated frontiers.
-Event forms still evaluate the entire retained mapping. Start, correction and checkpoint verification
+For bounded responses, a previously matched trigger keeps its first witness. An unmatched trigger
+resumes after its previously checked candidates and uses current completeness to decide absence.
+Skipped comparisons count against both cumulative budgets in trigger order. Prefixes with predicate
+diagnostics or duplicate input rows use full matching to preserve batch diagnostics and identity.
+A missing payload can therefore cause every subsequent append in the epoch to use full matching
+while the retained comparisons continue emitting predicate diagnostics. Shared input preparation
+affects which diagnostic is emitted first. A fresh epoch can resume from a clean prefix.
+Historical requirements use full matching. Start, correction and checkpoint verification
 run full batch evaluation. Append validation and result construction still traverse history, so repeated
 single-row appends can require quadratic total work. Checkpoints retain the full bounded history.
 
@@ -126,3 +133,27 @@ these tests do not claim to recover or replace that full normative corpus.
 Remaining #557 work includes optimized per-obligation state, a qualified retention/eviction strategy,
 multiple evolving joint mappings, cross-revision obligations and automated downstream correction
 propagation. Production capture/reconstruction is tracked separately in #558.
+
+## Bounded-response append measurements
+
+Local Release runs of `eng/assurance-monitor-review-bench` with tiered compilation disabled compare
+#586 with incremental matching. Each prefix contains the indicated number of triggers followed by
+eight eligible witnesses. In the matched workload the first witness matches every trigger. In the
+pending workload all eight miss. One additional matching witness is appended to the same snapshot
+after five warmups. Values are means over 30 appends and include cumulative monitor validation.
+
+| Triggers | Prefix | Before ms | After ms | Before bytes/op | After bytes/op |
+|---:|---|---:|---:|---:|---:|
+| 100 | matched | 0.155 | 0.175 | 130072 | 65840 |
+| 100 | pending | 0.253 | 0.055 | 406377 | 131272 |
+| 2000 | matched | 1.729 | 0.781 | 2506278 | 1187712 |
+| 2000 | pending | 6.296 | 1.227 | 8011665 | 2507460 |
+
+All four workloads allocated less. The small matched workload ran slower in this timing sample.
+The monitor still visits retained triggers and constructs a witness index on each optimized append.
+
+After deriving the resume offsets directly from the candidate list, the same benchmark measured
+0.149/0.049 ms at 100 triggers and 0.766/1.531 ms at 2,000 triggers (matched/pending).
+The 100-trigger matched timings span both sides of the baseline. A separate allocation regression
+test uses 64 pending triggers and 32 mismatching witnesses and requires the resolving append to
+allocate less than half as much as evaluating the cumulative batch.

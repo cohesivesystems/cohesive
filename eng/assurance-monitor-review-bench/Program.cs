@@ -27,6 +27,25 @@ foreach (var count in new[] { 100, 2000 })
     Measure("Replay", () => monitor.Advance(replay));
     Measure("Reference", () => monitor.Reference());
 
+    var author = new ExpressionAuthoring();
+    var response = Claim.Define("release", "1", R("subject"), R("mapping"), R("source"), R("config"))
+        .RequireWithin(R("cancel"), R("release"), TimeSpan.FromTicks(count + 100))
+        .Require(author.Input<Stock>("trigger"), ClaimInputRole.Trigger,
+            author.Input<Stock>("witness"), ClaimInputRole.Witness, (t, w) => t.Quantity == w.Quantity).Build();
+    SemanticObservation Event(int step, string selector, int value) => new("e" + step, "p", step, step, R(selector),
+        SemanticObservationKind.Event, ImmutableDictionary<ClaimInputRole, ObservationValue>.Empty,
+        ObservationValue.FromObject(new Stock(value)));
+    foreach (var matched in new[] { true, false })
+    {
+        var events = Enumerable.Range(1, count).Select(i => Event(i, "cancel", 1))
+            .Concat(Enumerable.Range(count + 1, 8).Select(i => Event(i, "release", matched ? 1 : 0))).ToImmutableArray();
+        var stream = batch with { Contract = new(R("mapping"), R("scope"), [new(R("cancel"), ["p"]), new(R("release"), ["p"])]),
+            Alternatives = [new(R("current"), events, [])] };
+        var accepted = TraceMonitor.Start(response, stream);
+        var release = new TraceObservationAlternative(R("next"), [Event(count + 9, "release", 1)], []);
+        Measure(matched ? "Matched" : "Pending", () => accepted.Advance(release));
+    }
+
     void Measure(string name, Func<object> action)
     {
         const int warmups = 5, iterations = 30;
