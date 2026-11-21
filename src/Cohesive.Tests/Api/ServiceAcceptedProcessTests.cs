@@ -45,8 +45,8 @@ public sealed class ServiceAcceptedProcessTests
     public async Task Declared_outcomes_drive_http_and_openapi()
     {
         var outcomes = AcceptedProcessResponses.Receipt(location => location.ResultLocation)
-            .IdentityConflict(409, "Conflict").InvalidRequest(400, "Invalid").AtCapacity(503)
-            .Pending(202).Missing(404).ExecutionFailed(500, "Failed");
+            .IdentityConflict(409, "Conflict").InvalidRequest(400, "Invalid").AtCapacity(503).QuotaPolicyMismatch(503)
+            .Pending(202).Missing(404).ExecutionFailed(422, "Rejected").EngineFailed(500, "Failed");
         var fixture = new Fixture();
         var api = fixture.Service.AcceptedApi<Command, string, string>("start", "result", "/commands", "/results/{instanceId}", outcomes);
         ApiEndpoint<Command, string> typedStart = api.Start;
@@ -56,7 +56,7 @@ public sealed class ServiceAcceptedProcessTests
         var post = paths.GetProperty("/commands").GetProperty("post").GetProperty("responses");
         Assert.Equal("string", post.GetProperty("202").GetProperty("content").GetProperty("application/json")
             .GetProperty("schema").GetProperty("type").GetString());
-        Assert.True(post.GetProperty("503").TryGetProperty("content", out _));
+        Assert.False(post.GetProperty("503").TryGetProperty("content", out _));
         var builder = WebApplication.CreateSlimBuilder();
         builder.Services.AddSingleton(OperationContext.Create().WithIdentityContext(new IdentityContext(new("caller", PrincipalKind.User))));
         await using var app = builder.Build();
@@ -91,9 +91,13 @@ public sealed class ServiceAcceptedProcessTests
         fixture.PolicyMismatch = true;
         var mismatch = await client.PostAsJsonAsync("/commands", new Command("new", "value"));
         Assert.Equal(HttpStatusCode.ServiceUnavailable, mismatch.StatusCode);
-        Assert.Equal(ProcessStartDisposition.QuotaPolicyMismatch, (await mismatch.Content.ReadFromJsonAsync<Cohesive.Execution.ProcessStartResult>())!.Disposition);
+        Assert.Empty(await mismatch.Content.ReadAsByteArrayAsync());
         fixture.Values.Current = new(ProcessExecutionValueReadState.ExecutionFailed, new(fixture.Plan.DefinitionReference, identity));
         Assert.Equal("Failed", await (await client.GetAsync(url)).Content.ReadFromJsonAsync<string>());
+        fixture.Complete(identity.Value, failed: true);
+        var rejected = await client.GetAsync(url);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, rejected.StatusCode);
+        Assert.Equal("Rejected", await rejected.Content.ReadFromJsonAsync<string>());
         fixture.Complete(identity.Value);
         Assert.Equal(HttpStatusCode.InternalServerError, (await client.GetAsync(url)).StatusCode);
     }
@@ -290,7 +294,7 @@ public sealed class ServiceAcceptedProcessTests
     public async Task Typed_projections_preserve_location_and_only_classify_verified_failures()
     {
         var fixture = new Fixture();
-        var outcomes = AcceptedProcessResponses.Receipt(location => location).ExecutionFailed(500, "Failed");
+        var outcomes = AcceptedProcessResponses.Receipt(location => location).EngineFailed(500, "Failed");
         var api = fixture.Service.AcceptedApi<Command, string, AcceptedProcessLocation>("start", "result", "/commands",
             "/results/{instanceId}", outcomes, ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(1)));
         var builder = WebApplication.CreateSlimBuilder();

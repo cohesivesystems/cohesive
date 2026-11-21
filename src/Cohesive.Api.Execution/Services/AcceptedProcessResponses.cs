@@ -43,18 +43,22 @@ public sealed class AcceptedProcessResponses<TReceipt>
     /// <summary>Return a bodyless response when admission capacity is exhausted.</summary>
     public AcceptedProcessResponses<TReceipt> AtCapacity(int status) => Empty(AcceptedProcessRoute.Submit, ApiResultKind.CapacityExceeded, status);
 
+    /// <summary>Return a bodyless response when the worker policy disagrees with the retained scope policy.</summary>
+    public AcceptedProcessResponses<TReceipt> QuotaPolicyMismatch(int status) => Empty(AcceptedProcessRoute.Submit, ApiResultKind.ServiceUnavailable, status);
+
     /// <summary>Return a bodyless response while a polled instance is running.</summary>
     public AcceptedProcessResponses<TReceipt> Pending(int status) => Empty(AcceptedProcessRoute.Poll, ApiResultKind.Accepted, status);
 
     /// <summary>Return a bodyless response for unknown instances and invalid polling tokens.</summary>
     public AcceptedProcessResponses<TReceipt> Missing(int status) => Empty(AcceptedProcessRoute.Poll, ApiResultKind.NotFound, status);
 
-    /// <summary>Project verified terminal failure. Storage and decoding failures retain their own handling.</summary>
-    public AcceptedProcessResponses<TReceipt> ExecutionFailed<T>(int status, T body)
-    {
+    /// <summary>Project an unsuccessful canonical process outcome.</summary>
+    public AcceptedProcessResponses<TReceipt> ExecutionFailed<T>(int status, T body) =>
+        Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionFailed, status, typeof(T), _ => body);
+
+    /// <summary>Project a verified execution engine failure.</summary>
+    public AcceptedProcessResponses<TReceipt> EngineFailed<T>(int status, T body) =>
         Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionEngineFailed, status, typeof(T), _ => body);
-        return Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionFailed, status, typeof(T), _ => body);
-    }
 
     internal Rule? Find(AcceptedProcessRoute route, ApiResultKind kind) => rules.GetValueOrDefault((route, kind));
 

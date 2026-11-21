@@ -56,8 +56,6 @@ public sealed class ServiceProcessEntityResultTests
         Assert.Equal(0, fixture.Values.RepositoryResolutions);
         var terminal = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance);
         Assert.Equal(expected, terminal.Kind);
-        if (expected == ApiResultKind.ExecutionFailed)
-            Assert.Equal(ServiceProcessFailureKind.UnsuccessfulOutcome, terminal.TerminalFailure);
     }
 
     [Theory]

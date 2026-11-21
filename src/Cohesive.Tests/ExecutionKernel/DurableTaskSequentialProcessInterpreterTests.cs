@@ -4200,10 +4200,10 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(ProcessStartDisposition.CommandIdentityConflict,
             (await client.AdmitCohesiveProcessAsync(Admission(winner, "changed"), timeout.Token)).Disposition);
         await worker.StopAsync(timeout.Token);
-        foreach (int? mismatchedLimit in new int?[] { null, 100 })
+        foreach (var (mismatchedLimit, prior) in new (int?, int?)[] { (null, null), (100, null), (100, 99) })
         {
             using var replacement = SchedulerHost(Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")!,
-                new DurableTaskSequentialProcessPlanCatalog([Physical(plan)], maximumRetainedInstances: mismatchedLimit), RejectingHost.Instance);
+                new DurableTaskSequentialProcessPlanCatalog([Physical(plan)], maximumRetainedInstances: mismatchedLimit, raiseQuotaFrom: prior), RejectingHost.Instance);
             await replacement.StartAsync(timeout.Token);
             var other = replacement.Services.GetRequiredService<DurableTaskClient>();
             Assert.Equal(ProcessStartDisposition.QuotaPolicyMismatch,
@@ -4219,6 +4219,16 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
         Assert.Equal(ProcessStartDisposition.QuotaExceeded, (await raised.AdmitCohesiveProcessAsync(Admission("third", "value"), timeout.Token)).Disposition);
         Assert.Equal(ProcessStartDisposition.Replayed, (await raised.AdmitCohesiveProcessAsync(Admission(winner, "same"), timeout.Token)).Disposition);
         await upgraded.StopAsync(timeout.Token);
+
+        using var stale = SchedulerHost(Environment.GetEnvironmentVariable("DURABLE_TASK_SCHEDULER_CONNECTION_STRING")!,
+            new DurableTaskSequentialProcessPlanCatalog([Physical(plan)], maximumRetainedInstances: 1), RejectingHost.Instance);
+        await stale.StartAsync(timeout.Token);
+        var old = stale.Services.GetRequiredService<DurableTaskClient>();
+        Assert.Equal(ProcessStartDisposition.QuotaPolicyMismatch,
+            (await old.AdmitCohesiveProcessAsync(Admission("stale", "new"), timeout.Token)).Disposition);
+        Assert.Equal(ProcessStartDisposition.QuotaPolicyMismatch,
+            (await old.AdmitCohesiveProcessAsync(Admission(winner, "same"), timeout.Token)).Disposition);
+        await stale.StopAsync(timeout.Token);
     }
 
     [DurableTaskSchedulerFact]

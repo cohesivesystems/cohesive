@@ -149,25 +149,7 @@ public sealed class ServiceTransitionBinding : ServiceBinding
 /// <typeparam name="TOutcome">Existing native outcome authority, retained without copying its result model.</typeparam>
 public sealed record ServiceOperationResult<TOutcome>(ApiResultKind Kind, TOutcome? Outcome,
     ImmutableArray<DocumentValidationDiagnostic> Diagnostics, NormalizedExecutionTrace Trace)
-    where TOutcome : class
-{
-    /// <summary>Verified terminal failure when the retained execution reached an unsuccessful end.</summary>
-    public ServiceProcessFailureKind? TerminalFailure => Kind switch
-    {
-        ApiResultKind.ExecutionEngineFailed => ServiceProcessFailureKind.EngineFailed,
-        ApiResultKind.ExecutionFailed => ServiceProcessFailureKind.UnsuccessfulOutcome,
-        _ => null
-    };
-}
-
-/// <summary>Verified failure source for a retained process result.</summary>
-public enum ServiceProcessFailureKind
-{
-    /// <summary>The provider retained a failed or terminated execution.</summary>
-    EngineFailed,
-    /// <summary>The canonical process completed with an unsuccessful outcome.</summary>
-    UnsuccessfulOutcome
-}
+    where TOutcome : class;
 
 /// <summary>Declared portable outcome, storage fence and payload-free evidence of one service invocation.</summary>
 /// <remarks>Internal subject snapshots and decision input/observation payloads are never part of this result.</remarks>

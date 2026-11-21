@@ -48,6 +48,17 @@ public static class ExecutionControlApiWireNames
 /// </remarks>
 public sealed class ExecutionControlApiCatalog
 {
+    internal static ApiResultKind StartResultKind(ProcessStartDisposition disposition, ApiResultKind success = ApiResultKind.Success) =>
+        disposition switch
+        {
+            ProcessStartDisposition.Accepted or ProcessStartDisposition.Replayed => success,
+            ProcessStartDisposition.CommandIdentityConflict or ProcessStartDisposition.IdempotencyConflict
+                or ProcessStartDisposition.InstanceConflict => ApiResultKind.Conflict,
+            ProcessStartDisposition.QuotaExceeded => ApiResultKind.CapacityExceeded,
+            ProcessStartDisposition.QuotaPolicyMismatch => ApiResultKind.ServiceUnavailable,
+            _ => throw new ArgumentOutOfRangeException(nameof(disposition), disposition, "Unsupported process start disposition.")
+        };
+
     /// <summary>Current semantic schema version of the execution-control API declaration.</summary>
     public static ExecutionIrSchemaVersion CurrentSchemaVersion { get; } =
         new("cohesive-execution-control-api/v4");
