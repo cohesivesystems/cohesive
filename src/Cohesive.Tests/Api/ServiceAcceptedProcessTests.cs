@@ -30,6 +30,31 @@ public sealed class ServiceAcceptedProcessTests
     public sealed record Command(string Id, string Text);
     static readonly ExecutionProvenance Provenance = new(new("tests"), new("tests/accepted"), DocumentOrigin.Generated);
 
+    [Theory]
+    [InlineData("partial", "POST /commands", "503")]
+    [InlineData("poll", "GET /results/{instanceId}", "500")]
+    [InlineData("wait", "POST /commands", "200")]
+    public void Conflicting_response_bodies_fail_during_declaration(string scenario, string route, string status)
+    {
+        var fixture = new Fixture();
+        var outcomes = AcceptedProcessResponses.Receipt(location => location.ResultLocation);
+        ServiceProcessResponse? response = null;
+        switch (scenario)
+        {
+            case "partial": outcomes.AtCapacity(503); break;
+            case "poll": outcomes.EngineFailed(500, "failed"); break;
+            case "wait":
+                outcomes.IdentityConflict(200, 42);
+                response = ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(1));
+                break;
+        }
+        var error = Assert.Throws<ServiceBindingValidationException>(() => fixture.Service.AcceptedApi<Command, string, string>(
+            "start", "result", "/commands", "/results/{instanceId}", outcomes, response));
+        Assert.Equal("services.api.responseBodyConflict", Assert.Single(error.Validation.Diagnostics).Code);
+        Assert.Contains(route, error.Message);
+        Assert.Contains(status, error.Message);
+    }
+
     [Fact]
     public void Repeated_outcomes_are_diagnosed_at_api_construction()
     {
@@ -46,7 +71,7 @@ public sealed class ServiceAcceptedProcessTests
     {
         var outcomes = AcceptedProcessResponses.Receipt(location => location.ResultLocation)
             .IdentityConflict(409, "Conflict").InvalidRequest(400, "Invalid").AtCapacity(503).QuotaPolicyMismatch(503)
-            .Pending(202).Missing(404).ExecutionFailed(422, "Rejected").EngineFailed(500, "Failed");
+            .Pending(202).Missing(404).ExecutionFailed(424, "Rejected").EngineFailed(502, "Failed");
         var fixture = new Fixture();
         var api = fixture.Service.AcceptedApi<Command, string, string>("start", "result", "/commands", "/results/{instanceId}", outcomes);
         ApiEndpoint<Command, string> typedStart = api.Start;
@@ -96,7 +121,7 @@ public sealed class ServiceAcceptedProcessTests
         Assert.Equal("Failed", await (await client.GetAsync(url)).Content.ReadFromJsonAsync<string>());
         fixture.Complete(identity.Value, failed: true);
         var rejected = await client.GetAsync(url);
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, rejected.StatusCode);
+        Assert.Equal(HttpStatusCode.FailedDependency, rejected.StatusCode);
         Assert.Equal("Rejected", await rejected.Content.ReadFromJsonAsync<string>());
         fixture.Complete(identity.Value);
         Assert.Equal(HttpStatusCode.InternalServerError, (await client.GetAsync(url)).StatusCode);
@@ -294,7 +319,7 @@ public sealed class ServiceAcceptedProcessTests
     public async Task Typed_projections_preserve_location_and_only_classify_verified_failures()
     {
         var fixture = new Fixture();
-        var outcomes = AcceptedProcessResponses.Receipt(location => location).EngineFailed(500, "Failed");
+        var outcomes = AcceptedProcessResponses.Receipt(location => location).EngineFailed(502, "Failed");
         var api = fixture.Service.AcceptedApi<Command, string, AcceptedProcessLocation>("start", "result", "/commands",
             "/results/{instanceId}", outcomes, ServiceProcessResponse.WaitForResult(TimeSpan.FromSeconds(1)));
         var builder = WebApplication.CreateSlimBuilder();
@@ -317,12 +342,12 @@ public sealed class ServiceAcceptedProcessTests
         var values = new ProcessExecutionValues(fixture.Plan.DefinitionReference, new("a/b"));
         fixture.Values.Current = new(ProcessExecutionValueReadState.ExecutionFailed, values);
         var failed = await client.GetAsync(url);
-        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        Assert.Equal(HttpStatusCode.BadGateway, failed.StatusCode);
         Assert.Equal("Failed", await failed.Content.ReadFromJsonAsync<string>());
         fixture.Values.OnWait = fixture.Values.Current;
         fixture.Values.Current = ProcessExecutionValueReadResult.InProgress(values);
         var waited = await client.PostAsJsonAsync("/prefix/commands", new Command("a/b", "text"));
-        Assert.Equal(HttpStatusCode.InternalServerError, waited.StatusCode);
+        Assert.Equal(HttpStatusCode.BadGateway, waited.StatusCode);
         Assert.Equal("Failed", await waited.Content.ReadFromJsonAsync<string>());
         fixture.Values.Current = ProcessExecutionValueReadResult.TerminalArtifactUnavailable(values);
         var unavailable = await client.GetAsync(url);

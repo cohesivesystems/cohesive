@@ -60,6 +60,10 @@ public sealed class AcceptedProcessResponses<TReceipt>
     public AcceptedProcessResponses<TReceipt> EngineFailed<T>(int status, T body) =>
         Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionEngineFailed, status, typeof(T), _ => body);
 
+    /// <summary>Project a result-read infrastructure error such as missing terminal evidence.</summary>
+    public AcceptedProcessResponses<TReceipt> InfrastructureError<T>(int status, T body) =>
+        Add(AcceptedProcessRoute.Poll, ApiResultKind.InfrastructureError, status, typeof(T), _ => body);
+
     internal Rule? Find(AcceptedProcessRoute route, ApiResultKind kind) => rules.GetValueOrDefault((route, kind));
 
     internal AcceptedProcessResponses<TReceipt> Snapshot()

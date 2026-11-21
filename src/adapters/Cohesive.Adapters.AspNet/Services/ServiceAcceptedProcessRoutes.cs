@@ -52,7 +52,20 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             }
             var outcome = await runtime.StartAsync(context, api.StartOperationId, intent.Command, intent.Idempotency,
                 intent.Continuation, intent.Input).ConfigureAwait(false);
-            if (outcome.Kind != ApiResultKind.Accepted) return Submission(outcome.Kind) ?? ProjectProcessOutcome(api.Start, outcome);
+            if (outcome.Kind != ApiResultKind.Accepted)
+            {
+                if (Submission(outcome.Kind) is { } mapped) return mapped;
+                if (api.Response.MaximumWait is not null && outcome.Kind is ApiResultKind.Conflict or ApiResultKind.Forbidden or ApiResultKind.ValidationFailed)
+                {
+                    var alternative = api.Start.Operation.Results.Single(item => item.Kind == outcome.Kind
+                        && !item.Id.StartsWith("result-", StringComparison.Ordinal));
+                    var diagnostics = outcome.Diagnostics;
+                    if (diagnostics.IsEmpty && outcome.Outcome?.DiagnosticCode is { } code)
+                        diagnostics = [new(code, DiagnosticSeverity.Error, "The process start conflicts with a retained identity.")];
+                    return ProjectServiceProblem(api.Start, outcome.Kind, diagnostics, alternative.Id);
+                }
+                return ProjectProcessOutcome(api.Start, outcome);
+            }
             var admission = outcome.Outcome ?? throw new InvalidOperationException("Accepted start requires admission evidence.");
             var instance = admission.Admission!.Continuation.ProcessInstanceId.Value;
             var token = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(instance));

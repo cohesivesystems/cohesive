@@ -38,9 +38,17 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
         var output = ServiceApiProjection.ProjectProcessResult<TResult>(declaration, resultOperationId,
             new("GET", resultRoute, [new("instanceId", HttpParameterSource.Route, typeof(string))], body: null)).Operation;
         Outcomes.Validate(input, output);
-        var alternatives = input.Results.Select(item => item.Kind == ApiResultKind.Accepted
-            ? new ApiResultDefinition(ApiResultKind.Accepted, typeof(TReceipt), isPrimary: true,
-                description: "Admitted to the declared execution lifetime; poll the linked result independently.") : item).Select(item => Outcomes.Apply(AcceptedProcessRoute.Submit, item)).ToList();
+        // A bounded POST can return a rejection from either admission or its result read.
+        // Use the standard read problem for shared kinds before applying public overrides.
+        var alternatives = input.Results.Select(item =>
+        {
+            var body = item.Kind == ApiResultKind.Accepted ? typeof(TReceipt) : item.BodyType;
+            if (response.MaximumWait is not null && output.Results.SingleOrDefault(read => read.Kind == item.Kind) is { } shared
+                && item.Kind != ApiResultKind.Accepted)
+                body = shared.BodyType;
+            return Outcomes.Apply(AcceptedProcessRoute.Submit,
+                new(item.Kind, body, item.IsPrimary, item.Id, item.Description, item.Http));
+        }).ToList();
         var reads = output.Results.Select(item => Outcomes.Apply(AcceptedProcessRoute.Poll, item)).ToList();
         if (response.MaximumWait is not null)
             alternatives.AddRange(reads.Where(item => item.Kind != ApiResultKind.Accepted)
@@ -52,11 +60,24 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
         Result = new(new ApiOperation(output.Name, output.Kind, output.RequestType, output.ResponseType,
             output.Http, output.Id, results: reads, authorizationRequirements: output.AuthorizationRequirements,
             semanticReferences: output.SemanticReferences, resultOf: Start.Id));
+        RequireOneBodyPerStatus(Start.Operation);
+        RequireOneBodyPerStatus(Result.Operation);
         Declaration = declaration;
         StartOperationId = startOperationId;
         ResultOperationId = resultOperationId;
         Definition = new ApiDefinition([Start, Result]);
     }
+    static void RequireOneBodyPerStatus(ApiOperation operation)
+    {
+        foreach (var group in operation.Results.GroupBy(result => result.Http!.StatusCode))
+        {
+            if (!group.Select(result => result.BodyType).Distinct().Skip(1).Any()) continue;
+            var alternatives = string.Join(", ", group.Select(result => $"{result.Id} ({result.BodyType.Name})"));
+            throw ServiceImplementationPlan.Error("services.api.responseBodyConflict",
+                $"{operation.Http!.Method} {operation.Http.Route} declares different bodies for HTTP {group.Key}: {alternatives}.");
+        }
+    }
+
     /// <summary>HTTP response timing, independent of the execution provider lifetime.</summary>
     public ServiceProcessResponse Response { get; }
     /// <summary>HTTP projections frozen at API construction.</summary>

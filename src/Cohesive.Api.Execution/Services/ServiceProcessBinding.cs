@@ -138,7 +138,7 @@ public sealed partial class ServiceRuntime
             evidence.Record("processStartDispatched");
             var success = operation.Execution is { Completion: ServiceProcessCompletion.Admission }
                 ? ApiResultKind.Accepted : ApiResultKind.Success;
-            var kind = ExecutionControlApiCatalog.StartResultKind(result.Disposition, success);
+            var kind = result.Disposition.ToApiResultKind(success);
             return new(kind, result, [], evidence.Complete(kind));
         }
         catch (Exception exception)
