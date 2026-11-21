@@ -127,6 +127,32 @@ public sealed partial class MachineReactionHost
         return results.ToImmutable();
     }
 
+    /// <summary>Durably admits one ordered delivery batch before advancing its source checkpoint.</summary>
+    /// <param name="context">Trusted worker context carrying delivery cancellation.</param>
+    /// <param name="receipts">Committed receipts from one bounded source batch, in delivery order.</param>
+    /// <param name="checkpointAsync">Advances the transport-owned checkpoint for this policy and batch.</param>
+    /// <returns>Completes after all admissions and the checkpoint have completed. Recovery executes admitted work separately.</returns>
+    /// <remarks>Use a separate cursor per policy and authority. Enumeration or admission failure leaves the batch
+    /// unacknowledged. If the checkpoint fails or its acknowledgement is lost, the source can redeliver the
+    /// entire batch. Durable admission reuses the same logical reaction identities.</remarks>
+    /// <exception cref="ArgumentNullException">A required argument is null.</exception>
+    /// <exception cref="OperationCanceledException">Cancellation is observed before checkpointing.</exception>
+    public async Task AdmitBatchAsync(OperationContext context, IEnumerable<EntityTransitionOperationReceipt> receipts,
+        Func<Task> checkpointAsync)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(receipts);
+        ArgumentNullException.ThrowIfNull(checkpointAsync);
+        context.ThrowIfCancellationRequested();
+        foreach (var receipt in receipts)
+        {
+            context.ThrowIfCancellationRequested();
+            await AdmitAsync(context, receipt).ConfigureAwait(false);
+        }
+        context.ThrowIfCancellationRequested();
+        await checkpointAsync().ConfigureAwait(false);
+    }
+
     /// <summary>Admits and immediately executes a delivery for synchronous callers.</summary>
     /// <param name="context">Trusted caller context.</param>
     /// <param name="receipt">Validated immutable source receipt.</param>

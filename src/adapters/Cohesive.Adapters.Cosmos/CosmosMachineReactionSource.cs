@@ -65,17 +65,20 @@ public sealed class CosmosMachineReactionSource
         }, cancellationToken);
     }
 
-    internal static async Task DeliverBatchAsync(CosmosEntityOutboxRepository repository, MachineReactionHost host,
+    internal static Task DeliverBatchAsync(CosmosEntityOutboxRepository repository, MachineReactionHost host,
         OperationContext context, CosmosManagedMaterializationProviderBatch batch)
     {
-        foreach (var document in batch.Documents)
+        return host.AdmitBatchAsync(context, ReadReceipts(), batch.CheckpointAsync);
+
+        IEnumerable<Cohesive.Storage.EntityTransitionOperationReceipt> ReadReceipts()
         {
-            context.ThrowIfCancellationRequested();
-            if (repository.ReadTransitionFeedReceipt(document) is { } receipt)
-                await host.AdmitAsync(context, receipt).ConfigureAwait(false);
+            foreach (var document in batch.Documents)
+            {
+                context.ThrowIfCancellationRequested();
+                if (repository.ReadTransitionFeedReceipt(document) is { } receipt)
+                    yield return receipt;
+            }
         }
-        context.ThrowIfCancellationRequested();
-        await batch.CheckpointAsync().ConfigureAwait(false);
     }
 
     sealed record Scope(string Seed, ExecutionDefinitionReference Policy, InteractionAuthorityScope Authority, string SourceAccount, string SourceDatabase,
