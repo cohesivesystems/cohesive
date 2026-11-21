@@ -21,15 +21,10 @@ public sealed class AcceptedProcessResponses<TReceipt>
 
     readonly SortedSet<string> duplicates = new(StringComparer.Ordinal);
 
-    internal void Bind(ApiOperation start, ApiOperation result)
+    internal void Validate(ApiOperation start, ApiOperation result)
     {
         if (duplicates.Count > 0)
             throw ServiceImplementationPlan.Error("services.api.duplicateOutcome", $"Duplicate accepted-process mappings: {string.Join(", ", duplicates)}.");
-        var infrastructure = result.Results.Single(item => item.Kind == ApiResultKind.InfrastructureError);
-        if (Find(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionEngineFailed) is { } engine
-            && engine.Http.StatusCode == infrastructure.Http!.StatusCode)
-            rules.TryAdd((AcceptedProcessRoute.Poll, ApiResultKind.InfrastructureError), engine);
-
         foreach (var key in rules.Keys)
         {
             var operation = key.Route == AcceptedProcessRoute.Submit ? start : result;
@@ -63,13 +58,17 @@ public sealed class AcceptedProcessResponses<TReceipt>
     public AcceptedProcessResponses<TReceipt> ExecutionFailed<T>(int status, T body) =>
         Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionFailed, status, typeof(T), _ => body);
 
-    /// <summary>Project a verified engine failure. Result infrastructure failures at the same default status inherit this projection unless explicitly mapped.</summary>
+    /// <summary>Project a verified engine failure.</summary>
     public AcceptedProcessResponses<TReceipt> EngineFailed<T>(int status, T body) =>
         Add(AcceptedProcessRoute.Poll, ApiResultKind.ExecutionEngineFailed, status, typeof(T), _ => body);
 
     /// <summary>Project a result-read infrastructure error such as missing terminal evidence.</summary>
     public AcceptedProcessResponses<TReceipt> InfrastructureError<T>(int status, T body) =>
         Add(AcceptedProcessRoute.Poll, ApiResultKind.InfrastructureError, status, typeof(T), _ => body);
+
+    /// <summary>Declare separate public bodies of one type for engine failure and result infrastructure failure at a shared HTTP status.</summary>
+    public AcceptedProcessResponses<TReceipt> ResultFailures<T>(int status, T engineFailed, T infrastructureError) =>
+        EngineFailed(status, engineFailed).InfrastructureError(status, infrastructureError);
 
     internal Rule? Find(AcceptedProcessRoute route, ApiResultKind kind) => rules.GetValueOrDefault((route, kind));
 

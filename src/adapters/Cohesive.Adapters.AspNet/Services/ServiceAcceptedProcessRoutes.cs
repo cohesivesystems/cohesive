@@ -55,22 +55,8 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             if (outcome.Kind != ApiResultKind.Accepted)
             {
                 if (Submission(outcome.Kind) is { } mapped) return mapped;
-                if (api.AdmissionProblems.TryGetValue(outcome.Kind, out var problem))
-                {
-                    var diagnostics = outcome.Diagnostics;
-                    if (diagnostics.IsEmpty)
-                    {
-                        var message = outcome.Kind switch
-                        {
-                            ApiResultKind.Forbidden => "The caller is forbidden from starting this process.",
-                            ApiResultKind.ValidationFailed => "The process start request is invalid.",
-                            ApiResultKind.Conflict => "The process start conflicts with a retained identity.",
-                            _ => "The process start was rejected."
-                        };
-                        diagnostics = [new(outcome.Outcome?.DiagnosticCode ?? $"services.start.{outcome.Kind}", DiagnosticSeverity.Error, message)];
-                    }
+                if (api.TryProjectAdmissionProblem(outcome, out var problem, out var diagnostics))
                     return ProjectServiceProblem(problem, diagnostics);
-                }
                 return ProjectProcessOutcome(api.Start, outcome);
             }
             var admission = outcome.Outcome ?? throw new InvalidOperationException("Accepted start requires admission evidence.");

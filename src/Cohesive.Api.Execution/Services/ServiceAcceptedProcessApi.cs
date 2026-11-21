@@ -1,4 +1,7 @@
 using System.Collections.Frozen;
+using System.Collections.Immutable;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Api.Services;
 using Cohesive.Execution;
 
@@ -38,7 +41,7 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
             new("POST", startRoute, [], new(typeof(TRequest)))).Operation;
         var output = ServiceApiProjection.ProjectProcessResult<TResult>(declaration, resultOperationId,
             new("GET", resultRoute, [new("instanceId", HttpParameterSource.Route, typeof(string))], body: null)).Operation;
-        Outcomes.Bind(input, output);
+        Outcomes.Validate(input, output);
         var sharedAdmissionProblems = new Dictionary<ApiResultKind, ApiResultDefinition>();
         // A bounded POST can return a rejection from either admission or its result read.
         // Use the standard read problem for shared kinds before applying public overrides.
@@ -54,7 +57,7 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
                 sharedAdmissionProblems.Add(item.Kind, admission);
             return admission;
         }).ToList();
-        AdmissionProblems = sharedAdmissionProblems.ToFrozenDictionary();
+        admissionProblems = sharedAdmissionProblems.ToFrozenDictionary();
         var reads = output.Results.Select(item => Outcomes.Apply(AcceptedProcessRoute.Poll, item)).ToList();
         if (response.MaximumWait is not null)
             alternatives.AddRange(reads.Where(item => item.Kind != ApiResultKind.Accepted)
@@ -84,8 +87,25 @@ public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclar
         }
     }
 
-    /// <summary>Default admission problem contracts shared with reads on a bounded-wait POST, indexed before route composition.</summary>
-    public IReadOnlyDictionary<ApiResultKind, ApiResultDefinition> AdmissionProblems { get; }
+    readonly FrozenDictionary<ApiResultKind, ApiResultDefinition> admissionProblems;
+
+    /// <summary>Resolves a standard bounded-wait admission problem and preserves any diagnostics supplied by the runtime.</summary>
+    public bool TryProjectAdmissionProblem(ServiceOperationResult<ProcessStartResult> outcome,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ApiResultDefinition? problem, out ImmutableArray<DocumentValidationDiagnostic> diagnostics)
+    {
+        diagnostics = outcome.Diagnostics;
+        if (!admissionProblems.TryGetValue(outcome.Kind, out problem)) return false;
+        if (!diagnostics.IsDefaultOrEmpty) return true;
+        var (code, message) = outcome.Kind switch
+        {
+            ApiResultKind.Forbidden => ("services.start.forbidden", "The caller is forbidden from starting this process."),
+            ApiResultKind.ValidationFailed => ("services.start.validationFailed", "The process start request is invalid."),
+            ApiResultKind.Conflict => ("services.start.conflict", "The process start conflicts with a retained identity."),
+            _ => ("services.start.rejected", "The process start was rejected.")
+        };
+        diagnostics = [new(outcome.Outcome?.DiagnosticCode ?? code, DiagnosticSeverity.Error, message)];
+        return true;
+    }
 
     /// <summary>HTTP response timing, independent of the execution provider lifetime.</summary>
     public ServiceProcessResponse Response { get; }
