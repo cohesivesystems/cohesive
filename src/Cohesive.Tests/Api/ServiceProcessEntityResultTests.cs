@@ -37,7 +37,7 @@ public sealed class ServiceProcessEntityResultTests
 {
     [Theory]
     [InlineData(ProcessTransitionOperationAdapterDiagnosticCodes.SubjectChanged, ApiResultKind.Conflict)]
-    [InlineData("unclassified.failure", ApiResultKind.DomainError)]
+    [InlineData("unclassified.failure", ApiResultKind.ExecutionFailed)]
     public async Task FailedCommitRetainsAttributedDiagnosticWithoutResolvingRepository(string code, ApiResultKind expected)
     {
         var fixture = await Create(failureCode: code);
@@ -77,9 +77,9 @@ public sealed class ServiceProcessEntityResultTests
         fixture.Values.Result = ProcessExecutionValueReadResult.Available(new(retained.Definition, retained.ProcessInstanceId,
             retained.Input, retained.TerminalOutcome, retained.TerminalContinuation, evidence, [other]));
         var result = await fixture.Read();
-        Assert.Equal(ApiResultKind.DomainError, result.Kind);
+        Assert.Equal(ApiResultKind.ExecutionFailed, result.Kind);
         var terminal = await fixture.Runtime.ReadProcessResultAsync(fixture.Context, "terminal", fixture.Instance);
-        Assert.Equal(ApiResultKind.DomainError, terminal.Kind);
+        Assert.Equal(ApiResultKind.ExecutionFailed, terminal.Kind);
         Assert.Equal(0, fixture.Values.RepositoryResolutions);
     }
 

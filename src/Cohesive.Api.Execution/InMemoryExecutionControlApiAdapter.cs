@@ -488,10 +488,7 @@ public sealed partial class InMemoryExecutionControlApiAdapter : IExecutionContr
             var startResult = await startDispatcher(context, start, invocation).ConfigureAwait(false)
                 ?? throw new InvalidOperationException(
                     "The authoritative Process-start dispatcher returned no canonical result.");
-            return Result(
-                endpoint,
-                startResult.IsConflict ? ApiResultKind.Conflict : ApiResultKind.Success,
-                startResult);
+            return Result(endpoint, startResult.Disposition.ToApiResultKind(), startResult);
         }
 
 
@@ -675,7 +672,7 @@ public sealed partial class InMemoryExecutionControlApiAdapter : IExecutionContr
                 startsByIdempotency.Add(new(scope, canonical.Context.IdempotencyKey), receipt);
             }
 
-            var kind = decision.Result.IsConflict ? ApiResultKind.Conflict : ApiResultKind.Success;
+            var kind = decision.Result.Disposition.ToApiResultKind();
             return Result(catalog.Start, kind, decision.Result);
         }
     }

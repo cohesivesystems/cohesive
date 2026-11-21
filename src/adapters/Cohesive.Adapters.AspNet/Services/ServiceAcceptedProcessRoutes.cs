@@ -24,8 +24,9 @@ public static partial class ServiceEndpointRouteBuilderExtensions
     /// <param name="project">Pure terminal value projection, invoked only after result authorization and validation.</param>
     /// <param name="authorizationPolicyResolver">Optional native policy mapping.</param>
     /// <exception cref="ServiceBindingValidationException">The runtime does not realize this exact service.</exception>
-    public static void MapServiceAcceptedProcess<TRequest, TResult>(this IEndpointRouteBuilder routes,
-        ServiceAcceptedProcessApi<TRequest, TResult> api, ServiceRuntime runtime,
+    /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+    public static void MapServiceAcceptedProcess<TRequest, TResult, TReceipt>(this IEndpointRouteBuilder routes,
+        ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> api, ServiceRuntime runtime,
         Func<HttpContext, TRequest, (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency,
             ProcessContinuationIdentity Continuation, ObservationValue Input)> bind,
         Func<PortableValue, TResult> project,
@@ -38,17 +39,31 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         if (api.Response.MaximumWait is not null) runtime.RequireProcessResultWaiting(api.ResultOperationId);
         routes.MapApiEndpoint(api.Start, async (OperationContext context, HttpContext http) =>
         {
-            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation,
-                context.CancellationToken).ConfigureAwait(false)
-                ?? throw new BadHttpRequestException("A Process command body is required.");
-            var intent = bind(http, request);
+            (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency, ProcessContinuationIdentity Continuation, ObservationValue Input) intent;
+            try
+            {
+                var request = await ReadBody(http, context.CancellationToken).ConfigureAwait(false);
+                intent = bind(http, request);
+            }
+            catch (BadHttpRequestException error) when (error.StatusCode == 400)
+            {
+                if (Submission(ApiResultKind.ValidationFailed) is { } invalid) return invalid;
+                throw;
+            }
             var outcome = await runtime.StartAsync(context, api.StartOperationId, intent.Command, intent.Idempotency,
                 intent.Continuation, intent.Input).ConfigureAwait(false);
-            if (outcome.Kind != ApiResultKind.Accepted) return ProjectProcessOutcome(api.Start, outcome);
+            if (outcome.Kind != ApiResultKind.Accepted)
+            {
+                if (Submission(outcome.Kind) is { } mapped) return mapped;
+                if (api.TryProjectAdmissionProblem(outcome, out var problem, out var diagnostics))
+                    return ProjectServiceProblem(problem, diagnostics);
+                return ProjectProcessOutcome(api.Start, outcome);
+            }
             var admission = outcome.Outcome ?? throw new InvalidOperationException("Accepted start requires admission evidence.");
             var instance = admission.Admission!.Continuation.ProcessInstanceId.Value;
+            var token = WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(instance));
             var location = http.Request.PathBase + api.Result.Operation.Http!.Route.Replace("{instanceId}",
-                WebEncoders.Base64UrlEncode(Encoding.UTF8.GetBytes(instance)), StringComparison.Ordinal);
+                token, StringComparison.Ordinal);
             http.Response.Headers.Location = location;
             if (api.Response.MaximumWait is { } maximumWait)
             {
@@ -56,14 +71,37 @@ public static partial class ServiceEndpointRouteBuilderExtensions
                 if (result.Kind == ApiResultKind.Success)
                     return Results.Json(project(result.Outcome!), statusCode: api.Result.Operation.PrimaryResult.Http!.StatusCode);
                 if (result.Kind != ApiResultKind.Accepted)
-                    return ProjectServiceProblem(api.Result, result.Kind, result.Diagnostics);
+                    return ProjectRead(result) ?? ProjectServiceProblem(api.Result, result.Kind, result.Diagnostics);
             }
             http.Response.Headers.RetryAfter = "1";
-            return Results.Json(new ServiceProcessReceipt(admission, location), statusCode: StatusCodes.Status202Accepted);
+            return Submission(ApiResultKind.Accepted, new(token, location)) ?? Results.Json(new ServiceProcessReceipt(admission, location), statusCode: StatusCodes.Status202Accepted);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(api.Declaration);
         MapResultCore(routes, api.Declaration, api.Result, _ => runtime,
-            (service, context, instance) => service.ReadProcessResultAsync(context, api.ResultOperationId, DecodeInstance(instance.Value)),
-            (_, value) => project(value), authorizationPolicyResolver, "instanceId");
+            (service, context, instance) => service.ReadProcessResultAsync(context, api.ResultOperationId, instance),
+            (_, value) => project(value), authorizationPolicyResolver, "instanceId", ProjectRead,
+            DecodeInstance, () => api.TryProjectMissing(out var missing) ? Render(missing) : null);
+
+        async ValueTask<TRequest> ReadBody(HttpContext http, CancellationToken cancellationToken)
+        {
+            try
+            {
+                return await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation, cancellationToken)
+                    .ConfigureAwait(false) ?? throw new BadHttpRequestException("A Process command body is required.");
+            }
+            catch (System.Text.Json.JsonException error)
+            {
+                throw new BadHttpRequestException("Invalid process command JSON.", error);
+            }
+        }
+
+        IResult? Submission(ApiResultKind kind, AcceptedProcessLocation? location = null) =>
+            api.TryProjectSubmission(kind, out var response, location) ? Render(response) : null;
+
+        IResult? ProjectRead(ServiceOperationResult<PortableValue> result) =>
+            api.TryProjectRead(result, out var response) ? Render(response) : null;
+
+        static IResult Render(AcceptedProcessResponse response) => response.BodyType == typeof(void)
+            ? Results.StatusCode(response.Status) : Results.Json(response.Body, statusCode: response.Status);
     }
 
     // Route segments use an opaque reversible token: ASP.NET deliberately leaves encoded slashes escaped.

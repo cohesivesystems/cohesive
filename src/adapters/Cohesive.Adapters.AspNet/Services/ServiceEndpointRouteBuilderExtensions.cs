@@ -178,7 +178,8 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         ExecutionDefinitionDocument declaration, ApiEndpoint projection, Func<IServiceProvider, ServiceRuntime> resolveRuntime,
         Func<ServiceRuntime, OperationContext, ProcessInstanceId, ValueTask<ServiceOperationResult<TValue>>> read,
         Func<HttpContext, TValue, TResponse> project, AspNetAuthorizationPolicyResolver? authorizationPolicyResolver,
-        string instanceParameter) where TValue : class
+        string instanceParameter, Func<ServiceOperationResult<TValue>, IResult?>? failure = null,
+        Func<string, ProcessInstanceId>? decode = null, Func<IResult?>? invalidToken = null) where TValue : class
     {
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
@@ -187,14 +188,21 @@ public static partial class ServiceEndpointRouteBuilderExtensions
                 return Results.BadRequest(new ApiValidationProblem("services.result.instanceRequired", "A Process instance is required.",
                     [new(instanceParameter, "services.result.instanceRequired", "Supply the logical Process instance identity.")]));
             var runtime = ResolveRuntime(declaration, resolveRuntime, http.RequestServices);
-            var result = await read(runtime, context, new(instance)).ConfigureAwait(false);
-            var status = projection.Operation.Results.Single(item => item.Kind == result.Kind).Http!.StatusCode;
+            ProcessInstanceId decoded;
+            try { decoded = decode is null ? new(instance) : decode(instance); }
+            catch (BadHttpRequestException) when (decode is not null)
+            {
+                if (invalidToken?.Invoke() is { } invalid) return invalid;
+                throw;
+            }
+            var result = await read(runtime, context, decoded).ConfigureAwait(false);
+
             if (result.Kind == ApiResultKind.Success)
             {
                 var value = result.Outcome ?? throw new InvalidOperationException("Successful result resolution returned no value.");
-                return Results.Json(project(http, value), statusCode: status);
+                return Results.Json(project(http, value), statusCode: projection.Operation.PrimaryResult.Http!.StatusCode);
             }
-            return ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
+            return failure?.Invoke(result) ?? ProjectServiceProblem(projection, result.Kind, result.Diagnostics);
         }, authorizationPolicyResolver: authorizationPolicyResolver).WithMetadata(declaration);
     }
 
@@ -211,6 +219,11 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(diagnostics);
         var result = endpoint.Operation.Results.Single(candidate => candidate.Kind == kind && (resultId is null || candidate.Id == resultId));
+        return ProjectServiceProblem(result, diagnostics);
+    }
+
+    static IResult ProjectServiceProblem(ApiResultDefinition result, IEnumerable<DocumentValidationDiagnostic> diagnostics)
+    {
         var status = result.Http?.StatusCode
             ?? throw new InvalidOperationException("A service problem requires a declared HTTP status.");
         var issues = diagnostics.ToArray();

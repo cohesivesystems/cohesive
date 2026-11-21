@@ -136,9 +136,9 @@ public sealed partial class ServiceRuntime
                 && (admission.Definition != operation.Process || admission.Continuation != initialContinuation)))
                 throw new InvalidOperationException("The Process dispatcher returned admission for a different definition or continuation.");
             evidence.Record("processStartDispatched");
-            var kind = result.IsConflict ? ApiResultKind.Conflict
-                : operation.Execution is { Completion: ServiceProcessCompletion.Admission }
-                    ? ApiResultKind.Accepted : ApiResultKind.Success;
+            var success = operation.Execution is { Completion: ServiceProcessCompletion.Admission }
+                ? ApiResultKind.Accepted : ApiResultKind.Success;
+            var kind = result.Disposition.ToApiResultKind(success);
             return new(kind, result, [], evidence.Complete(kind));
         }
         catch (Exception exception)

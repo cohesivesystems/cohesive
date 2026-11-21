@@ -114,7 +114,8 @@ public sealed class ServiceImplementationPlan
     /// <summary>Admits both operations of a fingerprint-pinned admission/result pair atomically.</summary>
     /// <typeparam name="TRequest">Command input.</typeparam><typeparam name="TResult">Terminal result.</typeparam>
     /// <param name="definition">Owning API.</param><param name="pair">Original pair retaining its exact service document.</param>
-    public void ImplementProcess<TRequest, TResult>(ApiDefinition definition, ServiceAcceptedProcessApi<TRequest, TResult> pair) where TRequest : class
+    /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+    public void ImplementProcess<TRequest, TResult, TReceipt>(ApiDefinition definition, ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> pair) where TRequest : class
     {
         ArgumentNullException.ThrowIfNull(pair);
         Contribute(definition, () =>

@@ -486,6 +486,18 @@ runtime requires complete binding coverage. The multi-operation hosting follow-u
 
 `ServiceBuilder.AcceptedApi<TRequest, TResult>` declares a 202 native admission receipt and an independently
 authorized polling endpoint. `ServiceApiBindingsBuilder` binds the linked pair to a complete `ServiceRuntime`;
+For a public DTO with one retry key, bind the command with
+`AcceptedProcessIntent.FromRequestId(request.RequestId, input)`. This opt-in convention hashes the
+exact UTF-8 key into the command, idempotency and instance identities and selects the first attempt.
+Use the explicit binder when those identities have independent lifetimes.
+
+Pass a typed `AcceptedProcessResponses.Receipt(...)` declaration to the accepted API declaration to customize its
+HTTP contract. For example, `AcceptedProcessResponses.Receipt(link => new Receipt(link.ResultToken, link.ResultLocation))
+.IdentityConflict(409, new Error("IdConflict")).AtCapacity(503).QuotaPolicyMismatch(503).Pending(202).Missing(404)`
+describes both the HTTP responses and their OpenAPI alternatives. `InvalidRequest` covers POST
+decoding and binding. `ExecutionFailed` projects an unsuccessful process outcome. `EngineFailed` projects a verified provider failure. Both apply to polling and bounded waits.
+The declaration takes a snapshot of the mappings at construction.
+
 `MapServiceAcceptedProcess` supports direct native routing. Execution remains with the qualified native
 dispatcher and retained-value provider, with no implicit worker activation or automatic retry.
 See [the protocol and binding walkthrough](../../../docs/design/accepted-process-api.md) for contracts, examples and limits.

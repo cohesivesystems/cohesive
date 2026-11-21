@@ -1,4 +1,3 @@
-using System.Text.Json.Serialization;
 using Cohesive.Api.Execution;
 using Cohesive.Execution;
 using Cohesive.Processes.Execution;
@@ -26,7 +25,6 @@ public sealed record DurableTaskProcessStartAdmission
     /// <exception cref="UnauthorizedAccessException">
     /// <paramref name="invocation"/> does not grant canonical Process-start admission.
     /// </exception>
-    [JsonConstructor]
     public DurableTaskProcessStartAdmission(
         ProcessStartRequest request,
         ProcessActivationContext activationContext,
@@ -175,7 +173,17 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
         var commandIndex = Index(scope, "command", request.Context.CommandId.Value);
         var idempotencyIndex = Index(scope, "idempotency", request.Context.IdempotencyKey.Value);
         var instanceIndex = Index(scope, "instance", request.Context.ProcessInstanceId.Value);
-        EntityInstanceId[] indices = [commandIndex, idempotencyIndex, instanceIndex];
+        var quota = new EntityInstanceId(DurableTaskAdmissionQuota.Name,
+            DurableTaskSequentialProcessIdentities.StartAdmissionIndex(scope, "quota", request.Definition.DefinitionId.Value));
+        // Every worker checks the persisted policy, including workers configured for unlimited retention.
+        // Branch on the recorded entity response so orchestration replay uses the original decision.
+        var policy = await context.Entities.CallEntityAsync<AdmissionQuotaDecision>(quota,
+            nameof(DurableTaskAdmissionQuota.RequirePolicy), new AdmissionQuotaRequest(catalog.MaximumRetainedInstances, catalog.RaiseQuotaFrom));
+        if (!policy.Matches) return new(ProcessStartDisposition.QuotaPolicyMismatch);
+        var maximum = policy.Maximum;
+        EntityInstanceId[] indices = maximum.HasValue
+            ? [commandIndex, idempotencyIndex, instanceIndex, quota]
+            : [commandIndex, idempotencyIndex, instanceIndex];
 
         await using (await context.Entities.LockEntitiesAsync(indices))
         {
@@ -193,6 +201,12 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
             if (!decision.RequiresPersistence)
                 return decision.Result;
 
+            // All four entities remain locked until the scheduling action is committed.
+            // Replays and conflicts were resolved above and never consume quota.
+            if (maximum is int limit
+                && await context.Entities.CallEntityAsync<int>(quota, nameof(DurableTaskAdmissionQuota.Count)) >= limit)
+                return new(ProcessStartDisposition.QuotaExceeded);
+
             var start = evaluated.AcceptedStart!;
             await ClaimAsync(
                 context,
@@ -205,7 +219,11 @@ sealed class DurableTaskProcessStartAdmissionOrchestrator(
             await ClaimAsync(
                 context,
                 instanceIndex,
-                new(start, DurableTaskProcessStartIndexClaimKind.RetainAndSchedule)).ConfigureAwait(true);
+                new(start, maximum.HasValue
+                    ? DurableTaskProcessStartIndexClaimKind.Retain
+                    : DurableTaskProcessStartIndexClaimKind.RetainAndSchedule)).ConfigureAwait(true);
+            if (maximum.HasValue)
+                await context.Entities.CallEntityAsync(quota, nameof(DurableTaskAdmissionQuota.Schedule), start);
             return decision.Result;
         }
     }
@@ -356,5 +374,34 @@ sealed class DurableTaskProcessStartIndexEntity : TaskEntity<DurableTaskProcessS
                 DurableTaskSequentialProcessClientExtensions.CreateStartOptions(claim.Start));
         }
         return claim.Start;
+    }
+}
+
+
+sealed record AdmissionQuotaPolicy(int? Maximum);
+sealed record AdmissionQuotaRequest(int? Maximum, int? RaiseFrom);
+sealed record AdmissionQuotaDecision(bool Matches, int? Maximum);
+sealed record AdmissionQuotaState(AdmissionQuotaPolicy? Policy, int Count);
+
+// Count and the outbound schedule action commit in the same entity turn.
+sealed class DurableTaskAdmissionQuota : TaskEntity<AdmissionQuotaState>
+{
+    internal const string Name = "Cohesive.Processes.AdmissionQuota.v1";
+    protected override AdmissionQuotaState InitializeState(TaskEntityOperation operation) => new(null, 0);
+
+    public AdmissionQuotaDecision RequirePolicy(AdmissionQuotaRequest requested)
+    {
+        if (State.Policy is null || (requested.RaiseFrom is int prior && State.Policy.Maximum == prior && requested.Maximum > prior))
+            State = State with { Policy = new(requested.Maximum) };
+        return new(State.Policy.Maximum == requested.Maximum, State.Policy.Maximum);
+    }
+
+    public int Count() => State.Count;
+
+    public void Schedule(DurableTaskSequentialProcessStart start, TaskEntityContext context)
+    {
+        State = State with { Count = checked(State.Count + 1) };
+        context.ScheduleNewOrchestration(new(DurableTaskSequentialProcessNames.Orchestration), start,
+            DurableTaskSequentialProcessClientExtensions.CreateStartOptions(start));
     }
 }

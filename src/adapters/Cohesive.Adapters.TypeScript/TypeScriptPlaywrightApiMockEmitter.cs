@@ -1422,7 +1422,7 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
                 Kind: ApiWireNames.ResultKind(result.Kind),
                 MethodName: CreateUniqueResultMethodName(result.Id, usedNames),
                 BodyTypeText: GetTypeScriptTypeText(result.BodyType),
-                StatusCode: result.Http?.StatusCode ?? DefaultMockStatusCode(result.Kind, result.BodyType),
+                StatusCode: result.Http?.StatusCode ?? ApiHttpResultConventions.DefaultStatusCode(result.Kind, result.BodyType),
                 ContentType: result.Http?.ContentType,
                 IsVoid: result.BodyType == typeof(void)));
         }
@@ -1443,26 +1443,6 @@ public sealed class TypeScriptPlaywrightApiMockEmitter : IApiCodeEmitter
 
         return name;
     }
-
-    static int DefaultMockStatusCode(ApiResultKind kind, Type bodyType) =>
-        kind switch
-        {
-            ApiResultKind.Success when bodyType == typeof(void) => 204,
-            ApiResultKind.Success => 200,
-            ApiResultKind.Created => 201,
-            ApiResultKind.Accepted => 202,
-            ApiResultKind.NoContent => 204,
-            ApiResultKind.ValidationFailed => 400,
-            ApiResultKind.Unauthorized => 401,
-            ApiResultKind.Forbidden => 403,
-            ApiResultKind.NotFound => 404,
-            ApiResultKind.Conflict => 409,
-            ApiResultKind.PreconditionFailed => 412,
-            ApiResultKind.RateLimited => 429,
-            ApiResultKind.DomainError => 422,
-            ApiResultKind.InfrastructureError => 500,
-            _ => bodyType == typeof(void) ? 204 : 200
-        };
 
     static ImmutableArray<RoutePropertyModel> BuildRouteProperties(
         HttpBinding http,

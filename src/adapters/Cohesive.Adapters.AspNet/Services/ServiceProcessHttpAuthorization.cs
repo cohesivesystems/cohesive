@@ -10,8 +10,8 @@ namespace Cohesive.Adapters.AspNet.Services;
 // The canonical operation remains authoritative; no permissions are inferred from transport input.
 internal static class ServiceProcessHttpAuthorization
 {
-    internal static AspNetAuthorizationPolicyResolver Register<TRequest, TResult>(IServiceCollection services,
-        ServiceAcceptedProcessApi<TRequest, TResult> pair, IServiceInvocationAuthorization authorization) where TRequest : class
+    internal static AspNetAuthorizationPolicyResolver Register<TRequest, TResult, TReceipt>(IServiceCollection services,
+        ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> pair, IServiceInvocationAuthorization authorization) where TRequest : class
     {
         var operations = pair.Declaration.GetDefinition<ServiceDefinition>().Operations;
         var start = operations.Single(operation => operation.Id == pair.StartOperationId);

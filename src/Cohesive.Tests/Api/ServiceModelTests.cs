@@ -254,7 +254,7 @@ public sealed class ServiceModelTests
                     .Operation("result").Require(new("shared")).ReadResultOf(process.Definition),
                 "start", "result", "/" + id, "/" + id + "/{instanceId}");
         }
-        public ColocatedProcessApi<ServiceProcessCommand<string>, string, string> Pair { get; }
+        public ColocatedProcessApi<ServiceProcessCommand<string>, string, string, ServiceProcessReceipt> Pair { get; }
     }
     sealed class SelectedAuthorization(string allowedOperation) : IServiceInvocationAuthorization
     {

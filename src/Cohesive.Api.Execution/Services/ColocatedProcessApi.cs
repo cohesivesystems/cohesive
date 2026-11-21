@@ -7,11 +7,12 @@ namespace Cohesive.Api.Execution.Services;
 /// <summary>A linked API retaining its colocated service and generated dependency recipe for host binding.</summary>
 /// <typeparam name="TRequest">Transport input.</typeparam><typeparam name="TInput">Process input.</typeparam>
 /// <typeparam name="TResult">Process result.</typeparam>
-public sealed class ColocatedProcessApi<TRequest, TInput, TResult> : ServiceAcceptedProcessApi<TRequest, TResult> where TRequest : class
+/// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+public sealed class ColocatedProcessApi<TRequest, TInput, TResult, TReceipt> : ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> where TRequest : class
 {
     internal ColocatedProcessApi(ServiceBuilder service, ProcessModel<TInput, TResult> process,
-        string startOperationId, string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse response)
-        : base(service.Build(), startOperationId, resultOperationId, startRoute, resultRoute, response)
+        string startOperationId, string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse response, AcceptedProcessResponses<TReceipt> outcomes)
+        : base(service.Build(), startOperationId, resultOperationId, startRoute, resultRoute, response, outcomes)
     {
         if (declarationMismatch())
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "Colocated operations must reference the selected exact process.");
@@ -60,16 +61,29 @@ public sealed class ColocatedProcessApiBuilder<TInput, TResult>
     /// <param name="startRoute">POST route.</param><param name="resultRoute">GET route with {instanceId}.</param>
     /// <param name="response">Response timing, independent of execution lifetime.</param>
     /// <returns>The linked declaration and its reusable host recipe.</returns>
-    public ColocatedProcessApi<TRequest, TInput, TResult> Accepted<TRequest>(ExecutionDefinitionId id, ExecutionRevisionId revision,
+    public ColocatedProcessApi<TRequest, TInput, TResult, ServiceProcessReceipt> Accepted<TRequest>(ExecutionDefinitionId id, ExecutionRevisionId revision,
         Func<ServiceBuilder, ServiceBuilder> configure, string startOperationId, string resultOperationId,
         string startRoute, string resultRoute, ServiceProcessResponse? response = null) where TRequest : class
+        => Accepted<TRequest, ServiceProcessReceipt>(id, revision, configure, startOperationId, resultOperationId,
+            startRoute, resultRoute, new(), response);
+
+    /// <summary>Declares a colocated pair with a typed admission receipt.</summary>
+    public ColocatedProcessApi<TRequest, TInput, TResult, TReceipt> Accepted<TRequest, TReceipt>(ExecutionDefinitionId id, ExecutionRevisionId revision,
+        Func<ServiceBuilder, ServiceBuilder> configure, string startOperationId, string resultOperationId,
+        string startRoute, string resultRoute, AcceptedProcessResponses<TReceipt> outcomes, ServiceProcessResponse? response = null) where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(outcomes);
+        var service = Configure(configure, id, revision);
+        var pair = new ColocatedProcessApi<TRequest, TInput, TResult, TReceipt>(service, process, startOperationId, resultOperationId,
+            startRoute, resultRoute, response ?? ServiceProcessResponse.Acknowledge, outcomes);
+        endpoints.Include(pair.Definition);
+        return pair;
+    }
+
+    ServiceBuilder Configure(Func<ServiceBuilder, ServiceBuilder> configure, ExecutionDefinitionId id, ExecutionRevisionId revision)
     {
         ArgumentNullException.ThrowIfNull(configure);
         var service = configure(Service.Define(id, revision, process.Provenance).Use(new ServiceDependencies().Process(process)));
-        ArgumentNullException.ThrowIfNull(service);
-        var pair = new ColocatedProcessApi<TRequest, TInput, TResult>(service, process, startOperationId, resultOperationId,
-            startRoute, resultRoute, response ?? ServiceProcessResponse.Acknowledge);
-        endpoints.Include(pair.Definition);
-        return pair;
+        return service ?? throw new InvalidOperationException("The configuration returned no service.");
     }
 }

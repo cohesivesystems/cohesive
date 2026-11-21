@@ -1,3 +1,7 @@
+using System.Collections.Frozen;
+using System.Collections.Immutable;
+using Cohesive.Model;
+using Cohesive.Model.Serialization;
 using Cohesive.Api.Services;
 using Cohesive.Execution;
 
@@ -13,12 +17,14 @@ public sealed record ServiceProcessReceipt(ProcessStartResult Admission, string 
 /// service. The result relationship remains visible on Result.Operation.ResultOf after API composition.</remarks>
 /// <typeparam name="TRequest">Medium command input, including caller-owned retry identities.</typeparam>
 /// <typeparam name="TResult">Public terminal result view.</typeparam>
-public class ServiceAcceptedProcessApi<TRequest, TResult> : IApiDeclaration where TRequest : class
+/// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+public class ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> : IApiDeclaration where TRequest : class
 {
     internal ServiceAcceptedProcessApi(ExecutionDefinitionDocument declaration, string startOperationId,
-        string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse response)
+        string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse response, AcceptedProcessResponses<TReceipt> outcomes)
     {
         Response = response;
+        Outcomes = outcomes.Snapshot();
         const string token = "{instanceId}";
         var remainder = resultRoute.Replace(token, "", StringComparison.Ordinal);
         if (!resultRoute.StartsWith('/') || resultRoute.StartsWith("//", StringComparison.Ordinal)
@@ -35,26 +41,104 @@ public class ServiceAcceptedProcessApi<TRequest, TResult> : IApiDeclaration wher
             new("POST", startRoute, [], new(typeof(TRequest)))).Operation;
         var output = ServiceApiProjection.ProjectProcessResult<TResult>(declaration, resultOperationId,
             new("GET", resultRoute, [new("instanceId", HttpParameterSource.Route, typeof(string))], body: null)).Operation;
-        var alternatives = input.Results.Select(item => item.Kind == ApiResultKind.Accepted
-            ? new ApiResultDefinition(ApiResultKind.Accepted, typeof(ServiceProcessReceipt), isPrimary: true,
-                description: "Admitted to the declared execution lifetime; poll the linked result independently.") : item).ToList();
+        Outcomes.Validate(input, output);
+        var sharedAdmissionProblems = new Dictionary<ApiResultKind, AdmissionProblem>();
+        // A bounded POST can return a rejection from either admission or its result read.
+        // Use the standard read problem for shared kinds before applying public overrides.
+        var alternatives = input.Results.Select(item =>
+        {
+            var body = item.Kind == ApiResultKind.Accepted ? typeof(TReceipt) : item.BodyType;
+            if (response.MaximumWait is not null && output.Results.SingleOrDefault(read => read.Kind == item.Kind) is { } shared
+                && item.Kind != ApiResultKind.Accepted)
+                body = shared.BodyType;
+            var admission = Outcomes.Apply(AcceptedProcessRoute.Submit,
+                new(item.Kind, body, item.IsPrimary, item.Id, item.Description, item.Http));
+            if (body != item.BodyType && item.Kind != ApiResultKind.Accepted && Outcomes.Find(AcceptedProcessRoute.Submit, item.Kind) is null)
+                sharedAdmissionProblems.Add(item.Kind, AdmissionProblem.Create(admission));
+            return admission;
+        }).ToList();
+        admissionProblems = sharedAdmissionProblems.ToFrozenDictionary();
+        var reads = output.Results.Select(item => Outcomes.Apply(AcceptedProcessRoute.Poll, item)).ToList();
         if (response.MaximumWait is not null)
-            alternatives.AddRange(output.Results.Where(item => item.Kind != ApiResultKind.Accepted)
+            alternatives.AddRange(reads.Where(item => item.Kind != ApiResultKind.Accepted)
                 .Select(item => new ApiResultDefinition(item.Kind, item.BodyType, id: "result-" + item.Id,
                     description: item.Description, http: item.Http)));
-        Start = new(new ApiOperation(input.Name, input.Kind, input.RequestType, typeof(ServiceProcessReceipt),
+        Start = new(new ApiOperation(input.Name, input.Kind, input.RequestType, alternatives.Single(item => item.IsPrimary).BodyType,
             input.Http, input.Id, authorizationRequirements: input.AuthorizationRequirements,
             results: alternatives, semanticReferences: input.SemanticReferences));
         Result = new(new ApiOperation(output.Name, output.Kind, output.RequestType, output.ResponseType,
-            output.Http, output.Id, results: output.Results, authorizationRequirements: output.AuthorizationRequirements,
+            output.Http, output.Id, results: reads, authorizationRequirements: output.AuthorizationRequirements,
             semanticReferences: output.SemanticReferences, resultOf: Start.Id));
+        RequireOneBodyPerStatus(Start.Operation);
+        RequireOneBodyPerStatus(Result.Operation);
         Declaration = declaration;
         StartOperationId = startOperationId;
         ResultOperationId = resultOperationId;
         Definition = new ApiDefinition([Start, Result]);
     }
+    static void RequireOneBodyPerStatus(ApiOperation operation)
+    {
+        foreach (var group in operation.Results.GroupBy(result => result.Http!.StatusCode))
+        {
+            if (!group.Select(result => result.BodyType).Distinct().Skip(1).Any()) continue;
+            var alternatives = string.Join(", ", group.Select(result => $"{result.Id} ({result.BodyType.Name})"));
+            throw ServiceImplementationPlan.Error("services.api.responseBodyConflict",
+                $"{operation.Http!.Method} {operation.Http.Route} declares different bodies for HTTP {group.Key}: {alternatives}.");
+        }
+    }
+
+    readonly FrozenDictionary<ApiResultKind, AdmissionProblem> admissionProblems;
+
+    sealed record AdmissionProblem(ApiResultDefinition Definition, ImmutableArray<DocumentValidationDiagnostic> Defaults)
+    {
+        public static AdmissionProblem Create(ApiResultDefinition definition)
+        {
+            var (code, message) = definition.Kind switch
+            {
+                ApiResultKind.Forbidden => ("services.start.forbidden", "The caller is forbidden from starting this process."),
+                ApiResultKind.ValidationFailed => ("services.start.validationFailed", "The process start request is invalid."),
+                ApiResultKind.Conflict => ("services.start.conflict", "The process start conflicts with a retained identity."),
+                _ => throw ServiceImplementationPlan.Error("services.api.unsupportedAdmissionProblem",
+                    $"No admission problem contract is defined for '{definition.Kind}'.")
+            };
+            return new(definition, [new(code, DiagnosticSeverity.Error, message)]);
+        }
+    }
+
+    /// <summary>Resolves a standard bounded-wait admission problem and preserves any diagnostics supplied by the runtime.</summary>
+    public bool TryProjectAdmissionProblem(ServiceOperationResult<ProcessStartResult> outcome,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out ApiResultDefinition? problem, out ImmutableArray<DocumentValidationDiagnostic> diagnostics)
+    {
+        diagnostics = outcome.Diagnostics;
+        if (!admissionProblems.TryGetValue(outcome.Kind, out var admission))
+        {
+            problem = null;
+            return false;
+        }
+        problem = admission.Definition;
+        if (diagnostics.IsDefaultOrEmpty)
+            diagnostics = outcome.Outcome?.DiagnosticCode is { } code
+                ? [admission.Defaults[0] with { Code = code }]
+                : admission.Defaults;
+        return true;
+    }
+
     /// <summary>HTTP response timing, independent of the execution provider lifetime.</summary>
     public ServiceProcessResponse Response { get; }
+    /// <summary>HTTP projections frozen at API construction.</summary>
+    AcceptedProcessResponses<TReceipt> Outcomes { get; }
+
+    /// <summary>Materializes the configured outcome using the same mapping as the endpoint declaration.</summary>
+    public bool TryProjectSubmission(ApiResultKind kind, out AcceptedProcessResponse response, AcceptedProcessLocation? receipt = null) =>
+        Outcomes.TryProject(AcceptedProcessRoute.Submit, kind, out response, receipt);
+
+    /// <summary>Projects a classified read outcome, including verified terminal failures.</summary>
+    public bool TryProjectRead<T>(ServiceOperationResult<T> result, out AcceptedProcessResponse response) where T : class =>
+        Outcomes.TryProject(AcceptedProcessRoute.Poll, result.Kind, out response);
+
+    /// <summary>Projects a malformed polling token as a missing instance.</summary>
+    public bool TryProjectMissing(out AcceptedProcessResponse response) => Outcomes.TryProject(AcceptedProcessRoute.Poll, ApiResultKind.NotFound, out response);
+
     /// <summary>Exact service authority; all its operations require runtime bindings.</summary>
     public ExecutionDefinitionDocument Declaration { get; }
     /// <summary>Selected admission operation, not inferred from the process identity.</summary>
@@ -62,7 +146,7 @@ public class ServiceAcceptedProcessApi<TRequest, TResult> : IApiDeclaration wher
     /// <summary>Selected independently authorized result operation.</summary>
     public string ResultOperationId { get; }
     /// <summary>Command with a primary 202 receipt response.</summary>
-    public ApiEndpoint<TRequest, ServiceProcessReceipt> Start { get; }
+    public ApiEndpoint<TRequest, TReceipt> Start { get; }
     /// <summary>Read with terminal success, pending and failure alternatives.</summary>
     public ApiEndpoint<TResult> Result { get; }
     /// <summary>Both endpoint declarations, available for separate or partial application composition.</summary>
@@ -81,15 +165,11 @@ public static class ServiceAcceptedProcessApiExtensions
     /// <returns>The typed pair; both endpoints are already registered without reflection or member discovery.</returns>
     /// <exception cref="ServiceBindingValidationException">The pair is invalid.</exception>
     /// <exception cref="InvalidOperationException">The owner is frozen or either endpoint already exists; neither is added.</exception>
-    public static ServiceAcceptedProcessApi<TRequest, TResult> AcceptedProcess<TRequest, TResult>(this ApiBuilder endpoints,
+    public static ServiceAcceptedProcessApi<TRequest, TResult, ServiceProcessReceipt> AcceptedProcess<TRequest, TResult>(this ApiBuilder endpoints,
         ServiceBuilder service, string startOperationId, string resultOperationId, string startRoute, string resultRoute,
         ServiceProcessResponse? response = null) where TRequest : class
-    {
-        ArgumentNullException.ThrowIfNull(endpoints);
-        var pair = service.AcceptedApi<TRequest, TResult>(startOperationId, resultOperationId, startRoute, resultRoute, response);
-        endpoints.Include(pair.Definition);
-        return pair;
-    }
+        => endpoints.AcceptedProcess<TRequest, TResult, ServiceProcessReceipt>(service, startOperationId,
+            resultOperationId, startRoute, resultRoute, new(), response);
 
     /// <summary>Projects two declared service operations without constructing any executor or storage.</summary>
     /// <typeparam name="TRequest">Command request.</typeparam><typeparam name="TResult">Terminal response view.</typeparam>
@@ -99,12 +179,48 @@ public static class ServiceAcceptedProcessApiExtensions
     /// <param name="response">Acknowledge immediately by default, or wait boundedly while retaining the polling fallback.</param>
     /// <returns>The linked API contract.</returns>
     /// <exception cref="ServiceBindingValidationException">Operation selection, exact process link, or result route is invalid.</exception>
-    public static ServiceAcceptedProcessApi<TRequest, TResult> AcceptedApi<TRequest, TResult>(this ServiceBuilder service,
+    public static ServiceAcceptedProcessApi<TRequest, TResult, ServiceProcessReceipt> AcceptedApi<TRequest, TResult>(this ServiceBuilder service,
         string startOperationId, string resultOperationId, string startRoute, string resultRoute, ServiceProcessResponse? response = null) where TRequest : class
+        => service.AcceptedApi<TRequest, TResult, ServiceProcessReceipt>(startOperationId, resultOperationId,
+            startRoute, resultRoute, new(), response);
+    /// <summary>Declares and registers a linked process start/result pair in the owning API builder.</summary>
+    /// <typeparam name="TRequest">Command request.</typeparam><typeparam name="TResult">Terminal response view.</typeparam>
+    /// <param name="endpoints">Owning API builder.</param><param name="service">Separate service authority.</param>
+    /// <param name="startOperationId">Admission operation.</param><param name="resultOperationId">Linked result operation.</param>
+    /// <param name="startRoute">POST route.</param><param name="resultRoute">GET route with one {instanceId} parameter.</param>
+    /// <param name="outcomes">Optional typed HTTP outcome mappings, captured at declaration.</param>
+    /// <param name="response">Independent response policy; defaults to immediate acknowledgement.</param>
+    /// <returns>The typed pair; both endpoints are already registered without reflection or member discovery.</returns>
+    /// <exception cref="ServiceBindingValidationException">The pair is invalid.</exception>
+    /// <exception cref="InvalidOperationException">The owner is frozen or either endpoint already exists; neither is added.</exception>
+    /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+    public static ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> AcceptedProcess<TRequest, TResult, TReceipt>(this ApiBuilder endpoints,
+        ServiceBuilder service, string startOperationId, string resultOperationId, string startRoute, string resultRoute,
+        AcceptedProcessResponses<TReceipt> outcomes, ServiceProcessResponse? response = null) where TRequest : class
     {
+        ArgumentNullException.ThrowIfNull(endpoints);
+        var pair = service.AcceptedApi<TRequest, TResult, TReceipt>(startOperationId, resultOperationId, startRoute, resultRoute, outcomes, response);
+        endpoints.Include(pair.Definition);
+        return pair;
+    }
+
+    /// <summary>Projects two declared service operations without constructing any executor or storage.</summary>
+    /// <typeparam name="TRequest">Command request.</typeparam><typeparam name="TResult">Terminal response view.</typeparam>
+    /// <param name="service">Separate service declaration.</param><param name="startOperationId">Admission operation.</param>
+    /// <param name="resultOperationId">Result operation referencing the same exact process.</param>
+    /// <param name="startRoute">POST route.</param><param name="resultRoute">Local GET route with one {instanceId} parameter.</param>
+    /// <param name="outcomes">Optional typed HTTP outcome mappings, captured at declaration.</param>
+    /// <param name="response">Acknowledge immediately by default, or wait boundedly while retaining the polling fallback.</param>
+    /// <returns>The linked API contract.</returns>
+    /// <exception cref="ServiceBindingValidationException">Operation selection, exact process link, or result route is invalid.</exception>
+    /// <typeparam name="TReceipt">Public admission receipt.</typeparam>
+    public static ServiceAcceptedProcessApi<TRequest, TResult, TReceipt> AcceptedApi<TRequest, TResult, TReceipt>(this ServiceBuilder service,
+        string startOperationId, string resultOperationId, string startRoute, string resultRoute, AcceptedProcessResponses<TReceipt> outcomes, ServiceProcessResponse? response = null) where TRequest : class
+    {
+        ArgumentNullException.ThrowIfNull(outcomes);
         ArgumentNullException.ThrowIfNull(service); ArgumentException.ThrowIfNullOrWhiteSpace(startRoute);
         ArgumentException.ThrowIfNullOrWhiteSpace(resultRoute);
-        return new(service.Build(), startOperationId, resultOperationId, startRoute, resultRoute, response ?? ServiceProcessResponse.Acknowledge);
+        return new(service.Build(), startOperationId, resultOperationId, startRoute, resultRoute, response ?? ServiceProcessResponse.Acknowledge, outcomes);
     }
 }
 
