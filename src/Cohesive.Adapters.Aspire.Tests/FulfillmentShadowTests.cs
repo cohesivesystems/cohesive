@@ -1,3 +1,4 @@
+using Cohesive.Transitions.Authoring;
 using Cohesive.Adapters.Elastic;
 using Cohesive.Adapters.Marten;
 using Marten;
@@ -160,6 +161,92 @@ public sealed class FulfillmentShadowTests
         Capacity = new(new("test/capacity"), 1, ["test/single-writer"]),
         Provenance = new(new("test/storage", "1"), new("test/storage"))
     };
+
+    sealed class RowsFactAttribute : FactAttribute
+    {
+        public RowsFactAttribute()
+        {
+            if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("COHESIVE_SHADOW_POSTGRES")))
+                Skip = "Requires an isolated logical-replication PostgreSQL orders database.";
+        }
+    }
+
+    [RowsFact]
+    public async Task Rooted_rows_worker_republishes_both_orders_sharing_stock_and_preserves_unrelated_row()
+    {
+        var connection = Environment.GetEnvironmentVariable("COHESIVE_SHADOW_POSTGRES")!;
+        await using var database = NpgsqlDataSource.Create(connection);
+        var app = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        var bindings = app.Orders.Storage.Bindings;
+        await bindings.PrepareSchemaAsync(database);
+        var id = Guid.NewGuid().ToString("N");
+        var a = "A" + id;
+        var b = "B" + id;
+        var u = "U" + id;
+        var sku = "S" + id;
+        var table = "rooted_" + id;
+        async Task Execute(string sql, params string[] values)
+        {
+            await using var cmd = database.CreateCommand(sql);
+            foreach (var value in values) cmd.Parameters.AddWithValue(value);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        async Task<string> Version(string root)
+        {
+            await using var cmd = database.CreateCommand($"SELECT xmin::text FROM {table} WHERE order_id = $1");
+            cmd.Parameters.AddWithValue(root);
+            return (string)(await cmd.ExecuteScalarAsync())!;
+        }
+        try
+        {
+            await Execute("INSERT INTO cohesive_orders(order_id,partition_key,status,observation_version) VALUES ($1,'local','Draft',0),($2,'local','Draft',0),($3,'local','Draft',0)", a,b,u);
+            await Execute("INSERT INTO cohesive_inventory(sku,partition_key,available,observation_version) VALUES ($1,'local',10,0),($2,'local',5,0)", sku,u);
+            await Execute("INSERT INTO cohesive_reservations(reservation_id,order_id,sku,partition_key,quantity,observation_version) VALUES ($1,$1,$4,'local',1,0),($2,$2,$4,'local',1,0),($3,$3,$3,'local',1,0)", a,b,u,sku);
+            var query = RelationQuery.Expression();
+            var partition = query.Parameter<string>("partition");
+            var domain = app.Orders.Domain;
+            var demand = query.Source(domain.Orders).Where(o => o.Partition == partition.Value)
+                .TraverseInverse(domain.ReservationOrder, (o,r) => new ReservationDemand(o.Id, r.Id, r.Sku, r.Quantity));
+            var rows = demand.LeftJoin(query.Source(domain.Inventory), (r,i) => r.Sku == i.Sku)
+                .Select((r,i) => new ReservationAvailability(r.OrderId, r.ReservationId, r.Sku, r.Quantity, i.Available))
+                .BuildArrayQuery(new("test/rooted-rows"), new("Rows"), partition);
+            var target = bindings.Bind(database, "tests/rows").MaterializeRows(rows, "local", table);
+            var storage = app.Storage.OrderDetails;
+            await storage.InitializeSourcesAsync(database);
+            var schedule = storage.Schedule(database, table);
+            await schedule.InitializeAsync();
+            Task<PostgresRootedRowsWorker<ReservationAvailability>> Bind() => storage.BindRowsWorkerAsync(database,
+                () => new LogicalReplicationConnection(connection), new byte[32], "test-slots/v1",
+                target, row => row.OrderId, TimeSpan.FromSeconds(1), schedule);
+            using var worker = await Bind();
+            await worker.RunOnceAsync();
+            var vu = await Version(u);
+            var va = await Version(a);
+            var vb = await Version(b);
+            await Execute("UPDATE cohesive_inventory SET available=8,observation_version=observation_version+1 WHERE sku=$1", sku);
+            using var restarted = await Bind();
+            await restarted.RunOnceAsync();
+            Assert.NotEqual(va, await Version(a));
+            Assert.NotEqual(vb, await Version(b));
+            Assert.Equal(vu, await Version(u));
+            var byOrder = target.Lookup(row => row.OrderId);
+            Assert.Equal(8, Assert.Single(await byOrder.ReadAsync(a)).Available);
+            Assert.Equal(8, Assert.Single(await byOrder.ReadAsync(b)).Available);
+            Assert.Equal(5, Assert.Single(await byOrder.ReadAsync(u)).Available);
+            await Execute($"DELETE FROM {table} WHERE order_id=$1", a);
+            var requested = await schedule.RequestResyncAsync();
+            await restarted.RunOnceAsync();
+            Assert.Equal(requested, (await schedule.CheckpointAsync()).Applied);
+            Assert.Equal(8, Assert.Single(await byOrder.ReadAsync(a)).Available);
+        }
+        finally
+        {
+            await Execute($"DROP FUNCTION IF EXISTS {table}_changed() CASCADE; DROP TABLE IF EXISTS {table}_progress,{table}_request,{table}");
+            await Execute("DELETE FROM cohesive_reservations WHERE sku IN ($1,$2)", sku,u);
+            await Execute("DELETE FROM cohesive_inventory WHERE sku IN ($1,$2)", sku,u);
+            await Execute("DELETE FROM cohesive_orders WHERE order_id IN ($1,$2,$3)", a,b,u);
+        }
+    }
 
     [ShadowFact]
     public async Task Native_shadow_resumes_then_tracks_updates_reparenting_and_deletes_without_changing_live_reads()

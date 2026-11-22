@@ -636,12 +636,42 @@ public sealed class MaterializationImpactPlanInterpreter
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(feed);
         ArgumentNullException.ThrowIfNull(page);
+        var canonicalRoots = await ResolveRootsAsync(context, feed.Scope, generation, page).ConfigureAwait(false);
+        if (canonicalRoots.IsEmpty) return [];
+        var evaluation = new RelationQueryEvaluationId(
+            $"cohesive.storage/materialization-impact-evaluation/v2/{MaterializationStableIdentity.Digest(
+                "cohesive.storage/materialization-impact-evaluation/v2",
+                linkage.Plan.Fingerprint.Value,
+                generation.Value,
+                MaterializationChannelSemantics.ToChannelScopeId(feed.Scope).Value,
+                feed.Id.Value,
+                page.ThroughPosition.FormatVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                page.ThroughPosition.Value)}");
+        var projections = await runtime.HydrateAsync(
+                context,
+                new(
+                    evaluation,
+                    feed.Scope.LogicalPartition,
+                    canonicalRoots))
+            .ConfigureAwait(false);
+        return MaterializationRootProjectionSemantics.ValidateHydration(
+            requestedRoots: canonicalRoots,
+            expectedOutputShape: linkage.Definition.Relation.ValueShape,
+            projections: projections,
+            parameterName: nameof(page));
+    }
+
+    /// <summary>Resolve and coalesce affected root identities without hydrating their output.
+    /// Relational targets can apply their existing compiled SQL to this key set.</summary>
+    public async ValueTask<ImmutableArray<MaterializationAffectedRoot>> ResolveRootsAsync(OperationContext context,
+        MaterializationSourceScope scope, MaterializationGenerationId generation, MaterializationChangePage page)
+    {
         context.ThrowIfCancellationRequested();
         MaterializationContract.RequireDefinedIdentity(generation.Value, nameof(generation));
-        if (page.ThroughPosition.Scope != feed.Scope)
+        if (page.ThroughPosition.Scope != scope)
             throw new ArgumentException("A change page must belong to the exact persisted feed scope.", nameof(page));
-        if (!linkage.Plan.TryGetRoute(feed.Scope.Input, out var route) || route!.ChangeShape != feed.Scope.Shape)
-            throw new ArgumentException("The persisted change feed does not realize an exact impact route.", nameof(feed));
+        if (!linkage.Plan.TryGetRoute(scope.Input, out var route) || route!.ChangeShape != scope.Shape)
+            throw new ArgumentException("The persisted change feed does not realize an exact impact route.", nameof(scope));
 
         Dictionary<(RelationQueryInputId Input, string Identity), MaterializationAffectedRoot> roots = [];
         foreach (var delivery in page.Deliveries)
@@ -678,31 +708,10 @@ public sealed class MaterializationImpactPlanInterpreter
 
         if (roots.Count == 0)
             return [];
-        var canonicalRoots = roots.Values
+        return roots.Values
             .OrderBy(static root => root.Input.Value, StringComparer.Ordinal)
             .ThenBy(static root => root.Identity, StringComparer.Ordinal)
             .ToImmutableArray();
-        var evaluation = new RelationQueryEvaluationId(
-            $"cohesive.storage/materialization-impact-evaluation/v2/{MaterializationStableIdentity.Digest(
-                "cohesive.storage/materialization-impact-evaluation/v2",
-                linkage.Plan.Fingerprint.Value,
-                generation.Value,
-                MaterializationChannelSemantics.ToChannelScopeId(feed.Scope).Value,
-                feed.Id.Value,
-                page.ThroughPosition.FormatVersion.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                page.ThroughPosition.Value)}");
-        var projections = await runtime.HydrateAsync(
-                context,
-                new(
-                    evaluation,
-                    feed.Scope.LogicalPartition,
-                    canonicalRoots))
-            .ConfigureAwait(false);
-        return MaterializationRootProjectionSemantics.ValidateHydration(
-            requestedRoots: canonicalRoots,
-            expectedOutputShape: linkage.Definition.Relation.ValueShape,
-            projections: projections,
-            parameterName: nameof(page));
     }
 
     static MaterializationAffectedRoot DirectRoot(

@@ -66,17 +66,30 @@ public sealed class PostgresMaterializedRows<TRow>
         owner = "cohesive.materializedRows/v1/" + Convert.ToHexString(SHA256.HashData(revision));
     }
 
+    internal string PublicationIdentity => table + "/" + owner;
+
     static string Quote(string name) => PostgresSqlDialect.Identifier(name).ToSql(PostgresSqlDialect.Instance);
 
     /// <summary>Prepare an equality lookup on one projected field. Reads use the physical target and
     /// the original query's typed row assembly. Nullable keys match stored SQL nulls.</summary>
     public PostgresMaterializedLookup<TKey, TRow> Lookup<TKey>(Expression<Func<TRow, TKey>> selector)
     {
+        var index = FieldIndex(selector);
+        return CreateLookup<TKey>(index);
+    }
+
+    int FieldIndex<TKey>(Expression<Func<TRow, TKey>> selector)
+    {
         ArgumentNullException.ThrowIfNull(selector);
         var path = FieldPath.Capture(Expression.Lambda<Func<TRow, object?>>(
             Expression.Convert(selector.Body, typeof(object)), selector.Parameters));
         var index = Array.FindIndex(fields.ToArray(), field => field.Field.Path.Equals(path));
         if (index < 0) throw new ArgumentException($"Field '{path}' is not projected by this target.", nameof(selector));
+        return index;
+    }
+
+    PostgresMaterializedLookup<TKey, TRow> CreateLookup<TKey>(int index)
+    {
         var sql = $"SELECT {columns} FROM {table} WHERE {names[index]}";
         return new(async (key, token) =>
         {
@@ -97,6 +110,38 @@ public sealed class PostgresMaterializedRows<TRow>
             await tx.CommitAsync(token);
             return assemble([.. rows]);
         });
+    }
+
+    /// <summary>Atomically replace the rows belonging to a bounded set of impacted keys.
+    /// Run ResyncAsync to establish the initial target. A deleted root produces no replacement rows.</summary>
+    public async Task RefreshKeysAsync<TKey>(Expression<Func<TRow, TKey>> selector,
+        IReadOnlyCollection<TKey> keys, CancellationToken cancellationToken = default) where TKey : notnull
+    {
+        ArgumentNullException.ThrowIfNull(keys);
+        var index = FieldIndex(selector);
+        if (keys.Count == 0) return;
+        var values = keys.Distinct().Select(key => new PostgresNpgsqlParameter(
+            PostgresRelationQueryValueConverter.Convert(ObservationValue.FromObject(key),
+                fields[index].Encoding, names[index]) ?? throw new ArgumentException("Root keys must be non-null.", nameof(keys)),
+            resultTypes[index], false)).ToImmutableArray();
+        if (values.Length + parameters.Length > 65535)
+            throw new ArgumentException("The key batch exceeds PostgreSQL's statement parameter limit.", nameof(keys));
+        string Predicate(int offset) => names[index] + " IN (" + string.Join(", ",
+            Enumerable.Range(offset + 1, values.Length).Select(i => "$" + i)) + ")";
+
+        await using var connection = await database.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        await RequireOwnerAsync(command, "EXCLUSIVE", cancellationToken);
+        command.CommandText = $"DELETE FROM {table} WHERE {Predicate(0)}";
+        PostgresNpgsqlExecution.BindParameters(command, values, [], true);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        command.Parameters.Clear();
+        command.CommandText = $"INSERT INTO {table} ({columns}) SELECT {columns} FROM ({select}) projected WHERE {Predicate(parameters.Length)}";
+        PostgresNpgsqlExecution.BindParameters(command, parameters.AddRange(values), [], true);
+        await command.ExecuteNonQueryAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     async Task RequireOwnerAsync(NpgsqlCommand command, string lockMode, CancellationToken token)
