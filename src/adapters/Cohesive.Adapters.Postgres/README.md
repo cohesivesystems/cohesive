@@ -11,7 +11,9 @@ replication semantics on PostgreSQL through explicit bindings and Npgsql-backed 
 
 ```csharp
 var availability = persistence.MaterializeRows(queries.PartitionAvailability, partition, "order_availability");
+var byOrder = availability.Lookup(row => row.OrderId);
 await availability.ResyncAsync(cancellationToken);
+var rows = await byOrder.ReadAsync(orderId, cancellationToken);
 ```
 
 Bind a flat row query and a fixed input once. Call the same operation at startup, after a settled write, or for operator repair. PostgreSQL creates the table on first use and executes the compiled, parameterized SELECT entirely inside the database. Output columns follow snake_case canonical field names. An absent outer-join value becomes SQL NULL. Readers see committed snapshots and a failed refresh rolls back. Cooperating refreshes serialize per target. An existing table must carry the ownership marker for the same compiled relation and input. Schema or binding changes require an explicit migration. Indexes can be added through ordinary schema setup and survive refresh. The caller owns the freshness boundary. This target implements full replacement independently of the generational rebuild and CDC lifecycle.

@@ -284,7 +284,7 @@ public sealed class PostgresQueryRowsReader : IRelationQueryRowsReader
             ? (PostgresRelationQueryScalarType?)RequireScalar(artifact.Parameters.Single(binding => binding.Position == slot.Position).ValueContract)
             : ConstantScalar(slot.Constant!.Kind)).ToArray();
 
-    static PostgresRelationQueryScalarType RequireScalar(ValueContract contract) =>
+    internal static PostgresRelationQueryScalarType RequireScalar(ValueContract contract) =>
         PostgresRelationQueryScalarCatalog.TryFromSemanticType(contract.Type, out var scalar)
             ? scalar : throw new ArgumentException("A parameter has no exact PostgreSQL scalar encoding.");
 
