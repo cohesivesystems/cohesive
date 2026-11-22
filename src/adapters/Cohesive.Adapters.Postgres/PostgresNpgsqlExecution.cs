@@ -94,6 +94,34 @@ internal static class PostgresNpgsqlExecution
         }
     }
 
+    internal static void BindParameters(NpgsqlCommand command, ImmutableArray<PostgresNpgsqlParameter> parameters,
+        ImmutableArray<PostgresRelationQueryScalarType> resultTypes, bool permitTemporalValues)
+    {
+        var temporalMetadata = resultTypes.Any(IsTemporal);
+        var temporalValues = temporalMetadata;
+        foreach (var parameter in parameters)
+        {
+            if (parameter.ScalarType is not { } type || !IsTemporal(type)) continue;
+            temporalMetadata = true;
+            temporalValues |= parameter.Value is not DBNull;
+        }
+        if (temporalValues && !permitTemporalValues)
+            throw new NotSupportedException("This command does not admit temporal values.");
+        if (temporalValues || (temporalMetadata && permitTemporalValues)) RequireExactTemporalSwitch();
+        foreach (var parameter in parameters)
+        {
+            if (parameter.ScalarType is null && (parameter.Value is not DBNull || parameter.IsArray))
+                throw new ArgumentException("An untyped PostgreSQL parameter must be a scalar SQL null.", nameof(parameters));
+            command.Parameters.Add(new NpgsqlParameter
+            {
+                NpgsqlDbType = parameter.ScalarType is { } type
+                    ? PostgresRelationQueryScalarCatalog.ToNpgsqlDbType(type, parameter.IsArray)
+                    : NpgsqlDbType.Unknown,
+                Value = parameter.Value
+            });
+        }
+    }
+
     static async ValueTask<ImmutableArray<T>> ExecuteCommandRowsAsync<T>(
         NpgsqlCommand command, PostgresNpgsqlCommand sourceCommand,
         Func<NpgsqlDataReader, PostgresNpgsqlResultBudget, CancellationToken, ValueTask<T>> decode,
@@ -110,29 +138,7 @@ internal static class PostgresNpgsqlExecution
                 "A PostgreSQL command result byte bound must be positive.");
         }
         if (sourceCommand.MaximumRows is <= 0) throw new ArgumentOutOfRangeException(nameof(sourceCommand));
-        var temporalMetadata = sourceCommand.ResultTypes.Any(IsTemporal);
-        var temporalValues = temporalMetadata;
-        foreach (var parameter in sourceCommand.Parameters)
-        {
-            if (parameter.ScalarType is not { } type || !IsTemporal(type)) continue;
-            temporalMetadata = true;
-            temporalValues |= parameter.Value is not DBNull;
-        }
-        if (temporalValues && !sourceCommand.PermitTemporalValues)
-            throw new NotSupportedException("This command does not admit temporal values.");
-        if (temporalValues || (temporalMetadata && sourceCommand.PermitTemporalValues)) RequireExactTemporalSwitch();
-        foreach (var parameter in sourceCommand.Parameters)
-        {
-            if (parameter.ScalarType is null && (parameter.Value is not DBNull || parameter.IsArray))
-                throw new ArgumentException("An untyped PostgreSQL parameter must be a scalar SQL null.", nameof(sourceCommand));
-            command.Parameters.Add(new NpgsqlParameter
-            {
-                NpgsqlDbType = parameter.ScalarType is { } type
-                    ? PostgresRelationQueryScalarCatalog.ToNpgsqlDbType(type, parameter.IsArray)
-                    : NpgsqlDbType.Unknown,
-                Value = parameter.Value
-            });
-        }
+        BindParameters(command, sourceCommand.Parameters, sourceCommand.ResultTypes, sourceCommand.PermitTemporalValues);
 
         await using var reader = await command
             .ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken)

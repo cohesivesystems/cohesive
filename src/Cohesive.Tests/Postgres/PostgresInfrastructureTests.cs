@@ -30,6 +30,46 @@ public sealed class PostgresInfrastructureTests
 
     static QuerySnapshotRequirement Requirement(string id = "query/items") => new(id, "1", Query(id).CompilationRequest);
 
+    [PostgresProcessDurableStoreTests.PostgresFact]
+    public async Task Synchronous_target_repairs_rows_and_preserves_publication_on_failure()
+    {
+        await using var db = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);
+        var suffix = Guid.NewGuid().ToString("N");
+        var source = "items_" + suffix;
+        var target = "projected_" + suffix;
+        var registration = Bindings(table: source).Bind(db, authority: "tests");
+        var projection = registration.MaterializeRows(Query(), "a", target);
+        async Task Execute(string sql)
+        {
+            await using var command = db.CreateCommand(sql);
+            await command.ExecuteNonQueryAsync();
+        }
+        async Task<object?> Read()
+        {
+            await using var command = db.CreateCommand($"SELECT string_agg(id, ',') FROM public.{target}");
+            return await command.ExecuteScalarAsync();
+        }
+        try
+        {
+            await Execute($"CREATE TABLE public.{source} (id text, partition text); INSERT INTO public.{source} VALUES ('a','local'),('b','local')");
+            await projection.ResyncAsync();
+            Assert.Equal("a", await Read());
+            await Execute($"UPDATE public.{target} SET id='stale'");
+            await Task.WhenAll(projection.ResyncAsync(), projection.ResyncAsync());
+            Assert.Equal("a", await Read());
+            var mismatched = registration.MaterializeRows(Query(), "b", target);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => mismatched.ResyncAsync());
+            Assert.Equal("a", await Read());
+            await Execute($"DROP TABLE public.{source}");
+            await Assert.ThrowsAsync<PostgresException>(() => projection.ResyncAsync());
+            Assert.Equal("a", await Read());
+        }
+        finally
+        {
+            await Execute($"DROP TABLE IF EXISTS public.{target},public.{source}");
+        }
+    }
+
     [Fact]
     public void Infrastructure_compiler_rejects_evidence_for_a_different_query()
     {
