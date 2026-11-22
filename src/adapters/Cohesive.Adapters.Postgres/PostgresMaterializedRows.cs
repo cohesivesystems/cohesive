@@ -17,6 +17,8 @@ public sealed partial class PostgresPersistenceRegistration
         TInput input, string table, string schema = "public")
     {
         ArgumentNullException.ThrowIfNull(query);
+        if (!query.IsDirectRowArray)
+            throw new NotSupportedException("Materialized lookups require a direct row array. Use BuildArrayQuery or Queries.Array.");
         var artifact = bindings.Prepare(query.CompilationRequest);
         var statement = artifact.Bind(new Dictionary<Cohesive.Relations.IR.QueryParameterId, ObservationValue>
             { [query.Parameter] = ObservationValue.FromObject(input) });

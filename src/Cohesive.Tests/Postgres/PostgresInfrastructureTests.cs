@@ -108,6 +108,19 @@ public sealed class PostgresInfrastructureTests
     }
 
     [Fact]
+    public void Materialized_lookup_rejects_custom_result_keys_before_database_access()
+    {
+        var query = RelationQuery.Expression();
+        var partition = query.Parameter<string>("partition");
+        var rows = query.Source(Entity).Where(item => item.Partition == partition.Value).Select(item => new Row(item.Id));
+        var mapped = query.BuildQuery(new("query/mapped"), new("Items"), rows, partition,
+            items => items.Select(item => new Row(item.Id.ToUpperInvariant())).ToArray());
+        using var db = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test");
+        var runtime = Bindings().Bind(db, authority: "tests");
+        Assert.Throws<NotSupportedException>(() => runtime.MaterializeRows(mapped, "local", "projected_items"));
+    }
+
+    [Fact]
     public void Infrastructure_compiler_rejects_evidence_for_a_different_query()
     {
         var required = Requirement().Capability;
