@@ -76,8 +76,13 @@ public sealed class PostgresRowsSchedule
 
     internal async Task AcknowledgeAsync(long revision, CancellationToken token)
     {
-        await using var cmd = database.CreateCommand($"UPDATE {progress} SET revision=$1 WHERE singleton");
+        // A disconnected client's blocked UPDATE may still execute after the lock is released.
+        // Require a subsequent commit from the live worker before the watermark is visible.
+        await using var connection = await database.OpenConnectionAsync(token);
+        await using var tx = await connection.BeginTransactionAsync(token);
+        await using var cmd = new NpgsqlCommand($"UPDATE {progress} SET revision=$1 WHERE singleton", connection, tx);
         cmd.Parameters.AddWithValue(revision);
         await cmd.ExecuteNonQueryAsync(token);
+        await tx.CommitAsync(token);
     }
 }
