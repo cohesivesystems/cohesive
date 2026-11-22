@@ -16,12 +16,16 @@ public sealed class RelationQuery<TInput, TResult>
     readonly Func<ImmutableArray<ObservationValue>, TResult> project;
 
     internal RelationQuery(RelationQueryCompilationRequest request, QueryParameterId parameter,
-        Func<ImmutableArray<ObservationValue>, TResult> project)
+        Func<ImmutableArray<ObservationValue>, TResult> project, bool isDirectRowArray = false)
     {
         CompilationRequest = request;
         Parameter = parameter;
         this.project = project;
+        IsDirectRowArray = isDirectRowArray;
     }
+
+    /// <summary>True when typed assembly preserves each projected row without a custom result transformation.</summary>
+    public bool IsDirectRowArray { get; }
 
     /// <summary>Exact canonical query, shapes and relationships captured at authoring completion.</summary>
     public RelationQueryCompilationRequest CompilationRequest { get; }
@@ -121,11 +125,11 @@ public sealed partial class RelationQueryExpressionAuthoring
         QueryId id, QueryName name, RelationQueryExpressionBoundNode<TNode, TRow> rows,
         RelationQueryExpressionParameter<TInput> parameter)
         where TNode : LogicalQueryNode where TRow : notnull =>
-        BuildProjectedQuery(id, name, rows, parameter, static (TRow[] values) => values);
+        BuildProjectedQuery(id, name, rows, parameter, static (TRow[] values) => values, isDirectRowArray: true);
 
     RelationQuery<TInput, TResult> BuildProjectedQuery<TNode, TRow, TInput, TResult>(
         QueryId id, QueryName name, RelationQueryExpressionBoundNode<TNode, TRow> rows,
-        RelationQueryExpressionParameter<TInput> parameter, Func<TRow[], TResult> result)
+        RelationQueryExpressionParameter<TInput> parameter, Func<TRow[], TResult> result, bool isDirectRowArray = false)
         where TNode : LogicalQueryNode where TRow : notnull
     {
         ArgumentNullException.ThrowIfNull(parameter);
@@ -143,7 +147,7 @@ public sealed partial class RelationQueryExpressionAuthoring
             for (var index = 0; index < typed.Length; index++)
                 typed[index] = materialize(values[index])!;
             return result(typed);
-        });
+        }, isDirectRowArray);
     }
 
     /// <summary>Filters a focused typed branch, retaining its binding for subsequent traversal or projection.</summary>

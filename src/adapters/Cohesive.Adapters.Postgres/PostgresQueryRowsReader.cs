@@ -72,9 +72,7 @@ public sealed class PostgresQueryRowsReader : IRelationQueryRowsReader
         if (scalarTypes.Any(PostgresNpgsqlExecution.IsTemporal))
             throw new NotSupportedException("This native row reader does not admit temporal fields; use the source reader with explicit temporal policy.");
         this.executeCommand = executeCommand ?? throw new ArgumentNullException(nameof(executeCommand));
-        parameterTypes = artifact.Statement.Parameters.Select(slot => slot.Kind == SqlParameterBindingKind.Runtime
-            ? (PostgresRelationQueryScalarType?)RequireScalar(artifact.Parameters.Single(binding => binding.Position == slot.Position).ValueContract)
-            : ConstantScalar(slot.Constant!.Kind)).ToArray();
+        parameterTypes = ParameterTypes(artifact);
         var presenceIndex = artifact.PresenceBindings.Select((binding, index) => (binding.Binding, Ordinal: scalarTypes.Length + index))
             .ToDictionary(static pair => pair.Binding, static pair => pair.Ordinal);
         presenceOrdinals = artifact.ResultFields.Select(field => field.PresenceDependencies
@@ -281,7 +279,12 @@ public sealed class PostgresQueryRowsReader : IRelationQueryRowsReader
         return true;
     }
 
-    static PostgresRelationQueryScalarType RequireScalar(ValueContract contract) =>
+    internal static PostgresRelationQueryScalarType?[] ParameterTypes(PostgresRelationQueryCompiledArtifact artifact) =>
+        artifact.Statement.Parameters.Select(slot => slot.Kind == SqlParameterBindingKind.Runtime
+            ? (PostgresRelationQueryScalarType?)RequireScalar(artifact.Parameters.Single(binding => binding.Position == slot.Position).ValueContract)
+            : ConstantScalar(slot.Constant!.Kind)).ToArray();
+
+    internal static PostgresRelationQueryScalarType RequireScalar(ValueContract contract) =>
         PostgresRelationQueryScalarCatalog.TryFromSemanticType(contract.Type, out var scalar)
             ? scalar : throw new ArgumentException("A parameter has no exact PostgreSQL scalar encoding.");
 

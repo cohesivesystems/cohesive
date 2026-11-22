@@ -15,6 +15,7 @@ public sealed class PostgresInfrastructureTests
 {
     public sealed record Item(string Id, string Partition);
     public sealed record Row(string Id);
+    public sealed record OptionalRow(string? Id);
     static readonly DomainEntity<Item> Entity = new DomainModelBuilder().Entity<Item>("test/item");
     static PostgresPersistenceBindings Bindings(string database = "orders", string table = "items") =>
         PostgresPersistenceBindings.Define(new(database), bindings => bindings.Entity(Entity, PostgresEntityRepositoryMapping.For(Entity)
@@ -29,6 +30,95 @@ public sealed class PostgresInfrastructureTests
     }
 
     static QuerySnapshotRequirement Requirement(string id = "query/items") => new(id, "1", Query(id).CompilationRequest);
+
+    [PostgresProcessDurableStoreTests.PostgresFact]
+    public async Task Synchronous_target_repairs_rows_and_preserves_publication_on_failure()
+    {
+        await using var db = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);
+        var suffix = Guid.NewGuid().ToString("N");
+        var source = "items_" + suffix;
+        var target = "projected_" + suffix;
+        var registration = Bindings(table: source).Bind(db, authority: "tests");
+        var projection = registration.MaterializeRows(Query(), "a", target);
+        async Task Execute(string sql)
+        {
+            await using var command = db.CreateCommand(sql);
+            await command.ExecuteNonQueryAsync();
+        }
+        async Task<object?> Read()
+        {
+            await using var command = db.CreateCommand($"SELECT string_agg(id, ',') FROM public.{target}");
+            return await command.ExecuteScalarAsync();
+        }
+        try
+        {
+            await Execute($"CREATE TABLE public.{source} (id text, partition text); INSERT INTO public.{source} VALUES ('a','local'),('b','local')");
+            await projection.ResyncAsync();
+            Assert.Equal("a", await Read());
+            await Execute($"UPDATE public.{target} SET id='stale'");
+            var byId = projection.Lookup(row => row.Id);
+            Assert.Equal(new Row("stale"), Assert.Single(await byId.ReadAsync("stale")));
+            Assert.Empty(await byId.ReadAsync("a"));
+            Assert.Empty(await byId.ReadAsync("a' OR true --"));
+            await Task.WhenAll(projection.ResyncAsync(), projection.ResyncAsync());
+            Assert.Equal("a", await Read());
+            var mismatched = registration.MaterializeRows(Query(), "b", target);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => mismatched.ResyncAsync());
+            await Assert.ThrowsAsync<InvalidOperationException>(() => mismatched.Lookup(row => row.Id).ReadAsync("a"));
+            Assert.Equal("a", await Read());
+            await Execute($"DROP TABLE public.{source}");
+            Assert.Equal(new Row("a"), Assert.Single(await byId.ReadAsync("a")));
+            await Assert.ThrowsAsync<PostgresException>(() => projection.ResyncAsync());
+            Assert.Equal("a", await Read());
+        }
+        finally
+        {
+            await Execute($"DROP TABLE IF EXISTS public.{target},public.{source}");
+        }
+    }
+
+    [PostgresProcessDurableStoreTests.PostgresFact]
+    public async Task Typed_lookup_preserves_matching_rows_and_handles_a_null_key()
+    {
+        await using var db = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);
+        var suffix = Guid.NewGuid().ToString("N");
+        var source = "items_" + suffix;
+        var target = "lookup_" + suffix;
+        var query = RelationQuery.Expression();
+        var partition = query.Parameter<string>("partition");
+        var definition = query.Source(Entity).Where(item => item.Partition == partition.Value)
+            .Select(item => new OptionalRow(item.Id)).BuildArrayQuery(new("query/optional"), new("Optional"), partition);
+        var projection = Bindings(table: source).Bind(db, authority: "tests").MaterializeRows(definition, "local", target);
+        var lookup = projection.Lookup(row => row.Id);
+        try
+        {
+            await using var create = db.CreateCommand($"CREATE TABLE public.{source} (id text, partition text); INSERT INTO public.{source} VALUES ('a','local'), ('a','local')");
+            await create.ExecuteNonQueryAsync();
+            await projection.ResyncAsync();
+            Assert.Equal([new OptionalRow("a"), new OptionalRow("a")], await lookup.ReadAsync("a"));
+            await using var damage = db.CreateCommand($"UPDATE public.{target} SET id = NULL");
+            await damage.ExecuteNonQueryAsync();
+            Assert.Equal([new OptionalRow(null), new OptionalRow(null)], await lookup.ReadAsync(null));
+        }
+        finally
+        {
+            await using var cleanup = db.CreateCommand($"DROP TABLE IF EXISTS public.{target},public.{source}");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [Fact]
+    public void Materialized_lookup_rejects_custom_result_keys_before_database_access()
+    {
+        var query = RelationQuery.Expression();
+        var partition = query.Parameter<string>("partition");
+        var rows = query.Source(Entity).Where(item => item.Partition == partition.Value).Select(item => new Row(item.Id));
+        var mapped = query.BuildQuery(new("query/mapped"), new("Items"), rows, partition,
+            items => items.Select(item => new Row(item.Id.ToUpperInvariant())).ToArray());
+        using var db = NpgsqlDataSource.Create("Host=invalid.invalid;Database=unused;Username=test");
+        var runtime = Bindings().Bind(db, authority: "tests");
+        Assert.Throws<NotSupportedException>(() => runtime.MaterializeRows(mapped, "local", "projected_items"));
+    }
 
     [Fact]
     public void Infrastructure_compiler_rejects_evidence_for_a_different_query()
