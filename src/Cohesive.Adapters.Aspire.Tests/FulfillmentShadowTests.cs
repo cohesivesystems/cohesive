@@ -202,24 +202,25 @@ public sealed class FulfillmentShadowTests
             await Execute("INSERT INTO cohesive_orders(order_id,partition_key,status,observation_version) VALUES ($1,'local','Draft',0),($2,'local','Draft',0),($3,'local','Draft',0)", a,b,u);
             await Execute("INSERT INTO cohesive_inventory(sku,partition_key,available,observation_version) VALUES ($1,'local',10,0),($2,'local',5,0)", sku,u);
             await Execute("INSERT INTO cohesive_reservations(reservation_id,order_id,sku,partition_key,quantity,observation_version) VALUES ($1,$1,$4,'local',1,0),($2,$2,$4,'local',1,0),($3,$3,$3,'local',1,0)", a,b,u,sku);
-            var query = RelationQuery.Expression();
-            var partition = query.Parameter<string>("partition");
-            var domain = app.Orders.Domain;
-            var demand = query.Source(domain.Orders).Where(o => o.Partition == partition.Value)
-                .TraverseInverse(domain.ReservationOrder, (o,r) => new ReservationDemand(o.Id, r.Id, r.Sku, r.Quantity));
-            var rows = demand.LeftJoin(query.Source(domain.Inventory), (r,i) => r.Sku == i.Sku)
-                .Select((r,i) => new ReservationAvailability(r.OrderId, r.ReservationId, r.Sku, r.Quantity, i.Available))
-                .BuildArrayQuery(new("test/rooted-rows"), new("Rows"), partition);
-            var target = bindings.Bind(database, "tests/rows").MaterializeRows(rows, "local", table);
-            var storage = app.Storage.OrderDetails;
-            await storage.InitializeSourcesAsync(database);
-            var schedule = storage.Schedule(database, table);
-            await schedule.InitializeAsync();
-            Task<PostgresRootedRowsWorker<ReservationAvailability>> Bind() => storage.BindRowsWorkerAsync(database,
-                () => new LogicalReplicationConnection(connection), new byte[32], "test-slots/v1",
-                target, row => row.OrderId, TimeSpan.FromSeconds(1), schedule);
+            await Execute("INSERT INTO cohesive_orders(order_id,partition_key,status,observation_version) VALUES ($1,'local','Draft',0)", "empty"+id);
+            var target = bindings.Bind(database, "tests/rows").MaterializeAsyncRows(AvailabilityRows(app.Orders.Domain),
+                table, new(new("tenant/local"), FulfillmentDomain.PartitionField, "local"), new()
+                {
+                    ScheduleName = table,
+                    ConfigureStorage = options => options with
+                    {
+                        Publication = table,
+                        Slot = input => table + "_" + Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                            System.Text.Encoding.UTF8.GetBytes(input.Value)))[..12]
+                    }
+                });
+            await target.InitializeAsync();
+            var schedule = target.Schedule;
+            Task<PostgresRootedRowsWorker<ReservationAvailability>> Bind() => target.BindWorkerAsync(
+                () => new LogicalReplicationConnection(connection), new byte[32], "test-slots/v1");
             using var worker = await Bind();
             await worker.RunOnceAsync();
+            Assert.Null(Assert.Single(await target.ReadAsync("empty"+id)).ReservationId);
             var vu = await Version(u);
             var va = await Version(a);
             var vb = await Version(b);
@@ -229,7 +230,7 @@ public sealed class FulfillmentShadowTests
             Assert.NotEqual(va, await Version(a));
             Assert.NotEqual(vb, await Version(b));
             Assert.Equal(vu, await Version(u));
-            var byOrder = target.Lookup(row => row.OrderId);
+            var byOrder = target;
             Assert.Equal(8, Assert.Single(await byOrder.ReadAsync(a)).Available);
             Assert.Equal(8, Assert.Single(await byOrder.ReadAsync(b)).Available);
             Assert.Equal(5, Assert.Single(await byOrder.ReadAsync(u)).Available);
@@ -241,11 +242,48 @@ public sealed class FulfillmentShadowTests
         }
         finally
         {
+            await Execute("SELECT pg_drop_replication_slot(slot_name) FROM pg_replication_slots WHERE starts_with(slot_name,$1)", table+"_");
+            await Execute($"DROP PUBLICATION IF EXISTS {table}");
             await Execute($"DROP FUNCTION IF EXISTS {table}_changed() CASCADE; DROP TABLE IF EXISTS {table}_progress,{table}_request,{table}");
             await Execute("DELETE FROM cohesive_reservations WHERE sku IN ($1,$2)", sku,u);
             await Execute("DELETE FROM cohesive_inventory WHERE sku IN ($1,$2)", sku,u);
-            await Execute("DELETE FROM cohesive_orders WHERE order_id IN ($1,$2,$3)", a,b,u);
+            await Execute("DELETE FROM cohesive_orders WHERE order_id IN ($1,$2,$3,$4)", a,b,u,"empty"+id);
         }
+    }
+
+    sealed record OrderKey(string Id);
+
+    [Fact]
+    public async Task Async_rows_derive_routes_from_the_projection_and_reject_an_unrelated_key()
+    {
+        var app = ModelActivator.Create<OrderMaterializationApplication>(services => services.AddSingleton(new FulfillmentHistoryPolicy()));
+        await using var database = NpgsqlDataSource.Create("Host=localhost;Database=orders");
+        var persistence = app.Orders.Storage.Bindings.Bind(database, "tests/rows");
+        var partition = new PostgresRelationQueryPartitionScope(new("tenant/local"), FulfillmentDomain.PartitionField, "local");
+        var query = RelationQuery.Expression();
+        var orders = query.Source(app.Orders.Domain.Orders);
+        var ids = query.RowsByRoot<OrderKey>().From(orders).Key(orders, o => o.Id, row => row.Id).BuildRows(new("test/ids"));
+        Assert.Single(persistence.MaterializeAsyncRows(ids, "order_ids", partition).Impact.Routes);
+        var availability = persistence.MaterializeAsyncRows(AvailabilityRows(app.Orders.Domain), "order_availability", partition);
+        Assert.Equal(3, availability.Impact.Routes.Length);
+        var wrong = query.RowsByRoot<OrderKey>().From(orders).Key(orders, o => o.Partition, row => row.Id).BuildRows(new("test/wrong"));
+        Assert.Contains("mapped identity", Assert.Throws<ArgumentException>(() =>
+            persistence.MaterializeAsyncRows(wrong, "invalid", partition)).Message);
+    }
+
+    static RootedRowProjection<ReservationAvailability> AvailabilityRows(FulfillmentDomain domain)
+    {
+        var query = RelationQuery.Expression();
+        var orders = query.Source(domain.Orders).Where(order => order.Partition == FulfillmentStoragePolicy.LocalPartition);
+        var reservations = orders.TraverseInverse(domain.ReservationOrder);
+        var inventory = reservations.Traverse(domain.ReservationItem);
+        return query.RowsByRoot<ReservationAvailability>().From(inventory)
+            .Key(orders, order => order.Id, row => row.OrderId)
+            .Field(row => row.ReservationId, reservations, reservation => reservation.Id)
+            .Field(row => row.Sku, inventory, item => item.Sku)
+            .Field(row => row.Quantity, reservations, reservation => reservation.Quantity)
+            .Field(row => row.Available, inventory, item => item.Available)
+            .BuildRows(new("fulfillment/availability"));
     }
 
     [ShadowFact]

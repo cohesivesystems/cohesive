@@ -564,3 +564,22 @@ and do not append replacement history, fire update triggers, or generate entity 
 fence still conflicts, and a purported non-applied outcome carrying changed state is rejected. The
 row/history lock lasts through receipt commit, preserving atomic decision evidence. `Applied` outcomes
 continue through the ordinary state/history write path even when their field values happen to match.
+
+## Asynchronous rows by root
+
+Declare the flat row fields and their owning root with `RowsByRoot<TRow>().From(...).Key(...).Field(...).BuildRows(...)`.
+The mapped root identity is shared by typed reads, affected-root discovery and keyed publication. A second impact relation is unnecessary.
+For a PostgreSQL partition, select asynchronous maintenance explicitly:
+
+```csharp
+var rows = persistence.MaterializeAsyncRows(projection, "order_availability", partition);
+await rows.InitializeAsync();
+var worker = await rows.BindWorkerAsync(replicationConnectionFactory, positionKey);
+services.AddHostedService(_ => worker);
+```
+
+`rows.ReadAsync(orderId)` reads the persisted target. `rows.Schedule.RequestResyncAsync()` queues a complete repair.
+The default profile admits 5,000 affected roots, pages of 100, a 2 MB read budget, and one worker.
+Use `PostgresAsyncRowsOptions` to override these bounds, polling, the schedule name or native storage settings.
+Publication and slot names are deterministic. Supply deployment-owned credentials and a stable position key. When adopting an existing
+deployment, preserve its storage identifiers and slot incarnation, or bootstrap a new schedule and checkpoint set with a full resync.
