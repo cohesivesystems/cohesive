@@ -66,6 +66,8 @@ public sealed partial class PostgresPersistenceRegistration
             .Build().Prepare(new(new(id + "/impact"), [MaterializationImpactStrategyKind.InverseTraversal], roots, bytes));
         static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)))[..24];
         var prefix = "coh_" + Hash(id);
+        using var connection = runtime.DataSource.CreateConnection();
+        var slotPrefix = "coh_" + Hash(connection.Database + "\0" + id);
         var native = new PostgresMaterializationStorageOptions
         {
             PartitionField = partition.SourceSelector,
@@ -73,14 +75,17 @@ public sealed partial class PostgresPersistenceRegistration
             Reads = new(page, roots, page, bytes, partitionScope: partition),
             Rebuild = new(page, bytes, page, bytes, 128, 1, 1, 16),
             Publication = prefix,
-            Slot = input => prefix + "_" + Hash(input.Value),
+            Slot = input => slotPrefix + "_" + Hash(input.Value),
             Replication = new(readInactivityTimeout: TimeSpan.FromSeconds(1)),
             Checkpoints = new(id), Provider = id,
             Capacity = new(new(id + "/worker"), 1, ["postgres-session-advisory-lock"]),
             Provenance = provenance
         };
-        var storage = new PostgresMaterializationStorage(bindings, declaration, options.ConfigureStorage?.Invoke(native) ?? native);
-        var sql = bindings.Prepare(projection.Rows);
+        native = options.ConfigureStorage?.Invoke(native) ?? native;
+        if (native.Reads.PartitionScope != partition || native.PartitionField != partition.SourceSelector)
+            throw new ArgumentException("Storage overrides must preserve the declared projection partition.", nameof(options));
+        var storage = new PostgresMaterializationStorage(bindings, declaration, native);
+        var sql = bindings.PreparePartitionRows(projection.Rows, partition);
         var materialize = ObservationMaterializer.PrepareJsonValue<TRow>();
         var target = new PostgresMaterializedRows<TRow>(runtime.DataSource, "public", table, sql,
             sql.Bind(new Dictionary<QueryParameterId, ObservationValue>()), rows => rows.Select(row => materialize(row)!).ToArray());

@@ -60,9 +60,12 @@ public static class PostgresLogicalReplicationPreparation
             await transaction.CommitAsync(cancellationToken);
             foreach (var input in slots)
             {
-                await using var slot = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = $1)", connection);
+                await using var slot = new NpgsqlCommand("SELECT database = current_database() AND slot_type = 'logical' AND plugin = 'pgoutput' AND NOT temporary FROM pg_replication_slots WHERE slot_name = $1", connection);
                 slot.Parameters.AddWithValue(input);
-                if (!(bool)(await slot.ExecuteScalarAsync(cancellationToken))!)
+                var compatible = await slot.ExecuteScalarAsync(cancellationToken);
+                if (compatible is not null && !Equals(compatible, true))
+                    throw new InvalidOperationException($"Replication slot '{input}' must be a permanent pgoutput slot in the current database.");
+                if (compatible is null)
                 {
                     // An absent slot cannot be reconstructed from an old durable cursor.
                     if (await state.HasStoredStateAsync(cancellationToken).ConfigureAwait(false))

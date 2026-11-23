@@ -251,6 +251,115 @@ public sealed class FulfillmentShadowTests
         }
     }
 
+    // Each database has independent source rows and progress; logical slot names share a cluster namespace.
+    static async Task InDatabase(Func<NpgsqlDataSource, string, Task> test)
+    {
+        var settings = new NpgsqlConnectionStringBuilder(Environment.GetEnvironmentVariable("COHESIVE_SHADOW_POSTGRES")!);
+        await using var admin = NpgsqlDataSource.Create(settings.ConnectionString);
+        var name = "rooted_" + Guid.NewGuid().ToString("N");
+        await using (var create = admin.CreateCommand($"CREATE DATABASE {name}"))
+            await create.ExecuteNonQueryAsync();
+        try
+        {
+            settings.Database = name;
+            await using var database = NpgsqlDataSource.Create(settings.ConnectionString);
+            await test(database, settings.ConnectionString);
+        }
+        finally
+        {
+            await using var drop = admin.CreateCommand($"DROP DATABASE {name} WITH (FORCE)");
+            await drop.ExecuteNonQueryAsync();
+        }
+    }
+
+    static async Task<PostgresAsyncRows<ReservationAvailability>> ScopedAvailability(NpgsqlDataSource database,
+        PostgresAsyncRowsOptions? options = null)
+    {
+        var domain = new FulfillmentDomain();
+        var mappings = new FulfillmentPostgresMappings(domain);
+        using var connection = database.CreateConnection();
+        var bindings = PostgresPersistenceBindings.Define(new(connection.Database), storage =>
+        {
+            storage.Schema(PostgresSchemaInitialization.CreateIfMissing, _ => { });
+            storage.Entity(domain.Orders, mappings.Orders);
+            storage.Entity(domain.Inventory, mappings.Inventory);
+            storage.Entity(domain.Reservations, mappings.Reservations);
+        });
+        await bindings.PrepareSchemaAsync(database);
+        return bindings.Bind(database, "scope-test").MaterializeAsyncRows(AvailabilityRows(domain),
+            "availability_rows", new(new("tenant/local"), FulfillmentDomain.PartitionField, "local"), options);
+    }
+
+    [RowsFact]
+    public Task Unfiltered_projection_scopes_root_and_join_scans_during_repair_and_catchup() =>
+        InDatabase(async (database, connection) =>
+        {
+            var target = await ScopedAvailability(database);
+            await using var seed = database.CreateCommand("""
+                INSERT INTO cohesive_orders(order_id,partition_key,status,observation_version)
+                VALUES ('A','local','Draft',0),('B','other','Draft',0);
+                INSERT INTO cohesive_inventory(sku,partition_key,available,observation_version) VALUES ('X','other',9,0);
+                INSERT INTO cohesive_reservations(reservation_id,order_id,sku,partition_key,quantity,released,observation_version)
+                VALUES ('r','A','X','local',1,false,0),('foreign','A','X','other',1,false,0);
+                """);
+            await seed.ExecuteNonQueryAsync();
+            await target.InitializeAsync();
+            using var worker = await target.BindWorkerAsync(() => new LogicalReplicationConnection(connection), new byte[32]);
+            await worker.RunOnceAsync();
+            Assert.Empty(await target.ReadAsync("B"));
+            Assert.Null(Assert.Single(await target.ReadAsync("A")).Available);
+            await using var change = database.CreateCommand("""
+                UPDATE cohesive_inventory SET available=99, observation_version=1 WHERE sku='X';
+                UPDATE cohesive_reservations SET quantity=3, observation_version=1 WHERE reservation_id='r';
+                INSERT INTO cohesive_orders(order_id,partition_key,status,observation_version) VALUES ('C','other','Draft',0);
+                """);
+            await change.ExecuteNonQueryAsync();
+            await worker.RunOnceAsync();
+            var row = Assert.Single(await target.ReadAsync("A"));
+            Assert.Equal(3, row.Quantity);
+            Assert.Null(row.Available);
+            Assert.Empty(await target.ReadAsync("C"));
+            await target.Schedule.RequestResyncAsync();
+            await worker.RunOnceAsync();
+            Assert.Empty(await target.ReadAsync("B"));
+            Assert.Empty(await target.ReadAsync("C"));
+        });
+
+    [RowsFact]
+    public Task Same_projection_in_two_databases_uses_distinct_slots_and_checks_existing_slot_ownership() =>
+        InDatabase(async (first, _) => await InDatabase(async (second, _) =>
+        {
+            static async Task<string[]> Slots(NpgsqlDataSource db)
+            {
+                await using var cmd = db.CreateCommand("SELECT array_agg(slot_name::text ORDER BY slot_name) FROM pg_replication_slots WHERE database=current_database()");
+                return (string[])(await cmd.ExecuteScalarAsync())!;
+            }
+            await (await ScopedAvailability(first)).InitializeAsync();
+            var firstSlots = await Slots(first);
+            Assert.Equal(3, firstSlots.Length);
+            var target = await ScopedAvailability(second);
+            await target.InitializeAsync();
+            await target.InitializeAsync();
+            var secondSlots = await Slots(second);
+            Assert.Equal(3, secondSlots.Length);
+            Assert.Empty(firstSlots.Intersect(secondSlots));
+
+            async Task RejectSlot(string name)
+            {
+                var index = 0;
+                var bad = await ScopedAvailability(second, new() { ConfigureStorage = native => native with
+                    { Slot = input => index++ == 0 ? name : native.Slot(input) } });
+                Assert.Contains("permanent pgoutput slot in the current database",
+                    (await Assert.ThrowsAsync<InvalidOperationException>(() => bad.InitializeAsync())).Message);
+            }
+            await RejectSlot(firstSlots[0]);
+            var wrongPlugin = "wrong_" + Guid.NewGuid().ToString("N");
+            await using var create = second.CreateCommand("SELECT pg_create_logical_replication_slot($1,'test_decoding')");
+            create.Parameters.AddWithValue(wrongPlugin);
+            await create.ExecuteNonQueryAsync();
+            await RejectSlot(wrongPlugin);
+        }));
+
     sealed record OrderKey(string Id);
 
     [Fact]
@@ -274,7 +383,7 @@ public sealed class FulfillmentShadowTests
     static RootedRowProjection<ReservationAvailability> AvailabilityRows(FulfillmentDomain domain)
     {
         var query = RelationQuery.Expression();
-        var orders = query.Source(domain.Orders).Where(order => order.Partition == FulfillmentStoragePolicy.LocalPartition);
+        var orders = query.Source(domain.Orders);
         var reservations = orders.TraverseInverse(domain.ReservationOrder);
         var inventory = reservations.Traverse(domain.ReservationItem);
         return query.RowsByRoot<ReservationAvailability>().From(inventory)

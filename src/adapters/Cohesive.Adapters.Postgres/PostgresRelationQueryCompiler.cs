@@ -26,6 +26,11 @@ public sealed class PostgresRelationQueryCompiler
     /// <summary>Versioned identity of this concrete compiler implementation and semantic profile.</summary>
     public const string CompilerProfile = "cohesive.adapters.postgres.sql/compiler-v3";
 
+    readonly Func<PostgresRelationQueryTableBinding, string, SqlExpression>? scanPredicate;
+
+    internal PostgresRelationQueryCompiler(Func<PostgresRelationQueryTableBinding, string, SqlExpression> scanPredicate) =>
+        this.scanPredicate = scanPredicate;
+
     /// <summary>Creates a canonical PostgreSQL relation/query compiler.</summary>
     public PostgresRelationQueryCompiler()
     {
@@ -54,7 +59,7 @@ public sealed class PostgresRelationQueryCompiler
             PostgresRelationQueryTelemetry.Emitter,
             RelationQueryTelemetry.RealizationActivityName,
             (Compiler: this, Request: request, StorageBinding: storageBinding),
-            static state => EvaluateContext(state.Request, state.StorageBinding),
+            static state => state.Compiler.EvaluateContext(state.Request, state.StorageBinding),
             static evaluation => RelationQueryTelemetry.GetStatusTagValue(evaluation.Report.Status),
             static (activity, state, evaluation) => RelationQueryCompilerTelemetry.ProjectRealizationActivity(
                 activity,
@@ -178,7 +183,7 @@ public sealed class PostgresRelationQueryCompiler
         {
             try
             {
-                artifacts.Add(new BranchCompiler(context, storageBinding, branch).Compile(request));
+                artifacts.Add(new BranchCompiler(context, storageBinding, branch, scanPredicate).Compile(request));
             }
             catch (BranchCompilationException exception)
             {
@@ -240,7 +245,7 @@ public sealed class PostgresRelationQueryCompiler
         }
     }
 
-    static ContextualEvaluation EvaluateContext(
+    ContextualEvaluation EvaluateContext(
         RelationQueryBoundRealizationRequest request,
         PostgresRelationQueryStorageBinding storageBinding)
     {
@@ -283,7 +288,7 @@ public sealed class PostgresRelationQueryCompiler
             {
                 try
                 {
-                    new BranchCompiler(context, storageBinding, branch).Validate();
+                    new BranchCompiler(context, storageBinding, branch, scanPredicate).Validate();
                 }
                 catch (BranchCompilationException exception)
                 {
@@ -826,11 +831,14 @@ public sealed class PostgresRelationQueryCompiler
         readonly SqlAliasAllocator resultAliases = new(PostgresSqlDialect.StandardMaxUtf8ByteLength, StringComparer.Ordinal);
         PostgresRelationQueryPagingContract? paging;
 
+        readonly Func<PostgresRelationQueryTableBinding, string, SqlExpression>? scanPredicate;
+
         public BranchCompiler(
             CompilationContext request,
             PostgresRelationQueryStorageBinding storageBinding,
-            RelationQueryNativeResultBranch branch)
+            RelationQueryNativeResultBranch branch, Func<PostgresRelationQueryTableBinding, string, SqlExpression>? scanPredicate)
         {
+            this.scanPredicate = scanPredicate;
             this.request = request;
             this.storageBinding = storageBinding;
             this.branch = branch;
@@ -1200,10 +1208,7 @@ public sealed class PostgresRelationQueryCompiler
             RelationQueryTraversalInputContract contract,
             PostgresRelationQueryTableBinding table)
         {
-            var tableAlias = RelationAlias(table.TableName);
-            var builder = new SqlSelectBuilder(
-                new SqlQualifiedTable(table.SchemaName, table.TableName),
-                tableAlias);
+            var builder = CreatePhysicalBuilder(table, out var tableAlias);
             Dictionary<FieldKey, ScopedValue> values = [];
             Dictionary<ValueBindingId, ScopedIdentity> identities = [];
             Dictionary<RelationshipKey, ScopedValue> references = [];
@@ -3291,7 +3296,9 @@ public sealed class PostgresRelationQueryCompiler
             out string alias)
         {
             alias = RelationAlias(table.TableName);
-            return new(new SqlQualifiedTable(table.SchemaName, table.TableName), alias);
+            var builder = new SqlSelectBuilder(new SqlQualifiedTable(table.SchemaName, table.TableName), alias);
+            if (scanPredicate is not null) builder.Where(scanPredicate(table, alias));
+            return builder;
         }
 
         PostgresRelationQueryTableBinding ResolveTable(RelationQueryInputId input, QueryNodeId node)
