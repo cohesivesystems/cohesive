@@ -119,7 +119,8 @@ public sealed class MaterializationPartitionBinding
     /// <exception cref="KeyNotFoundException"><paramref name="input"/> is absent.</exception>
     public MaterializationPartitionSourceBinding GetSource(RelationQueryInputId input) => sources[input];
 
-    internal IMaterializationImpactRuntime CreateImpactRuntime(MaterializationImpactPlan impactPlan) =>
+    /// <summary>Bind the physical root resolver and hydrator to the prepared impact plan.</summary>
+    public IMaterializationImpactRuntime CreateImpactRuntime(MaterializationImpactPlan impactPlan) =>
         impactRuntimeFactory(impactPlan);
 }
 

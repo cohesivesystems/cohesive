@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using Npgsql;
+using Cohesive.Adapters.Sql;
 using Cohesive.Prelude;
 using Cohesive.Model;
 using Cohesive.Transitions.Model;
@@ -200,7 +201,25 @@ public sealed partial class PostgresPersistenceBindings : Cohesive.Storage.IStor
         return preparedQueries.Get(request, PrepareCore);
     }
 
-    PostgresRelationQueryCompiledArtifact PrepareCore(RelationQueryCompilationRequest request)
+    PostgresRelationQueryCompiledArtifact PrepareCore(RelationQueryCompilationRequest request) =>
+        CompileQuery(request, new PostgresRelationQueryCompiler());
+
+    internal PostgresRelationQueryCompiledArtifact PreparePartitionRows(RelationQueryCompilationRequest request,
+        PostgresRelationQueryPartitionScope scope)
+    {
+        // Constrain each physical scan before joining, preserving unmatched left-join rows.
+        return CompileQuery(request, new PostgresRelationQueryCompiler((table, alias) =>
+        {
+            var mapping = Mapping(table.Shape);
+            if (mapping.PartitionField != scope.SourceSelector)
+                throw new ArgumentException("Partition selector differs from the registered mapping.", nameof(scope));
+            var column = mapping.FieldByName[mapping.PartitionField].Column.Value;
+            return SqlExpression.Binary(SqlBinaryOperator.Equal, SqlExpression.Column(alias, column),
+                SqlExpression.Constant(scope.CanonicalValue));
+        }));
+    }
+
+    PostgresRelationQueryCompiledArtifact CompileQuery(RelationQueryCompilationRequest request, PostgresRelationQueryCompiler compiler)
     {
         var compilation = RelationQueryStaticCompiler.Compile(request);
         if (!compilation.IsSuccessful) throw new RelationQueryPreparationException("query preparation", compilation);
@@ -217,7 +236,6 @@ public sealed partial class PostgresPersistenceBindings : Cohesive.Storage.IStor
         var storage = binding.Build().RequireValue();
         var feasibility = RelationQueryRealizationCompiler.Compile(plan, PostgresRelationQueryTargetProfile.Default,
             PostgresRelationQueryTargetProfile.Policy, RelationQueryResultObservability.NotRequested);
-        var compiler = new PostgresRelationQueryCompiler();
         var bound = compiler.Realize(new(plan, feasibility, placement.Placement), storage);
         var native = compiler.Compile(new RelationQueryNativeCompilationRequest(plan, bound, placement.Placement), storage);
         if (!native.IsSuccessful) throw new PostgresQueryPreparationException(compilation, native);

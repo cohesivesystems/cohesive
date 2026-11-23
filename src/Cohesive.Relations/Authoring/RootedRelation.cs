@@ -57,3 +57,20 @@ public sealed class RootedRelation<TResult> where TResult : class
         });
     }
 }
+
+/// <summary>A flat row projection and its impact authority, derived from one rooted node graph.</summary>
+public sealed class RootedRowProjection<TRow> where TRow : class
+{
+    internal RootedRowProjection(RelationQueryCompilationRequest relation, RelationQueryCompilationRequest rows,
+        System.Linq.Expressions.Expression<Func<TRow, string>> key, FieldPath keyField) =>
+        (Relation, Rows, Key, KeyField) = (relation, rows, key, keyField);
+
+    /// <summary>Canonical parameter-free relation used for impact planning.</summary>
+    public RelationQueryCompilationRequest Relation { get; }
+    /// <summary>Rows query sharing the complete relation body.</summary>
+    public RelationQueryCompilationRequest Rows { get; }
+    /// <summary>Typed projected root identity for lookup and replacement.</summary>
+    public System.Linq.Expressions.Expression<Func<TRow, string>> Key { get; }
+    /// <summary>Canonical output path bound by the typed key declaration.</summary>
+    public FieldPath KeyField { get; }
+}

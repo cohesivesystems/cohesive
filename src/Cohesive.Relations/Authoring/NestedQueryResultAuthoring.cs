@@ -19,6 +19,9 @@ public sealed partial class RelationQueryExpressionAuthoring
     /// <returns>A registration-local builder; not safe for concurrent mutation.</returns>
     public NestedQueryResultSource<TResult> SingleOrDefault<TResult>() where TResult : class => new(this);
 
+    /// <summary>Starts a flat projection whose rows are maintained together by the selected root identity.</summary>
+    public NestedQueryResultSource<TRow> RowsByRoot<TRow>() where TRow : class => new(this);
+
     internal ClrAuthoringShape<T> ResultShape<T>() where T : notnull
     {
         var shape = Clr.Shape<T>();
@@ -109,6 +112,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
     readonly List<QueryResultCollectionAssembly> collections = [];
     RelationQueryNodeHandle<LogicalQueryNode>? input;
     FieldPath identity;
+    Expression<Func<TResult, string>>? identitySelector;
     RelationQueryBindingHandle root;
     bool built;
 
@@ -138,6 +142,7 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
     public NestedQueryResultBuilder<TResult> Identity(Expression<Func<TResult, string>> target)
     {
         RequireMutable();
+        identitySelector = target;
         fields.Add(new(identity, Target(shape, target)));
         return this;
     }
@@ -251,6 +256,40 @@ public sealed class NestedQueryResultBuilder<TResult> where TResult : class
                 $"{diagnostic.Code} at {diagnostic.Location}: {diagnostic.Message}")), nameof(id));
         built = true;
         return new(request);
+    }
+
+    /// <summary>Build a flat, parameter-free projection with a single declared root key.
+    /// SQL publication and change-impact compilation use exactly the same nodes and scalar assignments.</summary>
+    public RootedRowProjection<TResult> BuildRows(RelationId id)
+    {
+        RequireMutable();
+        if (identitySelector is null || collections.Count != 0)
+            throw new InvalidOperationException("Flat rows require one mapped root identity and scalar fields.");
+        var mappedTargets = fields.Select(field => field.Target).ToHashSet();
+        if (mappedTargets.Count != fields.Count || !mappedTargets.SetEquals(shape.Document.Graph.GetShape(shape.Id).Fields
+            .Select(field => FieldPath.FromField(field.Name.Value))))
+            throw new ArgumentException("Each flat output field must be mapped exactly once.");
+        var mappings = fields.ToDictionary(field => field.Source, field => field.Target);
+        var projected = author.Structural.Project(input!.Value, shape.Id,
+            [.. assignments.Select(slot => new RelationQueryProjectionAssignment(mappings[slot.Target], slot.Value))]);
+        var definition = author.Structural.BuildRelation(id, new(id.Value), root, projected.Node,
+            shape.Id, RelationOutputMode.ManyPerRoot).Definition;
+        if (definition.Body.Parameters.Length != 0)
+            throw new ArgumentException("A persisted rooted projection must be parameter-free.", nameof(id));
+        var rows = author.Structural.Rows(projected.Node);
+        var query = new QueryDefinition(new(id.Value), new(id.Value), definition.Body,
+            [new RowsQueryResultDefinition(rows.Id, projected.Node.Id)]);
+        // Impact planning consumes a set of root identities; a flat target may publish multiple rows per identity.
+        var rootShape = new QualifiedShapeId(new GraphId(id.Value + "/impact-root/v1"), new ShapeId("Root"));
+        var rootGraph = new ShapeGraph(rootShape.GraphId, [new Shape(rootShape.ShapeId,
+            [new FieldDefinition(new("id"), new ScalarTypeRef(ScalarTypeKind.String))])]);
+        var keyPath = mappings[identity];
+        definition = definition with { Assembly = new(rows.Id, rootShape, keyPath, [new(keyPath, FieldPath.FromField("id"))], []) };
+        RelationQueryCompilationRequest Request(RelationQueryDefinition item) => new(
+            RelationQueryDocument.FromDefinition(item), [.. author.ShapeDocuments, ShapeGraphDocument.FromGraph(rootGraph)],
+            author.CreateRelationshipCatalogDocument());
+        built = true;
+        return new(Request(definition), Request(query), identitySelector, mappings[identity]);
     }
 
     (ShapeGraph Graph, RelationQueryBoundNodeHandle<ProjectQueryNode> Projected, RelationQueryResultHandle<RowsQueryResultDefinition> Rows, NestedQueryResultAssembly Assembly) PrepareRows(string id)

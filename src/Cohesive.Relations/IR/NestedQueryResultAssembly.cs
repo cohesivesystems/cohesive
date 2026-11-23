@@ -31,7 +31,7 @@ public sealed record NestedQueryResultAssembly(
     /// <exception cref="ArgumentException">The portable assembly contract is invalid.</exception>
     public void Validate()
     {
-        if (Fields.IsDefaultOrEmpty || Collections.IsDefaultOrEmpty
+        if (Fields.IsDefaultOrEmpty || Collections.IsDefault
             || Fields.Any(field => field is null)
             || Collections.Any(collection => collection is null || collection.Fields.IsDefaultOrEmpty || collection.Fields.Any(field => field is null)))
             throw new ArgumentException("Nested assembly requires parent fields and nonempty child mappings.", "definition");

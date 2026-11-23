@@ -32,6 +32,46 @@ public sealed class PostgresInfrastructureTests
     static QuerySnapshotRequirement Requirement(string id = "query/items") => new(id, "1", Query(id).CompilationRequest);
 
     [PostgresProcessDurableStoreTests.PostgresFact]
+    public async Task Keyed_refresh_replaces_only_selected_roots_including_removals()
+    {
+        await using var db = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);
+        var suffix = Guid.NewGuid().ToString("N");
+        var source = "items_" + suffix;
+        var target = "projected_" + suffix;
+        var query = RelationQuery.Expression();
+        var partition = query.Parameter<string>("partition");
+        var definition = query.Source(Entity).Where(item => item.Partition == partition.Value)
+            .Select(item => new Row(item.Id)).BuildArrayQuery(new("query/by-partition"), new("Rows"), partition);
+        var projection = Bindings(table: source).Bind(db, authority: "tests").MaterializeRows(definition, "local", target);
+        async Task Execute(string sql)
+        {
+            await using var command = db.CreateCommand(sql);
+            await command.ExecuteNonQueryAsync();
+        }
+        async Task<string> Version()
+        {
+            await using var command = db.CreateCommand($"SELECT xmin::text FROM {target} WHERE id='U'");
+            return (string)(await command.ExecuteScalarAsync())!;
+        }
+        try
+        {
+            await Execute($"CREATE TABLE {source} (id text, partition text); INSERT INTO {source} VALUES ('A','local'),('U','local')");
+            await projection.ResyncAsync();
+            var before = await Version();
+            await Execute($"DELETE FROM {source} WHERE id='A'; INSERT INTO {source} VALUES ('B','local'),('B','local')");
+            await projection.RefreshKeysAsync(row => row.Id, new[] { "A", "B", "B" });
+            var lookup = projection.Lookup(row => row.Id);
+            Assert.Empty(await lookup.ReadAsync("A"));
+            Assert.Equal(2, (await lookup.ReadAsync("B")).Length);
+            Assert.Equal(before, await Version());
+        }
+        finally
+        {
+            await Execute($"DROP TABLE IF EXISTS {target},{source}");
+        }
+    }
+
+    [PostgresProcessDurableStoreTests.PostgresFact]
     public async Task Synchronous_target_repairs_rows_and_preserves_publication_on_failure()
     {
         await using var db = NpgsqlDataSource.Create(Environment.GetEnvironmentVariable("COHESIVE_POSTGRES_TEST_CONNECTION_STRING")!);

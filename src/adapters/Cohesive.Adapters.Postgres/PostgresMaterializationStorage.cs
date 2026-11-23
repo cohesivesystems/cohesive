@@ -161,16 +161,45 @@ public sealed class PostgresMaterializationStorage
         ArgumentNullException.ThrowIfNull(replicationConnectionFactory);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentException.ThrowIfNullOrWhiteSpace(slotGeneration);
+        var partition = await BindPartitionAsync(database, replicationConnectionFactory, authenticationKey, slotGeneration, cancellationToken);
+        var compilation = MaterializationPartitionedRebuildCompiler.Compile(Materialization.Document, relation.Plan,
+            options.Rebuild, options.Provider, target.Descriptor, [partition], Materialization.Impact, options.Capacity, options.Provenance);
+        var state = new PostgresMaterializationStateStore(database, options.Checkpoints);
+        return new(compilation, target, state, state);
+    }
+
+    internal async Task<MaterializationPartitionBinding> BindPartitionAsync(NpgsqlDataSource database,
+        PostgresLogicalReplicationConnectionFactory replicationConnectionFactory, ReadOnlyMemory<byte> authenticationKey,
+        string slotGeneration, CancellationToken cancellationToken)
+    {
         var native = new PostgresNpgsqlRuntimeBinding(bindings.Database, database, options.Checkpoints.AuthorityId,
             logicalReplicationConnectionFactory: replicationConnectionFactory);
-        var partition = await relation.BindAsync(Materialization.Document, native.DataSource, native, options.Reads,
+        return await relation.BindAsync(Materialization.Document, native.DataSource, native, options.Reads,
             options.Reads.PartitionScope!.CanonicalValue, authenticationKey, input => new(options.Publication, slots[input], slotGeneration,
                 expectedReplicaIdentity: new(PostgresLogicalReplicationReplicaIdentityKind.Full),
                 beforeImageRequirement: PostgresLogicalReplicationBeforeImageRequirement.Required),
             options.Replication, cancellationToken).ConfigureAwait(false);
-        var compilation = MaterializationPartitionedRebuildCompiler.Compile(Materialization.Document, relation.Plan,
-            options.Rebuild, options.Provider, target.Descriptor, [partition], Materialization.Impact, options.Capacity, options.Provenance);
-        var state = new PostgresMaterializationStateStore(native.DataSource, options.Checkpoints);
-        return new(compilation, target, state, state);
+    }
+
+    internal PostgresMaterializationStateStore CheckpointStore(NpgsqlDataSource database) => new(database, options.Checkpoints);
+
+    /// <summary>Declare a durable schedule over the tables selected by the prepared impact plan.</summary>
+    public PostgresRowsSchedule Schedule(NpgsqlDataSource database, string name) => new(database,
+        relation.Reads.Impact.Placement.Bindings.Select(binding => bindings.Mapping(binding.Shape).Table.ToSql(PostgresSqlDialect.Instance)).Distinct(), name);
+
+    internal PostgresRelationQuerySourcePolicy ReadLimits => options.Reads;
+
+    /// <summary>Bind a hosted catch-up worker to an initialized flat target whose selected field
+    /// is the identity of the prepared relation root. The target binding determines the durable generation and worker lease.</summary>
+    public async Task<PostgresRootedRowsWorker<TRow>> BindRowsWorkerAsync<TRow>(NpgsqlDataSource database,
+        PostgresLogicalReplicationConnectionFactory replication, ReadOnlyMemory<byte> positionKey, string slotGeneration,
+        PostgresMaterializedRows<TRow> target, System.Linq.Expressions.Expression<Func<TRow, string>> rootKey,
+        TimeSpan interval, PostgresRowsSchedule? schedule = null, CancellationToken cancellationToken = default)
+    {
+        if (interval <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(interval));
+        var partition = await BindPartitionAsync(database, replication, positionKey, slotGeneration, cancellationToken);
+        var digest = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(target.PublicationIdentity));
+        return new(database, this, target, rootKey, partition, System.Buffers.Binary.BinaryPrimitives.ReadInt64BigEndian(digest),
+            Convert.ToHexStringLower(digest), interval, schedule);
     }
 }
