@@ -1,11 +1,33 @@
 using Cohesive.Transitions.Authoring;
 using Cohesive.Application;
+using Cohesive.Machines;
+using Cohesive.Transitions.Machines;
 using System.Text.Json.Serialization;
 
 namespace Cohesive.Tests.Modeling;
 
 public sealed class DomainDiscoveryTests
 {
+    [Fact]
+    public void Discovered_machine_is_shared_by_registration_and_typed_handles_only_in_the_selected_catalog()
+    {
+        var source = Machine.Define("order.quantity", "1");
+        var empty = source.State("empty").Initial();
+        var ready = source.State("ready").Final();
+        source.Edge("fill").From(empty).To(ready);
+        var binding = new MachineDiscriminatorBinding<Order, int>(source.Build(), order => order.Quantity)
+            .Map(empty, 0).Map(ready, 1);
+        var original = DomainDiscovery.For<Module>();
+        var bound = original.WithMachine(binding);
+        var builder = new DomainModelBuilder().Discover(bound);
+        var order = builder.Entity<Order>();
+        Assert.Equal(source.Build().Document.Reference, order.Definition.Machine!.Machine.Reference);
+        Assert.Same(order.Definition, builder.Build().Entities.Single(entity => entity.Name.Value == "order"));
+        Assert.Null(new DomainModelBuilder().Discover(original).Entity<Order>().Definition.Machine);
+        Assert.Throws<InvalidOperationException>(() => bound.WithMachine(binding));
+        Assert.Throws<ArgumentException>(() => original.Exclude<Order>("external").WithMachine(binding));
+    }
+
     [Fact]
     public void Discovery_reuses_explicit_projection_and_is_scoped_sorted_and_cached()
     {

@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Reflection;
 using Cohesive.Model.Serialization;
 using Cohesive.Transitions.Model;
+using Cohesive.Transitions.Machines;
 using Cohesive.Prelude;
 
 namespace Cohesive.Transitions.Authoring;
@@ -83,6 +84,24 @@ public sealed class DomainDiscovery
     public static DomainDiscovery For<TModule>() => Cache<TModule>.Value.Value;
 
     internal ImmutableArray<KeyValuePair<Type, EntityDefinition>> IncludedDeclarations { get; }
+
+    /// <summary>Attaches a discriminator machine before registering a discovered entity in a domain.</summary>
+    /// <typeparam name="TEntity">Included entity whose status field classifies its state.</typeparam>
+    /// <typeparam name="TValue">CLR type of the discriminator field.</typeparam>
+    /// <param name="binding">Complete mapping from machine states to field values.</param>
+    /// <returns>A new catalog. The cached discovery catalog retains its original definitions.</returns>
+    /// <exception cref="ArgumentException">The entity is absent, excluded, or the binding is incomplete.</exception>
+    /// <exception cref="InvalidOperationException">The entity already owns a machine.</exception>
+    /// <exception cref="ArgumentNullException">The binding is null.</exception>
+    public DomainDiscovery WithMachine<TEntity, TValue>(MachineDiscriminatorBinding<TEntity, TValue> binding)
+        where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        var type = typeof(TEntity);
+        if (Exclusions.ContainsKey(type) || !declarations.TryGetValue(type, out var entity))
+            throw new ArgumentException($"'{type}' is not included in this discovery catalog.", nameof(binding));
+        return new(declarations.SetItem(type, binding.Bind(entity)), Exclusions);
+    }
 
     /// <summary>Creates a catalog with an intentional omission, without modifying the cached catalog.</summary>
     /// <typeparam name="TEntity">A discovered declaration to omit.</typeparam>
