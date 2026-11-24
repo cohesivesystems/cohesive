@@ -1,4 +1,7 @@
+using Cohesive.Transitions.Execution;
 using Cohesive.Model.Authoring;
+using Cohesive.Machines;
+using Cohesive.Transitions.Machines;
 using Cohesive.Transitions.Assurance;
 using Cohesive.Transitions.Authoring;
 using Cohesive.Transitions.IR;
@@ -23,6 +26,38 @@ public sealed class TransitionProbeTests
                 if (subtract) t.Set(new("decrement"), s => s.Available, (s, r) => s.Available - r.Quantity);
                 t.Return(new("reserved"), TransitionOutcomeDisposition.Applied, "reserved");
             });
+
+    [Fact]
+    public void Machine_binding_allows_typed_execution_but_reports_unsupported_boundary_generation()
+    {
+        var machine = Machine.Define("stock", "1");
+        var ready = machine.State("ready").Initial();
+        var spent = machine.State("spent").Final();
+        var consume = machine.Edge("consume").From(ready).To(spent);
+        var entity = new MachineDiscriminatorBinding<Stock, int>(machine.Build(), stock => stock.Available)
+            .Map(ready, 1).Map(spent, 0).Bind(ObjectEntityDefinition.For<Stock>(new("stock")));
+        var transition = TransitionAuthoring.Create<Stock, Request, string>(entity.Shape, new("consume"), new("1"),
+            t => t.Move(consume, (_, _) => "Unavailable").Return("Consumed"));
+        var probe = TransitionAssurance.Prepare(transition);
+        var result = probe.Execute(new("sku", 1, 4, false), new(1, ""), new("case"));
+        Assert.Equal("Consumed", result.Outcome);
+        Assert.Equal(0, result.State.Available);
+        Assert.Equal("consume", Assert.Single(result.Decision.MachineMovements).Edge.Value);
+        Assert.Throws<TransitionInputGenerationException>(() => probe.EnsureGenerationSupported());
+    }
+
+    [Fact]
+    public void Parameterless_offline_execution_accepts_no_change()
+    {
+        var entity = ObjectEntityDefinition.For<Stock>(new("stock"));
+        var transition = TransitionAuthoring.Create<Stock, string>(entity.Shape,
+            new("inspect"), new("1"), t => t.Return(new("observed"), TransitionOutcomeDisposition.NoChange, "Observed"));
+        var before = new Stock("sku", 1, 4, false);
+        var result = OfflineTransition.Prepare(transition).Execute(before, new("case"));
+        Assert.True(result.Decision.IsAccepted);
+        Assert.Equal(before, result.State);
+        Assert.Equal("Observed", result.Outcome);
+    }
 
     [Fact]
     public void JointCasesCoverOverlapExactExhaustionAndIsolatedRejections()

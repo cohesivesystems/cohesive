@@ -1,3 +1,4 @@
+using Cohesive.Prelude;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Transitions.Authoring;
@@ -15,18 +16,27 @@ public sealed record OfflineTransitionResult<TEntity, TOutcome>(TEntity State, T
 /// <summary>Creates non-committing typed executions without an Assurance or storage dependency.</summary>
 public static class OfflineTransition
 {
+    /// <summary>Executes a parameterless command with the caller's invocation identity.</summary>
+    public static OfflineTransitionResult<TEntity, TOutcome> Execute<TEntity, TOutcome>(
+        this OfflineTransition<TEntity, Unit, TOutcome> runner, TEntity before, ActivationId invocation)
+        where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        return runner.Execute(before, default, invocation);
+    }
+
     /// <summary>Compiles one existing-entity transition for repeated offline execution.</summary>
     /// <param name="transition">Canonical model to compile.</param>
     /// <returns>A reusable typed reference execution.</returns>
     /// <exception cref="ArgumentNullException">Transition is null.</exception>
     /// <exception cref="ArgumentException">Compilation fails with diagnostics.</exception>
-    /// <exception cref="NotSupportedException">Creation or machine binding requires a different execution profile.</exception>
+    /// <exception cref="NotSupportedException">The transition creates a subject instead of operating on the supplied entity.</exception>
     public static OfflineTransition<TEntity, TInput, TOutcome> Prepare<TEntity, TInput, TOutcome>(
         Transition<TEntity, TInput, TOutcome> transition) where TEntity : notnull
     {
         ArgumentNullException.ThrowIfNull(transition);
-        if (transition.Definition.SubjectCreation is not null || transition.Definition.MachineBinding is not null)
-            throw new NotSupportedException("Offline probes require an existing entity without machine bindings.");
+        if (transition.Definition.SubjectCreation is not null)
+            throw new NotSupportedException("Offline probes require an existing entity.");
         var compiled = transition.Compile();
         if (!compiled.IsSuccessful)
             throw new ArgumentException(string.Join("; ", compiled.Validation.Diagnostics), nameof(transition));

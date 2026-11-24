@@ -130,3 +130,9 @@ reuse the same inspection result and perform the check on first use if setup omi
 interpreter expression set. Unsupported guard syntax or operand types raise
 `TransitionInputGenerationException` with the guard node. Invalid caller configuration or
 missing template fields raise argument errors.
+
+Typed offline execution supports existing machine-bound entities. Prepare the production
+transition once and call `Execute(before, input, invocation)` for each example. The
+result includes the projected state, typed outcome and exact edge evidence in
+`Decision.MachineMovements`. Boundary generation for machine-bound entities reports
+an unsupported-generation diagnostic.

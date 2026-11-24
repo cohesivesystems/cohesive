@@ -67,7 +67,7 @@ public static partial class TransitionAssurance
     /// <returns>A reusable, non-committing typed runner and boundary-input proposer.</returns>
     /// <exception cref="ArgumentNullException">Transition is null.</exception>
     /// <exception cref="ArgumentException">Compilation fails; the message includes its diagnostics.</exception>
-    /// <exception cref="NotSupportedException">The transition creates a subject or requires machine bindings.</exception>
+    /// <exception cref="NotSupportedException">The transition creates a subject.</exception>
     public static TransitionProbe<TEntity, TInput, TOutcome> Prepare<TEntity, TInput, TOutcome>(
         Transition<TEntity, TInput, TOutcome> transition) where TEntity : notnull
     {
@@ -203,6 +203,9 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
 
     GuardInspection InspectGuards()
     {
+        if (plan.Definition.MachineBinding is not null)
+            return new([], new(plan.Definition.Body.Id, "Boundary generation does not inspect machine states and edge guards."));
+
         try
         {
             return new([.. plan.Definition.Preconditions.Select(r => Resolve(r.Id, r.Predicate))]);
