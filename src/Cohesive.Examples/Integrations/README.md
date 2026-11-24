@@ -226,11 +226,30 @@ qualification, dispatch policy, coverage and ledger checks retain their existing
 
 An unresolved admission stops subsequent ticks before another fetch. This includes a known coverage
 failure: a later tick cannot treat that failure as permission to retry or skip ahead. Use the operator
-runbook's evidence-based reconciliation/resolution path; new attempts after resolution are deliberately
-not modeled by this example. Admission replay also cannot authorize execution again.
+runbook's evidence-based reconciliation/resolution path; explicit new attempts after verified resolution are demonstrated in the follow-up below. Admission replay also cannot authorize execution again.
 
 The tick has no persisted timer occurrence or process-local cursor. The ledger owns progress, while
 consumer admission owns unresolved work. Reads across them are not transactional, and the pending check
 is not a claim: concurrent dispatchers require additional ownership/fencing. This is not a production
 scheduler, restart-durability proof, arbitrary trading-calendar planner, correction policy or completion
 of the Ito-dependent acceptance gate. No new public API is introduced.
+
+
+[HistoricalCatchUpRetryExamples.cs](HistoricalCatchUpRetryExamples.cs), tracked in
+[#545](https://github.com/cohesivesystems/cohesive/issues/545), closes the local post-resolution gap.
+A failed acquisition with incomplete coverage has no accepted publication or ledger advance. The host
+must verify complete effect accounting through `ResolveFailure`; unknown evidence keeps it pending.
+Resolution retains the failed Process decision and original admission, and does not resume a paused
+consumer. Only after an explicit resume can a newly selected Process attempt acquire again.
+
+The caller now supplies the attempt identity to the private tick helper. Reusing the old attempt under
+a fresh lifecycle revision returns an admission rejection with zero effects. Exact original admission
+replay still returns the old receipt and is never executed again. The explicit new attempt keeps the
+same canonical binding/window and re-runs current qualification, dispatch checks and coverage evaluation.
+Another incomplete response remains pending; a complete response publishes and advances once, allowing
+the next window. The original failed attempt never becomes a successful completion.
+
+The verifier is trusted local fixture code with complete knowledge of its one acquisition and absent
+publication. It is not an evidence-authentication service or an ambiguous-effect recovery mechanism.
+Attempt selection and retry policy remain host-owned; there is no automatic retry budget, durable
+scheduler claim or cross-process ownership guarantee. A new attempt is new work, not reconciliation.
