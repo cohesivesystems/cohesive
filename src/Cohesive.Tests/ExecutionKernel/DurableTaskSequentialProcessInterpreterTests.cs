@@ -1175,6 +1175,81 @@ public sealed class DurableTaskSequentialProcessInterpreterTests
     }
 
     [Fact]
+    public async Task TwoChildScope_WaitsForBothClosuresBeforeSchedulingFinalizer()
+    {
+        var (fixture, child) = CancellationFinalizerDurabilityTestFixture.CreateTwoChildScope();
+        var start = new DurableTaskSequentialProcessStart(fixture.Start, fixture.ActivationContext);
+        var now = fixture.Start.AcceptedAtUtc;
+        var controls = Channel.CreateUnbounded<ProcessControlCommand>();
+        ConcurrentDictionary<EmissionId, PendingChild> pending = [];
+        ConcurrentQueue<ProcessChildCancellationIntent> cancellations = [];
+        ConcurrentQueue<DurableTaskSequentialProcessResult> observations = [];
+        var finalizerStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var execution = DurableTaskSequentialProcessInterpreter.RunAsync(
+            fixture.Plan, start,
+            new DurableRequestBindingCatalog(
+            [
+                fixture.Binding,
+                child.BindDurably(maxAttempts: 3, claimLease: TimeSpan.FromMinutes(1),
+                    DurableOperationIdempotencyEvidence.TargetDeduplication,
+                    reconciliationTarget: new(child.Process.Reference, new("return")))
+            ]),
+            UnexpectedOperation, UnexpectedDurableOperation,
+            invocation =>
+            {
+                var target = Assert.IsType<ProcessChildRequestTarget>(invocation.Request.ChildTarget);
+                if (target.Definition == child.Process.Reference)
+                {
+                    var completion = new TaskCompletionSource<DurableTaskDurableOperationAttemptResult>(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    Assert.True(pending.TryAdd(invocation.Request.Context.EmissionId, new(target, completion)));
+                    return completion.Task;
+                }
+                Assert.Equal(fixture.Protocol.Process.Reference, target.Definition);
+                Assert.All(pending.Values, item => Assert.True(item.Completion.Task.IsCompleted));
+                Assert.True(finalizerStarted.TrySetResult());
+                return Task.FromResult(new DurableTaskDurableOperationAttemptResult(
+                    new DurableOperationOutcomeObservation(
+                        new RequestResultOutcome(target.OutcomeMapping.Completed,
+                            fixture.Acknowledgement(start.Receipt.Request.InitialContinuation.ProcessAttemptId)),
+                        replyOrigin: new ProcessInteractionOrigin(target.Definition, new("return"), target.Continuation,
+                            new("activation/scope-finalizer"), new("token/scope-finalizer"), outcome: new("return"))),
+                    deadlineElapsed: false));
+            },
+            UnexpectedReconciliation, UnexpectedInteraction, TestDurableTimer, () => now,
+            observations.Enqueue,
+            dispatchChildCancellation: intent =>
+            {
+                cancellations.Enqueue(intent);
+                return Task.CompletedTask;
+            },
+            waitForControl: () => controls.Reader.ReadAsync().AsTask());
+
+        await WaitUntilAsync(() => pending.Count == 2);
+        var running = await WaitForObservationAsync(observations,
+            result => result.Control.Mode == ProcessControlMode.Running && result.State.Children.Length == 2);
+        now = now.AddSeconds(1);
+        await controls.Writer.WriteAsync(new CancelProcessCommand(ProcessControlCommand.CurrentSchemaVersion,
+            ControlContext(start, "cancel/two-child-scope", now), Expectation(running.Control), new("operator.cancel")));
+        await WaitUntilAsync(() => cancellations.Count == 2);
+        Assert.False(finalizerStarted.Task.IsCompleted);
+        var ordered = pending.OrderBy(pair => pair.Key.Value, StringComparer.Ordinal).ToArray();
+        ordered[0].Value.Completion.SetResult(CancelledTypedProcessChild(ordered[0].Key, ordered[0].Value.Target));
+        Assert.False(execution.IsCompleted);
+        Assert.False(finalizerStarted.Task.IsCompleted);
+        now = now.AddSeconds(1);
+        ordered[1].Value.Completion.SetResult(CancelledTypedProcessChild(ordered[1].Key, ordered[1].Value.Target));
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(finalizerStarted.Task.IsCompleted);
+        Assert.Equal(ProcessControlMode.Cancelled, result.Control.Mode);
+        Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, result.State.Terminal.Kind);
+        Assert.Equal(2, result.State.Children.Count(item => item.Disposition == ProcessChildDisposition.CancellationSettled));
+        Assert.Equal(2, cancellations.Select(item => item.IntentId).Distinct().Count());
+        Assert.All(result.State.Children.Where(item => item.Node.Value.StartsWith("child/", StringComparison.Ordinal)),
+            item => Assert.Equal(ExecutionTerminalOutcomeKind.Cancelled, item.CancellationClosure?.Outcome));
+    }
+
+    [Fact]
     public async Task LifecycleControl_PauseDuringHostWorkDefersAndStopsAtTheExactSafePoint()
     {
         var transition = DefinitionReference("transition/control/active", '8');
