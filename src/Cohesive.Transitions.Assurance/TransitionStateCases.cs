@@ -55,10 +55,21 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
         if (!plan.Definition.Observation.IsSatisfiedByConstant(root))
             throw new ArgumentException("Template violates the observation contract.", nameof(template));
         var states = new List<ObservationValue> { root };
+        FieldPath? discriminator = null;
+        if (plan.Definition.MachineBinding is { } machine)
+        {
+            if (machine.States.Count > maxCases)
+                throw new InvalidOperationException($"State exploration budget {maxCases} exceeded by machine states.");
+            var assignments = machine.States.Values.Select(state => state.Assignments.Single()).ToArray();
+            discriminator = assignments[0].Path;
+            states = [.. assignments.Select(a => root.WithField(a.Path, a.Value.Value!.Value))];
+        }
         var fields = guards.SelectMany(rule => rule.Fields.Select(path => (path, rule))).GroupBy(pair => pair.path);
         foreach (var group in fields)
         {
             var path = group.Key;
+            // The binding supplies the complete domain for this field.
+            if (path == discriminator) continue;
             ObservationValue[] values;
             if (group.First().rule.Boolean)
                 values = [ObservationValue.FromBool(false), ObservationValue.FromBool(true)];

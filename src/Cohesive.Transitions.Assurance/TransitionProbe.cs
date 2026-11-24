@@ -170,7 +170,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
         var nodes = ImmutableArray.CreateBuilder<ExecutionNodeId>();
         foreach (var rule in GenerationGuards)
         {
-            nodes.Add(rule.Id);
+            if (!nodes.Contains(rule.Id)) nodes.Add(rule.Id);
             if (rule.Input is not { } path) continue;
             if (!template.TryGetField(path, out var original))
                 throw new ArgumentException($"Missing command field {path}.", nameof(seed));
@@ -203,12 +203,30 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
 
     GuardInspection InspectGuards()
     {
-        if (plan.Definition.MachineBinding is not null)
-            return new([], new(plan.Definition.Body.Id, "Boundary generation does not inspect machine states and edge guards."));
-
         try
         {
-            return new([.. plan.Definition.Preconditions.Select(r => Resolve(r.Id, r.Predicate))]);
+            var guards = plan.Definition.Preconditions.Select(r => Resolve(r.Id, r.Predicate)).ToList();
+            if (plan.Definition.MachineBinding is { } machine)
+            {
+                FieldPath? discriminator = null;
+                foreach (var (name, state) in machine.States)
+                {
+                    if (state.Assignments is not [var assignment] ||
+                        assignment.Value.Value is not { } value ||
+                        state.Predicate != Expr.Eq(Expr.Field(TransitionBindingIds.Observation, assignment.Path), Expr.Const(value)) ||
+                        discriminator is { } other && assignment.Path != other)
+                        throw Unsupported(plan.Definition.Body.Id, $"State '{name}' needs a single mapped discriminator field.");
+                    discriminator = assignment.Path;
+                }
+                foreach (var edge in plan.MachineEdges)
+                    foreach (var predicate in edge.AdmissionGuards)
+                    {
+                        if (predicate is ConstantExpr { Value.Kind: ObservationValueKind.Bool }
+                            or LiteralExpr { Value.Kind: ObservationValueKind.Bool }) continue;
+                        guards.Add(Resolve(edge.Edge, predicate));
+                    }
+            }
+            return new([.. guards]);
         }
         catch (TransitionInputGenerationException error)
         {
@@ -232,11 +250,19 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
                     input = path;
                     contract = plan.Definition.Input.Type!;
                     break;
+                case FieldExpr field when field.Binding == TransitionBindingIds.Input && input is null:
+                    path = field.Path;
+                    input = path;
+                    contract = plan.Definition.Input.Type!;
+                    break;
                 case FieldExpr field when IsState(field):
                     path = field.Path;
                     fields.Add(path);
                     contract = plan.Definition.Observation.Type!;
                     break;
+                case LiteralExpr typed when kind == ScalarTypeKind.Int32 && typed.Value.TryGetInt32(out var threshold):
+                    constant = threshold;
+                    return;
                 case ConstantExpr literal when kind == ScalarTypeKind.Int32 && literal.Value.TryGetInt32(out var number):
                     constant = number;
                     return;

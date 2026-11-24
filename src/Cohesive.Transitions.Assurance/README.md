@@ -134,5 +134,17 @@ missing template fields raise argument errors.
 Typed offline execution supports existing machine-bound entities. Prepare the production
 transition once and call `Execute(before, input, invocation)` for each example. The
 result includes the projected state, typed outcome and exact edge evidence in
-`Decision.MachineMovements`. Boundary generation for machine-bound entities reports
-an unsupported-generation diagnostic.
+`Decision.MachineMovements`.
+
+For single-step model-based test generation, prepare a discriminator-bound transition and pass a
+template. The binding supplies each mapped state, including states where the action is disallowed.
+Compiled edge guards contribute Boolean alternatives and Int32 boundaries using the same bounded
+profile as other admission guards. Unrelated entity and input fields retain the template values.
+
+```csharp
+var probe = TransitionAssurance.Prepare(orderTransitions.Ship);
+var cases = probe.GenerateCases(order, default, new() { MaxCases = 10 });
+```
+
+Cases are proposals. Supply the expected behavior independently. Predicate-only state bindings and
+unsupported guard expressions report a generation diagnostic at setup. Sequence exploration is outside this profile.
