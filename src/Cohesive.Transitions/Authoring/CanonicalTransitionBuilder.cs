@@ -1157,6 +1157,14 @@ public sealed class TransitionChoiceBuilder<TEntity, TInput, TOutcome>
         [CallerMemberName] string sourceMember = "")
     {
         ArgumentNullException.ThrowIfNull(predicate);
+        return CaseExpression(id, context.Translate(predicate), configure, sourceFile, sourceLine, sourceMember);
+    }
+
+    internal TransitionChoiceBuilder<TEntity, TInput, TOutcome> CaseExpression(
+        ExecutionNodeId id, Expr predicate, Action<TransitionSequenceBuilder<TEntity, TInput, TOutcome>> configure,
+        [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0,
+        [CallerMemberName] string sourceMember = "")
+    {
         ArgumentNullException.ThrowIfNull(configure);
         var source = context.Source(sourceFile, sourceLine, sourceMember, $"Choice case '{id.Value}'");
         var branch = new TransitionSequenceBuilder<TEntity, TInput, TOutcome>(
@@ -1164,7 +1172,7 @@ public sealed class TransitionChoiceBuilder<TEntity, TInput, TOutcome>
             new(parentScope));
         configure(branch);
         var body = branch.BuildSequence(TransitionAuthoringIdentities.BodyFor(id), source);
-        var choiceCase = new TransitionChoiceCase(id, context.Translate(predicate), body);
+        var choiceCase = new TransitionChoiceCase(id, predicate, body);
         cases.Add(choiceCase);
         context.Register(choiceCase, source);
         return this;

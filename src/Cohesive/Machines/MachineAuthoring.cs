@@ -36,6 +36,15 @@ public sealed class MachineAuthor
     /// <exception cref="InvalidOperationException">Source is frozen.</exception>
     public MachineState State(string id, [CallerFilePath] string sourceFile = "", [CallerLineNumber] int sourceLine = 0)
     { Mutable(); Builder.State(id, sourceFile, sourceLine); return new(this, id); }
+    /// <summary>Names a protocol action whose movements are resolved against this machine when used.</summary>
+    /// <param name="id">Action identity shared by its edges.</param>
+    /// <returns>An owner-scoped action handle.</returns>
+    public MachineAction Action(string id)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(id);
+        return new(this, id);
+    }
+
     /// <summary>Begins an edge declaration.</summary>
     /// <param name="id">Stable movement identity.</param>
     /// <returns>An owner-scoped fluent movement handle.</returns>
@@ -91,6 +100,31 @@ public sealed class MachineState
     /// <returns>This handle.</returns>
     /// <exception cref="InvalidOperationException">Source is frozen.</exception>
     public MachineState Final() { Owner.Mutable(); Owner.Builder.Final(Id); return this; }
+}
+
+/// <summary>A protocol action, potentially realized by different edges in different states.</summary>
+public sealed class MachineAction
+{
+    internal MachineAuthor Owner { get; }
+    internal MachineAction(MachineAuthor owner, string id) { Owner = owner; Id = id; }
+    /// <summary>Stable protocol action identity.</summary>
+    public string Id { get; }
+    /// <summary>Declares an edge implementing this action.</summary>
+    /// <param name="id">Distinct movement identity. Defaults to the action identity.</param>
+    /// <returns>A movement ready for its source, target and optional guard.</returns>
+    /// <exception cref="InvalidOperationException">The owning machine is frozen.</exception>
+    public MachineMovement Edge(string? id = null) => Owner.Edge(id ?? Id).On(Id);
+
+    /// <summary>Freezes the owner and resolves the edges for this action.</summary>
+    /// <returns>The exact machine and its matching edges in canonical order.</returns>
+    /// <exception cref="InvalidOperationException">No edge implements this action or the machine is invalid.</exception>
+    public (MachineDefinition Machine, ImmutableArray<MachineEdge> Edges) Resolve()
+    {
+        var machine = Owner.Build();
+        var edges = machine.Edges.Where(edge => edge.Action == Id).ToImmutableArray();
+        if (edges.IsEmpty) throw new InvalidOperationException($"Machine '{machine.Id}' has no action '{Id}'.");
+        return (machine, edges);
+    }
 }
 
 /// <summary>A movement handle with owner-checked endpoints.</summary>

@@ -68,3 +68,11 @@ is not proof that a movement committed. Durable reaction publication is separate
 
 See `eng/examples/tender-acceptance/TenderEntityModel.cs` for a compiled consumer covering linkage,
 automatic/deferred acceptance, receipt confirmation, and note edits.
+
+For commands implemented by multiple edges, name the action once with
+`var pack = machine.Action("pack")`. Declare its movements with `pack.Edge()` and `pack.Edge("pack-again")`, then
+request `t.Move(pack, (_, _) => "Cannot pack")` on the bound entity. The builder
+uses the binding’s source predicates and the machine’s guards to lower the action
+to canonical choices and exact movements. A first pack and a pack self-loop
+retain distinct edge identities in decision evidence. A disabled action rejects;
+overlapping enabled siblings retain the machine ambiguity diagnostic.

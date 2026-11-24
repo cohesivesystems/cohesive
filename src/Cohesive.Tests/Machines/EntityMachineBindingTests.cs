@@ -18,6 +18,44 @@ public sealed class EntityMachineBindingTests
     static readonly TenderState Offered = Unlinked with { LoadId = "load-1" };
     static readonly TenderState Pending = Offered with { Accepted = true, PendingReceipt = true };
 
+    [Theory]
+    [InlineData("ready", "", "pack")]
+    [InlineData("packed", "", "again")]
+    [InlineData("packed", "other", "alternative")]
+    [InlineData("blocked", "", null)]
+    [InlineData("packed", "disabled", null)]
+    [InlineData("packed", "overlap", "ambiguous")]
+    public void Action_dispatch_records_the_admitted_edge(string status, string note, string? expectedEdge)
+    {
+        var source = Machine.Define("warehouse", "1");
+        var action = source.Action("pack");
+        var ready = source.State("ready").Initial();
+        var packed = source.State("packed");
+        var blocked = source.State("blocked").Final();
+        action.Edge().From(ready).To(packed)
+            .When((TenderState state, UpdateNote input) => true);
+        action.Edge("again").From(packed).To(packed)
+            .When((TenderState state, UpdateNote input) => input.Note == "" || input.Note == "overlap");
+        action.Edge("alternative").From(packed).To(packed)
+            .When((TenderState state, UpdateNote input) => input.Note != "" && input.Note != "disabled");
+        source.Edge("block").From(ready).To(blocked);
+        var entity = new MachineDiscriminatorBinding<TenderState, string>(source.Build(), state => state.Note)
+            .Map(ready, "ready").Map(packed, "packed").Map(blocked, "blocked").Bind(ObjectEntityDefinition.For<TenderState>());
+        var transition = Author(entity, t => t.Move(action, (_, _) => "Rejected")
+            .Return(new("result"), TransitionOutcomeDisposition.Applied, "Packed"));
+        var decision = Run(transition, Offered with { Note = status }, new UpdateNote(note));
+        if (expectedEdge == "ambiguous")
+        {
+            AssertInvalid(decision, TransitionExecutionDiagnosticCodes.MachineAdmissionAmbiguous);
+            return;
+        }
+        Assert.Equal(expectedEdge is null ? TransitionDecisionKind.AdmissionRejected : TransitionDecisionKind.Applied, decision.Kind);
+        Assert.Equal(expectedEdge, decision.MachineMovements.SingleOrDefault()?.Edge.Value);
+        Assert.Throws<InvalidOperationException>(() => source.Action("typo").Resolve());
+        Assert.Throws<InvalidOperationException>(() => Author(ObjectEntityDefinition.For<TenderState>(),
+            t => t.Move(action, (_, _) => "Rejected")));
+    }
+
     [Fact]
     public void Tender_realizes_linkage_acceptance_confirmation_and_preservation()
     {
