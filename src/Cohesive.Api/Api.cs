@@ -361,6 +361,20 @@ public abstract class OperationBuilder<TParent>
         return this;
     }
 
+    internal string OperationName => name;
+
+    internal ApiEndpoint BuildEntityTransition<TRequest>(ExecutionDefinitionReference reference)
+    {
+        if (kind != ApiOperationKind.Command || entity is null)
+            throw new InvalidOperationException($"Operation '{name}' must be an entity command to bind an entity Transition.");
+
+        var declared = endpoint is null ? transitionReference : endpoint.Operation.TransitionReference;
+        if ((declared is not null || endpoint is not null) && declared != reference)
+            throw new InvalidOperationException($"Operation '{name}' already declares a different Transition contract.");
+
+        return BuildJsonBody<TRequest>(() => primaryResult, reference);
+    }
+
     /// <summary>
     /// Adds a semantic scope policy to the operation.
     /// </summary>
@@ -518,15 +532,19 @@ public abstract class OperationBuilder<TParent>
     /// <exception cref="ArgumentException">An existing request, response or query binding conflicts.</exception>
     /// <exception cref="ArgumentOutOfRangeException">The result kind cannot carry a primary success body.</exception>
     /// <exception cref="InvalidOperationException">No HTTP route is declared.</exception>
-    public ApiEndpoint<TRequest, TResponse> BuildBody<TRequest, TResponse>(ApiResultKind? kind = null)
+    public ApiEndpoint<TRequest, TResponse> BuildBody<TRequest, TResponse>(ApiResultKind? kind = null) =>
+        new(BuildJsonBody<TRequest>(() => PrepareResponse<TResponse>(kind)).Operation);
+
+    ApiEndpoint BuildJsonBody<TRequest>(
+        Func<ApiResultDefinition?> preparePrimaryResult, ExecutionDefinitionReference? preparedTransitionReference = null)
     {
         ValidateRequestType<TRequest>();
         if (query is not null || endpoint is not null && endpoint.Operation.Http?.Body?.BodyType != typeof(TRequest))
-            throw new ArgumentException("The existing endpoint does not have a compatible JSON body binding.");
-        var primary = PrepareResponse<TResponse>(kind);
-        if (endpoint is not null) return new(endpoint.Operation);
-        var http = FinalizeHttpBinding(new HttpBodyBinding(typeof(TRequest)), null, typeof(TRequest));
-        return new(BuildPrepared(http, typeof(TRequest), primary).Operation);
+            throw new ArgumentException($"Operation '{name}' has an incompatible JSON body binding.");
+
+        var primary = preparePrimaryResult();
+        return endpoint ?? BuildPrepared(FinalizeHttpBinding(new HttpBodyBinding(typeof(TRequest)), null, typeof(TRequest)),
+            typeof(TRequest), primary, preparedTransitionReference);
     }
 
     /// <summary>Declares a query DTO and primary response once, then completes their typed endpoint.</summary>
@@ -563,7 +581,8 @@ public abstract class OperationBuilder<TParent>
     /// </summary>
     public ApiEndpoint Build() => endpoint ?? BuildPrepared(FinalizeHttpBinding(body, query, requestType), requestType, primaryResult);
 
-    ApiEndpoint BuildPrepared(HttpBinding? http, Type? preparedRequestType, ApiResultDefinition? preparedPrimaryResult)
+    ApiEndpoint BuildPrepared(HttpBinding? http, Type? preparedRequestType, ApiResultDefinition? preparedPrimaryResult,
+        ExecutionDefinitionReference? preparedTransitionReference = null)
     {
         var finalizedRequestType = http?.Body?.BodyType ?? http?.Query?.QueryType ?? preparedRequestType ?? typeof(void);
         var finalizedResults = FinalizeResults(hasHttpProjection: http is not null, preparedPrimaryResult);
@@ -578,7 +597,7 @@ public abstract class OperationBuilder<TParent>
             http: http,
             id: root.CreateEndpointId(name, entity),
             entity: entity,
-            transitionReference: transitionReference,
+            transitionReference: preparedTransitionReference ?? transitionReference,
             summary: summary,
             description: description,
             tags: finalizedTags,

@@ -573,7 +573,15 @@ public sealed class TransitionReferenceInterpreterTests
                 Entry(plan, "eligible", ObservationValue.FromBool(false))
             ]);
 
+        var root = new GraphShapeId(graph, shape.Id);
+        var layout = ObservationLayout.Create(root, ["eligible", "normalized", "raw"]);
+        var ordinal = Observation.Create(root, layout,
+            ImmutableArray.Create(ObservationValue.FromBool(false), ObservationValue.FromInt64(2), ObservationValue.FromInt64(1)));
+        var fromOrdinal = TransitionReferenceInterpreter.DecideFullState(plan, new("derived"),
+            EmptyInput(definition.Input), PortableValue.Concrete(observation, ordinal.Value));
+
         Assert.Equivalent(full, sparse, strict: true);
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(full), System.Text.Json.JsonSerializer.Serialize(fromOrdinal));
         Assert.Equal(TransitionDecisionKind.Applied, full.Kind);
         Assert.Equal(["raw", "normalized", "eligible"], full.Patch.Select(static patch => patch.Path.ToString()));
         AssertTraceOrder(
@@ -666,7 +674,18 @@ public sealed class TransitionReferenceInterpreterTests
             EmptyInput(definition.Input),
             fullState);
 
+        var shape = new Shape(new("optional-value"), [
+            new(new("value"), StringContract.Type!, presence: FieldPresence.Optional, nullability: FieldNullability.Nullable)
+        ]);
+        var root = new GraphShapeId(new ShapeGraph(new("optional-value-graph"), [shape]), shape.Id);
+        var layout = ObservationLayout.Create(root);
+        var ordinal = Observation.Create(root, layout,
+            ImmutableArray.Create(state == PortableValueState.Absent ? ObservationValue.Undefined : ObservationValue.Null));
+        var fromOrdinal = TransitionReferenceInterpreter.DecideFullState(plan, new("states"),
+            EmptyInput(definition.Input), PortableValue.Concrete(definition.Observation, ordinal.Value));
+
         Assert.Equivalent(full, sparse, strict: true);
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(full), System.Text.Json.JsonSerializer.Serialize(fromOrdinal));
         Assert.Equal(TransitionDecisionKind.NoChange, sparse.Kind);
         Assert.Equal(expectedOutcome, sparse.Outcome?.Value?.String);
     }
