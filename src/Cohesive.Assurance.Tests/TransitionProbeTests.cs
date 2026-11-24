@@ -33,18 +33,18 @@ public sealed class TransitionProbeTests
         var machine = Machine.Define("stock", "1");
         var ready = machine.State("ready").Initial();
         var spent = machine.State("spent").Final();
-        var consume = machine.Edge("consume").From(ready).To(spent).When((Stock state, Request input) => !state.Quarantined);
+        var consume = machine.Edge("consume").From(ready).To(spent).When((Stock state) => !state.Quarantined);
         var entity = new MachineDiscriminatorBinding<Stock, int>(machine.Build(), stock => stock.Available)
             .Map(ready, 1).Map(spent, 0).Bind(ObjectEntityDefinition.For<Stock>(new("stock")));
-        var transition = TransitionAuthoring.Create<Stock, Request, string>(entity.Shape, new("consume"), new("1"),
+        var transition = TransitionAuthoring.Create<Stock, string>(entity.Shape, new("consume"), new("1"),
             t => t.Move(consume, (_, _) => "Unavailable").Return("Consumed"));
         var probe = TransitionAssurance.Prepare(transition);
-        var result = probe.Execute(new("sku", 1, 4, false), new(1, ""), new("case"));
+        var result = probe.Execute(new("sku", 1, 4, false), default, new("case"));
         Assert.Equal("Consumed", result.Outcome);
         Assert.Equal(0, result.State.Available);
         Assert.Equal("consume", Assert.Single(result.Decision.MachineMovements).Edge.Value);
         var template = new Stock("sku", 1, 4, false);
-        var cases = probe.GenerateCases(template, new(1, ""), new() { MaxCases = 4 });
+        var cases = probe.GenerateCases(template, default, new() { MaxCases = 4 });
         Assert.Equal(4, cases.Length);
         Assert.Equal(4, cases.Select(c => (c.State.Available, c.State.Quarantined)).Distinct().Count());
         foreach (var c in cases)
@@ -53,7 +53,7 @@ public sealed class TransitionProbeTests
             var run = probe.Execute(c.State, Assert.Single(c.Commands.Inputs), new("case"));
             Assert.Equal(c.State.Available == 1 && !c.State.Quarantined, run.Decision.IsAccepted);
         }
-        Assert.Throws<InvalidOperationException>(() => probe.GenerateCases(template, new(1, ""), new() { MaxCases = 3 }));
+        Assert.Throws<InvalidOperationException>(() => probe.GenerateCases(template, default, new() { MaxCases = 3 }));
     }
 
     [Fact]

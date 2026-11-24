@@ -10,6 +10,20 @@ namespace Cohesive.Relations.Authoring;
 /// derived IR; ordinary machine authors use the typed When extension.</remarks>
 public static class MachineGuardCompiler
 {
+    /// <summary>Lowers a guard for a parameterless action using only entity facts.</summary>
+    public static MachineGuard Compile<TFacts>(Expression<Func<TFacts, bool>> predicate, IClrTypeRefMapper? typeRefMapper = null)
+        where TFacts : notnull
+    {
+        ArgumentNullException.ThrowIfNull(predicate);
+        var author = new RelationQueryExpressionAuthoring();
+        var facts = author.Source<TFacts>("machine/facts").Binding;
+        var lowered = new ExpressionLowerer(author.Clr.ResolveMemberPath)
+            .LowerValue(predicate, [facts], "machine/guard").RequireValue();
+        var mapper = typeRefMapper ?? new DefaultClrTypeRefMapper();
+        return new(lowered.Value, facts.Id, new("machine/input"), new(mapper.Map(typeof(TFacts), nullability: null)),
+            new(new EnumTypeRef("Unit", [Cohesive.Prelude.Unit.Value.ToString()])));
+    }
+
     /// <summary>Lowers a typed Boolean expression without executing it.</summary>
     /// <typeparam name="TFacts">Explicit facts record type.</typeparam>
     /// <typeparam name="TInput">Action input record type.</typeparam>
