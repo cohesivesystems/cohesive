@@ -15,6 +15,38 @@ namespace Cohesive.Tests.Machines;
 
 public sealed class MachineReactionHostTests
 {
+    [Fact]
+    public async Task Direct_acceptance_survives_restart_before_delivery_and_checkpoint_failure_after_admission()
+    {
+        var f = await TenderEpisodeRuntime.Create();
+        var accepted = await f.Execute(f.TenderTransitions, "tender-1", f.Model.Accept, new EpisodeCommand(1));
+        using var client = new CosmosClient("https://localhost:8081", Convert.ToBase64String(new byte[64]));
+        var source = new CosmosEntityOutboxRepository(f.Model.Tender, client.GetContainer("test", "source"),
+            partitionKeyPolicy: EntityPartitionKeyPolicy.Fixed("test"));
+        var snapshot = accepted.Entity.Entity;
+        var entity = new CosmosObservationContainerDocument("entity", "test", "entity", source.EntityType,
+            snapshot.EntityId.Value, snapshot.Version, EntityConcurrencyToken: accepted.Entity.ConcurrencyToken.Value);
+        var document = source.CreateTransitionReceiptDocument(f.Context, accepted.Commit, entity, "test");
+        var batch = new CosmosManagedMaterializationProviderBatch("range", "cursor", [document],
+            () => throw new IOException("Checkpoint unavailable"));
+        f.Restart();
+        Assert.Empty(await ((IProcessInstanceSource)f.Store).ListInstancesAsync(f.Context, null, 10));
+        await Assert.ThrowsAsync<IOException>(() => CosmosMachineReactionSource.DeliverBatchAsync(source, f.Acceptance(), f.Context, batch));
+        f.Restart();
+        var instance = Assert.Single(await ((IProcessInstanceSource)f.Store).ListInstancesAsync(f.Context, null, 10));
+        Assert.Equal(MachineReactionStatus.Pending, (await f.Acceptance().InspectAsync(f.Context, instance))!.Status);
+        var checkpoints = 0;
+        batch = batch with { CheckpointAsync = () => { checkpoints++; return Task.CompletedTask; } };
+        await CosmosMachineReactionSource.DeliverBatchAsync(source, f.Acceptance(), f.Context, batch);
+        Assert.Equal(MachineReactionStatus.Completed, (await f.Acceptance().RecoverAsync(f.Context, instance))!.Status);
+        var load = await f.Loads.TryGet(f.Context, "load-1", EntityReadOptions.Full.WithPartitionKey("test"));
+        Assert.Equal(nameof(EpisodeLoadStatus.Pending), load!.Entity.Observation.GetField(nameof(EpisodeLoad.Status)).GetString());
+        await CosmosMachineReactionSource.DeliverBatchAsync(source, f.Acceptance(), f.Context, batch);
+        Assert.Equal(instance, Assert.Single(await ((IProcessInstanceSource)f.Store).ListInstancesAsync(f.Context, null, 10)));
+        Assert.Equal(2, checkpoints);
+        Assert.Equal(load, await f.Loads.TryGet(f.Context, "load-1", EntityReadOptions.Full.WithPartitionKey("test")));
+    }
+
     [Theory]
     [InlineData(true, MachineReactionStatus.Completed)]
     [InlineData(false, MachineReactionStatus.Rejected)]
