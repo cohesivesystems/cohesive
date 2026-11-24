@@ -89,6 +89,32 @@ public sealed class TransitionProbeTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Unsupported_machine_bindings_and_edge_guards_report_setup_diagnostics(bool predicateBinding)
+    {
+        var machine = Machine.Define("stock", "1");
+        var ready = machine.State("ready").Initial();
+        var spent = machine.State("spent").Final();
+        var consume = machine.Edge("consume").From(ready).To(spent)
+            .When((Stock state, Request input) => input.Note == "release");
+        var definition = machine.Build();
+        var entity = ObjectEntityDefinition.For<Stock>(new("stock"));
+        var bound = predicateBinding
+            ? new MachinePredicateBinding<Stock, Request>(definition)
+                .State(ready, stock => !stock.Quarantined).State(spent, stock => stock.Quarantined).Bind(entity)
+            : new MachineDiscriminatorBinding<Stock, int>(definition, stock => stock.Available)
+                .Map(ready, 1).Map(spent, 0).Bind(entity);
+        var transition = TransitionAuthoring.Create<Stock, Request, string>(bound.Shape, new("consume"), new("1"),
+            t => t.Move(consume, (_, _) => "Rejected").Return("Consumed"));
+        var probe = TransitionAssurance.Prepare(transition);
+        var error = Assert.Throws<TransitionInputGenerationException>(() => probe.EnsureGenerationSupported());
+        Assert.Equal(error.Diagnostic, probe.GenerationDiagnostic);
+        if (predicateBinding) Assert.Contains("discriminator", error.Message);
+        else Assert.Equal("consume", error.Node.Value);
+    }
+
     [Fact]
     public void Parameterless_offline_execution_accepts_no_change()
     {
