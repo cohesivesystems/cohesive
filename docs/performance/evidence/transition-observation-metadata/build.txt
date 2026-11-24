@@ -1,0 +1,42 @@
+  Determining projects to restore...
+/private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj : warning NU1903: Package 'AutoMapper' 16.2.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-6vhm-j9h7-f9gh
+/private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj : warning NU1903: Package 'AutoMapper' 16.2.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-gpwp-5797-mjff
+  All projects are up-to-date for restore.
+/private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj : warning NU1903: Package 'AutoMapper' 16.2.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-6vhm-j9h7-f9gh
+/private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj : warning NU1903: Package 'AutoMapper' 16.2.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-gpwp-5797-mjff
+  Cohesive.Analyzers -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Analyzers/bin/Release/netstandard2.0/Cohesive.Analyzers.dll
+  Cohesive -> /private/tmp/cohesive-transition-parameters/src/Cohesive/bin/Release/net10.0/Cohesive.dll
+  Cohesive.Configuration -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Configuration/bin/Release/net10.0/Cohesive.Configuration.dll
+  Cohesive.Infra -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Infra/bin/Release/net10.0/Cohesive.Infra.dll
+  Cohesive.Adapters.Sql -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Sql/bin/Release/net10.0/Cohesive.Adapters.Sql.dll
+  Cohesive.Relations -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Relations/bin/Release/net10.0/Cohesive.Relations.dll
+  Cohesive.Assurance -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Assurance/bin/Release/net10.0/Cohesive.Assurance.dll
+  Cohesive.Transitions -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Transitions/bin/Release/net10.0/Cohesive.Transitions.dll
+  Cohesive.Relations.TestFixtures -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.TestFixtures/bin/Release/net10.0/Cohesive.Relations.TestFixtures.dll
+  Cohesive.Cli -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Cli/bin/Release/net10.0/Cohesive.Cli.dll
+  Cohesive.Processes -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Processes/bin/Release/net10.0/Cohesive.Processes.dll
+  Cohesive.Api -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Api/bin/Release/net10.0/Cohesive.Api.dll
+  Cohesive.Integrations -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Integrations/bin/Release/net10.0/Cohesive.Integrations.dll
+  Cohesive.Processes.Distribution -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Processes.Distribution/bin/Release/net10.0/Cohesive.Processes.Distribution.dll
+  Cohesive.Storage -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Storage/bin/Release/net10.0/Cohesive.Storage.dll
+  Cohesive.ExecutionKernel.TestFixtures -> /private/tmp/cohesive-transition-parameters/src/Cohesive.ExecutionKernel.TestFixtures/bin/Release/net10.0/Cohesive.ExecutionKernel.TestFixtures.dll
+  Cohesive.Identity -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Identity/bin/Release/net10.0/Cohesive.Identity.dll
+  Cohesive.MaterializationHarness.Model -> /private/tmp/cohesive-transition-parameters/eng/materialization-harness/model/bin/Release/net10.0/Cohesive.MaterializationHarness.Model.dll
+  Cohesive.Adapters.SQLite -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.SQLite/bin/Release/net10.0/Cohesive.Adapters.SQLite.dll
+  Cohesive.Adapters.Postgres -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.Postgres/bin/Release/net10.0/Cohesive.Adapters.Postgres.dll
+  Cohesive.Api.Execution -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Api.Execution/bin/Release/net10.0/Cohesive.Api.Execution.dll
+  Cohesive.Host -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Host/bin/Release/net10.0/Cohesive.Host.dll
+  Cohesive.Application -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Application/bin/Release/net10.0/Cohesive.Application.dll
+  Cohesive.Adapters.AspNet -> /private/tmp/cohesive-transition-parameters/src/adapters/Cohesive.Adapters.AspNet/bin/Release/net10.0/Cohesive.Adapters.AspNet.dll
+  Cohesive.Relations.Benchmarks -> /private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Benchmarks/bin/Release/net10.0/Cohesive.Relations.Benchmarks.dll
+
+Build succeeded.
+
+/private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj : warning NU1903: Package 'AutoMapper' 16.2.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-6vhm-j9h7-f9gh
+/private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj : warning NU1903: Package 'AutoMapper' 16.2.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-gpwp-5797-mjff
+/private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj : warning NU1903: Package 'AutoMapper' 16.2.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-6vhm-j9h7-f9gh
+/private/tmp/cohesive-transition-parameters/src/Cohesive.Relations.Benchmarks/Cohesive.Relations.Benchmarks.csproj : warning NU1903: Package 'AutoMapper' 16.2.0 has a known high severity vulnerability, https://github.com/advisories/GHSA-gpwp-5797-mjff
+    4 Warning(s)
+    0 Error(s)
+
+Time Elapsed 00:00:01.12

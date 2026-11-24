@@ -62,6 +62,8 @@ public static class PortableExecutionDiagnosticCodes
 /// types may be reused by exact declaration identity. Successful structural evidence may be reused for immutable
 /// observation storage; contract modifiers, type compatibility, names, and shapes remain checked for each invocation
 /// and supplied graph. Newly decoded storage requires fresh structural validation.
+/// Synchronous validation exclusively leases its working context. At most one cleared idle context is
+/// retained per thread; graph, diagnostic and traversal references are released after each call.
 /// </remarks>
 public static class PortableExecutionValidator
 {
@@ -83,7 +85,7 @@ public static class PortableExecutionValidator
         out bool requiresJsonRoundTrip)
     {
         ArgumentNullException.ThrowIfNull(value);
-        var context = new ValidationContext(graph, jsonDepthLimit);
+        using var context = ValidationContext.Rent(graph, jsonDepthLimit);
         context.ValidatePortableValue(value, location: context.Root);
         requiresJsonRoundTrip = context.RequiresJsonRoundTrip;
         return context.ToResult();
@@ -97,7 +99,7 @@ public static class PortableExecutionValidator
     public static DocumentValidationResult Validate(ValueContract contract, ShapeGraph? graph = null)
     {
         ArgumentNullException.ThrowIfNull(contract);
-        var context = new ValidationContext(graph);
+        using var context = ValidationContext.Rent(graph);
         context.ValidateContract(contract, location: context.Root);
         return context.ToResult();
     }
@@ -110,7 +112,7 @@ public static class PortableExecutionValidator
     public static DocumentValidationResult Validate(TypeRef type, ShapeGraph? graph = null)
     {
         ArgumentNullException.ThrowIfNull(type);
-        var context = new ValidationContext(graph);
+        using var context = ValidationContext.Rent(graph);
         context.ValidateType(type, location: context.Root);
         return context.ToResult();
     }
@@ -123,7 +125,7 @@ public static class PortableExecutionValidator
     public static DocumentValidationResult Validate(Expr expression, ShapeGraph? graph = null)
     {
         ArgumentNullException.ThrowIfNull(expression);
-        var context = new ValidationContext(graph);
+        using var context = ValidationContext.Rent(graph);
         context.ValidateExpression(expression, location: context.Root);
         return context.ToResult();
     }
@@ -151,13 +153,70 @@ public static class PortableExecutionValidator
         Unresolved
     }
 
-    sealed class ValidationContext(ShapeGraph? graph, int jsonDepthLimit = 0)
+    internal sealed class ValidationContext : IDisposable
     {
+        // Only cleared, idle owners are cached. Removing the owner before use makes nested validation
+        // rent independently; no graph, diagnostic or semantic result is thread-local.
+        [ThreadStatic] static ValidationContext? idle;
+        ShapeGraph? graph;
+        int jsonDepthLimit;
+#if DEBUG
+        long generation;
+        bool leased;
+#endif
+
+        public static ValidationContext Rent(ShapeGraph? graph, int jsonDepthLimit = 0)
+        {
+            var context = idle ?? new ValidationContext();
+            idle = null;
+#if DEBUG
+            context.generation = unchecked(context.generation + 1);
+            context.leased = true;
+#endif
+            context.graph = graph;
+            context.jsonDepthLimit = jsonDepthLimit;
+            return context;
+        }
+
         public bool RequiresJsonRoundTrip { get; private set; }
         const int MaximumValueCompatibilityDepth = 64;
-        // Most validations succeed over small contracts. The location cursor is pre-sized for typical depth;
-        // diagnostics and recursive-type state are allocated only when first needed.
-        public Location Root { get; } = new(new(capacity: 8), 0);
+        // Locations are synchronous traversal cursors and never escape this owner. Rent on first use;
+        // every validation entry point disposes the owner, including exceptions and invalid input.
+        Segment[]? segments;
+        public Location Root => new(this, 0);
+
+        public void Dispose()
+        {
+#if DEBUG
+            leased = false;
+#endif
+            if (segments is { } owned)
+            {
+                segments = null;
+                ArrayPool<Segment>.Shared.Return(owned, clearArray: true);
+            }
+            graph = null;
+            jsonDepthLimit = 0;
+            RequiresJsonRoundTrip = false;
+            diagnostics = null;
+            activeTypeDefinitions = null;
+            namedTypeReferences = 0;
+            // A nested validation may have returned another owner first. Keep at most one per thread.
+            idle ??= this;
+        }
+
+        void SetSegment(int depth, Segment value)
+        {
+            if (segments is null) segments = ArrayPool<Segment>.Shared.Rent(8);
+            if (depth == segments.Length)
+            {
+                var expanded = ArrayPool<Segment>.Shared.Rent(checked(depth * 2));
+                segments.CopyTo(expanded, 0);
+                ArrayPool<Segment>.Shared.Return(segments, clearArray: true);
+                segments = expanded;
+            }
+            segments[depth] = value;
+        }
 
         List<DocumentValidationDiagnostic>? diagnostics;
         HashSet<TypeId>? activeTypeDefinitions;
@@ -1392,17 +1451,22 @@ public static class PortableExecutionValidator
 
         // Locations are traversal-scoped cursors, never retained. A child overwrites only its depth;
         // ancestors remain intact. Error eagerly snapshots a pointer before traversal continues.
-        public readonly struct Location(List<Segment> segments, int depth)
+        public readonly struct Location(ValidationContext owner, int depth)
         {
 #if DEBUG
-            readonly Segment[] expectedPrefix = segments.Take(depth).ToArray();
+            readonly long generation = owner.generation;
+            internal bool IsCurrentLease => owner.leased && generation == owner.generation;
+            readonly Segment[] expectedPrefix = depth == 0 ? [] : owner.segments!.AsSpan(0, depth).ToArray();
 #endif
             [Conditional("DEBUG")]
             void AssertCurrent()
             {
 #if DEBUG
+                Debug.Assert(IsCurrentLease,
+                    "A validation location was used after its owner's lease ended or the owner was rented again.");
+                if (!IsCurrentLease) return; // Do not inspect a returned or another lease's segment buffer.
                 for (var index = 0; index < depth; index++)
-                    Debug.Assert(segments[index] == expectedPrefix[index],
+                    Debug.Assert(owner.segments![index] == expectedPrefix[index],
                         "A validation location was reused after a sibling overwrote its cursor. Build and consume child locations in traversal order.");
 #endif
             }
@@ -1410,11 +1474,8 @@ public static class PortableExecutionValidator
             public Location Append(Segment segment)
             {
                 AssertCurrent();
-                if (segments.Count == depth)
-                    segments.Add(segment);
-                else
-                    segments[depth] = segment;
-                return new(segments, depth + 1);
+                owner.SetSegment(depth, segment);
+                return new(owner, depth + 1);
             }
 
             public override string ToString()
@@ -1426,7 +1487,7 @@ public static class PortableExecutionValidator
                 for (var index = 0; index < depth; index++)
                 {
                     builder.Append('/');
-                    var segment = segments[index];
+                    var segment = owner.segments![index];
                     if (segment.Name is null)
                         builder.Append(segment.Index.ToString(CultureInfo.InvariantCulture));
                     else

@@ -14,6 +14,81 @@ public sealed class TransitionStaticCompilerTests
     static readonly ValueContract Int64Contract = new(new ScalarTypeRef(ScalarTypeKind.Int64));
 
     [Fact]
+    public void ParameterPreparation_UsesNavigationRulesAndHandlesDefaultOrRepeatedCatalogEntries()
+    {
+        var input = new ValueContract(new ObjectTypeRef([new("name", StringContract.Type!)]));
+        CanonicalTransitionDefinition definition = new(input,
+            new(new JsonTypeRef(JsonTypeKind.Object)), StringContract, [],
+            Sequence("root", Outcome("outcome")), []);
+        var result = TransitionStaticCompiler.Compile(Document(definition));
+        Assert.True(result.IsSuccessful, Format(result.Validation));
+        var plan = result.Plan!;
+        var empty = new CompiledTransitionPlan(plan.Document, definition, plan.Analysis, null,
+            derivedFields: default, machineEdges: default, parameters: default);
+        Assert.Empty(empty.Parameters);
+        ExprScopeParameter parameter = new("name", StringContract.Type!);
+        var repeated = new CompiledTransitionPlan(plan.Document, definition, plan.Analysis, null,
+            derivedFields: [], machineEdges: [], parameters: [parameter, parameter]);
+        Assert.Single(repeated.Parameters);
+        var path = FieldPath.FromField("name");
+        Assert.Equal(repeated.ResolveRelativeContract(input, path, out var error), repeated.Parameters["name"].Contract);
+        Assert.Null(error);
+
+        var collection = new ValueContract(input.Type, cardinality: FieldCardinality.Many);
+        CanonicalTransitionDefinition collectionDefinition = new(collection,
+            definition.Observation, StringContract, [], definition.Body, []);
+        var collectionPlan = new CompiledTransitionPlan(Document(collectionDefinition), collectionDefinition,
+            plan.Analysis, null, derivedFields: [], machineEdges: [], parameters: [parameter]);
+        Assert.Empty(collectionPlan.Parameters);
+        Assert.Null(collectionPlan.ResolveRelativeContract(collection, path, out error));
+        Assert.Contains("without an element scope", error);
+        Assert.Throws<ArgumentException>(() => new ExprScopeParameter(" ", StringContract.Type!));
+    }
+
+    [Fact]
+    public void Compile_ObservationMetadataRetainsShapeFieldConstraints()
+    {
+        ShapeId stateShape = new("constrained-state");
+        ShapeGraph graph = new(new("observation-contracts"),
+            [new(stateShape, [new(new FieldName("name"), StringContract.Type!,
+                constraints: [new MaxLengthConstraint(2)])])]);
+        var observation = ValueContract.FromShape(graph.GetShape(stateShape), graph.Qualify(stateShape));
+        CanonicalTransitionDefinition definition = new(new(new ObjectTypeRef([])),
+            observation, StringContract,
+            [new(new("check-name"), Expr.Eq(Expr.Field("name"), Expr.Const("ok")), Expr.Const("bad"))],
+            Sequence("root", Outcome("outcome")), []);
+        var result = TransitionStaticCompiler.Compile(Document(definition), graph);
+        Assert.True(result.IsSuccessful, Format(result.Validation));
+        var contract = result.Plan!.ObservationContracts[FieldPath.FromField("name")];
+        Assert.False(PortableExecutionValidator.Validate(PortableValue.Concrete(
+            contract, ObservationValue.FromString("long")), graph).IsValid);
+        Assert.True(PortableExecutionValidator.Validate(PortableValue.Concrete(
+            contract, ObservationValue.FromString("ok")), graph).IsValid);
+    }
+
+    [Fact]
+    public void Compile_ParameterMetadataRetainsShapeFieldConstraints()
+    {
+        ShapeId inputShape = new("constrained-input");
+        ShapeGraph graph = new(new("parameter-contracts"),
+            [new(inputShape, [new(new FieldName("name"), StringContract.Type!,
+                constraints: [new MaxLengthConstraint(2)])])]);
+        var input = ValueContract.FromShape(graph.GetShape(inputShape), graph.Qualify(inputShape));
+        CanonicalTransitionDefinition definition = new(input,
+            new(new JsonTypeRef(JsonTypeKind.Object)), StringContract, [],
+            Sequence("root", Outcome("outcome")), []);
+        var result = TransitionStaticCompiler.Compile(Document(definition), graph);
+        Assert.True(result.IsSuccessful, Format(result.Validation));
+        var parameter = result.Plan!.Parameters["name"];
+        Assert.Equal(FieldPath.FromField("name"), parameter.Path);
+        Assert.Equal(new ExecutionNodeId("input/name"), parameter.Node);
+        Assert.False(PortableExecutionValidator.Validate(PortableValue.Concrete(
+            parameter.Contract, ObservationValue.FromString("long")), graph).IsValid);
+        Assert.True(PortableExecutionValidator.Validate(PortableValue.Concrete(
+            parameter.Contract, ObservationValue.FromString("ok")), graph).IsValid);
+    }
+
+    [Fact]
     public void Compile_NestedChoiceMatchAndParentLet_ProducesPathSensitiveRequirements()
     {
         var definition = RoutingDefinition();

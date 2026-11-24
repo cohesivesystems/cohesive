@@ -16,6 +16,40 @@ public sealed class TransitionReferenceInterpreterTests
     static readonly ValueContract Int64Contract = new(new ScalarTypeRef(ScalarTypeKind.Int64));
 
     [Fact]
+    public void PreparedObservationContracts_ExtraSparsePathsRetainValidationAndEvidence()
+    {
+        var fixture = Ek01Fixture();
+        var unused = FieldPath.FromField("unused");
+        Assert.False(fixture.Plan.ObservationContracts.ContainsKey(unused));
+        var input = Object(fixture.Definition.Input,
+            ("approved", ObservationValue.FromBool(true)),
+            ("decision", ObservationValue.FromString("approve")));
+        TransitionObservationEntry[] required =
+        [
+            Entry(fixture.Plan, "status", ObservationValue.FromString("pending")),
+            Entry(fixture.Plan, "eligible", ObservationValue.FromBool(true)),
+            Entry(fixture.Plan, "caseId", ObservationValue.FromString("case-1"))
+        ];
+        var expected = TransitionReferenceInterpreter.DecideSparse(
+            fixture.Plan, new("extra-path"), input, required);
+        var actual = TransitionReferenceInterpreter.DecideSparse(
+            fixture.Plan, new("extra-path"), input,
+            [.. required, Entry(fixture.Plan, "unused", ObservationValue.FromString("extra"))]);
+        Assert.Equal(TransitionDecisionKind.Applied, actual.Kind);
+        Assert.Equivalent(expected, actual, strict: true);
+
+        var invalid = TransitionReferenceInterpreter.DecideSparse(
+            fixture.Plan, new("extra-path"), input,
+            [.. required, new(TransitionObservationAccess.At(FieldPath.FromField("unknown")),
+                PortableValue.Concrete(StringContract, ObservationValue.FromString("extra")))]);
+        Assert.Equal(TransitionDecisionKind.InfrastructureFailure, invalid.Kind);
+        var diagnostic = Assert.Single(invalid.Diagnostics);
+        Assert.Equal(TransitionExecutionDiagnosticCodes.ActivationInvalid, diagnostic.Code);
+        Assert.Contains("is absent from the compiled aggregate contract", diagnostic.Message);
+        AssertNoCommitArtifacts(invalid);
+    }
+
+    [Fact]
     public void TraceProjection_IsDeterministicProvenancePinnedAndPayloadSafe()
     {
         var fixture = Ek01Fixture();
@@ -990,6 +1024,8 @@ public sealed class TransitionReferenceInterpreterTests
         const int seed = 158_108;
         var random = new Random(seed);
         var fixture = Ek01Fixture();
+        var unprepared = WithoutPreparedMetadata(fixture.Plan);
+        Assert.NotEmpty(fixture.Plan.Parameters);
         for (var iteration = 0; iteration < 96; iteration++)
         {
             var isPending = random.Next(4) != 0;
@@ -1050,9 +1086,51 @@ public sealed class TransitionReferenceInterpreterTests
                 sparse,
                 freshSparse);
 
+            Assert.Equivalent(full, TransitionReferenceInterpreter.DecideFullState(
+                unprepared, activationId, input, state, freshState), strict: true);
             Assert.Equivalent(full, sparseDecision, strict: true);
             Assert.Equal(conflict ? TransitionDecisionKind.Conflict : full.Kind, sparseDecision.Kind);
         }
+    }
+
+    [Fact]
+    public void PreparedParameters_PreserveInvalidInputDiagnosticsAndRetainedDecisions()
+    {
+        var fixture = Ek01Fixture();
+        var unprepared = WithoutPreparedMetadata(fixture.Plan);
+        var state = Object(fixture.Definition.Observation,
+            ("status", ObservationValue.FromString("pending")),
+            ("eligible", ObservationValue.FromBool(true)),
+            ("caseId", ObservationValue.FromString("case-1")),
+            ("unused", ObservationValue.FromString("unused")));
+        foreach (var value in new[] { ObservationValue.Null, ObservationValue.Undefined,
+                     ObservationValue.FromInt64(1), ObservationValue.FromString("invalid"),
+                     ObservationValue.FromString("approve"), ObservationValue.FromString("hold") })
+        {
+            var input = Object(fixture.Definition.Input,
+                ("approved", ObservationValue.FromBool(true)), ("decision", value));
+            var expected = TransitionReferenceInterpreter.DecideFullState(
+                unprepared, new("parameter-validation"), input, state);
+            var actual = TransitionReferenceInterpreter.DecideFullState(
+                fixture.Plan, new("parameter-validation"), input, state);
+            Parallel.For(0, 16, _ => Assert.Equivalent(expected,
+                TransitionReferenceInterpreter.DecideFullState(
+                    fixture.Plan, new("parameter-validation"), input, state), strict: true));
+            Assert.Equivalent(expected, actual, strict: true);
+        }
+    }
+
+    static CompiledTransitionPlan WithoutPreparedMetadata(CompiledTransitionPlan plan)
+    {
+        var analysis = plan.Analysis;
+        // Omit only the preparation catalogs. Execution still uses the same definition, graph,
+        // expression-site contracts, and machine/derived-field plans through dynamic resolution.
+        var withoutCatalog = new TransitionSemanticAnalysis(analysis.Conditions,
+            analysis.InvocationDomain, analysis.AdmittedDomain, analysis.AcceptedDomain,
+            analysis.CommitDomain, analysis.ExpressionSites, requirements: [],
+            analysis.Branches, analysis.DerivedFields);
+        return new(plan.Document, plan.Definition, withoutCatalog, plan.ShapeGraph,
+            plan.DerivedFields, plan.MachineEdges, parameters: []);
     }
 
     static (
