@@ -1,3 +1,4 @@
+using Cohesive.Transitions.Execution;
 using Cohesive.Model.Authoring;
 using Cohesive.Machines;
 using Cohesive.Transitions.Machines;
@@ -43,6 +44,19 @@ public sealed class TransitionProbeTests
         Assert.Equal(0, result.State.Available);
         Assert.Equal("consume", Assert.Single(result.Decision.MachineMovements).Edge.Value);
         Assert.Throws<TransitionInputGenerationException>(() => probe.EnsureGenerationSupported());
+    }
+
+    [Fact]
+    public void Parameterless_offline_execution_accepts_no_change()
+    {
+        var entity = ObjectEntityDefinition.For<Stock>(new("stock"));
+        var transition = TransitionAuthoring.Create<Stock, Cohesive.Prelude.Unit, string>(entity.Shape,
+            new("inspect"), new("1"), t => t.Return(new("observed"), TransitionOutcomeDisposition.NoChange, "Observed"));
+        var before = new Stock("sku", 1, 4, false);
+        var result = OfflineTransition.Prepare(transition).Execute(before, new("case"));
+        Assert.True(result.Decision.IsAccepted);
+        Assert.Equal(before, result.State);
+        Assert.Equal("Observed", result.Outcome);
     }
 
     [Fact]

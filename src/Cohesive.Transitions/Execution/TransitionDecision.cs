@@ -493,6 +493,10 @@ public sealed class TransitionDecision
     /// <summary>Terminal semantic decision category.</summary>
     public TransitionDecisionKind Kind { get; }
 
+    /// <summary>True for an applied transition or an accepted no-change outcome.</summary>
+    [JsonIgnore]
+    public bool IsAccepted => Kind is TransitionDecisionKind.Applied or TransitionDecisionKind.NoChange;
+
     /// <summary>Typed authored outcome when the terminal category carries one.</summary>
     public PortableValue? Outcome { get; }
 

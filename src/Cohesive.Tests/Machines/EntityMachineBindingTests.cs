@@ -58,6 +58,7 @@ public sealed class EntityMachineBindingTests
         Assert.Equal(expectedEdge, decision.MachineMovements.SingleOrDefault()?.Edge.Value);
         var result = offline.Execute(before, input, new("offline"));
         Assert.Equal(decision.Kind, result.Decision.Kind);
+        Assert.Equal(expectedEdge is not null, result.Decision.IsAccepted);
         Assert.Equal(expectedEdge, result.Decision.MachineMovements.SingleOrDefault()?.Edge.Value);
         Assert.Equal(expectedEdge is null ? "Rejected" : "Packed", result.Outcome);
         Assert.Equal(expectedEdge is null ? before : before with { Note = "packed" }, result.State);

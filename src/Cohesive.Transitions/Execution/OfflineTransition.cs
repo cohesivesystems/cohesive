@@ -1,3 +1,4 @@
+using Cohesive.Prelude;
 using Cohesive.Execution;
 using Cohesive.Model;
 using Cohesive.Transitions.Authoring;
@@ -15,6 +16,15 @@ public sealed record OfflineTransitionResult<TEntity, TOutcome>(TEntity State, T
 /// <summary>Creates non-committing typed executions without an Assurance or storage dependency.</summary>
 public static class OfflineTransition
 {
+    /// <summary>Executes a parameterless command with the caller's invocation identity.</summary>
+    public static OfflineTransitionResult<TEntity, TOutcome> Execute<TEntity, TOutcome>(
+        this OfflineTransition<TEntity, Unit, TOutcome> runner, TEntity before, ActivationId invocation)
+        where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(runner);
+        return runner.Execute(before, default, invocation);
+    }
+
     /// <summary>Compiles one existing-entity transition for repeated offline execution.</summary>
     /// <param name="transition">Canonical model to compile.</param>
     /// <returns>A reusable typed reference execution.</returns>
