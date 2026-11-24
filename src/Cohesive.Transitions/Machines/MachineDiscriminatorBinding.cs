@@ -86,6 +86,53 @@ public sealed class MachineDiscriminatorBinding<TEntity, TValue> where TEntity :
 /// <summary>Typed movement conveniences over canonical Transition authoring.</summary>
 public static class MachineTransitionAuthoring
 {
+    /// <summary>Dispatches an action using the entity's bound lifecycle and records the exact selected edge.</summary>
+    /// <typeparam name="TEntity">Entity type.</typeparam>
+    /// <typeparam name="TInput">Command type.</typeparam>
+    /// <typeparam name="TOutcome">Outcome type.</typeparam>
+    /// <param name="transition">Owning transition sequence.</param>
+    /// <param name="action">Action from the entity's bound machine.</param>
+    /// <param name="rejection">Outcome when no movement is enabled.</param>
+    /// <returns>The same transition sequence.</returns>
+    /// <exception cref="InvalidOperationException">The action is unknown or its exact machine is not bound.</exception>
+    public static TransitionSequenceBuilder<TEntity, TInput, TOutcome> Move<TEntity, TInput, TOutcome>(
+        this TransitionSequenceBuilder<TEntity, TInput, TOutcome> transition,
+        MachineAction action, Expression<Func<TEntity, TInput, TOutcome>> rejection) where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        ArgumentNullException.ThrowIfNull(rejection);
+        var (machine, edges) = action.Resolve();
+        var reference = machine.Document.Reference;
+        var binding = transition.Context.MachineBinding;
+        if (binding is null || binding.Machine.Reference != reference)
+            throw new InvalidOperationException($"Action '{action.Id}' requires the entity binding for machine '{machine.Id}'.");
+
+        ExecutionNodeId Id(string kind) => transition.Context.NextConventionId(kind);
+        void MoveEdge(TransitionSequenceBuilder<TEntity, TInput, TOutcome> branch, MachineEdge edge) =>
+            branch.MoveMachine(Id("movement"), reference, new(edge.Id), rejection);
+
+        if (edges.Length == 1)
+        {
+            MoveEdge(transition, edges[0]);
+            return transition;
+        }
+
+        return transition.Choose(Id("action"), choice =>
+        {
+            foreach (var edge in edges[..^1])
+            {
+                var source = binding.States[edge.From].Predicate;
+                var enabled = edge.Guard is { } guard
+                    ? Expr.And(source, MachineTransitionLinker.Rebind(guard.Predicate, guard))
+                    : source;
+                choice.CaseExpression(Id("candidate"), enabled, branch => MoveEdge(branch, edge));
+            }
+            // Every exact movement enforces source, guard and sibling uniqueness. The last
+            // candidate therefore also supplies the normal admission rejection when none matches.
+            choice.Fallback(Id("last"), branch => MoveEdge(branch, edges[^1]));
+        });
+    }
+
     /// <summary>References a frozen movement without repeating machine or edge identifiers.</summary>
     /// <typeparam name="TEntity">Entity type.</typeparam>
     /// <typeparam name="TInput">Input type.</typeparam>
