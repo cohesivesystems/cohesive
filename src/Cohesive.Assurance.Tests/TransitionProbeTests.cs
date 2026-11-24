@@ -44,7 +44,7 @@ public sealed class TransitionProbeTests
         Assert.Equal(0, result.State.Available);
         Assert.Equal("consume", Assert.Single(result.Decision.MachineMovements).Edge.Value);
         var template = new Stock("sku", 1, 4, false);
-        var cases = probe.GenerateCases(template, default, new() { MaxCases = 4 });
+        var cases = probe.GenerateCases(template, new() { MaxCases = 4 });
         Assert.Equal(4, cases.Length);
         Assert.Equal(4, cases.Select(c => (c.State.Available, c.State.Quarantined)).Distinct().Count());
         foreach (var c in cases)
@@ -53,7 +53,7 @@ public sealed class TransitionProbeTests
             var run = probe.Execute(c.State, Assert.Single(c.Commands.Inputs), new("case"));
             Assert.Equal(c.State.Available == 1 && !c.State.Quarantined, run.Decision.IsAccepted);
         }
-        Assert.Throws<InvalidOperationException>(() => probe.GenerateCases(template, default, new() { MaxCases = 3 }));
+        Assert.Throws<InvalidOperationException>(() => probe.GenerateCases(template, new() { MaxCases = 3 }));
     }
 
     [Fact]

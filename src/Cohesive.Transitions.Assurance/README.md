@@ -143,7 +143,7 @@ profile as other admission guards. Unrelated entity and input fields retain the 
 
 ```csharp
 var probe = TransitionAssurance.Prepare(orderTransitions.Ship);
-var cases = probe.GenerateCases(order, default, new() { MaxCases = 10 });
+var cases = probe.GenerateCases(order, new() { MaxCases = 10 });
 ```
 
 Cases are proposals. Supply the expected behavior independently. Predicate-only state bindings and

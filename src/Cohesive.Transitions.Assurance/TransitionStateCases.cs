@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Model;
+using Cohesive.Prelude;
 using Cohesive.Transitions.IR;
 
 namespace Cohesive.Transitions.Assurance;
@@ -40,6 +41,18 @@ public sealed class StateCaseOptions<TEntity>
 
 /// <summary>One synthetic pre-state and the guard-derived commands for it. Contains no expected outcomes.</summary>
 public sealed record TransitionStateCases<TEntity, TInput>(TEntity State, TransitionInputCases<TInput> Commands);
+
+public static partial class TransitionAssurance
+{
+    /// <summary>Generate cases for a parameterless command using its entity template and exploration options.</summary>
+    public static ImmutableArray<TransitionStateCases<TEntity, Unit>> GenerateCases<TEntity, TOutcome>(
+        this TransitionProbe<TEntity, Unit, TOutcome> probe, TEntity template, StateCaseOptions<TEntity> options)
+        where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+        return probe.GenerateCases(template, default, options);
+    }
+}
 
 public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
 {
