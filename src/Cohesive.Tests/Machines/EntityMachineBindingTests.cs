@@ -43,14 +43,24 @@ public sealed class EntityMachineBindingTests
             .Map(ready, "ready").Map(packed, "packed").Map(blocked, "blocked").Bind(ObjectEntityDefinition.For<TenderState>());
         var transition = Author(entity, t => t.Move(action, (_, _) => "Rejected")
             .Return(new("result"), TransitionOutcomeDisposition.Applied, "Packed"));
-        var decision = Run(transition, Offered with { Note = status }, new UpdateNote(note));
+        var before = Offered with { Note = status };
+        var input = new UpdateNote(note);
+        var decision = Run(transition, before, input);
+        var offline = OfflineTransition.Prepare(transition);
         if (expectedEdge == "ambiguous")
         {
             AssertInvalid(decision, TransitionExecutionDiagnosticCodes.MachineAdmissionAmbiguous);
+            var error = Assert.Throws<InvalidOperationException>(() => offline.Execute(before, input, new("offline")));
+            Assert.Contains(TransitionExecutionDiagnosticCodes.MachineAdmissionAmbiguous, error.Message);
             return;
         }
         Assert.Equal(expectedEdge is null ? TransitionDecisionKind.AdmissionRejected : TransitionDecisionKind.Applied, decision.Kind);
         Assert.Equal(expectedEdge, decision.MachineMovements.SingleOrDefault()?.Edge.Value);
+        var result = offline.Execute(before, input, new("offline"));
+        Assert.Equal(decision.Kind, result.Decision.Kind);
+        Assert.Equal(expectedEdge, result.Decision.MachineMovements.SingleOrDefault()?.Edge.Value);
+        Assert.Equal(expectedEdge is null ? "Rejected" : "Packed", result.Outcome);
+        Assert.Equal(expectedEdge is null ? before : before with { Note = "packed" }, result.State);
         Assert.Throws<InvalidOperationException>(() => source.Action("typo").Resolve());
         Assert.Throws<InvalidOperationException>(() => Author(ObjectEntityDefinition.For<TenderState>(),
             t => t.Move(action, (_, _) => "Rejected")));

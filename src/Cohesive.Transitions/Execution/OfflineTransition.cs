@@ -20,13 +20,13 @@ public static class OfflineTransition
     /// <returns>A reusable typed reference execution.</returns>
     /// <exception cref="ArgumentNullException">Transition is null.</exception>
     /// <exception cref="ArgumentException">Compilation fails with diagnostics.</exception>
-    /// <exception cref="NotSupportedException">Creation or machine binding requires a different execution profile.</exception>
+    /// <exception cref="NotSupportedException">The transition creates a subject instead of operating on the supplied entity.</exception>
     public static OfflineTransition<TEntity, TInput, TOutcome> Prepare<TEntity, TInput, TOutcome>(
         Transition<TEntity, TInput, TOutcome> transition) where TEntity : notnull
     {
         ArgumentNullException.ThrowIfNull(transition);
-        if (transition.Definition.SubjectCreation is not null || transition.Definition.MachineBinding is not null)
-            throw new NotSupportedException("Offline probes require an existing entity without machine bindings.");
+        if (transition.Definition.SubjectCreation is not null)
+            throw new NotSupportedException("Offline probes require an existing entity.");
         var compiled = transition.Compile();
         if (!compiled.IsSuccessful)
             throw new ArgumentException(string.Join("; ", compiled.Validation.Diagnostics), nameof(transition));
