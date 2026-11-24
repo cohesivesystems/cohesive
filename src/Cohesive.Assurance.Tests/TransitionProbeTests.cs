@@ -50,7 +50,7 @@ public sealed class TransitionProbeTests
     public void Parameterless_offline_execution_accepts_no_change()
     {
         var entity = ObjectEntityDefinition.For<Stock>(new("stock"));
-        var transition = TransitionAuthoring.Create<Stock, Cohesive.Prelude.Unit, string>(entity.Shape,
+        var transition = TransitionAuthoring.Create<Stock, string>(entity.Shape,
             new("inspect"), new("1"), t => t.Return(new("observed"), TransitionOutcomeDisposition.NoChange, "Observed"));
         var before = new Stock("sku", 1, 4, false);
         var result = OfflineTransition.Prepare(transition).Execute(before, new("case"));
