@@ -38,7 +38,15 @@ public sealed record CaseCoverageGoal(CaseCoverageFact First, CaseCoverageFact? 
 public sealed record SelectedTransitionCase<TEntity, TInput>(TEntity State, TInput Input, ImmutableArray<CaseCoverageGoal> CoveredGoals);
 /// <summary>Deterministic suite and observed goals left uncovered within the suite budget.</summary>
 public sealed record SelectedTransitionCases<TEntity, TInput>(ImmutableArray<SelectedTransitionCase<TEntity, TInput>> Cases,
-    int CandidateCount, ImmutableArray<CaseCoverageGoal> UncoveredGoals);
+    int CandidateCount, ImmutableArray<CaseCoverageGoal> UncoveredGoals)
+{
+    /// <summary>First witnesses of distinct single-field decision changes, with zero-based indices into Cases.</summary>
+    public ImmutableArray<DecisionIsolationPair> DecisionPairs { get; init; } = [];
+}
+
+/// <summary>Two selected cases differing in one field that change admission or the accepted movement path.</summary>
+public sealed record DecisionIsolationPair(int FirstCase, int SecondCase, string Scope, FieldPath Field,
+    string FirstDecision, string SecondDecision);
 
 public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
 {
@@ -64,33 +72,97 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
         }
         var groups = GenerateCases(template, seed, options.States, options.MaxCandidates, options.Inputs.Ranges);
         var pool = new List<SelectedTransitionCase<TEntity, TInput>>();
+        var accepted = new List<bool>();
+        var observations = new List<(ObservationValue State, ObservationValue Input)>();
         foreach (var group in groups)
         {
             var state = ObservationValue.FromObject(group.State);
             foreach (var candidate in group.Commands.Candidates)
             {
                 var decision = Execute(group.State, candidate.Input, new($"selection/{pool.Count}")).Decision;
-                pool.Add(new(group.State, candidate.Input, InspectCase(state, ObservationValue.FromObject(candidate.Input), decision)));
+                var command = ObservationValue.FromObject(candidate.Input);
+                observations.Add((state, command));
+                accepted.Add(decision.IsAccepted);
+                pool.Add(new(group.State, candidate.Input, InspectCase(state, command, decision)));
             }
         }
 
-        // Greedy set cover. For equal gains prefer rarer goals, then stable generation order.
+        var axes = GenerationGuards.SelectMany(g => g.Fields.Select(f => new Axis(false, f)))
+            .Concat(GenerationGuards.Where(g => g.Input.HasValue).Select(g => new Axis(true, g.Input!.Value))).ToList();
+        if (plan.Definition.MachineBinding is { } binding)
+            axes.Add(new(false, binding.States.Values.First().Assignments.Single().Path));
+        return SelectSuite(pool, observations, accepted, [.. axes.Distinct()], options.MaxCases);
+    }
+
+    readonly record struct Axis(bool Input, FieldPath Path);
+    readonly record struct Contrast(Axis Axis, string Low, string High);
+    sealed record Witness(int First, Axis Axis, Contrast Goal, long Distance);
+
+    static SelectedTransitionCases<TEntity, TInput> SelectSuite(List<SelectedTransitionCase<TEntity, TInput>> pool,
+        List<(ObservationValue State, ObservationValue Input)> observations, List<bool> accepted, Axis[] axes, int budget)
+    {
         var frequency = pool.SelectMany(c => c.CoveredGoals).GroupBy(g => g).ToDictionary(g => g.Key, g => g.Count());
         var remaining = frequency.Keys.ToHashSet();
-        var candidateCount = pool.Count;
-        var selected = ImmutableArray.CreateBuilder<SelectedTransitionCase<TEntity, TInput>>();
-        while (selected.Count < options.MaxCases && pool.Count > 0)
+        var paths = pool.Select(DecisionPath).ToArray();
+        var covered = new HashSet<Contrast>();
+        var witnesses = pool.Select(_ => new List<Witness>()).ToArray();
+        var chosen = new List<int>();
+        var available = Enumerable.Range(0, pool.Count).ToList();
+        var pairs = ImmutableArray.CreateBuilder<DecisionIsolationPair>();
+        // Equal keys for an axis mean the complete state and command agree outside that field.
+        var buckets = axes.ToDictionary(axis => axis, axis => observations.Select((o, i) => (o, i))
+            .ToLookup(x => Mask(x.o, axis), x => x.i));
+        while (chosen.Count < budget && available.Count > 0)
         {
-            var best = pool.Select(c =>
+            var best = available.Select(i =>
             {
-                var goals = c.CoveredGoals.Where(remaining.Contains).ToArray();
-                return (Case: c, Gain: goals.Length, Rarity: goals.Sum(g => 1.0 / frequency[g]));
-            }).OrderByDescending(c => c.Gain).ThenByDescending(c => c.Rarity).First().Case;
-            selected.Add(best);
-            pool.Remove(best);
-            remaining.ExceptWith(best.CoveredGoals);
+                var fresh = witnesses[i].Where(w => !covered.Contains(w.Goal)).ToArray();
+                var facts = pool[i].CoveredGoals.Where(remaining.Contains).ToArray();
+                return (Index: i, Contrasts: fresh.Select(w => w.Goal).Distinct().Count(), Gain: facts.Length,
+                    Distance: fresh.Length == 0 ? 0 : fresh.Min(w => w.Distance), Rarity: facts.Sum(g => 1.0 / frequency[g]));
+            }).OrderByDescending(c => c.Contrasts).ThenByDescending(c => c.Gain).ThenBy(c => c.Distance)
+                .ThenByDescending(c => c.Rarity).First().Index;
+            var position = chosen.Count;
+            foreach (var w in witnesses[best])
+                if (covered.Add(w.Goal))
+                    pairs.Add(new(w.First, position, w.Axis.Input ? "input" : "state", w.Axis.Path,
+                        paths[chosen[w.First]], paths[best]));
+            chosen.Add(best);
+            available.Remove(best);
+            remaining.ExceptWith(pool[best].CoveredGoals);
+            foreach (var axis in axes)
+            {
+                var key = Mask(observations[best], axis);
+                foreach (var neighbor in buckets[axis][key])
+                {
+                    if (paths[best] == paths[neighbor]) continue;
+                    if (!accepted[best] && !accepted[neighbor]) continue;
+                    var (low, high) = string.CompareOrdinal(paths[best], paths[neighbor]) < 0
+                        ? (paths[best], paths[neighbor]) : (paths[neighbor], paths[best]);
+                    var goal = new Contrast(axis, low, high);
+                    if (!covered.Contains(goal))
+                        witnesses[neighbor].Add(new(position, axis, goal, Distance(observations[best], observations[neighbor], axis)));
+                }
+            }
         }
-        return new(selected.ToImmutable(), candidateCount, [.. frequency.Keys.Where(remaining.Contains)]);
+        return new([.. chosen.Select(i => pool[i])], pool.Count, [.. frequency.Keys.Where(remaining.Contains)])
+            { DecisionPairs = pairs.ToImmutable() };
+    }
+
+    static string DecisionPath(SelectedTransitionCase<TEntity, TInput> c) =>
+        string.Join("/", c.CoveredGoals.Where(g => g.Second is null).Select(g => g.First)
+            .Where(f => f.Kind is "decision" or "edge" || f is { Kind: "admission", Detail: "false" })
+            .Select(f => f.Kind == "decision" ? f.Detail : f.Kind + ":" + Uri.EscapeDataString(f.Node)));
+
+    static (ObservationValue, ObservationValue) Mask((ObservationValue State, ObservationValue Input) o, Axis axis) =>
+        axis.Input ? (o.State, o.Input.WithoutField(axis.Path)) : (o.State.WithoutField(axis.Path), o.Input);
+
+    static long Distance((ObservationValue State, ObservationValue Input) a, (ObservationValue State, ObservationValue Input) b, Axis axis)
+    {
+        var left = axis.Input ? a.Input : a.State;
+        var right = axis.Input ? b.Input : b.State;
+        return left.TryGetField(axis.Path, out var x) && x.TryGetInt32(out var n)
+            && right.TryGetField(axis.Path, out var y) && y.TryGetInt32(out var m) ? Math.Abs((long)n - m) : 1;
     }
 
     ImmutableArray<CaseCoverageGoal> InspectCase(ObservationValue state, ObservationValue input, TransitionDecision decision)

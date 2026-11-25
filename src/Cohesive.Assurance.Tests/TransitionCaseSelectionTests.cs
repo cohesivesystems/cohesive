@@ -51,6 +51,36 @@ public sealed class TransitionCaseSelectionTests
     }
 
     [Fact]
+    public void Prioritizes_a_one_field_decision_change_and_reports_actual_witnesses()
+    {
+        var probe = Calibrate();
+        var tiny = probe.SelectCases(Template, new(4), Options(2, 512));
+        Assert.Single(tiny.DecisionPairs);
+        var suite = probe.SelectCases(Template, new(4), Options(8, 512));
+        Assert.Contains(suite.DecisionPairs, p => p.Scope == "state");
+        Assert.Contains(suite.DecisionPairs, p => p.Scope == "input");
+        Assert.Empty(probe.SelectCases(Template, new(4), Options(1, 512)).DecisionPairs);
+        foreach (var pair in suite.DecisionPairs)
+        {
+            var first = suite.Cases[pair.FirstCase];
+            var second = suite.Cases[pair.SecondCase];
+            var a = probe.Execute(first.State, first.Input, new("first")).Decision;
+            var b = probe.Execute(second.State, second.Input, new("second")).Decision;
+            Assert.NotEqual(a.IsAccepted, b.IsAccepted);
+            var changed = new List<(string Scope, string Name)>();
+            if (first.State.Mode != second.State.Mode) changed.Add(("state", "Mode"));
+            if (first.State.Locked != second.State.Locked) changed.Add(("state", "Locked"));
+            if (first.State.Limit != second.State.Limit) changed.Add(("state", "Limit"));
+            if (first.Input.Level != second.Input.Level) changed.Add(("input", "Level"));
+            var only = Assert.Single(changed);
+            Assert.Equal(only.Scope, pair.Scope);
+            Assert.Equal(only.Name, pair.Field.ToString(), ignoreCase: true);
+            Assert.NotEqual(pair.FirstDecision, pair.SecondDecision);
+        }
+        Assert.Equal(suite.DecisionPairs.ToArray(), probe.SelectCases(Template, new(4), Options(8, 512)).DecisionPairs.ToArray());
+    }
+
+    [Fact]
     public void Fills_spare_slots_with_distinct_candidates_until_the_pool_is_exhausted()
     {
         var probe = Calibrate();
