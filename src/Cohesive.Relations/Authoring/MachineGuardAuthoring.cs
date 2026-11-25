@@ -10,6 +10,14 @@ namespace Cohesive.Machines;
 /// The core Cohesive assembly supplies machine semantics but does not perform CLR expression lowering.</remarks>
 public static class MachineGuardAuthoring
 {
+    /// <summary>Attach a guard over entity facts to a parameterless action.</summary>
+    public static MachineMovement When<TFacts>(this MachineMovement movement,
+        Expression<Func<TFacts, bool>> predicate, IClrTypeRefMapper? typeRefMapper = null) where TFacts : notnull
+    {
+        ArgumentNullException.ThrowIfNull(movement);
+        return movement.When(MachineGuardCompiler.Compile(predicate, typeRefMapper));
+    }
+
     /// <summary>Lowers and attaches a typed guard to a movement using the Cohesive.Relations assembly.</summary>
     /// <typeparam name="TFacts">Facts type.</typeparam>
     /// <typeparam name="TInput">Action payload type.</typeparam>

@@ -28,22 +28,91 @@ public sealed class TransitionProbeTests
             });
 
     [Fact]
-    public void Machine_binding_allows_typed_execution_but_reports_unsupported_boundary_generation()
+    public void Machine_binding_generates_mapped_states_crossed_with_guard_boundaries()
     {
         var machine = Machine.Define("stock", "1");
         var ready = machine.State("ready").Initial();
         var spent = machine.State("spent").Final();
-        var consume = machine.Edge("consume").From(ready).To(spent);
+        var consume = machine.Edge("consume").From(ready).To(spent).When((Stock state) => !state.Quarantined);
         var entity = new MachineDiscriminatorBinding<Stock, int>(machine.Build(), stock => stock.Available)
             .Map(ready, 1).Map(spent, 0).Bind(ObjectEntityDefinition.For<Stock>(new("stock")));
-        var transition = TransitionAuthoring.Create<Stock, Request, string>(entity.Shape, new("consume"), new("1"),
+        var transition = TransitionAuthoring.Create<Stock, string>(entity.Shape, new("consume"), new("1"),
             t => t.Move(consume, (_, _) => "Unavailable").Return("Consumed"));
         var probe = TransitionAssurance.Prepare(transition);
-        var result = probe.Execute(new("sku", 1, 4, false), new(1, ""), new("case"));
+        var result = probe.Execute(new("sku", 1, 4, false), default, new("case"));
         Assert.Equal("Consumed", result.Outcome);
         Assert.Equal(0, result.State.Available);
         Assert.Equal("consume", Assert.Single(result.Decision.MachineMovements).Edge.Value);
-        Assert.Throws<TransitionInputGenerationException>(() => probe.EnsureGenerationSupported());
+        var template = new Stock("sku", 1, 4, false);
+        var cases = probe.GenerateCases(template, new() { MaxCases = 4 });
+        Assert.Equal(4, cases.Length);
+        Assert.Equal(4, cases.Select(c => (c.State.Available, c.State.Quarantined)).Distinct().Count());
+        foreach (var c in cases)
+        {
+            Assert.Equal(template with { Available = c.State.Available, Quarantined = c.State.Quarantined }, c.State);
+            var run = probe.Execute(c.State, Assert.Single(c.Commands.Inputs), new("case"));
+            Assert.Equal(c.State.Available == 1 && !c.State.Quarantined, run.Decision.IsAccepted);
+        }
+        Assert.Throws<InvalidOperationException>(() => probe.GenerateCases(template, new() { MaxCases = 3 }));
+    }
+
+    [Fact]
+    public void Action_cases_include_first_repeat_disallowed_and_guarded_commands()
+    {
+        var machine = Machine.Define("packing", "1");
+        var draft = machine.State("draft").Initial();
+        var submitted = machine.State("submitted");
+        var packed = machine.State("packed");
+        machine.Edge("submit").From(draft).To(submitted);
+        var pack = machine.Action("pack");
+        pack.Edge().From(submitted).To(packed).When((Stock stock, Request request) => request.Quantity >= 5);
+        pack.Edge("again").From(packed).To(packed).When((Stock stock, Request request) => true);
+        var entity = new MachineDiscriminatorBinding<Stock, int>(machine.Build(), stock => stock.Available)
+            .Map(draft, 0).Map(submitted, 1).Map(packed, 2).Bind(ObjectEntityDefinition.For<Stock>(new("stock")));
+        var transition = TransitionAuthoring.Create<Stock, Request, bool>(entity.Shape, new("pack"), new("1"),
+            t => t.Move(pack, (_, _) => false).Return(true));
+        var probe = TransitionAssurance.Prepare(transition);
+        var cases = probe.GenerateCases(new("id", 0, 9, false), new(5, "keep"), new() { MaxCases = 30 });
+        Assert.Equal(new[] { 0, 1, 2 }, cases.Select(c => c.State.Available).Order());
+        foreach (var c in cases)
+        {
+            Assert.Contains(c.Commands.Inputs, input => input.Quantity == 4);
+            Assert.Contains(c.Commands.Inputs, input => input.Quantity == 5);
+            foreach (var input in c.Commands.Inputs)
+            {
+                Assert.Equal("keep", input.Note);
+                var result = probe.Execute(c.State, input, new("case"));
+                var accepted = c.State.Available == 2 || c.State.Available == 1 && input.Quantity >= 5;
+                Assert.Equal(accepted, result.Outcome);
+                Assert.Equal(accepted ? 2 : c.State.Available, result.State.Available);
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void Unsupported_machine_bindings_and_edge_guards_report_setup_diagnostics(bool predicateBinding)
+    {
+        var machine = Machine.Define("stock", "1");
+        var ready = machine.State("ready").Initial();
+        var spent = machine.State("spent").Final();
+        var consume = machine.Edge("consume").From(ready).To(spent)
+            .When((Stock state, Request input) => input.Note == "release");
+        var definition = machine.Build();
+        var entity = ObjectEntityDefinition.For<Stock>(new("stock"));
+        var bound = predicateBinding
+            ? new MachinePredicateBinding<Stock, Request>(definition)
+                .State(ready, stock => !stock.Quarantined).State(spent, stock => stock.Quarantined).Bind(entity)
+            : new MachineDiscriminatorBinding<Stock, int>(definition, stock => stock.Available)
+                .Map(ready, 1).Map(spent, 0).Bind(entity);
+        var transition = TransitionAuthoring.Create<Stock, Request, string>(bound.Shape, new("consume"), new("1"),
+            t => t.Move(consume, (_, _) => "Rejected").Return("Consumed"));
+        var probe = TransitionAssurance.Prepare(transition);
+        var error = Assert.Throws<TransitionInputGenerationException>(() => probe.EnsureGenerationSupported());
+        Assert.Equal(error.Diagnostic, probe.GenerationDiagnostic);
+        if (predicateBinding) Assert.Contains("discriminator", error.Message);
+        else Assert.Equal("consume", error.Node.Value);
     }
 
     [Fact]

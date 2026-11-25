@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Linq.Expressions;
 using Cohesive.Model;
+using Cohesive.Prelude;
 using Cohesive.Transitions.IR;
 
 namespace Cohesive.Transitions.Assurance;
@@ -41,6 +42,18 @@ public sealed class StateCaseOptions<TEntity>
 /// <summary>One synthetic pre-state and the guard-derived commands for it. Contains no expected outcomes.</summary>
 public sealed record TransitionStateCases<TEntity, TInput>(TEntity State, TransitionInputCases<TInput> Commands);
 
+public static partial class TransitionAssurance
+{
+    /// <summary>Generate cases for a parameterless command using its entity template and exploration options.</summary>
+    public static ImmutableArray<TransitionStateCases<TEntity, Unit>> GenerateCases<TEntity, TOutcome>(
+        this TransitionProbe<TEntity, Unit, TOutcome> probe, TEntity template, StateCaseOptions<TEntity> options)
+        where TEntity : notnull
+    {
+        ArgumentNullException.ThrowIfNull(probe);
+        return probe.GenerateCases(template, default, options);
+    }
+}
+
 public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
 {
     /// <summary>Generate joint cases from typed ranges, exploration budget and optional invariant.</summary>
@@ -55,10 +68,21 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
         if (!plan.Definition.Observation.IsSatisfiedByConstant(root))
             throw new ArgumentException("Template violates the observation contract.", nameof(template));
         var states = new List<ObservationValue> { root };
+        FieldPath? discriminator = null;
+        if (plan.Definition.MachineBinding is { } machine)
+        {
+            if (machine.States.Count > maxCases)
+                throw new InvalidOperationException($"State exploration budget {maxCases} exceeded by machine states.");
+            var assignments = machine.States.Values.Select(state => state.Assignments.Single()).ToArray();
+            discriminator = assignments[0].Path;
+            states = [.. assignments.Select(a => root.WithField(a.Path, a.Value.Value!.Value))];
+        }
         var fields = guards.SelectMany(rule => rule.Fields.Select(path => (path, rule))).GroupBy(pair => pair.path);
         foreach (var group in fields)
         {
             var path = group.Key;
+            // The binding supplies the complete domain for this field.
+            if (path == discriminator) continue;
             ObservationValue[] values;
             if (group.First().rule.Boolean)
                 values = [ObservationValue.FromBool(false), ObservationValue.FromBool(true)];
