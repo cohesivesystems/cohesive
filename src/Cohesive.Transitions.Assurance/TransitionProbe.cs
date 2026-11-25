@@ -149,7 +149,8 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
         }
     }
 
-    TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int minimum, int maximum, CaseBudget budget)
+    TransitionInputCases<TInput> GenerateInputs(TEntity before, TInput seed, int minimum, int maximum, CaseBudget budget,
+        IReadOnlyDictionary<FieldPath, StateIntegerRange>? inputRanges = null)
     {
         budget.RequireRoom(0);
         if (minimum > maximum) throw new ArgumentOutOfRangeException(nameof(minimum));
@@ -181,14 +182,15 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
                     Add(template.WithField(path, ObservationValue.FromBool(value)), rule.Id);
                 continue;
             }
-            if (!original.TryGetInt32(out var seedValue) || seedValue < minimum || seedValue > maximum)
+            var range = inputRanges?.GetValueOrDefault(path, new(minimum, maximum)) ?? new(minimum, maximum);
+            if (!original.TryGetInt32(out var seedValue) || seedValue < range.Minimum || seedValue > range.Maximum)
                 throw new ArgumentOutOfRangeException(nameof(seed), "Invalid Int32 seed or outside supplied bounds.");
             var number = rule.Constant ?? ReadInteger(state, rule.Fields.Single());
             // Use Int64 for neighbor arithmetic, then clip to the declared Int32 profile.
-            long[] values = [minimum, -1, 0, 1, maximum, (long)number - 1, number, (long)number + 1];
+            long[] values = [range.Minimum, -1, 0, 1, range.Maximum, (long)number - 1, number, (long)number + 1];
             foreach (var value in values)
             {
-                if (value < minimum || value > maximum) continue;
+                if (value < range.Minimum || value > range.Maximum) continue;
                 var candidate = template.WithField(path, ObservationValue.FromInt64(value));
                 Add(candidate, rule.Id);
             }
@@ -197,7 +199,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
             p.Deserialize<TInput>() ?? throw new InvalidOperationException("No typed generated input."), [.. sources[p]]))], nodes.ToImmutable(), minimum, maximum, budget.Remaining);
     }
 
-    sealed record Guard(ExecutionNodeId Id, bool Boolean, FieldPath? Input, FieldPath[] Fields, int? Constant);
+    sealed record Guard(ExecutionNodeId Id, bool Boolean, FieldPath? Input, FieldPath[] Fields, int? Constant, bool MachineGuard = false, bool SelectedGuard = true);
 
     sealed record GuardInspection(ImmutableArray<Guard> Guards, TransitionGenerationDiagnostic? Diagnostic = null);
 
@@ -219,11 +221,12 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome> where TEn
                     discriminator = assignment.Path;
                 }
                 foreach (var edge in plan.MachineEdges)
-                    foreach (var predicate in edge.AdmissionGuards)
+                    for (var index = 0; index < edge.AdmissionGuards.Length; index++)
                     {
+                        var predicate = edge.AdmissionGuards[index];
                         if (predicate is ConstantExpr { Value.Kind: ObservationValueKind.Bool }
                             or LiteralExpr { Value.Kind: ObservationValueKind.Bool }) continue;
-                        guards.Add(Resolve(edge.Edge, predicate));
+                        guards.Add(Resolve(edge.Edge, predicate) with { MachineGuard = true, SelectedGuard = index == edge.SelectedGuardIndex });
                     }
             }
             return new([.. guards]);

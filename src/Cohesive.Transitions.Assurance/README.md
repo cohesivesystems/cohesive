@@ -148,3 +148,27 @@ var cases = probe.GenerateCases(order, new() { MaxCases = 10 });
 
 Cases are proposals. Supply the expected behavior independently. Predicate-only state bindings and
 unsupported guard expressions report a generation diagnostic at setup. Sequence exploration is outside this profile.
+
+### Selecting a small suite
+
+```csharp
+var options = new CaseSelectionOptions<Order, ShipQuantity> { MaxCases = 8, MaxCandidates = 1024 }
+    .StateRange(order => order.Remaining, 1, 4)
+    .InputRange(command => command.Quantity, -1, 5);
+var suite = probe.SelectCases(order, new ShipQuantity(1), options);
+foreach (var test in suite.Cases)
+    VerifyAgainstContract(test.State, test.Input);
+```
+
+The candidate budget bounds exploration and fails on overflow. The suite budget limits the number returned.
+The selector executes candidates offline against the prepared reference. It records observed states, decisions,
+admissions and taken edges. Boolean guard values and integer distances of −1, 0 and +1 from guard thresholds
+are boundary facts. Two reached boundaries sharing a command or state field form an intersection goal.
+Machine boundary credit requires the selected movement. The first case maximizes observed goal gain. Later cases first maximize novel one-field contrasts
+with already selected cases. The complete state and input must agree except on the reported field,
+and at least one endpoint must be accepted. A contrast distinguishes decision kind, failing admission,
+or accepted movement path. Equal contrast counts favor new single-case goals, shorter numeric changes,
+rarer goals and finally generation order. `DecisionPairs` gives zero-based endpoints, the changed field
+and both decision paths. These are observed witnesses, not a proof of independent effects across all paths. If all observed goals are covered, it fills remaining suite slots with distinct candidates in generation order.
+Each pair exposes its covered goals; the suite reports observed goals left uncovered. This is a heuristic
+over a finite generated pool. The consumer supplies an independent behavioral oracle.
