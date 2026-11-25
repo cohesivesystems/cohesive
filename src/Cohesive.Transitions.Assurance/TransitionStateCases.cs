@@ -61,7 +61,12 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
     public ImmutableArray<TransitionStateCases<TEntity, TInput>> GenerateCases(TEntity template, TInput input, StateCaseOptions<TEntity> options)
     {
         ArgumentNullException.ThrowIfNull(options);
-        var maxCases = options.MaxCases;
+        return GenerateCases(template, input, options, options.MaxCases, null);
+    }
+
+    ImmutableArray<TransitionStateCases<TEntity, TInput>> GenerateCases(TEntity template, TInput input,
+        StateCaseOptions<TEntity> options, int maxCases, IReadOnlyDictionary<FieldPath, StateIntegerRange>? inputRanges)
+    {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxCases);
         var guards = GenerationGuards;
         var root = ObservationValue.FromObject(template);
@@ -114,10 +119,15 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
         var result = ImmutableArray.CreateBuilder<TransitionStateCases<TEntity, TInput>>();
         foreach (var observation in states)
         {
+            if (inputRanges is not null && discriminator is { } key && options.Ranges.TryGetValue(key, out var bounds))
+            {
+                var mapped = ReadInteger(observation, key);
+                if (mapped < bounds.Minimum || mapped > bounds.Maximum) continue;
+            }
             if (!plan.Definition.Observation.IsSatisfiedByConstant(observation)) continue;
             var state = observation.Deserialize<TEntity>() ?? throw new InvalidOperationException("No typed generated state.");
             if (options.ValidState?.Invoke(state) == false) continue;
-            var commands = GenerateInputs(state, input, int.MinValue, int.MaxValue, new CaseBudget(maxCases, remaining));
+            var commands = GenerateInputs(state, input, int.MinValue, int.MaxValue, new CaseBudget(maxCases, remaining), inputRanges);
             remaining -= commands.Candidates.Length;
             result.Add(new(state, commands));
         }
