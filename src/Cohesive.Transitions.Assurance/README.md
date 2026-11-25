@@ -165,6 +165,6 @@ The selector executes candidates offline against the prepared reference. It reco
 admissions and taken edges. Boolean guard values and integer distances of −1, 0 and +1 from guard thresholds
 are boundary facts. Two reached boundaries sharing a command or state field form an intersection goal.
 Machine boundary credit requires the selected movement. Greedy selection maximizes newly covered goals,
-breaking ties by rarity and then generation order. It stops early if all observed goals are covered.
+breaking ties by rarity and then generation order. If all observed goals are covered, it fills remaining suite slots with distinct candidates in generation order.
 Each pair exposes its covered goals; the suite reports observed goals left uncovered. This is a heuristic
 over a finite generated pool. The consumer supplies an independent behavioral oracle.

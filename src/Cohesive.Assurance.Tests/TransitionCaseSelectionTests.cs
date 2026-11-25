@@ -51,6 +51,18 @@ public sealed class TransitionCaseSelectionTests
     }
 
     [Fact]
+    public void Fills_spare_slots_with_distinct_candidates_until_the_pool_is_exhausted()
+    {
+        var probe = Calibrate();
+        var suite = probe.SelectCases(Template, new(4), Options(512, 512));
+        Assert.Equal(suite.CandidateCount, suite.Cases.Length);
+        Assert.Empty(suite.UncoveredGoals);
+        Assert.Equal(suite.Cases.Length, suite.Cases.Select(c => (c.State, c.Input)).Distinct().Count());
+        var shorter = probe.SelectCases(Template, new(4), Options(8, 512));
+        Assert.Equal(suite.Cases.Take(8).Select(c => (c.State, c.Input)), shorter.Cases.Select(c => (c.State, c.Input)));
+    }
+
+    [Fact]
     public void Selection_is_repeatable_and_reports_the_observed_goals_left_out()
     {
         var probe = Calibrate();

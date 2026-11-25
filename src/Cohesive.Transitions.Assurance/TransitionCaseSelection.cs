@@ -77,8 +77,9 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
         // Greedy set cover. For equal gains prefer rarer goals, then stable generation order.
         var frequency = pool.SelectMany(c => c.CoveredGoals).GroupBy(g => g).ToDictionary(g => g.Key, g => g.Count());
         var remaining = frequency.Keys.ToHashSet();
+        var candidateCount = pool.Count;
         var selected = ImmutableArray.CreateBuilder<SelectedTransitionCase<TEntity, TInput>>();
-        while (selected.Count < options.MaxCases && remaining.Count > 0)
+        while (selected.Count < options.MaxCases && pool.Count > 0)
         {
             var best = pool.Select(c =>
             {
@@ -86,9 +87,10 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
                 return (Case: c, Gain: goals.Length, Rarity: goals.Sum(g => 1.0 / frequency[g]));
             }).OrderByDescending(c => c.Gain).ThenByDescending(c => c.Rarity).First().Case;
             selected.Add(best);
+            pool.Remove(best);
             remaining.ExceptWith(best.CoveredGoals);
         }
-        return new(selected.ToImmutable(), pool.Count, [.. frequency.Keys.Where(remaining.Contains)]);
+        return new(selected.ToImmutable(), candidateCount, [.. frequency.Keys.Where(remaining.Contains)]);
     }
 
     ImmutableArray<CaseCoverageGoal> InspectCase(ObservationValue state, ObservationValue input, TransitionDecision decision)
