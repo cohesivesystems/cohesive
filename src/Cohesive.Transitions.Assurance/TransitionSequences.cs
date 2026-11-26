@@ -24,8 +24,6 @@ public sealed record SequenceSelectionOptions
     public int MaxCandidates { get; init; } = 4096;
     /// <summary>Maximum histories expanded at each exploration depth.</summary>
     public int BeamWidth { get; init; } = 32;
-    /// <summary>Mandatory whole paths in public command names.</summary>
-    public IReadOnlyList<IReadOnlyList<string>> RequiredScenarios { get; init; } = [];
 }
 
 /// <summary>A command's observed decision and whether its full modeled state changed.</summary>
@@ -35,14 +33,45 @@ public sealed record SequenceGoal(SequenceDecision? Previous, SequenceDecision C
 /// <summary>One replayable command path and its observed coverage.</summary>
 public sealed record SelectedSequence(ImmutableArray<string> Commands, ImmutableArray<SequenceGoal> CoveredGoals);
 /// <summary>A bounded suite and the observed coverage remaining after selection.</summary>
-public sealed record SequenceSelection(ImmutableArray<SelectedSequence> Sequences, int CandidatesExplored,
-    bool SearchTruncated, ImmutableArray<SequenceGoal> UncoveredObservedGoals);
+public sealed record SequenceSelection(ImmutableArray<SelectedSequence> Sequences, int CandidateCount,
+    bool SearchTruncated, ImmutableArray<SequenceGoal> UncoveredGoals) : ICoverageSelection<SequenceGoal>;
 
 /// <summary>Explores sequences from one seed using the production reference interpreter for every step.</summary>
 public sealed class SequenceProbe<TEntity> where TEntity : notnull
 {
-    delegate (TEntity State, TransitionDecisionKind Decision) Run(TEntity state, int step);
+    delegate (TEntity State, TransitionDecisionKind Decision, bool IsAccepted) Run(TEntity state, int step);
     readonly Dictionary<string, Run> commands = new(StringComparer.Ordinal);
+
+    readonly List<ImmutableArray<string>> required = [];
+
+    /// <summary>Validate and snapshot a mandatory command path against this vocabulary at setup.</summary>
+    public SequenceProbe<TEntity> RequireScenario(params string[] names)
+    {
+        ArgumentNullException.ThrowIfNull(names);
+        if (names.Length == 0 || required.Any(p => p.SequenceEqual(names)))
+            throw new ArgumentException("Empty or duplicate required scenario.", nameof(names));
+        foreach (var name in names)
+            if (!commands.ContainsKey(name))
+                throw new ArgumentException($"Unknown required command '{name}'.", nameof(names));
+        required.Add([.. names]);
+        return this;
+    }
+
+    /// <summary>Execute the registered commands in order, carrying the interpreter state into each step.</summary>
+    public IEnumerable<(TEntity State, TransitionDecisionKind Decision, bool IsAccepted)> ExecuteSequence(
+        TEntity seed, IEnumerable<string> names)
+    {
+        var state = seed;
+        var index = 0;
+        foreach (var name in names)
+        {
+            if (!commands.TryGetValue(name, out var run))
+                throw new ArgumentException($"Unknown sequence command '{name}'.", nameof(names));
+            var step = run(state, index++);
+            state = step.State;
+            yield return step;
+        }
+    }
 
     /// <summary>Register a parameterless public command.</summary>
     public SequenceProbe<TEntity> Command<TOutcome>(string name, Transition<TEntity, Unit, TOutcome> transition)
@@ -67,7 +96,7 @@ public sealed class SequenceProbe<TEntity> where TEntity : notnull
             commands.Add(entry.Name, (state, step) =>
             {
                 var result = runner.Execute(state, entry.Input, new($"sequence-{step}"));
-                return (result.State, result.Decision.Kind);
+                return (result.State, result.Decision.Kind, result.Decision.IsAccepted);
             });
         return this;
     }
@@ -77,7 +106,7 @@ public sealed class SequenceProbe<TEntity> where TEntity : notnull
     {
         public Path Append(string name, Run run)
         {
-            var (state, kind) = run(State, Commands.Length);
+            var (state, kind, _) = run(State, Commands.Length);
             var observation = ObservationValue.FromObject(state);
             var current = new SequenceDecision(name, kind, !Observation.Equals(observation));
             var goals = Goals.Add(new(null, current));
@@ -100,18 +129,15 @@ public sealed class SequenceProbe<TEntity> where TEntity : notnull
         var root = new Path(seed, ObservationValue.FromObject(seed), [], null, []);
         var selected = new List<Path>();
         var explored = 0;
-        foreach (var scenario in options.RequiredScenarios)
+        foreach (var scenario in required)
         {
-            if (scenario.Count == 0 || scenario.Count > options.MaxStepsPerSequence ||
-                selected.Count >= options.MaxSequences || scenario.Count > options.MaxCandidates - explored ||
-                selected.Any(p => p.Commands.SequenceEqual(scenario)))
+            if (scenario.Length > options.MaxStepsPerSequence ||
+                selected.Count >= options.MaxSequences || scenario.Length > options.MaxCandidates - explored)
                 throw new ArgumentException("Invalid, duplicate or over-budget required scenario.", nameof(options));
             var path = root;
             foreach (var name in scenario)
             {
-                if (!commands.TryGetValue(name, out var run))
-                    throw new ArgumentException($"Unknown required command '{name}'.", nameof(options));
-                path = path.Append(name, run);
+                path = path.Append(name, commands[name]);
                 explored++;
             }
             selected.Add(path);
@@ -149,17 +175,14 @@ public sealed class SequenceProbe<TEntity> where TEntity : notnull
         }
 
         var covered = selected.SelectMany(p => p.Goals).ToHashSet();
-        var observed = candidates.SelectMany(p => p.Goals).ToHashSet();
-        while (selected.Count < options.MaxSequences)
-        {
-            var best = candidates.Where(p => !selected.Any(s => s.Commands.SequenceEqual(p.Commands)))
-                .MaxBy(p => (p.Goals.Count(g => !covered.Contains(g)), -p.Commands.Length));
-            if (best is null) break;
-            covered.UnionWith(best.Goals);
-            selected.Add(best);
-        }
+        var remaining = candidates.SelectMany(p => p.Goals).ToHashSet();
+        remaining.ExceptWith(covered);
+        var extra = CoverageSelection.Pick<SequenceGoal, (int Gain, int Length)>(
+            candidates.Count, options.MaxSequences - selected.Count, i => candidates[i].Goals, remaining,
+            (i, gain) => gain > 0 ? (gain, -candidates[i].Commands.Length) : null);
+        selected.AddRange(extra.Select(i => candidates[i]));
         return new([.. selected.Select(p => new SelectedSequence(p.Commands, Ordered(p.Goals)))],
-            explored, truncated, Ordered(observed.Except(covered)));
+            explored, truncated, Ordered(remaining));
     }
 
     static ImmutableArray<SequenceGoal> Ordered(IEnumerable<SequenceGoal> goals) =>

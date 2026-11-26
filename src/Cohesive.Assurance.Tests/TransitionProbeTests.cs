@@ -32,16 +32,19 @@ public sealed class TransitionProbeTests
     {
         var probe = TransitionAssurance.ForSequences<Stock>()
             .Commands(Model(), new[] { new Request(1, ""), new Request(2, "") }, r => $"take-{r.Quantity}");
+        probe.RequireScenario("take-2", "take-2", "take-1");
         var options = new SequenceSelectionOptions
         {
-            MaxSequences = 3, MaxStepsPerSequence = 3,
-            RequiredScenarios = [new[] { "take-2", "take-2", "take-1" }]
+            MaxSequences = 3, MaxStepsPerSequence = 3
         };
         var seed = new Stock("one", 3, 3, false);
         var suite = probe.SelectSequences(seed, options);
         Assert.Equal(3, suite.Sequences.Length);
         var required = suite.Sequences[0];
-        Assert.Equal(options.RequiredScenarios[0], required.Commands.ToArray());
+        Assert.Equal(new[] { "take-2", "take-2", "take-1" }, required.Commands.ToArray());
+        var trace = probe.ExecuteSequence(seed, required.Commands).ToArray();
+        Assert.Equal(new[] { 1, 1, 0 }, trace.Select(s => s.State.Available));
+        Assert.Equal(new[] { true, false, true }, trace.Select(s => s.IsAccepted));
         Assert.Contains(required.CoveredGoals, g => g.Previous is { Command: "take-2", Changed: false }
             && g.Current is { Command: "take-1", Changed: true });
         Assert.Contains(required.CoveredGoals, g => g.Previous is { Command: "take-2", Changed: true }
@@ -58,13 +61,13 @@ public sealed class TransitionProbeTests
         var options = new SequenceSelectionOptions { MaxSequences = 2, MaxStepsPerSequence = 3, MaxCandidates = 2 };
         var suite = probe.SelectSequences(seed, options);
         Assert.True(suite.SearchTruncated);
-        Assert.Equal(2, suite.CandidatesExplored);
-        Assert.Equal(2, suite.Sequences.Length);
+        Assert.Equal(2, suite.CandidateCount);
+        Assert.Single(suite.Sequences);
+        Assert.Empty(suite.UncoveredGoals);
         Assert.Throws<ArgumentException>(() => probe.Command("take", Model(), new Request(2, "")));
-        Assert.Throws<ArgumentException>(() => probe.SelectSequences(seed,
-            options with { RequiredScenarios = [new[] { "unknown" }] }));
-        Assert.Throws<ArgumentException>(() => probe.SelectSequences(seed,
-            options with { RequiredScenarios = [new[] { "take", "take", "take" }] }));
+        Assert.Throws<ArgumentException>(() => probe.RequireScenario("unknown"));
+        probe.RequireScenario("take", "take", "take");
+        Assert.Throws<ArgumentException>(() => probe.SelectSequences(seed, options));
     }
 
     [Fact]
