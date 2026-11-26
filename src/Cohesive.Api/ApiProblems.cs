@@ -38,15 +38,12 @@ public sealed record ApiValidationProblem(
     string? Target = null)
 {
     /// <summary>HTTP status when projected as a Problem Details document.</summary>
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public int? Status { get; init; }
 
     /// <summary>Short title for a Problem Details response.</summary>
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? Title { get; init; }
 
     /// <summary>Public explanation of a classified rejection.</summary>
-    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? Detail { get; init; }
 }
 
