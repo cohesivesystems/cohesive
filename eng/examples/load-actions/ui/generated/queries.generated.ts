@@ -83,6 +83,12 @@ export const apiOperationMetadata = {
         bodyContract: 'ApiValidationProblem',
         isPrimary: false,
       },
+      {
+        id: 'http.unsupportedMediaType',
+        kind: 'unsupportedMediaType',
+        bodyContract: 'ApiValidationProblem',
+        isPrimary: false,
+      },
     ],
     semanticReferences: [],
     http: {
