@@ -81,4 +81,7 @@ export interface ApiValidationProblem {
   Message: string;
   Issues: ApiValidationIssue[];
   Target?: string | null;
+  Status?: number | null;
+  Title?: string | null;
+  Detail?: string | null;
 }
