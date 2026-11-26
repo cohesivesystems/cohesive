@@ -28,6 +28,46 @@ public sealed class TransitionProbeTests
             });
 
     [Fact]
+    public void Sequence_selection_carries_state_through_acceptance_and_rejection()
+    {
+        var probe = TransitionAssurance.ForSequences<Stock>()
+            .Commands(Model(), new[] { new Request(1, ""), new Request(2, "") }, r => $"take-{r.Quantity}");
+        var options = new SequenceSelectionOptions
+        {
+            MaxSequences = 3, MaxStepsPerSequence = 3,
+            RequiredScenarios = [new[] { "take-2", "take-2", "take-1" }]
+        };
+        var seed = new Stock("one", 3, 3, false);
+        var suite = probe.SelectSequences(seed, options);
+        Assert.Equal(3, suite.Sequences.Length);
+        var required = suite.Sequences[0];
+        Assert.Equal(options.RequiredScenarios[0], required.Commands.ToArray());
+        Assert.Contains(required.CoveredGoals, g => g.Previous is { Command: "take-2", Changed: false }
+            && g.Current is { Command: "take-1", Changed: true });
+        Assert.Contains(required.CoveredGoals, g => g.Previous is { Command: "take-2", Changed: true }
+            && g.Current is { Command: "take-2", Changed: false });
+        Assert.Equal(System.Text.Json.JsonSerializer.Serialize(suite),
+            System.Text.Json.JsonSerializer.Serialize(probe.SelectSequences(seed, options)));
+    }
+
+    [Fact]
+    public void Sequence_search_bounds_and_invalid_scenarios_are_explicit()
+    {
+        var probe = TransitionAssurance.ForSequences<Stock>().Command("take", Model(), new Request(1, ""));
+        var seed = new Stock("one", 1, 1, false);
+        var options = new SequenceSelectionOptions { MaxSequences = 2, MaxStepsPerSequence = 3, MaxCandidates = 2 };
+        var suite = probe.SelectSequences(seed, options);
+        Assert.True(suite.SearchTruncated);
+        Assert.Equal(2, suite.CandidatesExplored);
+        Assert.Equal(2, suite.Sequences.Length);
+        Assert.Throws<ArgumentException>(() => probe.Command("take", Model(), new Request(2, "")));
+        Assert.Throws<ArgumentException>(() => probe.SelectSequences(seed,
+            options with { RequiredScenarios = [new[] { "unknown" }] }));
+        Assert.Throws<ArgumentException>(() => probe.SelectSequences(seed,
+            options with { RequiredScenarios = [new[] { "take", "take", "take" }] }));
+    }
+
+    [Fact]
     public void Machine_binding_generates_mapped_states_crossed_with_guard_boundaries()
     {
         var machine = Machine.Define("stock", "1");
