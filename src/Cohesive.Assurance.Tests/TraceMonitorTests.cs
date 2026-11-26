@@ -50,6 +50,82 @@ public sealed class TraceMonitorTests
         Assert.Equal(batch.Serialize(), monitor.Evaluation.Serialize());
     }
 
+    [Theory]
+    [InlineData(2, 10)]
+    [InlineData(10, 2)]
+    [InlineData(3, 3)]
+    public void BoundedAppendChargesRetainedMatchesInBatchOrder(int predicates, int visits)
+    {
+        var first = Event("a", 1, 1) with { EventPayload = ObservationValue.FromObject(new Order("other")) };
+        var second = Event("b", 1, 1);
+        var priorWitness = Event("release", 1, 1, witness: true);
+        var claim = Events();
+        var limits = new TraceEvaluationLimits(MaxPredicateEvaluations: predicates, MaxEventCandidateVisits: visits);
+        var initial = Batch(events: true) with { Alternatives = [Update("prior", [first, second, priorWitness])] };
+        var monitor = TraceMonitor.Restore(TraceMonitor.Start(claim, initial, limits).Serialize());
+        var newWitness = Event("release2", 2, 11, witness: true) with { EventPayload = first.EventPayload };
+        var batch = initial with { Alternatives = [Update("next", [first, second, priorWitness, newWitness])] };
+        var expected = TraceClaimEvaluator.Evaluate(claim, batch, limits);
+        var update = Update("next", [newWitness]);
+        if (expected.Status == AssuranceAttemptStatus.BudgetExceeded)
+            Assert.Equal(expected.Diagnostics[0], Assert.Throws<TraceObservationException>(() => monitor.Advance(update)).Diagnostic);
+        else
+            Assert.Equal(expected.Serialize(), monitor.Advance(update).Evaluation.Serialize());
+    }
+
+    [Fact]
+    public void BoundedAppendPreservesMissingPayloadDiagnosticsAcrossFallbackAndRestore()
+    {
+        var initial = Batch(events: true);
+        var monitor = TraceMonitor.Start(Events(), initial);
+        SemanticObservation[] rows = [Event("a", 1, 1), Event("b", 1, 1),
+            Event("unknown", 2, 4, witness: true) with { EventPayload = null },
+            Event("first", 3, 11, witness: true), Event("second", 3, 11, witness: true)];
+        for (var length = 1; length <= rows.Length; length++)
+        {
+            var reference = "prefix-" + length;
+            monitor = monitor.Advance(Update(reference, [rows[length - 1]]));
+            MatchesBatch(monitor, initial with { Alternatives = [Update(reference, rows[..length])] });
+            monitor = TraceMonitor.Restore(monitor.Serialize());
+        }
+        Assert.All(monitor.Evaluation.Alternatives[0].Obligations, o => Assert.Equal("first", o.WitnessOccurrence));
+    }
+
+    [Fact]
+    public void CleanPrefixReusesFirstWitnessAndRejectsNonEventWitnessSelector()
+    {
+        var monitor = TraceMonitor.Start(Events(), Batch(events: true))
+            .Advance(Update("first", [Event("trigger", 1, 1), Event("first", 1, 1, witness: true)]));
+        var invalid = State("wrong-kind", 2, 2) with { Selector = Witness };
+        var error = Assert.Throws<TraceObservationException>(() => monitor.Advance(Update("invalid", [invalid])));
+        Assert.Equal(TraceEvaluationCodes.InvalidObservation, error.Diagnostic.Code);
+        var next = monitor.Advance(Update("next", [Event("second", 2, 2, witness: true)]));
+        Assert.Same(monitor.Evaluation.Alternatives[0].Obligations[0], next.Evaluation.Alternatives[0].Obligations[0]);
+        MatchesBatch(next, next.Evaluation.Batch);
+    }
+
+    [Fact]
+    public void PendingResumeAllocatesLessThanReplayingAllCandidatePairs()
+    {
+        var claim = Events();
+        var misses = Enumerable.Range(0, 32).Select(i => Event("miss" + i, 2, 2, witness: true) with
+            { EventPayload = ObservationValue.FromObject(new Order("unrelated")) });
+        SemanticObservation[] prior = [.. Enumerable.Range(0, 64).Select(i => Event("t" + i, 1, 1)), .. misses];
+        var initial = Batch(events: true) with { Alternatives = [Update("prior", prior)] };
+        var monitor = TraceMonitor.Start(claim, initial);
+        var hit = Event("hit", 3, 3, witness: true);
+        var update = Update("next", [hit]);
+        var cumulative = initial with { Alternatives = [Update("next", [.. prior, hit])] };
+        MatchesBatch(monitor.Advance(update), cumulative);
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        monitor.Advance(update);
+        var appendBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        start = GC.GetAllocatedBytesForCurrentThread();
+        TraceClaimEvaluator.Evaluate(claim, cumulative);
+        var replayBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        Assert.True(appendBytes < replayBytes / 2, $"append={appendBytes}, replay={replayBytes}");
+    }
+
     [Fact]
     public void RestoredStatePrefixRetainsDiagnosticsAndChargesOriginalPredicateBudget()
     {

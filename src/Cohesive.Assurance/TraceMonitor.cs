@@ -6,7 +6,7 @@ using Cohesive.Model.Serialization;
 namespace Cohesive.Assurance;
 
 /// <summary>Immutable bounded reference monitor for one ordered mapping of an exact observation scope.</summary>
-/// <remarks>Appends reuse prior state and transition obligations. Event matching evaluates the retained history. No observations or obligations are evicted.
+/// <remarks>Appends reuse prior state and transition obligations. Bounded responses can reuse previously checked witness ranges. Historical requirements scan retained history. No observations or obligations are evicted.
 /// Rejected updates leave this snapshot unchanged and must not be acknowledged as consumed.</remarks>
 public sealed class TraceMonitor
 {
