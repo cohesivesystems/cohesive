@@ -113,6 +113,24 @@ var loadSearch = searchDocuments.BuildRelation(dto => dto.Id);
 The same traversal may become an in-memory lookup, a PostgreSQL join, bounded source reads followed by local
 correlation, or another capability-compatible realization. The relation itself does not change.
 
+## Author a single-extent schema mapping
+
+`Cohesive.Relations.Migrations.SchemaMapping` interprets a summary extent over an operational schema. Supply two exact `ClrShapeGraphBuildResult` snapshots and the operational `RelationshipCatalog`. Each mapped extent declares one required string field with `FieldRole.Identity`. The mapping derives its identity assignment from these fields.
+
+```csharp
+var mapping = SchemaMapping.Define<OrderSummary, Order>(
+    new RelationId("order-summary-over-sales"), summarySchema, salesSchema, relationships,
+    (summary, order) =>
+    {
+        var region = order.Via(orderCustomer).Via(customerRegion);
+        summary.Field(s => s.RegionCode, region, r => r.Code);
+    });
+
+var relation = mapping.Pullback();
+```
+
+The mapping document embeds the exact graphs and catalog and fingerprints their canonical JSON with the field clauses. The pullback produces an ordinary `RelationDefinition` through the structural core. Each distinct path prefix contributes one required forward traversal. This first profile admits direct, exact scalar assignments reached through required, non-null, single-valued acyclic paths. Runtime evidence of reference resolution, source-cut coverage, and destination parity belongs to migration execution. [Design and qualification plan](../../docs/design/relation-data-migrations.md)
+
 ## Use it for
 
 - DTO mapping and enrichment.
