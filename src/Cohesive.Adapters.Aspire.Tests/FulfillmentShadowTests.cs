@@ -3,6 +3,7 @@ using Cohesive.Adapters.Elastic;
 using Cohesive.Adapters.Marten;
 using Marten;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
@@ -362,6 +363,12 @@ public sealed class FulfillmentShadowTests
 
     sealed record OrderKey(string Id);
 
+    sealed class StartupRead(Func<Task> read) : IHostedService
+    {
+        public Task StartAsync(CancellationToken token) => read();
+        public Task StopAsync(CancellationToken token) => Task.CompletedTask;
+    }
+
     [RowsFact]
     public Task Root_only_worker_backfills_and_publishes_a_new_root() =>
         InDatabase(async (database, connection) =>
@@ -388,12 +395,18 @@ public sealed class FulfillmentShadowTests
                 await insert.ExecuteNonQueryAsync();
             }
             await Insert("before");
-            await target.InitializeAsync();
-            using var worker = await target.BindWorkerAsync(() => new LogicalReplicationConnection(connection), new byte[32]);
-            await worker.RunOnceAsync();
-            Assert.Equal(new OrderKey("before"), Assert.Single(await target.ReadAsync("before")));
+            var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
+            // Even an earlier registered service must see the published baseline in StartAsync.
+            builder.Services.AddSingleton<IHostedService>(new StartupRead(async () =>
+                Assert.Equal(new OrderKey("before"), Assert.Single(await target.ReadAsync("before")))));
+            builder.Services.AddPostgresRowsWorker(target, () => new LogicalReplicationConnection(connection), new byte[32]);
+            using var host = builder.Build();
+            await host.StartAsync();
             await Insert("after");
-            await worker.RunOnceAsync();
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            while ((await target.ReadAsync("after", deadline.Token)).Length == 0)
+                await Task.Delay(50, deadline.Token);
+            await host.StopAsync();
             Assert.Equal(new OrderKey("after"), Assert.Single(await target.ReadAsync("after")));
         });
 

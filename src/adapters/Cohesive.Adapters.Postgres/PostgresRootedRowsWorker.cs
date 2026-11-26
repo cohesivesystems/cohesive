@@ -125,7 +125,14 @@ public sealed class PostgresRootedRowsWorker<TRow> : BackgroundService
     /// <inheritdoc />
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        await RunOnceAsync(stoppingToken);
+        await PollAsync(stoppingToken);
+    }
+
+    internal async Task PollAsync(CancellationToken stoppingToken)
+    {
         using var timer = new PeriodicTimer(interval);
-        do { await RunOnceAsync(stoppingToken); } while (await timer.WaitForNextTickAsync(stoppingToken));
+        while (await timer.WaitForNextTickAsync(stoppingToken))
+            await RunOnceAsync(stoppingToken);
     }
 }

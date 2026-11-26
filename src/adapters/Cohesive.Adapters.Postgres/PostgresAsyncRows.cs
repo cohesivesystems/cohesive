@@ -7,6 +7,8 @@ using Cohesive.Relations.Authoring;
 using Cohesive.Relations.Compilation;
 using Cohesive.Relations.IR;
 using Cohesive.Storage.Materialization;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Npgsql;
 
 namespace Cohesive.Adapters.Postgres;
@@ -131,4 +133,45 @@ public sealed class PostgresAsyncRows<TRow> where TRow : class
     public Task<PostgresRootedRowsWorker<TRow>> BindWorkerAsync(PostgresLogicalReplicationConnectionFactory replication,
         ReadOnlyMemory<byte> positionKey, string slotGeneration = "v1", CancellationToken token = default) =>
         storage.BindRowsWorkerAsync(database, replication, positionKey, slotGeneration, target, projection.Key, interval, Schedule, token);
+}
+
+/// <summary>Generic Host integration for rooted PostgreSQL row projections.</summary>
+public static class PostgresAsyncRowsHosting
+{
+    /// <summary>Initialize and publish the first pass before hosted services (including the HTTP
+    /// server) start, then poll for changes until shutdown. A failed first pass aborts startup.</summary>
+    /// <param name="services">Host service collection.</param>
+    /// <param name="target">Bound projection. Its data source must live through host shutdown.</param>
+    /// <param name="replication">Factory for deployment-owned replication connections.</param>
+    /// <param name="positionKey">Key used to authenticate stored replication positions.</param>
+    /// <param name="slotGeneration">Incarnation of the replication slot.</param>
+    /// <returns>The service collection for chaining additional registrations.</returns>
+    public static IServiceCollection AddPostgresRowsWorker<TRow>(this IServiceCollection services,
+        PostgresAsyncRows<TRow> target, PostgresLogicalReplicationConnectionFactory replication,
+        ReadOnlyMemory<byte> positionKey, string slotGeneration = "v1") where TRow : class =>
+        services.AddSingleton<IHostedService>(_ => new HostedRows<TRow>(target, replication, positionKey, slotGeneration));
+
+    sealed class HostedRows<TRow>(PostgresAsyncRows<TRow> target, PostgresLogicalReplicationConnectionFactory replication,
+        ReadOnlyMemory<byte> positionKey, string slotGeneration) : BackgroundService, IHostedLifecycleService where TRow : class
+    {
+        PostgresRootedRowsWorker<TRow>? worker;
+
+        public async Task StartingAsync(CancellationToken cancellationToken)
+        {
+            await target.InitializeAsync(cancellationToken);
+            worker = await target.BindWorkerAsync(replication, positionKey, slotGeneration, cancellationToken);
+            await worker.RunOnceAsync(cancellationToken);
+        }
+
+        protected override Task ExecuteAsync(CancellationToken stoppingToken) => worker!.PollAsync(stoppingToken);
+        public Task StartedAsync(CancellationToken token) => Task.CompletedTask;
+        public Task StoppingAsync(CancellationToken token) => Task.CompletedTask;
+        public Task StoppedAsync(CancellationToken token) => Task.CompletedTask;
+
+        public override void Dispose()
+        {
+            base.Dispose();
+            worker?.Dispose();
+        }
+    }
 }
