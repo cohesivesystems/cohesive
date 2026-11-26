@@ -30,6 +30,9 @@ public sealed class ServiceRuntimeTests
         var good = fixture.Runtime.Project<Note.ReviseInput, bool>("revise", new("POST", "/notes/{id}/revise",
             [new("id", HttpParameterSource.Route, typeof(string)),
              new("X-Expected-Concurrency-Token", HttpParameterSource.Header, typeof(string))], new(typeof(Note.ReviseInput))));
+        Assert.Contains(good.Operation.Results, r => r.Kind == ApiResultKind.UnsupportedMediaType);
+        var withoutBody = good.WithHttp(new("GET", "/notes/{id}", good.Operation.Http!.Parameters, null));
+        Assert.DoesNotContain(withoutBody.Operation.Results, r => r.Kind == ApiResultKind.UnsupportedMediaType);
         var unknown = new ApiOperation("unknown", ApiOperationKind.Command, typeof(Note.ReviseInput), typeof(bool))
             .WithHttp(new("POST", "/notes/{id}/unknown", good.Operation.Http!.Parameters, new(typeof(Note.ReviseInput))));
         await using var app = WebApplication.CreateSlimBuilder().Build();

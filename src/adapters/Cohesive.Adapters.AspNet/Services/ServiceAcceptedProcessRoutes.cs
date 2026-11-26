@@ -37,17 +37,15 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         if (runtime.Declaration.Reference != api.Declaration.Reference)
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "The linked endpoints require the exact declared service runtime.");
         if (api.Response.MaximumWait is not null) runtime.RequireProcessResultWaiting(api.ResultOperationId);
+        var reader = HttpRequestBindingSupport.Prepare(api.Start.Operation, Submission(ApiResultKind.ValidationFailed));
         routes.MapApiEndpoint(api.Start, async (OperationContext context, HttpContext http) =>
         {
             (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency, ProcessContinuationIdentity Continuation, ObservationValue Input) intent;
+            var (request, failure) = await reader.ReadAsync(http, context.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             try
             {
-                var request = (TRequest)(await HttpRequestBindingSupport.ReadOperationBodyAsync(http, api.Start.Operation, context.CancellationToken).ConfigureAwait(false))!;
-                intent = bind(http, request);
-            }
-            catch (HttpRequestBindingSupport.BodyFailure error) when (error.Kind == ApiResultKind.ValidationFailed)
-            {
-                return Submission(ApiResultKind.ValidationFailed) ?? error.Project(api.Start.Operation);
+                intent = bind(http, (TRequest)request!);
             }
             catch (BadHttpRequestException error) when (error.StatusCode == 400)
             {

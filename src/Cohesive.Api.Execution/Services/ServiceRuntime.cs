@@ -298,7 +298,6 @@ public sealed partial class ServiceRuntime
             authorizationRequirements: linked.Operation.AuthorizationRequirements,
             results: [new(ApiResultKind.Success, typeof(TOutcome), isPrimary: true),
                 new(ApiResultKind.DomainError, typeof(TOutcome)),
-                new(ApiResultKind.UnsupportedMediaType, typeof(ApiValidationProblem)),
                 new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem)),
                 new(ApiResultKind.Conflict, typeof(ApiProblem)),
                 new(ApiResultKind.Forbidden, typeof(ApiProblem)),

@@ -31,13 +31,16 @@ public static class ProcessExecutionApiEndpointRouteBuilderExtensions
         return endpoints.MapApiEndpoint(endpoint, CreateQueryHandler(endpoint.Operation, options), configure);
     }
 
-    static Delegate CreateQueryHandler<TRequest>(ApiOperation operation, ProcessExecutionApiEndpointOptions<TRequest> options) =>
-        async (OperationContext operationContext, HttpContext httpContext, IProcessExecutionRepository repository, ILogger<ProcessExecutionApiEndpoints> logger) =>
+    static Delegate CreateQueryHandler<TRequest>(ApiOperation operation, ProcessExecutionApiEndpointOptions<TRequest> options)
+    {
+        var reader = HttpRequestBindingSupport.Prepare(operation);
+        return async (OperationContext operationContext, HttpContext httpContext, IProcessExecutionRepository repository, ILogger<ProcessExecutionApiEndpoints> logger) =>
         {
             ArgumentNullException.ThrowIfNull(operationContext);
             ArgumentNullException.ThrowIfNull(httpContext);
             ArgumentNullException.ThrowIfNull(repository);
-            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(httpContext, operation, operationContext.CancellationToken).ConfigureAwait(false);
+            var (request, failure) = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(reader, httpContext, operationContext.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             var query = options.CreateQuery(new(
                 OperationContext: operationContext,
                 HttpContext: httpContext,
@@ -64,4 +67,5 @@ public static class ProcessExecutionApiEndpointRouteBuilderExtensions
                 )
             );
         };
+    }
 }

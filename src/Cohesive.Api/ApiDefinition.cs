@@ -638,6 +638,9 @@ public sealed class ApiOperation
     /// </summary>
     public IReadOnlyList<ApiSemanticReference> SemanticReferences { get; }
 
+    static readonly ApiResultDefinition JsonMediaFailure =
+        new(ApiResultKind.UnsupportedMediaType, typeof(ApiValidationProblem), http: new(415));
+
     /// <summary>Creates an equivalent operation projected through HTTP.</summary>
     /// <remarks>
     /// Existing explicit result bindings are retained. Results without an HTTP binding receive the
@@ -646,18 +649,20 @@ public sealed class ApiOperation
     /// <param name="http">HTTP operation binding to attach.</param>
     /// <returns>A new operation retaining the semantic identity, contracts, policies, and provenance.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="http"/> is <see langword="null"/>.</exception>
-    public ApiOperation WithHttp(HttpBinding http)
+    public ApiOperation WithHttp(HttpBinding http) => WithHttp(http, []);
+
+    /// <summary>Attach an HTTP binding and its transport-specific response alternatives.</summary>
+    public ApiOperation WithHttp(HttpBinding http, IReadOnlyList<ApiResultDefinition> transportResults)
     {
         ArgumentNullException.ThrowIfNull(http);
-        var results = new ApiResultDefinition[Results.Count];
-        for (var i = 0; i < Results.Count; i++)
-        {
-            var result = Results[i];
-            results[i] = result.Http is not null
-                ? result
-                : result.WithHttp(new ApiHttpResultBinding(
-                    ApiHttpResultConventions.DefaultStatusCode(result.Kind, result.BodyType)));
-        }
+        ArgumentNullException.ThrowIfNull(transportResults);
+        var results = Results.Where(result => !ReferenceEquals(result, JsonMediaFailure))
+            .Concat(transportResults)
+            .Select(result => result.Http is not null ? result :
+                result.WithHttp(new ApiHttpResultBinding(ApiHttpResultConventions.DefaultStatusCode(result.Kind, result.BodyType))))
+            .ToList();
+        if (http.Body is not null && !results.Any(result => result.Kind == ApiResultKind.UnsupportedMediaType))
+            results.Add(JsonMediaFailure);
 
         return new ApiOperation(
             name: Name,

@@ -8,22 +8,20 @@ static class ProcessApiRequestSupport
 {
     static readonly JsonSerializerOptions DefaultJsonOptions = new(JsonSerializerDefaults.Web);
 
-    public static async ValueTask<TRequest> ReadRequestAsync<TRequest>(HttpContext httpContext, ApiOperation operation, CancellationToken ct)
+    public static async ValueTask<HttpRequestBindingSupport.ReadResult<TRequest>> ReadRequestAsync<TRequest>(HttpRequestBindingSupport.BodyReader reader, HttpContext httpContext, CancellationToken ct)
     {
-        var request = await HttpRequestBindingSupport
-            .ReadOperationRequestAsync(httpContext, operation, ct)
-            .ConfigureAwait(false);
-
-        if (request is null && operation.Http?.Query is not null)
-            return JsonSerializer.Deserialize<TRequest>("{}", DefaultJsonOptions) ?? default!;
+        var (request, failure) = await reader.ReadRequestAsync(httpContext, ct).ConfigureAwait(false);
+        if (failure is not null) return new(default!, failure);
+        if (request is null && reader.HasQuery)
+            return new(JsonSerializer.Deserialize<TRequest>("{}", DefaultJsonOptions)!);
 
         if (request is null)
-            return default!;
+            return new(default!);
 
         if (request is TRequest typed)
-            return typed;
+            return new(typed);
 
         throw new BadHttpRequestException(
-            $"Request for operation '{operation.Name}' could not be bound as '{typeof(TRequest).Name}'.");
+            $"Request for operation '{reader.Name}' could not be bound as '{typeof(TRequest).Name}'.");
     }
 }

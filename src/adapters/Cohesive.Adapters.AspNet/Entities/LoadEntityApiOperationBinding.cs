@@ -24,12 +24,15 @@ sealed class LoadEntityApiOperationBinding : EntityApiOperationBinding
         this.createResult = createResult ?? throw new ArgumentNullException(nameof(createResult));
     }
 
-    internal override Delegate CreateHandler(ApiOperation operation, EntityApiEndpointOptions options) =>
-        async (OperationContext operationContext, HttpContext httpContext) =>
+    internal override Delegate CreateHandler(ApiOperation operation, EntityApiEndpointOptions options)
+    {
+        var reader = HttpRequestBindingSupport.Prepare(operation);
+        return async (OperationContext operationContext, HttpContext httpContext) =>
         {
             var repository = EntityApiRequestSupport.ResolveRepository(httpContext, options);
             var entityId = EntityApiRequestSupport.GetRequiredEntityId(httpContext, options);
-            var request = await EntityApiRequestSupport.ReadBodyRequestAsync(httpContext, operation, operationContext.CancellationToken).ConfigureAwait(false);
+            var (request, failure) = await reader.ReadAsync(httpContext, operationContext.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             var requestContext = new EntityApiRequestContext(operationContext, httpContext, operation, options.Entity, repository, entityId);
             var readOptions = options.ResolveReadOptions(requestContext, EntityReadOptions.Full);
             var snapshot = await repository.TryGet(operationContext, entityId, readOptions).ConfigureAwait(false);
@@ -41,4 +44,5 @@ sealed class LoadEntityApiOperationBinding : EntityApiOperationBinding
                 snapshot,
                 request).ConfigureAwait(false);
         };
+    }
 }

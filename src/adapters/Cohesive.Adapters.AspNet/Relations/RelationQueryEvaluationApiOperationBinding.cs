@@ -30,8 +30,10 @@ sealed class RelationQueryEvaluationApiOperationBinding : RelationQueryApiOperat
         this.createResult = createResult ?? throw new ArgumentNullException(nameof(createResult));
     }
 
-    internal override Delegate CreateHandler(ApiOperation operation, RelationQueryApiEndpointOptions options) =>
-        async (OperationContext operationContext, HttpContext httpContext) =>
+    internal override Delegate CreateHandler(ApiOperation operation, RelationQueryApiEndpointOptions options)
+    {
+        var reader = HttpRequestBindingSupport.Prepare(operation);
+        return async (OperationContext operationContext, HttpContext httpContext) =>
         {
             CancellationTokenSource? linkedCancellation = null;
             var cancellationToken = operationContext.CancellationToken == httpContext.RequestAborted
@@ -49,9 +51,8 @@ sealed class RelationQueryEvaluationApiOperationBinding : RelationQueryApiOperat
 
             var evaluator = options.ResolveEvaluator(httpContext.RequestServices);
             var evaluationId = options.CreateEvaluationId(httpContext, operation);
-            var request = await HttpRequestBindingSupport
-                .ReadOperationRequestAsync(httpContext, operation, cancellationToken)
-                .ConfigureAwait(false);
+            var (request, failure) = await reader.ReadRequestAsync(httpContext, cancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             cancellationToken.ThrowIfCancellationRequested();
             var requestContext = new RelationQueryApiRequestContext(
                 effectiveOperationContext,
@@ -93,4 +94,5 @@ sealed class RelationQueryEvaluationApiOperationBinding : RelationQueryApiOperat
             return result ?? throw new InvalidOperationException(
                 $"Relation/query result mapper returned null for operation '{operation.Name}'.");
         };
+    }
 }

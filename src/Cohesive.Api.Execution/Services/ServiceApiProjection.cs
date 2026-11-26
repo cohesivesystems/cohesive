@@ -105,8 +105,6 @@ public static class ServiceApiProjection
         var results = nativeResults.ToList();
         if (!results.Any(result => result.Kind == ApiResultKind.ValidationFailed && result.BodyType == typeof(ExecutionApiProblem)))
             results.Add(new(ApiResultKind.ValidationFailed, typeof(ExecutionApiProblem), id: "admissionValidationFailed"));
-        if (http?.Body is not null)
-            results.Add(new(ApiResultKind.UnsupportedMediaType, typeof(ApiValidationProblem)));
         var operation = new ApiOperation(operationId, native.Kind, requestType, native.ResponseType,
             id: new(OperationIdentity(reference, operationId)),
             summary: native.Summary, description: native.Description, tags: native.Tags,
@@ -181,7 +179,6 @@ public static class ServiceApiProjection
                 new(ApiResultKind.NotFound, typeof(ApiProblem)),
                 new(ApiResultKind.Conflict, typeof(ApiProblem)),
                 new(ApiResultKind.PreconditionFailed, typeof(ApiProblem)),
-                new(ApiResultKind.UnsupportedMediaType, typeof(ApiValidationProblem)),
                 new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem)),
                 new(ApiResultKind.DomainError, typeof(ApiProblem)),
                 new(ApiResultKind.InfrastructureError, typeof(ApiProblem))]);

@@ -65,6 +65,7 @@ public sealed class TypedEntityApiBindingsTests
             .SelectMany(source => source.Endpoints));
         var operation = Assert.IsType<ApiOperation>(route.Metadata.GetMetadata<ApiOperation>());
         Assert.Equal(typeof(string), operation.Http!.Body!.BodyType);
+        Assert.Equal(typeof(string), route.Metadata.GetMetadata<Microsoft.AspNetCore.Http.Metadata.IAcceptsMetadata>()?.RequestType);
         foreach (var status in new[] { 400, 415 })
         {
             var result = Assert.Single(operation.Results, r => r.Http?.StatusCode == status);

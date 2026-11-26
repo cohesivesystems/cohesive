@@ -78,11 +78,15 @@ public static class ProcessExecutionCommandApiEndpointRouteBuilderExtensions
                 $"Execution-control endpoint '{operation.Id}' does not declare command request '{typeof(TRequest).FullName}'.");
         }
 
-        var projected = endpoint.WithHttp(new HttpBinding(
+        var decodingFailures = operation.Results.Any(r => r.Kind == ApiResultKind.ValidationFailed && r.BodyType == typeof(ExecutionApiProblem))
+            ? Array.Empty<ApiResultDefinition>()
+            : [new ApiResultDefinition(ApiResultKind.ValidationFailed, typeof(ExecutionApiProblem), id: "httpInvalidBody")];
+        var projectedOperation = operation.WithHttp(new HttpBinding(
             method: HttpMethods.Post,
             route: route,
             parameters: [],
-            body: new HttpBodyBinding(typeof(TRequest))));
+            body: new HttpBodyBinding(typeof(TRequest))), decodingFailures);
+        var projected = new ApiDefinition([projectedOperation]).Endpoints[0];
         return endpoints.MapApiEndpoint(
             projected,
             CreateHandler<TRequest>(endpoint, projected.Operation, invocationContextResolver),
@@ -94,8 +98,10 @@ public static class ProcessExecutionCommandApiEndpointRouteBuilderExtensions
         ApiEndpoint endpoint,
         ApiOperation projectedOperation,
         ExecutionApiInvocationContextResolver invocationContextResolver)
-        where TRequest : class =>
-        async (
+        where TRequest : class
+    {
+        var reader = HttpRequestBindingSupport.Prepare(projectedOperation);
+        return async (
             OperationContext operationContext,
             HttpContext httpContext,
             IExecutionControlApiDispatcher dispatcher) =>
@@ -103,11 +109,8 @@ public static class ProcessExecutionCommandApiEndpointRouteBuilderExtensions
             ArgumentNullException.ThrowIfNull(operationContext);
             ArgumentNullException.ThrowIfNull(httpContext);
             ArgumentNullException.ThrowIfNull(dispatcher);
-            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(
-                    httpContext,
-                    projectedOperation,
-                    operationContext.CancellationToken)
-                .ConfigureAwait(false);
+            var (request, failure) = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(reader, httpContext, operationContext.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             if (request is null)
             {
                 throw new BadHttpRequestException(
@@ -136,6 +139,7 @@ public static class ProcessExecutionCommandApiEndpointRouteBuilderExtensions
                     contentType: result.Http!.ContentType ?? "application/json",
                     statusCode: result.Http.StatusCode);
         };
+    }
 
     internal static ApiResultDefinition GetProjectedResult(
         ApiOperation operation,

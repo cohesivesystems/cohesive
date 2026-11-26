@@ -66,12 +66,13 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
                 + $"'{plan.DefinitionReference.RevisionId.Value}'.");
         }
 
+        var reader = HttpRequestBindingSupport.Prepare(operation);
         return async (OperationContext operationContext, HttpContext httpContext) =>
         {
             var repository = EntityApiRequestSupport.ResolveRepository(httpContext, options);
             var entityId = EntityApiRequestSupport.GetRequiredEntityId(httpContext, options);
-            var request = await EntityApiRequestSupport.ReadBodyRequestAsync(
-                httpContext, operation, operationContext.CancellationToken).ConfigureAwait(false);
+            var (request, failure) = await reader.ReadAsync(httpContext, operationContext.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             var initialRequestContext = new EntityApiRequestContext(
                 operationContext,
                 httpContext,
