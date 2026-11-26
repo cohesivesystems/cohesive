@@ -392,6 +392,14 @@ explicit domain body and Problem Details for concurrency. Use the Problem Detail
 
 ### Prepared rejection cases and no-input transitions
 
+Use `.FromBody()` when the JSON DTO is the transition input. Use
+`.FromBody<TBody>((ctx, body) => ...)` to combine it with route values.
+JSON body bindings declare HTTP 400 (`http.invalidJson`) and 415
+(`http.unsupportedMediaType`) by default. Both use `ApiValidationProblem`
+with the `application/problem+json` media type. The response includes `code` and `status`.
+Explicit response contracts take precedence. Classify a decoded command with
+`.InvalidInput(code, title, detail)` to return the same shape with a domain code.
+
 For a closed outcome discriminator, classify every case at registration:
 
 ```csharp

@@ -423,6 +423,9 @@ public sealed class ApiResultDefinition
         BodyType = bodyType ?? throw new ArgumentNullException(nameof(bodyType));
         IsPrimary = isPrimary;
         Id = string.IsNullOrWhiteSpace(id) ? GetDefaultId(kind, isPrimary) : id.Trim();
+        if (IsHttpBodyDefault && (isPrimary ||
+            kind != (Id == ApiOperation.InvalidBodyId ? ApiResultKind.ValidationFailed : ApiResultKind.UnsupportedMediaType)))
+            throw new ArgumentException($"'{Id}' is reserved for the corresponding HTTP body decoding failure.", nameof(id));
         Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
         Http = http;
     }
@@ -441,6 +444,9 @@ public sealed class ApiResultDefinition
     /// CLR body type for the result, or <see cref="void"/> when no body is emitted.
     /// </summary>
     public Type BodyType { get; }
+
+    /// <summary>Whether this response was inferred from the HTTP request body.</summary>
+    public bool IsHttpBodyDefault => Id is ApiOperation.InvalidBodyId or ApiOperation.UnsupportedMediaId;
 
     /// <summary>
     /// Indicates that this is the compatibility result exposed through <see cref="ApiOperation.ResponseType"/>.
@@ -545,10 +551,11 @@ public sealed class ApiOperation
         ScopePolicies = scopePolicies is null || scopePolicies.Count == 0 ? [] : [.. scopePolicies];
         AuthorizationRequirements = NormalizeAuthorizationRequirements(authorizationRequirements);
         SemanticReferences = NormalizeSemanticReferences(semanticReferences);
-        Results = NormalizeResults(
+        var normalized = NormalizeResults(
             responseType ?? throw new ArgumentNullException(nameof(responseType)),
             results,
             inferHttpBinding: http is not null);
+        Results = WithBodyDefaults(normalized, http?.Body is not null);
         PrimaryResult = SelectPrimaryResult(Results);
         ResponseType = PrimaryResult.BodyType;
     }
@@ -638,8 +645,26 @@ public sealed class ApiOperation
     /// </summary>
     public IReadOnlyList<ApiSemanticReference> SemanticReferences { get; }
 
-    static readonly ApiResultDefinition JsonMediaFailure =
-        new(ApiResultKind.UnsupportedMediaType, typeof(ApiValidationProblem), http: new(415));
+    // Reserved transport result ids survive declaration and projection copies.
+    internal const string InvalidBodyId = "http.invalidBody";
+    internal const string UnsupportedMediaId = "http.unsupportedMediaType";
+
+    static IReadOnlyList<ApiResultDefinition> WithBodyDefaults(IReadOnlyList<ApiResultDefinition> results, bool hasBody)
+    {
+        if (!hasBody)
+            return results.Any(r => r.IsHttpBodyDefault) ? results.Where(r => !r.IsHttpBodyDefault).ToArray() : results;
+
+        var projected = results.ToList();
+        if (!results.Any(result => result.Kind == ApiResultKind.ValidationFailed))
+            projected.Add(BodyDefault(ApiResultKind.ValidationFailed));
+        if (!results.Any(result => result.Kind == ApiResultKind.UnsupportedMediaType))
+            projected.Add(BodyDefault(ApiResultKind.UnsupportedMediaType));
+        return projected;
+    }
+
+    static ApiResultDefinition BodyDefault(ApiResultKind kind) =>
+        new(kind, typeof(ApiValidationProblem), id: kind == ApiResultKind.ValidationFailed ? InvalidBodyId : UnsupportedMediaId,
+            http: new(ApiHttpResultConventions.DefaultStatusCode(kind, typeof(ApiValidationProblem)), "application/problem+json"));
 
     /// <summary>Creates an equivalent operation projected through HTTP.</summary>
     /// <remarks>
@@ -649,20 +674,19 @@ public sealed class ApiOperation
     /// <param name="http">HTTP operation binding to attach.</param>
     /// <returns>A new operation retaining the semantic identity, contracts, policies, and provenance.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="http"/> is <see langword="null"/>.</exception>
-    public ApiOperation WithHttp(HttpBinding http) => WithHttp(http, []);
+    public ApiOperation WithHttp(HttpBinding http) => WithHttp(http, separateInputValidation: false);
 
-    /// <summary>Attach an HTTP binding and its transport-specific response alternatives.</summary>
-    public ApiOperation WithHttp(HttpBinding http, IReadOnlyList<ApiResultDefinition> transportResults)
+    /// <summary>Attach an HTTP binding. A command with its own domain validation outcome can
+    /// request a separate standard response for an undecodable HTTP body.</summary>
+    public ApiOperation WithHttp(HttpBinding http, bool separateInputValidation)
     {
         ArgumentNullException.ThrowIfNull(http);
-        ArgumentNullException.ThrowIfNull(transportResults);
-        var results = Results.Where(result => !ReferenceEquals(result, JsonMediaFailure))
-            .Concat(transportResults)
+        var results = Results
             .Select(result => result.Http is not null ? result :
                 result.WithHttp(new ApiHttpResultBinding(ApiHttpResultConventions.DefaultStatusCode(result.Kind, result.BodyType))))
             .ToList();
-        if (http.Body is not null && !results.Any(result => result.Kind == ApiResultKind.UnsupportedMediaType))
-            results.Add(JsonMediaFailure);
+        if (http.Body is not null && separateInputValidation && !results.Any(result => result.Id == InvalidBodyId))
+            results.Add(BodyDefault(ApiResultKind.ValidationFailed));
 
         return new ApiOperation(
             name: Name,

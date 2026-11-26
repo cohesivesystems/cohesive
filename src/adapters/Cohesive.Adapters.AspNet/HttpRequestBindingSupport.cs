@@ -18,7 +18,7 @@ internal static class HttpRequestBindingSupport
     internal readonly record struct ReadResult<T>(T Value, IResult? Failure = null);
 
     /// <summary>Prepare the two public decoding failures once, using the operation's response contract.</summary>
-    internal sealed class BodyReader(ApiOperation operation, Func<IResult>? invalid, Func<IResult>? unsupported)
+    internal class BodyReader(ApiOperation operation)
     {
         internal bool HasQuery => operation.Http?.Query is not null;
         internal string Name => operation.Name;
@@ -26,40 +26,50 @@ internal static class HttpRequestBindingSupport
         internal ValueTask<ReadResult<object?>> ReadRequestAsync(HttpContext http, CancellationToken ct) =>
             operation.Http?.Body is null ? ValueTask.FromResult(new ReadResult<object?>(ReadOperationQuery(http, operation))) : ReadAsync(http, ct);
 
-        internal async ValueTask<ReadResult<object?>> ReadAsync(HttpContext http, CancellationToken ct)
+        internal virtual ValueTask<ReadResult<object?>> ReadAsync(HttpContext http, CancellationToken ct) => default;
+    }
+
+    sealed class JsonBodyReader(ApiOperation operation, HttpBodyBinding body, Func<IResult> invalid,
+        Func<IResult> unsupported) : BodyReader(operation)
+    {
+        internal override async ValueTask<ReadResult<object?>> ReadAsync(HttpContext http, CancellationToken ct)
         {
-            if (operation.Http?.Body is not { } body)
-                return default;
             if (!http.Request.HasJsonContentType())
-                return new(null, unsupported!());
+                return new(null, unsupported());
             try
             {
                 var value = await JsonSerializer.DeserializeAsync(http.Request.Body, body.BodyType,
                     ResolveJsonOptions(http), ct).ConfigureAwait(false);
-                return new(value, value is null ? invalid!() : null);
+                return new(value, value is null ? invalid() : null);
             }
             catch (JsonException)
             {
-                return new(null, invalid!());
+                return new(null, invalid());
             }
         }
     }
 
     internal static BodyReader Prepare(ApiOperation operation, IResult? invalidOverride = null)
     {
-        if (operation.Http?.Body is null) return new(operation, null, null);
+        if (operation.Http?.Body is not { } body) return new(operation);
         Func<IResult> invalid = invalidOverride is not null ? () => invalidOverride :
             Failure(ApiResultKind.ValidationFailed, "http.invalidJson", "A non-null JSON body matching the declared request type is required.");
         var unsupported = Failure(ApiResultKind.UnsupportedMediaType, "http.unsupportedMediaType", "A JSON content type is required.");
-        return new(operation, invalid, unsupported);
+        return new JsonBodyReader(operation, body, invalid, unsupported);
 
         Func<IResult> Failure(ApiResultKind kind, string code, string message)
         {
             var status = ApiHttpResultConventions.DefaultStatusCode(kind, typeof(void));
-            var types = operation.Results.Where(r => r.Kind == kind && r.Http?.StatusCode == status)
-                .Select(r => r.BodyType).ToHashSet();
+            var candidates = operation.Results.Where(r => r.Kind == kind && r.Http?.StatusCode == status).ToArray();
+            var types = candidates.Select(r => r.BodyType).ToHashSet();
+            if (operation.Results.Any(r => r.Http?.StatusCode == status && r.Kind != kind && !types.Contains(r.BodyType)))
+                throw new InvalidOperationException($"HTTP {status} on '{operation.Id}' declares conflicting response bodies for {kind}.");
             if (types.Contains(typeof(ApiValidationProblem)))
-                return () => Results.Json(new ApiValidationProblem(code, message, []), statusCode: status);
+            {
+                var media = candidates.First(r => r.BodyType == typeof(ApiValidationProblem)).Http!.ContentType;
+                var problem = new ApiValidationProblem(code, message, []) { Status = status, Title = message };
+                return () => Results.Json(problem, contentType: media, statusCode: status);
+            }
             if (types.Contains(typeof(Cohesive.Api.Execution.ExecutionApiProblem)))
                 return () => Results.Json(new Cohesive.Api.Execution.ExecutionApiProblem(code), statusCode: status);
             if (types.Contains(typeof(ApiProblem)))

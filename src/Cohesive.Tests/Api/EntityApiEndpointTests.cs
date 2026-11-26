@@ -36,16 +36,30 @@ public sealed class EntityApiEndpointTests
     static readonly InteractionContractCatalog NoteInteractionContracts = CreateInteractionCatalog(NoteRevisedEvent);
 
     [Fact]
-    public async Task Json_reader_requires_a_declared_failure_shape_at_registration()
+    public async Task Json_reader_rejects_an_incompatible_explicit_failure_shape_at_registration()
     {
         await using var app = WebApplication.CreateSlimBuilder().Build();
         var definition = Cohesive.Api.Api.Define().Entity<NoteResource>()
             .Command("Inspect").Route("POST", "/notes/{id}/inspect").Body<InspectNoteRequest>()
-            .Returns<NoteInspectionResponse>().Done().Build();
+            .Result<string>(ApiResultKind.ValidationFailed).Returns<NoteInspectionResponse>().Done().Build();
         var options = new EntityApiEndpointOptions { Entity = NoteEntity.Instance.Definition }
             .Bind(EntityApiOperationBinding.Load("Inspect", (_, _, _) => Results.Ok()));
         var error = Assert.Throws<InvalidOperationException>(() => app.MapEntityApiDefinition(definition, options));
         Assert.Contains("ValidationFailed", error.Message);
+    }
+
+    [Fact]
+    public async Task An_inferred_400_cannot_hide_an_incompatible_explicit_400()
+    {
+        await using var app = WebApplication.CreateSlimBuilder().Build();
+        var definition = Cohesive.Api.Api.Define().Entity<NoteResource>()
+            .Command("Inspect").Route("POST", "/notes/{id}/inspect").Body<InspectNoteRequest>()
+            .Result<string>(ApiResultKind.Conflict, httpStatusCode: 400)
+            .Returns<NoteInspectionResponse>().Done().Build();
+        var options = new EntityApiEndpointOptions { Entity = NoteEntity.Instance.Definition }
+            .Bind(EntityApiOperationBinding.Load("Inspect", (_, _, _) => Results.Ok()));
+        var error = Assert.Throws<InvalidOperationException>(() => app.MapEntityApiDefinition(definition, options));
+        Assert.Contains("HTTP 400", error.Message);
     }
 
     [Fact]
@@ -663,16 +677,12 @@ public sealed class EntityApiEndpointTests
             .Command("Create")
                 .Route("POST", "/notes")
                 .Body<CreateNoteRequest>()
-                .Result<ApiValidationProblem>(ApiResultKind.ValidationFailed)
-                .Result<ApiValidationProblem>(ApiResultKind.UnsupportedMediaType)
                 .Returns<NoteResource>()
                 .Done()
             .Command("Revise")
                 .Route("POST", "/notes/{id}")
                 .RouteParameter<string>("id")
                 .Body<ReviseNoteRequest>()
-                .Result<ApiValidationProblem>(ApiResultKind.ValidationFailed)
-                .Result<ApiValidationProblem>(ApiResultKind.UnsupportedMediaType)
                 .Returns<NoteResource>()
                 .Transition(reviseTransition)
                 .Done()
@@ -680,8 +690,6 @@ public sealed class EntityApiEndpointTests
                 .Route("POST", "/notes/{id}/inspect")
                 .RouteParameter<string>("id")
                 .Body<InspectNoteRequest>()
-                .Result<ApiValidationProblem>(ApiResultKind.ValidationFailed)
-                .Result<ApiValidationProblem>(ApiResultKind.UnsupportedMediaType)
                 .Returns<NoteInspectionResponse>()
                 .Done()
             .Build();

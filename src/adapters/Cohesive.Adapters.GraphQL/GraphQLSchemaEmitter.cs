@@ -95,7 +95,7 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
 
         GraphQLTypeRef BuildOperationTypeRef(ApiOperation operation)
         {
-            if (operation.Results.Count <= 1)
+            if (!operation.Results.Any(result => !result.IsPrimary && !result.IsHttpBodyDefault))
                 return types.OutputTypeRef(operation.ResponseType, required: operation.ResponseType != typeof(void));
 
             return types.OperationResultTypeRef(operation, required: true);
@@ -1084,6 +1084,7 @@ public sealed class GraphQLSchemaEmitter : IApiCodeEmitter
             for (var i = 0; i < operation.Results.Count; i++)
             {
                 var result = operation.Results[i];
+                if (result.IsHttpBodyDefault) continue;
                 var memberName = CreateUniqueName($"{baseName}{ToPascalCase(result.Id)}Result");
                 var definition = new GraphQLTypeDefinition(memberName, GraphQLNamedTypeKind.Object)
                 {

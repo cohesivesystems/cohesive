@@ -385,20 +385,19 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
         ArgumentNullException.ThrowIfNull(respond);
         if (input is null) throw new InvalidOperationException("Configure Input before completing the binding.");
         var onApplied = applied ?? throw new InvalidOperationException("Configure OnApplied before completing the binding.");
-        if (invalidInput || bodyType is not null) declaration?.Result<ProblemDetails>(ApiResultKind.ValidationFailed, contentType: "application/problem+json");
-        if (bodyType is not null) declaration?.Result<ProblemDetails>(ApiResultKind.UnsupportedMediaType, contentType: "application/problem+json");
+        if (invalidInput)
+            declaration?.Result<ApiValidationProblem>(ApiResultKind.ValidationFailed, contentType: "application/problem+json");
         resolved = endpoint ?? declaration!.Result<TResponse>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound).Build();
         validate!(resolved);
         if (!resolved.Operation.Results.Any(result => result.Kind == ApiResultKind.Conflict && result.BodyType == typeof(TResponse)))
             throw new ArgumentException("Endpoint must declare the typed conflict response.");
-        if (invalidInput || bodyType is not null) RequireProblem(ApiResultKind.ValidationFailed);
-        if (bodyType is not null) RequireProblem(ApiResultKind.UnsupportedMediaType);
+        if (invalidInput) RequireProblem(ApiResultKind.ValidationFailed);
 
         void RequireProblem(ApiResultKind kind)
         {
             var status = ApiHttpResultConventions.DefaultStatusCode(kind, typeof(ProblemDetails));
             var alternatives = resolved.Operation.Results.Where(r => r.Http?.StatusCode == status).ToArray();
-            if (!alternatives.Any(r => r.Kind == kind) || alternatives.Any(r => r.BodyType != typeof(ProblemDetails)))
+            if (!alternatives.Any(r => r.Kind == kind) || alternatives.Any(r => r.BodyType != typeof(ApiValidationProblem) || r.Http?.ContentType != "application/problem+json"))
                 throw new ArgumentException($"Endpoint must declare {kind} with Problem Details for HTTP {status}.");
         }
         var compilation = transition.Compile();

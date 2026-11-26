@@ -494,7 +494,7 @@ public sealed class TypeScriptApiClientEmitterTests
         var document = Assert.Single(emission.Documents);
         Assert.Equal("sample.api.playwright.generated.ts", document.FileName);
         Assert.Contains("import type { Page, Request, Route } from '@playwright/test';", document.Text, StringComparison.Ordinal);
-        Assert.Contains("import type { ApiProblem, DispatchShipmentRequest, SearchShipmentsRequest, ShipmentDto } from './sample.shapes.generated';", document.Text, StringComparison.Ordinal);
+        Assert.Contains("import type { ApiProblem, ApiValidationProblem, DispatchShipmentRequest, SearchShipmentsRequest, ShipmentDto } from './sample.shapes.generated';", document.Text, StringComparison.Ordinal);
         Assert.Contains("export type SampleApiEndpointKey =", document.Text, StringComparison.Ordinal);
         Assert.Contains("| 'getShipment'", document.Text, StringComparison.Ordinal);
         Assert.Contains("getShipment: 'Shipping.Shipment.Get'", document.Text, StringComparison.Ordinal);
@@ -565,8 +565,8 @@ public sealed class TypeScriptApiClientEmitterTests
 
         var document = EmitPlaywrightApiMock(definition);
 
-        Assert.Contains("import type { ConflictProblemDto, ShipmentDto, SubmitShipmentRequest, ValidationProblemDto } from './sample.shapes.generated';", document.Text, StringComparison.Ordinal);
-        Assert.Contains("readonly submit: ShipmentDto | ValidationProblemDto | ConflictProblemDto | void;", document.Text, StringComparison.Ordinal);
+        Assert.Contains("import type { ApiValidationProblem, ConflictProblemDto, ShipmentDto, SubmitShipmentRequest, ValidationProblemDto } from './sample.shapes.generated';", document.Text, StringComparison.Ordinal);
+        Assert.Contains("readonly submit: ShipmentDto | ValidationProblemDto | ConflictProblemDto | void | ApiValidationProblem;", document.Text, StringComparison.Ordinal);
         Assert.Contains("validationFailed: { id: 'validationFailed', kind: 'validationFailed', status: 400, contentType: 'application/json' },", document.Text, StringComparison.Ordinal);
         Assert.Contains("concurrencyTokenMismatch: { id: 'concurrencyTokenMismatch', kind: 'conflict', status: 412, contentType: 'application/json' },", document.Text, StringComparison.Ordinal);
         Assert.Contains("alreadyApplied: { id: 'alreadyApplied', kind: 'noContent', status: 204, contentType: 'application/json' },", document.Text, StringComparison.Ordinal);

@@ -223,7 +223,11 @@ public static class ApiEndpointRouteBuilderExtensions
             // Preserve the DTO for API Explorer. Content-type matching stays in the reader
             // so routing cannot substitute a bodyless 415 before the handler runs.
             if (operation.Results.Any(r => r.Kind == ApiResultKind.UnsupportedMediaType))
-                builder.WithMetadata(new Microsoft.AspNetCore.Http.Metadata.AcceptsMetadata([], body.BodyType));
+                builder.Add(endpoint =>
+                {
+                    if (!endpoint.Metadata.OfType<Microsoft.AspNetCore.Http.Metadata.IAcceptsMetadata>().Any())
+                        endpoint.Metadata.Add(new Microsoft.AspNetCore.Http.Metadata.AcceptsMetadata([], body.BodyType));
+                });
             else
                 builder.Accepts(body.BodyType, "application/json");
         }

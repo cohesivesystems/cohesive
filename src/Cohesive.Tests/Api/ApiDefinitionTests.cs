@@ -125,7 +125,9 @@ public sealed class ApiDefinitionTests
         Assert.Equal(ApiOperationKind.Command, command.Kind);
         Assert.Equal(typeof(DispatchShipmentRequest), command.RequestType);
         Assert.Equal(typeof(void), command.ResponseType);
-        Assert.Same(command.PrimaryResult, Assert.Single(command.Results));
+        Assert.Equal(3, command.Results.Count);
+        Assert.Equal(typeof(ApiValidationProblem), Assert.Single(command.Results, r => r.Http?.StatusCode == 400).BodyType);
+        Assert.Equal(typeof(ApiValidationProblem), Assert.Single(command.Results, r => r.Http?.StatusCode == 415).BodyType);
         Assert.Equal(ApiResultKind.NoContent, command.PrimaryResult.Kind);
         Assert.Equal(StatusCodes.Status204NoContent, command.PrimaryResult.Http?.StatusCode);
         Assert.Same(transitionReference, command.TransitionReference);
@@ -136,6 +138,25 @@ public sealed class ApiDefinitionTests
         Assert.Equal("id", commandRoute.Name);
         Assert.Equal(HttpParameterSource.Route, commandRoute.Source);
         Assert.Equal(typeof(string), commandRoute.Type);
+    }
+
+    [Fact]
+    public void Rebuilt_results_drop_only_inferred_errors_when_the_body_is_removed()
+    {
+        var json = new HttpBinding("POST", "/items", [], new(typeof(string)));
+        var get = new HttpBinding("GET", "/items", [], null);
+        var command = new ApiOperation("items", ApiOperationKind.Command, typeof(string), typeof(string), json);
+        var copies = command.Results.Select(r => new ApiResultDefinition(r.Kind, r.BodyType, r.IsPrimary, r.Id,
+            r.Description, r.Http)).ToArray();
+        var rebuilt = new ApiOperation("items", command.Kind, command.RequestType, command.ResponseType, json, results: copies);
+        Assert.Equal(2, rebuilt.WithHttp(json).Results.Count(r => r.IsHttpBodyDefault));
+        Assert.Single(rebuilt.WithHttp(get).Results);
+
+        var explicitFailure = new ApiResultDefinition(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem),
+            id: "invalidOrder", http: new(400));
+        var explicitCommand = new ApiOperation("items", command.Kind, command.RequestType, command.ResponseType, json,
+            results: [command.PrimaryResult, explicitFailure]);
+        Assert.Same(explicitFailure, Assert.Single(explicitCommand.WithHttp(get).Results, r => r.Kind == ApiResultKind.ValidationFailed));
     }
 
     [Fact]

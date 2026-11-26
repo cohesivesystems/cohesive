@@ -78,14 +78,12 @@ public static class ProcessExecutionCommandApiEndpointRouteBuilderExtensions
                 $"Execution-control endpoint '{operation.Id}' does not declare command request '{typeof(TRequest).FullName}'.");
         }
 
-        var decodingFailures = operation.Results.Any(r => r.Kind == ApiResultKind.ValidationFailed && r.BodyType == typeof(ExecutionApiProblem))
-            ? Array.Empty<ApiResultDefinition>()
-            : [new ApiResultDefinition(ApiResultKind.ValidationFailed, typeof(ExecutionApiProblem), id: "httpInvalidBody")];
         var projectedOperation = operation.WithHttp(new HttpBinding(
             method: HttpMethods.Post,
             route: route,
             parameters: [],
-            body: new HttpBodyBinding(typeof(TRequest))), decodingFailures);
+            body: new HttpBodyBinding(typeof(TRequest))),
+            separateInputValidation: operation.Results.Any(r => r.Kind == ApiResultKind.ValidationFailed && r.BodyType != typeof(ExecutionApiProblem)));
         var projected = new ApiDefinition([projectedOperation]).Endpoints[0];
         return endpoints.MapApiEndpoint(
             projected,

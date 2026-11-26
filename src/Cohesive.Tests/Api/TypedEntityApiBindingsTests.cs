@@ -69,8 +69,9 @@ public sealed class TypedEntityApiBindingsTests
         foreach (var status in new[] { 400, 415 })
         {
             var result = Assert.Single(operation.Results, r => r.Http?.StatusCode == status);
-            Assert.Equal(typeof(Microsoft.AspNetCore.Mvc.ProblemDetails), result.BodyType);
+            Assert.Equal(typeof(ApiValidationProblem), result.BodyType);
             Assert.Equal("application/problem+json", result.Http!.ContentType);
+            Assert.Equal(status == 415, result.IsHttpBodyDefault);
         }
         const string path = "/orders/one/submit";
         Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(path, "")).StatusCode);
@@ -106,8 +107,7 @@ public sealed class TypedEntityApiBindingsTests
         typed.FromBody<string>((_, id) => new Submit(id));
         Assert.Throws<InvalidOperationException>(() => typed.Input(ctx => new Submit(ctx.RequiredEntityId)));
         typed.OnApplied((state, _) => TypedResults.Ok(state));
-        Assert.Contains("ValidationFailed", Assert.Throws<ArgumentException>(() =>
-            typed.OnRejected(outcome => TypedResults.Conflict(outcome))).Message);
+        typed.OnRejected(outcome => TypedResults.Conflict(outcome));
         var routed = bindings.Transition("Other", "/other/{id}", SubmitTransition)
             .Input(ctx => new Submit(ctx.RequiredEntityId));
         Assert.Throws<InvalidOperationException>(() => routed.FromBody());
