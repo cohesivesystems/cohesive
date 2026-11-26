@@ -38,6 +38,36 @@ public sealed class TypedEntityApiBindingsTests
     public sealed record PointResponse(string Id, SubmitCode Status);
 
     [Fact]
+    public async Task Json_body_drives_typed_transition_and_declared_invalid_input_response()
+    {
+        var transition = TransitionAuthoring.Create<Order, Submit, ClosedOutcome>(Entity.Shape,
+            new("typed/body"), new("1"), t => t.Requires((state, input) => state.Id == input.Id,
+                (_, _) => new ClosedOutcome(SubmitCode.NotDraft)).Return(new ClosedOutcome(SubmitCode.Applied)));
+        var repository = new InMemoryEntityOutboxRepository(Entity, partitionKeyFieldName: "Partition");
+        await repository.Upsert(OperationContext.Create(), new(Entity.CreateState("one", new Order("one", "local", "Draft")).Snapshot));
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddRequestOperationContext();
+        await using var app = builder.Build();
+        app.UseRequestOperationContext();
+        app.MapEntityApi<Order>(Entity, repository, "local", bindings => bindings
+            .Transition("Submit", "/orders/{id}/submit", transition).FromBody()
+            .OnApplied((state, _) => TypedResults.Ok(state))
+            .OnRejected(o => o.Code, "orders.submit", r => r.InvalidInput(SubmitCode.NotDraft, "Invalid", "Invalid input.")
+                .NotRejected(SubmitCode.Applied)));
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+        const string path = "/orders/one/submit";
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(path, new Submit("one"))).StatusCode);
+        var invalid = await client.PostAsJsonAsync(path, new Submit("other"));
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        Assert.Contains("orders.submit.not-draft", await invalid.Content.ReadAsStringAsync());
+        Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsync(path,
+            new StringContent("{", System.Text.Encoding.UTF8, "application/json"))).StatusCode);
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, (await client.PostAsync(path, new StringContent("one"))).StatusCode);
+    }
+
+    [Fact]
     public async Task Typed_point_read_supplies_identity_and_enum_without_manual_observation_access()
     {
         var entity = ObjectEntityDefinition.For<PointState>(new("point"));
