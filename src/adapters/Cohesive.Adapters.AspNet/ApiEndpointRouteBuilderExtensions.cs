@@ -160,6 +160,12 @@ public static class ApiEndpointRouteBuilderExtensions
         var http = operation.Http ?? throw new InvalidOperationException(
             $"API endpoint '{endpoint.Id}' does not declare an HTTP projection and cannot be mapped to ASP.NET.");
         var builder = endpoints.MapMethods(http.Route, [http.Method], handler);
+        if (http.Body is not null)
+            builder.AddEndpointFilter(async (invocation, next) =>
+            {
+                try { return await next(invocation); }
+                catch (HttpRequestBindingSupport.BodyFailure error) { return error.Project(operation); }
+            });
         var endpointName = endpointNameSelector?.Invoke(operation) ?? operation.Id.ToString();
         ApplyMetadata(builder, operation, http, endpointName: endpointName);
         configure?.Invoke(builder, operation);
@@ -218,7 +224,10 @@ public static class ApiEndpointRouteBuilderExtensions
         if (!string.IsNullOrWhiteSpace(operation.Description))
             builder.WithDescription(operation.Description);
 
-        if (http.Body is not null)
+        // A declared 415 has a response body. Let the handler inspect Content-Type;
+        // ASP.NET's AcceptsMatcherPolicy otherwise short-circuits with an empty 415.
+        // The canonical operation metadata still carries the JSON request contract.
+        if (http.Body is not null && !operation.Results.Any(r => r.Kind == ApiResultKind.UnsupportedMediaType))
             builder.Accepts(http.Body.BodyType, "application/json");
 
         if (http.Query is not null)

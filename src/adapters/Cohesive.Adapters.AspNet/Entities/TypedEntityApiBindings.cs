@@ -237,8 +237,8 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
     readonly ApiEndpoint? endpoint;
     readonly OperationBuilder<EntityApiBuilder<TEntity>>? declaration;
     readonly Transition<TEntity, TInput, TOutcome> transition;
-    Func<EntityApiRequestContext, TInput>? input;
-    bool fromBody;
+    Func<EntityApiRequestContext, object?, object?>? input;
+    Type? bodyType;
     Func<TEntity, TOutcome, IResult>? applied;
     ApiEndpoint? resolved;
     bool completed;
@@ -258,7 +258,7 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
         this.declaration = declaration;
         this.transition = transition;
         if (typeof(TInput) == typeof(Cohesive.Prelude.Unit))
-            input = static _ => default!;
+            input = static (_, _) => default(TInput);
         owner.BeginTransition();
     }
 
@@ -271,20 +271,26 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
     {
         EnsureMutable();
         ArgumentNullException.ThrowIfNull(create);
-        if (input is not null || fromBody) throw new InvalidOperationException("Input is already configured.");
-        input = create;
+        if (input is not null) throw new InvalidOperationException("Input is already configured.");
+        input = (context, _) => create(context);
         return this;
     }
 
     /// <summary>Declare the JSON body as the canonical transition input. Its DTO type is inferred.</summary>
-    public TypedEntityTransitionBinding<TEntity, TInput, TOutcome> FromBody()
+    public TypedEntityTransitionBinding<TEntity, TInput, TOutcome> FromBody() =>
+        FromBody<TInput>(static (_, body) => body);
+
+    /// <summary>Project a declared JSON DTO and the route context into a transition input.</summary>
+    public TypedEntityTransitionBinding<TEntity, TInput, TOutcome> FromBody<TBody>(Func<EntityApiRequestContext, TBody, TInput> project)
     {
         EnsureMutable();
-        if (input is not null || fromBody) throw new InvalidOperationException("Input is already configured.");
-        if (endpoint is not null && endpoint.Operation.Http?.Body?.BodyType != typeof(TInput))
-            throw new ArgumentException("The declared JSON body must match the transition input.");
-        declaration?.Body<TInput>();
-        fromBody = true;
+        ArgumentNullException.ThrowIfNull(project);
+        if (input is not null) throw new InvalidOperationException("Input is already configured.");
+        if (endpoint is not null && endpoint.Operation.Http?.Body?.BodyType != typeof(TBody))
+            throw new ArgumentException("The declared JSON body must match the projected DTO.");
+        declaration?.Body<TBody>();
+        bodyType = typeof(TBody);
+        input = (context, body) => project(context, (TBody)body!);
         return this;
     }
 
@@ -302,7 +308,7 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
         if (applied is not null) throw new InvalidOperationException("Success response is already configured.");
         validate = handle =>
         {
-            owner.Validate<TResponse>(handle, ApiOperationKind.Command, bodyType: fromBody ? typeof(TInput) : null);
+            owner.Validate<TResponse>(handle, ApiOperationKind.Command, bodyType: bodyType);
             if (handle.Operation.TransitionReference != transition.Reference)
                 throw new ArgumentException("Endpoint must reference the exact authored transition.");
         };
@@ -377,21 +383,30 @@ public sealed class TypedEntityTransitionBinding<TEntity, TInput, TOutcome> wher
     {
         EnsureMutable();
         ArgumentNullException.ThrowIfNull(respond);
-        if (input is null && !fromBody) throw new InvalidOperationException("Configure Input before completing the binding.");
+        if (input is null) throw new InvalidOperationException("Configure Input before completing the binding.");
         var onApplied = applied ?? throw new InvalidOperationException("Configure OnApplied before completing the binding.");
-        if (invalidInput) declaration?.Result<TResponse>(ApiResultKind.ValidationFailed);
+        if (invalidInput || bodyType is not null) declaration?.Result<ProblemDetails>(ApiResultKind.ValidationFailed, contentType: "application/problem+json");
+        if (bodyType is not null) declaration?.Result<ProblemDetails>(ApiResultKind.UnsupportedMediaType, contentType: "application/problem+json");
         resolved = endpoint ?? declaration!.Result<TResponse>(ApiResultKind.Conflict).Result(ApiResultKind.NotFound).Build();
         validate!(resolved);
         if (!resolved.Operation.Results.Any(result => result.Kind == ApiResultKind.Conflict && result.BodyType == typeof(TResponse)))
             throw new ArgumentException("Endpoint must declare the typed conflict response.");
-        if (invalidInput && !resolved.Operation.Results.Any(r => r.Kind == ApiResultKind.ValidationFailed && r.BodyType == typeof(TResponse)))
-            throw new ArgumentException("Endpoint must declare the typed invalid-input response.");
+        if (invalidInput || bodyType is not null) RequireProblem(ApiResultKind.ValidationFailed);
+        if (bodyType is not null) RequireProblem(ApiResultKind.UnsupportedMediaType);
+
+        void RequireProblem(ApiResultKind kind)
+        {
+            var status = ApiHttpResultConventions.DefaultStatusCode(kind, typeof(ProblemDetails));
+            var alternatives = resolved.Operation.Results.Where(r => r.Http?.StatusCode == status).ToArray();
+            if (!alternatives.Any(r => r.Kind == kind) || alternatives.Any(r => r.BodyType != typeof(ProblemDetails)))
+                throw new ArgumentException($"Endpoint must declare {kind} with Problem Details for HTTP {status}.");
+        }
         var compilation = transition.Compile();
         if (!compilation.IsSuccessful)
             throw new TransitionApiPreparationException(resolved.Name, compilation);
         var materialize = ObservationMaterializer.PrepareJsonValue<TOutcome>();
         var binding = EntityApiOperationBinding.Transition(resolved!, compilation.Plan!,
-            fromBody ? null : (context, _) => input!(context),
+            input,
             (context, snapshot) =>
             {
                 var decision = context.Decision ?? throw new InvalidOperationException("Transition decision is required.");

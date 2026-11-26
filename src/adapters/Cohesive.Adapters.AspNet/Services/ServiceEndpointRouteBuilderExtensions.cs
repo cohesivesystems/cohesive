@@ -57,7 +57,8 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             var subject = http.Request.RouteValues[subjectParameter]?.ToString();
             var tokens = http.Request.Headers[tokenHeader];
             if (string.IsNullOrWhiteSpace(subject) || tokens.Count != 1 || string.IsNullOrWhiteSpace(tokens[0]))
-                return Results.BadRequest();
+                return Results.BadRequest(new ApiValidationProblem("services.transition.invalidInvocation",
+                    "The entity identity and concurrency token are required.", []));
             var body = await HttpRequestBindingSupport.ReadOperationBodyAsync(http, projection.Operation, context.CancellationToken)
                 .ConfigureAwait(false);
             var observed = ObservationValue.FromObject(body);

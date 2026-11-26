@@ -26,7 +26,7 @@ public sealed class TransitionRejectionResponses<TCode> where TCode : struct, En
         return this;
     }
 
-    internal bool HasInvalidInput => cases.Values.Any(p => p?.Status == StatusCodes.Status400BadRequest);
+    internal bool HasInvalidInput { get; private set; }
 
     /// <summary>Classify a typed domain rejection caused by invalid input as HTTP 400.</summary>
     public TransitionRejectionResponses<TCode> InvalidInput(TCode code, string title, string detail)
@@ -34,6 +34,7 @@ public sealed class TransitionRejectionResponses<TCode> where TCode : struct, En
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(detail);
         Add(code, new(StatusCodes.Status400BadRequest, title, detail));
+        HasInvalidInput = true;
         return this;
     }
 

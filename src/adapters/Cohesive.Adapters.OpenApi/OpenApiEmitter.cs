@@ -457,29 +457,21 @@ public sealed class OpenApiEmitter : IApiCodeEmitter
             };
             AppendResultExtensions(response, statusCode, results);
 
-            var bodyResults = results.Where(static result => result.BodyType != typeof(void))
-                .DistinctBy(static result => result.BodyType).ToArray();
-            if (bodyResults.Length == 0)
-                return response;
-
-            var schema = bodyResults.Length == 1
-                ? schemas.SchemaFor(bodyResults[0].BodyType)
-                : new()
-                {
-                    ["oneOf"] = new JsonArray(bodyResults
-                        .Select(result => schemas.SchemaFor(result.BodyType))
-                        .ToArray<JsonNode?>()
-                    )
-                };
-
-            response["content"] = new JsonObject
+            JsonObject content = [];
+            foreach (var group in results.Where(result => result.BodyType != typeof(void))
+                         .GroupBy(result => result.Http?.ContentType ?? "application/json"))
             {
-                ["application/json"] = new JsonObject
+                var types = group.Select(result => result.BodyType).Distinct().ToArray();
+                content[group.Key] = new JsonObject
                 {
-                    ["schema"] = schema
-                }
-            };
-
+                    ["schema"] = types.Length == 1 ? schemas.SchemaFor(types[0]) : new JsonObject
+                    {
+                        ["oneOf"] = new JsonArray(types.Select(type => schemas.SchemaFor(type)).ToArray<JsonNode?>())
+                    }
+                };
+            }
+            if (content.Count > 0)
+                response["content"] = content;
             return response;
         }
 

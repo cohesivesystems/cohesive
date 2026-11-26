@@ -70,16 +70,8 @@ sealed class TransitionEntityApiOperationBinding : EntityApiOperationBinding
         {
             var repository = EntityApiRequestSupport.ResolveRepository(httpContext, options);
             var entityId = EntityApiRequestSupport.GetRequiredEntityId(httpContext, options);
-            if (operation.Http?.Body is not null && !httpContext.Request.HasJsonContentType())
-                return Results.StatusCode(StatusCodes.Status415UnsupportedMediaType);
-            object? request;
-            try
-            {
-                request = await EntityApiRequestSupport.ReadBodyRequestAsync(
-                    httpContext, operation, operationContext.CancellationToken).ConfigureAwait(false);
-            }
-            catch (System.Text.Json.JsonException) { return Results.BadRequest(); }
-            catch (BadHttpRequestException error) { return Results.StatusCode(error.StatusCode); }
+            var request = await EntityApiRequestSupport.ReadBodyRequestAsync(
+                httpContext, operation, operationContext.CancellationToken).ConfigureAwait(false);
             var initialRequestContext = new EntityApiRequestContext(
                 operationContext,
                 httpContext,

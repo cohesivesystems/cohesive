@@ -326,7 +326,10 @@ public enum ApiResultKind
     ExecutionEngineFailed = 15,
 
     /// <summary>The configured provider cannot currently serve the operation.</summary>
-    ServiceUnavailable = 16
+    ServiceUnavailable = 16,
+
+    /// <summary>The HTTP body has an unsupported media type.</summary>
+    UnsupportedMediaType = 17
 }
 
 /// <summary>Stable host-language-independent wire names for closed API semantic categories.</summary>
@@ -365,6 +368,7 @@ public static class ApiWireNames
         ApiResultKind.ExecutionFailed => "executionFailed",
         ApiResultKind.ExecutionEngineFailed => "executionEngineFailed",
         ApiResultKind.ServiceUnavailable => "serviceUnavailable",
+        ApiResultKind.UnsupportedMediaType => "unsupportedMediaType",
         ApiResultKind.DomainError => "domainError",
         ApiResultKind.InfrastructureError => "infrastructureError",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unsupported API result kind.")
@@ -805,6 +809,7 @@ public static class ApiHttpResultConventions
         ApiResultKind.Accepted => 202,
         ApiResultKind.NoContent => 204,
         ApiResultKind.ValidationFailed => 400,
+        ApiResultKind.UnsupportedMediaType => 415,
         ApiResultKind.Unauthorized => 401,
         ApiResultKind.Forbidden => 403,
         ApiResultKind.NotFound => 404,

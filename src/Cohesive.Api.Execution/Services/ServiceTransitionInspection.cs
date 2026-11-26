@@ -42,6 +42,7 @@ public sealed partial class ServiceRuntime
             typeof(ServiceTransitionInspection<TInput>), typeof(ServiceTransitionAction[]),
             id: new(ServiceApiProjection.EntityInspectionIdentity(definitionReference, entity)), entity: entityName,
             results: [new(ApiResultKind.Success, typeof(ServiceTransitionAction[]), isPrimary: true),
+                new(ApiResultKind.UnsupportedMediaType, typeof(ApiValidationProblem)),
                 new(ApiResultKind.ValidationFailed, typeof(ApiValidationProblem))]).WithHttp(http);
         return new ApiDefinition([operation]).Endpoints[0];
     }

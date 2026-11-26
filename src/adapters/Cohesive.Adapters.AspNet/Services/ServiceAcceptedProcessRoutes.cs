@@ -42,8 +42,12 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency, ProcessContinuationIdentity Continuation, ObservationValue Input) intent;
             try
             {
-                var request = await ReadBody(http, context.CancellationToken).ConfigureAwait(false);
+                var request = (TRequest)(await HttpRequestBindingSupport.ReadOperationBodyAsync(http, api.Start.Operation, context.CancellationToken).ConfigureAwait(false))!;
                 intent = bind(http, request);
+            }
+            catch (HttpRequestBindingSupport.BodyFailure error) when (error.Kind == ApiResultKind.ValidationFailed)
+            {
+                return Submission(ApiResultKind.ValidationFailed) ?? error.Project(api.Start.Operation);
             }
             catch (BadHttpRequestException error) when (error.StatusCode == 400)
             {
@@ -80,19 +84,6 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             (service, context, instance) => service.ReadProcessResultAsync(context, api.ResultOperationId, instance),
             (_, value) => project(value), authorizationPolicyResolver, "instanceId", ProjectRead,
             DecodeInstance, () => api.TryProjectMissing(out var missing) ? Render(missing) : null);
-
-        async ValueTask<TRequest> ReadBody(HttpContext http, CancellationToken cancellationToken)
-        {
-            try
-            {
-                return await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation, cancellationToken)
-                    .ConfigureAwait(false) ?? throw new BadHttpRequestException("A Process command body is required.");
-            }
-            catch (System.Text.Json.JsonException error)
-            {
-                throw new BadHttpRequestException("Invalid process command JSON.", error);
-            }
-        }
 
         IResult? Submission(ApiResultKind kind, AcceptedProcessLocation? location = null) =>
             api.TryProjectSubmission(kind, out var response, location) ? Render(response) : null;

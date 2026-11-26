@@ -53,14 +53,36 @@ internal static class HttpRequestBindingSupport
         if (RequireHttp(operation).Body is not { } body)
             return null;
 
-        var request = await JsonSerializer.DeserializeAsync(
-                httpContext.Request.Body,
-                body.BodyType,
-                ResolveJsonOptions(httpContext),
-                cancellationToken)
-            .ConfigureAwait(false);
-        return request ?? throw new BadHttpRequestException(
-            $"Request body for operation '{operation.Name}' is required.");
+        if (!httpContext.Request.HasJsonContentType())
+            throw new BodyFailure(ApiResultKind.UnsupportedMediaType, "http.unsupportedMediaType", "A JSON content type is required.");
+        try
+        {
+            return await JsonSerializer.DeserializeAsync(httpContext.Request.Body, body.BodyType,
+                ResolveJsonOptions(httpContext), cancellationToken).ConfigureAwait(false)
+                ?? throw InvalidBody();
+        }
+        catch (JsonException) { throw InvalidBody(); }
+    }
+
+    static BodyFailure InvalidBody() => new(ApiResultKind.ValidationFailed, "http.invalidJson",
+        "A non-null JSON body matching the declared request type is required.");
+
+    internal sealed class BodyFailure(ApiResultKind kind, string code, string message) : Exception(message)
+    {
+        internal ApiResultKind Kind => kind;
+
+        internal IResult Project(ApiOperation operation)
+        {
+            var status = ApiHttpResultConventions.DefaultStatusCode(kind, typeof(void));
+            if (operation.Results.Any(r => r.Kind == kind && r.BodyType == typeof(ApiValidationProblem)))
+                return Results.Json(new ApiValidationProblem(code, Message, []), statusCode: status);
+            if (operation.Results.Any(r => r.Kind == kind && r.BodyType == typeof(Cohesive.Api.Execution.ExecutionApiProblem)))
+                return Results.Json(new Cohesive.Api.Execution.ExecutionApiProblem(code), statusCode: status);
+            if (operation.Results.Any(r => r.Kind == kind && r.BodyType == typeof(ApiProblem)))
+                return Results.Json(new ApiProblem(code, Message), statusCode: status);
+            return TypedResults.Problem(statusCode: status, title: Message,
+                extensions: new Dictionary<string, object?> { ["code"] = code });
+        }
     }
 
     /// <summary>Reads the query input declared by an API operation.</summary>
