@@ -35,7 +35,17 @@ public sealed record ApiValidationProblem(
     string Code,
     string Message,
     IReadOnlyList<ApiValidationIssue> Issues,
-    string? Target = null);
+    string? Target = null)
+{
+    /// <summary>HTTP status when projected as a Problem Details document.</summary>
+    public int? Status { get; init; }
+
+    /// <summary>Short title for a Problem Details response.</summary>
+    public string? Title { get; init; }
+
+    /// <summary>Public explanation of a classified rejection.</summary>
+    public string? Detail { get; init; }
+}
 
 /// <summary>
 /// Standard conflict problem payload for state, version, or concurrency conflicts.

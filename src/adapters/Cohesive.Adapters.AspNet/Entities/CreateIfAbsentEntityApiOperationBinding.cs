@@ -29,10 +29,12 @@ sealed class CreateIfAbsentEntityApiOperationBinding(ApiEndpoint endpoint,
             new(new("cohesive.api.crud", "1"), new("entity-api/create-if-absent"), DocumentOrigin.Generated));
         var compilation = TransitionStaticCompiler.Compile(document);
         var plan = compilation.Plan ?? throw new TransitionApiPreparationException(operation.Id.Value, compilation);
+        var reader = HttpRequestBindingSupport.Prepare(operation);
         return async (OperationContext context, HttpContext http) =>
         {
             var repository = EntityApiRequestSupport.ResolveRepository(http, options);
-            var request = await EntityApiRequestSupport.ReadBodyRequestAsync(http, operation, context.CancellationToken).ConfigureAwait(false);
+            var (request, bindingFailure) = await reader.ReadAsync(http, context.CancellationToken).ConfigureAwait(false);
+            if (bindingFailure is not null) return bindingFailure;
             var acquired = initialize(new(context, http, operation, options.Entity, repository, EntityId: null), request);
             var decision = TransitionReferenceInterpreter.DecideCreation(plan, options.CreateActivationId(http, operation),
                 PortableValue.Concrete(stateContract, ObservationValue.FromObject(acquired.Fields)));

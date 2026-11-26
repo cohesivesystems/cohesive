@@ -1,4 +1,5 @@
 using Cohesive.Model.Serialization;
+using Cohesive.Api;
 using Microsoft.AspNetCore.Http;
 
 namespace Cohesive.Adapters.AspNet.Entities;
@@ -22,7 +23,19 @@ public sealed class TransitionRejectionResponses<TCode> where TCode : struct, En
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentException.ThrowIfNullOrWhiteSpace(detail);
-        Add(code, new(title, detail));
+        Add(code, new(StatusCodes.Status409Conflict, title, detail));
+        return this;
+    }
+
+    internal bool HasInvalidInput { get; private set; }
+
+    /// <summary>Classify a typed domain rejection caused by invalid input as HTTP 400.</summary>
+    public TransitionRejectionResponses<TCode> InvalidInput(TCode code, string title, string detail)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        ArgumentException.ThrowIfNullOrWhiteSpace(detail);
+        Add(code, new(StatusCodes.Status400BadRequest, title, detail));
+        HasInvalidInput = true;
         return this;
     }
 
@@ -54,10 +67,14 @@ public sealed class TransitionRejectionResponses<TCode> where TCode : struct, En
                 return TypedResults.Problem(statusCode: StatusCodes.Status500InternalServerError,
                     title: "Invalid transition outcome", detail: "The transition produced an inconsistent rejection outcome.",
                     extensions: new Dictionary<string, object?> { ["code"] = "cohesive.transitions.rejection_mapping_invalid" });
-            return TypedResults.Problem(statusCode: StatusCodes.Status409Conflict, title: problem.Title,
+            if (problem.Status == StatusCodes.Status400BadRequest)
+                return Results.Json(new ApiValidationProblem(response.Code, problem.Detail, [])
+                    { Status = problem.Status, Title = problem.Title, Detail = problem.Detail },
+                    contentType: "application/problem+json", statusCode: problem.Status);
+            return TypedResults.Problem(statusCode: problem.Status, title: problem.Title,
                 detail: problem.Detail, extensions: new Dictionary<string, object?> { ["code"] = response.Code });
         };
     }
 
-    sealed record Problem(string Title, string Detail);
+    sealed record Problem(int Status, string Title, string Detail);
 }

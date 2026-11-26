@@ -313,7 +313,8 @@ public abstract class OperationBuilder<TParent>
         ApiResultKind kind,
         int? httpStatusCode = null,
         string? id = null,
-        string? description = null)
+        string? description = null,
+        string? contentType = "application/json")
     {
         additionalResults.Add(CreateResult(
             kind: kind,
@@ -321,7 +322,8 @@ public abstract class OperationBuilder<TParent>
             isPrimary: false,
             httpStatusCode: httpStatusCode ?? ApiHttpResultConventions.DefaultStatusCode(kind, typeof(TResponse)),
             id: id,
-            description: description
+            description: description,
+            contentType: contentType
             )
         );
         return this;
@@ -683,9 +685,10 @@ public abstract class OperationBuilder<TParent>
         bool isPrimary,
         int? httpStatusCode,
         string? id,
-        string? description)
+        string? description,
+        string? contentType = "application/json")
     {
-        var binding = httpStatusCode is null ? null : new ApiHttpResultBinding(httpStatusCode.Value);
+        var binding = httpStatusCode is null ? null : new ApiHttpResultBinding(httpStatusCode.Value, contentType);
         return new(
             kind: kind,
             bodyType: bodyType,

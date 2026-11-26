@@ -102,12 +102,13 @@ public static class ServiceApiProjection
                     description: "The Process was admitted to its declared execution lifetime; terminal completion is not promised.")
                 : result).ToArray()
             : native.Results;
+        var results = nativeResults.ToList();
+        if (!results.Any(result => result.Kind == ApiResultKind.ValidationFailed && result.BodyType == typeof(ExecutionApiProblem)))
+            results.Add(new(ApiResultKind.ValidationFailed, typeof(ExecutionApiProblem), id: "admissionValidationFailed"));
         var operation = new ApiOperation(operationId, native.Kind, requestType, native.ResponseType,
             id: new(OperationIdentity(reference, operationId)),
             summary: native.Summary, description: native.Description, tags: native.Tags,
-            results: nativeResults.Any(result => result.Kind == ApiResultKind.ValidationFailed && result.BodyType == typeof(ExecutionApiProblem))
-                ? nativeResults
-                : [.. nativeResults, new(ApiResultKind.ValidationFailed, typeof(ExecutionApiProblem), id: "admissionValidationFailed")],
+            results: results,
             scopePolicies: scopePolicies ?? native.ScopePolicies,
             authorizationRequirements: declared.AuthorizationRequirements,
             semanticReferences: native.SemanticReferences);

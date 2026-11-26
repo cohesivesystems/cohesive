@@ -37,6 +37,82 @@ public sealed class TypedEntityApiBindingsTests
     public sealed record PointState(string Partition, SubmitCode Status);
     public sealed record PointResponse(string Id, SubmitCode Status);
 
+    [System.Text.Json.Serialization.JsonConverter(typeof(System.Text.Json.Serialization.JsonStringEnumConverter<BodyCode>))]
+    public enum BodyCode { Applied, IdMismatch }
+    public sealed record BodyOutcome(BodyCode Code);
+
+    [Fact]
+    public async Task Json_body_drives_typed_transition_and_declared_invalid_input_response()
+    {
+        var transition = TransitionAuthoring.Create<Order, Submit, BodyOutcome>(Entity.Shape,
+            new("typed/body"), new("1"), t => t.Requires((state, input) => state.Id == input.Id,
+                (_, _) => new BodyOutcome(BodyCode.IdMismatch)).Return(new BodyOutcome(BodyCode.Applied)));
+        var repository = new InMemoryEntityOutboxRepository(Entity, partitionKeyFieldName: "Partition");
+        await repository.Upsert(OperationContext.Create(), new(Entity.CreateState("one", new Order("one", "local", "Draft")).Snapshot));
+        var builder = WebApplication.CreateBuilder();
+        builder.Services.AddRequestOperationContext();
+        await using var app = builder.Build();
+        app.UseRequestOperationContext();
+        app.MapEntityApi<Order>(Entity, repository, "local", bindings => bindings
+            .Transition("Submit", "/orders/{id}/submit", transition).FromBody<string>((ctx, suffix) => new Submit(ctx.RequiredEntityId + suffix))
+            .OnApplied((state, _) => TypedResults.Ok(state))
+            .OnRejected(o => o.Code, "orders.submit", r => r.InvalidInput(BodyCode.IdMismatch, "Invalid", "Invalid input.")
+                .NotRejected(BodyCode.Applied)));
+        app.Urls.Add("http://127.0.0.1:0");
+        await app.StartAsync();
+        using var client = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
+        var route = Assert.Single(((Microsoft.AspNetCore.Routing.IEndpointRouteBuilder)app).DataSources
+            .SelectMany(source => source.Endpoints));
+        var operation = Assert.IsType<ApiOperation>(route.Metadata.GetMetadata<ApiOperation>());
+        Assert.Equal(typeof(string), operation.Http!.Body!.BodyType);
+        Assert.Equal(typeof(string), route.Metadata.GetMetadata<Microsoft.AspNetCore.Http.Metadata.IAcceptsMetadata>()?.RequestType);
+        foreach (var status in new[] { 400, 415 })
+        {
+            var result = Assert.Single(operation.Results, r => r.Http?.StatusCode == status);
+            Assert.Equal(typeof(ApiValidationProblem), result.BodyType);
+            Assert.Equal("application/problem+json", result.Http!.ContentType);
+            Assert.Equal(status == 415, result.IsHttpBodyDefault);
+        }
+        const string path = "/orders/one/submit";
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(path, "")).StatusCode);
+        var invalid = await client.PostAsJsonAsync(path, "-other");
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+        Assert.Contains("orders.submit.IdMismatch", await invalid.Content.ReadAsStringAsync());
+        foreach (var (payload, media, expected, code) in new[]
+        {
+            ("{", "application/json", HttpStatusCode.BadRequest, "http.invalidJson"),
+            ("null", "application/json", HttpStatusCode.BadRequest, "http.invalidJson"),
+            ("one", "text/plain", HttpStatusCode.UnsupportedMediaType, "http.unsupportedMediaType")
+        })
+        {
+            var response = await client.PostAsync(path, new StringContent(payload, System.Text.Encoding.UTF8, media));
+            Assert.Equal(expected, response.StatusCode);
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+            var problem = await response.Content.ReadFromJsonAsync<System.Text.Json.JsonElement>();
+            Assert.Equal(code, problem.GetProperty("code").GetString());
+            Assert.Equal((int)expected, problem.GetProperty("status").GetInt32());
+        }
+    }
+
+    [Fact]
+    public void Body_and_response_contract_errors_fail_during_setup()
+    {
+        var repository = new InMemoryEntityOutboxRepository(Entity, partitionKeyFieldName: "Partition");
+        var bindings = new TypedEntityApiBindings<Order>(Entity, repository, "local");
+        var declared = Cohesive.Api.Api.Define().Entity<Order>().Command("Submit").Route("POST", "/orders/{id}")
+            .RouteParameter<string>("id").Body<string>().Transition(SubmitTransition.Reference).Returns<Order>()
+            .Result<Outcome>(ApiResultKind.Conflict).Build();
+        var typed = bindings.Transition(declared, SubmitTransition);
+        Assert.Throws<ArgumentException>(() => typed.FromBody());
+        typed.FromBody<string>((_, id) => new Submit(id));
+        Assert.Throws<InvalidOperationException>(() => typed.Input(ctx => new Submit(ctx.RequiredEntityId)));
+        typed.OnApplied((state, _) => TypedResults.Ok(state));
+        typed.OnRejected(outcome => TypedResults.Conflict(outcome));
+        var routed = bindings.Transition("Other", "/other/{id}", SubmitTransition)
+            .Input(ctx => new Submit(ctx.RequiredEntityId));
+        Assert.Throws<InvalidOperationException>(() => routed.FromBody());
+    }
+
     [Fact]
     public async Task Typed_point_read_supplies_identity_and_enum_without_manual_observation_access()
     {

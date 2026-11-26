@@ -218,8 +218,19 @@ public static class ApiEndpointRouteBuilderExtensions
         if (!string.IsNullOrWhiteSpace(operation.Description))
             builder.WithDescription(operation.Description);
 
-        if (http.Body is not null)
-            builder.Accepts(http.Body.BodyType, "application/json");
+        if (http.Body is { } body)
+        {
+            // Preserve the DTO for API Explorer. Content-type matching stays in the reader
+            // so routing cannot substitute a bodyless 415 before the handler runs.
+            if (operation.Results.Any(r => r.Kind == ApiResultKind.UnsupportedMediaType))
+                builder.Add(endpoint =>
+                {
+                    if (!endpoint.Metadata.OfType<Microsoft.AspNetCore.Http.Metadata.IAcceptsMetadata>().Any())
+                        endpoint.Metadata.Add(new Microsoft.AspNetCore.Http.Metadata.AcceptsMetadata([], body.BodyType));
+                });
+            else
+                builder.Accepts(body.BodyType, "application/json");
+        }
 
         if (http.Query is not null)
             builder.WithMetadata(http.Query);

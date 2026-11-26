@@ -52,14 +52,16 @@ public static partial class ServiceEndpointRouteBuilderExtensions
     {
         var contract = runtime.InputContract(operationId);
         var readOutcome = ObservationMaterializer.PrepareJsonValue<TOutcome>(OutcomeJson, ObservationBytesJsonEncoding.Base64String);
+        var reader = HttpRequestBindingSupport.Prepare(projection.Operation);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
             var subject = http.Request.RouteValues[subjectParameter]?.ToString();
             var tokens = http.Request.Headers[tokenHeader];
             if (string.IsNullOrWhiteSpace(subject) || tokens.Count != 1 || string.IsNullOrWhiteSpace(tokens[0]))
-                return Results.BadRequest();
-            var body = await HttpRequestBindingSupport.ReadOperationBodyAsync(http, projection.Operation, context.CancellationToken)
-                .ConfigureAwait(false);
+                return Results.BadRequest(new ApiValidationProblem("services.transition.invalidInvocation",
+                    "The entity identity and concurrency token are required.", []));
+            var (body, failure) = await reader.ReadAsync(http, context.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             var observed = ObservationValue.FromObject(body);
             var input = observed.Kind switch
             {
@@ -370,9 +372,11 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         var projection = ServiceApiProjection.ProjectEphemeralProcess<TRequest, TResponse, TInput, TOutput>(
             declaration, operationId, process, http, scopePolicies);
         var readOutput = ObservationMaterializer.PrepareJsonValue<TOutput>(OutcomeJson, ObservationBytesJsonEncoding.Base64String);
+        var reader = HttpRequestBindingSupport.Prepare(projection.Operation);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext request) =>
         {
-            var body = await HttpRequestBindingSupport.ReadOperationBodyAsync(request, projection.Operation, context.CancellationToken).ConfigureAwait(false);
+            var (body, failure) = await reader.ReadAsync(request, context.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             var input = bind(request, (TRequest)body!);
             var runtime = ResolveRuntime(declaration, resolveRuntime, request.RequestServices);
             try
@@ -423,11 +427,11 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(http);
         ArgumentNullException.ThrowIfNull(bind);
         var projection = ServiceApiProjection.ProjectProcessInput<TRequest>(declaration, operationId, http, scopePolicies);
+        var reader = HttpRequestBindingSupport.Prepare(projection.Operation);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext requestHttp) =>
         {
-            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(requestHttp, projection.Operation,
-                context.CancellationToken).ConfigureAwait(false)
-                ?? throw new BadHttpRequestException("A Process command body is required.");
+            var (request, failure) = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(reader, requestHttp, context.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             var input = bind(requestHttp, request);
             var runtime = ResolveRuntime(declaration, resolveRuntime, requestHttp.RequestServices);
             var result = await runtime.StartAsync(context, operationId, input.Command, input.Idempotency,
@@ -469,11 +473,11 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             throw new ArgumentOutOfRangeException(nameof(maximumWait), "A positive finite timer duration is required.");
         var projection = ServiceApiProjection.ProjectProcessEntityCommand<TRequest, TResponse, TPending>(
             declaration, startOperationId, resultOperationId, http, scopePolicies);
+        var reader = HttpRequestBindingSupport.Prepare(projection.Operation);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext requestHttp) =>
         {
-            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(requestHttp, projection.Operation,
-                context.CancellationToken).ConfigureAwait(false)
-                ?? throw new BadHttpRequestException("A Process command body is required.");
+            var (request, failure) = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(reader, requestHttp, context.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             var input = bind(requestHttp, request);
             var runtime = ResolveRuntime(declaration, resolveRuntime, requestHttp.RequestServices);
             var start = await runtime.StartAsync(context, startOperationId, input.Command, input.Idempotency,
@@ -532,11 +536,11 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         Func<ServiceRuntime, OperationContext, TRequest, HttpContext, ValueTask<ServiceOperationResult<TOutcome>>> invoke,
         AspNetAuthorizationPolicyResolver? authorizationPolicyResolver) where TRequest : class where TOutcome : class
     {
+        var reader = HttpRequestBindingSupport.Prepare(projection.Operation);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
-            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, projection.Operation,
-                context.CancellationToken).ConfigureAwait(false)
-                ?? throw new BadHttpRequestException("A native Process request body is required.");
+            var (request, failure) = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(reader, http, context.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             var runtime = ResolveRuntime(declaration, resolveRuntime, http.RequestServices);
             var result = await invoke(runtime, context, request, http).ConfigureAwait(false);
             return ProjectProcessOutcome(projection, result);
@@ -574,11 +578,11 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         ArgumentNullException.ThrowIfNull(bind);
         ArgumentNullException.ThrowIfNull(project);
         var projection = ServiceApiProjection.ProjectQuery<TRequest, TResponse>(declaration, operationId, http, scopePolicies);
+        var reader = HttpRequestBindingSupport.Prepare(projection.Operation);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext requestHttp) =>
         {
-            var request = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(requestHttp, projection.Operation,
-                context.CancellationToken).ConfigureAwait(false)
-                ?? throw new BadHttpRequestException("A query request is required.");
+            var (request, failure) = await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(reader, requestHttp, context.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             var runtime = ResolveRuntime(declaration, resolveRuntime, requestHttp.RequestServices);
             var result = await runtime.EvaluateAsync(context, operationId,
                 RelationQueryApiEndpointOptions.CreateConventionalEvaluationId(requestHttp, projection.Operation), bind(request)).ConfigureAwait(false);

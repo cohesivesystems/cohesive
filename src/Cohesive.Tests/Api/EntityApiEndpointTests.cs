@@ -36,6 +36,33 @@ public sealed class EntityApiEndpointTests
     static readonly InteractionContractCatalog NoteInteractionContracts = CreateInteractionCatalog(NoteRevisedEvent);
 
     [Fact]
+    public async Task Json_reader_rejects_an_incompatible_explicit_failure_shape_at_registration()
+    {
+        await using var app = WebApplication.CreateSlimBuilder().Build();
+        var definition = Cohesive.Api.Api.Define().Entity<NoteResource>()
+            .Command("Inspect").Route("POST", "/notes/{id}/inspect").Body<InspectNoteRequest>()
+            .Result<string>(ApiResultKind.ValidationFailed).Returns<NoteInspectionResponse>().Done().Build();
+        var options = new EntityApiEndpointOptions { Entity = NoteEntity.Instance.Definition }
+            .Bind(EntityApiOperationBinding.Load("Inspect", (_, _, _) => Results.Ok()));
+        var error = Assert.Throws<InvalidOperationException>(() => app.MapEntityApiDefinition(definition, options));
+        Assert.Contains("ValidationFailed", error.Message);
+    }
+
+    [Fact]
+    public async Task An_inferred_400_cannot_hide_an_incompatible_explicit_400()
+    {
+        await using var app = WebApplication.CreateSlimBuilder().Build();
+        var definition = Cohesive.Api.Api.Define().Entity<NoteResource>()
+            .Command("Inspect").Route("POST", "/notes/{id}/inspect").Body<InspectNoteRequest>()
+            .Result<string>(ApiResultKind.Conflict, httpStatusCode: 400)
+            .Returns<NoteInspectionResponse>().Done().Build();
+        var options = new EntityApiEndpointOptions { Entity = NoteEntity.Instance.Definition }
+            .Bind(EntityApiOperationBinding.Load("Inspect", (_, _, _) => Results.Ok()));
+        var error = Assert.Throws<InvalidOperationException>(() => app.MapEntityApiDefinition(definition, options));
+        Assert.Contains("HTTP 400", error.Message);
+    }
+
+    [Fact]
     public async Task Candidate_preparation_failure_returns_sanitized_problem_without_commit()
     {
         var entity = NoteEntity.Instance;

@@ -23,12 +23,6 @@ static class EntityApiRequestSupport
         throw new BadHttpRequestException($"Route value '{options.EntityIdRouteParameter}' is required.");
     }
 
-    public static ValueTask<object?> ReadBodyRequestAsync(
-        HttpContext httpContext,
-        ApiOperation operation,
-        CancellationToken ct) =>
-        HttpRequestBindingSupport.ReadOperationBodyAsync(httpContext, operation, ct);
-
     public static async Task<EntitySnapshot> CommitAsync(
         EntityApiCommitContext context,
         EntityApiEndpointOptions options,

@@ -37,13 +37,15 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         if (runtime.Declaration.Reference != api.Declaration.Reference)
             throw ServiceImplementationPlan.Error("services.api.processMismatch", "The linked endpoints require the exact declared service runtime.");
         if (api.Response.MaximumWait is not null) runtime.RequireProcessResultWaiting(api.ResultOperationId);
+        var reader = HttpRequestBindingSupport.Prepare(api.Start.Operation, Submission(ApiResultKind.ValidationFailed));
         routes.MapApiEndpoint(api.Start, async (OperationContext context, HttpContext http) =>
         {
             (ProcessControlCommandId Command, ProcessControlIdempotencyKey Idempotency, ProcessContinuationIdentity Continuation, ObservationValue Input) intent;
+            var (request, failure) = await reader.ReadAsync(http, context.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             try
             {
-                var request = await ReadBody(http, context.CancellationToken).ConfigureAwait(false);
-                intent = bind(http, request);
+                intent = bind(http, (TRequest)request!);
             }
             catch (BadHttpRequestException error) when (error.StatusCode == 400)
             {
@@ -80,19 +82,6 @@ public static partial class ServiceEndpointRouteBuilderExtensions
             (service, context, instance) => service.ReadProcessResultAsync(context, api.ResultOperationId, instance),
             (_, value) => project(value), authorizationPolicyResolver, "instanceId", ProjectRead,
             DecodeInstance, () => api.TryProjectMissing(out var missing) ? Render(missing) : null);
-
-        async ValueTask<TRequest> ReadBody(HttpContext http, CancellationToken cancellationToken)
-        {
-            try
-            {
-                return await ProcessApiRequestSupport.ReadRequestAsync<TRequest>(http, api.Start.Operation, cancellationToken)
-                    .ConfigureAwait(false) ?? throw new BadHttpRequestException("A Process command body is required.");
-            }
-            catch (System.Text.Json.JsonException error)
-            {
-                throw new BadHttpRequestException("Invalid process command JSON.", error);
-            }
-        }
 
         IResult? Submission(ApiResultKind kind, AcceptedProcessLocation? location = null) =>
             api.TryProjectSubmission(kind, out var response, location) ? Render(response) : null;

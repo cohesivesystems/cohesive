@@ -69,6 +69,12 @@ export const apiOperationMetadata = {
         bodyContract: 'ApiProblem',
         isPrimary: false,
       },
+      {
+        id: 'http.unsupportedMediaType',
+        kind: 'unsupportedMediaType',
+        bodyContract: 'ApiValidationProblem',
+        isPrimary: false,
+      },
     ],
     semanticReferences: [],
     http: {
@@ -124,6 +130,12 @@ export const apiOperationMetadata = {
         id: 'infrastructureError',
         kind: 'infrastructureError',
         bodyContract: 'ApiProblem',
+        isPrimary: false,
+      },
+      {
+        id: 'http.unsupportedMediaType',
+        kind: 'unsupportedMediaType',
+        bodyContract: 'ApiValidationProblem',
         isPrimary: false,
       },
     ],

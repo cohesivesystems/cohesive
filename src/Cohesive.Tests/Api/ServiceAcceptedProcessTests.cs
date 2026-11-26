@@ -121,6 +121,12 @@ public sealed class ServiceAcceptedProcessTests
         var bad = await client.PostAsync("/commands", new StringContent("{", System.Text.Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
         Assert.Equal("Invalid", await bad.Content.ReadFromJsonAsync<string>());
+        var media = await client.PostAsync("/commands", new StringContent("{}", System.Text.Encoding.UTF8, "text/plain"));
+        Assert.Equal(HttpStatusCode.UnsupportedMediaType, media.StatusCode);
+        Assert.Equal("http.unsupportedMediaType", (await media.Content.ReadFromJsonAsync<ApiValidationProblem>())!.Code);
+        var missingIdentity = await client.PostAsJsonAsync("/commands", new Command("", "value"));
+        Assert.Equal(HttpStatusCode.BadRequest, missingIdentity.StatusCode);
+        Assert.Equal("Invalid", await missingIdentity.Content.ReadFromJsonAsync<string>());
         var command = new Command("a/b", "value");
         var accepted = await client.PostAsJsonAsync("/commands", command);
         var url = accepted.Headers.Location!;

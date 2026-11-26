@@ -30,6 +30,9 @@ public sealed class ServiceRuntimeTests
         var good = fixture.Runtime.Project<Note.ReviseInput, bool>("revise", new("POST", "/notes/{id}/revise",
             [new("id", HttpParameterSource.Route, typeof(string)),
              new("X-Expected-Concurrency-Token", HttpParameterSource.Header, typeof(string))], new(typeof(Note.ReviseInput))));
+        Assert.Contains(good.Operation.Results, r => r.Kind == ApiResultKind.UnsupportedMediaType);
+        var withoutBody = good.WithHttp(new("GET", "/notes/{id}", good.Operation.Http!.Parameters, null));
+        Assert.DoesNotContain(withoutBody.Operation.Results, r => r.Kind == ApiResultKind.UnsupportedMediaType);
         var unknown = new ApiOperation("unknown", ApiOperationKind.Command, typeof(Note.ReviseInput), typeof(bool))
             .WithHttp(new("POST", "/notes/{id}/unknown", good.Operation.Http!.Parameters, new(typeof(Note.ReviseInput))));
         await using var app = WebApplication.CreateSlimBuilder().Build();
@@ -68,6 +71,8 @@ public sealed class ServiceRuntimeTests
     [InlineData("{\"Inputs\":{\"revise\":{\"Text\":\"after\"}}}", true, 200, "Permitted")]
     [InlineData("{\"Inputs\":{\"unknown\":{\"Text\":\"after\"}}}", true, 400, null)]
     [InlineData("{}", false, 200, null)]
+    [InlineData("{", true, 400, "http.invalidJson")]
+    [InlineData("plain", true, 415, "http.unsupportedMediaType")]
     public async Task Http_inspection_is_typed_authorized_and_never_writes(string body, bool authorized, int status, string? kind)
     {
         var fixture = await Fixture.Create();
@@ -81,7 +86,7 @@ public sealed class ServiceRuntimeTests
         var bytes = Encoding.UTF8.GetBytes(body);
         var http = new DefaultHttpContext { RequestServices = app.Services };
         http.Request.Method = "POST";
-        http.Request.ContentType = "application/json";
+        http.Request.ContentType = body == "plain" ? "text/plain" : "application/json";
         http.Request.ContentLength = bytes.Length;
         http.Request.Body = new MemoryStream(bytes);
         http.Request.RouteValues["id"] = "note-1";
@@ -91,7 +96,9 @@ public sealed class ServiceRuntimeTests
         Assert.Equal(0, fixture.Repository.Writes);
         http.Response.Body.Position = 0;
         using var json = await System.Text.Json.JsonDocument.ParseAsync(http.Response.Body);
-        if (kind is not null)
+        if (kind?.StartsWith("http.") == true)
+            Assert.Equal(kind, json.RootElement.GetProperty("code").GetString());
+        else if (kind is not null)
         {
             var action = Assert.Single(json.RootElement.EnumerateArray());
             Assert.Equal(kind, action.GetProperty("Kind").GetString());

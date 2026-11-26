@@ -33,16 +33,17 @@ public static partial class ServiceEndpointRouteBuilderExtensions
         var declared = runtime.Declaration.GetDefinition<ServiceDefinition>().Operations
             .OfType<ServiceTransitionOperation>().Where(op => op.Entity == entity)
             .ToFrozenDictionary(op => op.Id, op => runtime.InputContract(op.Id), StringComparer.Ordinal);
+        var reader = HttpRequestBindingSupport.Prepare(projection.Operation);
         return endpoints.MapApiEndpoint(projection, async (OperationContext context, HttpContext http) =>
         {
             var subject = http.Request.RouteValues[subjectParameter]?.ToString();
             if (string.IsNullOrWhiteSpace(subject)) return Results.BadRequest();
-            var body = (ServiceTransitionInspection<TInput>?)await HttpRequestBindingSupport.ReadOperationBodyAsync(
-                http, projection.Operation, context.CancellationToken).ConfigureAwait(false);
+            var (body, failure) = await reader.ReadAsync(http, context.CancellationToken).ConfigureAwait(false);
+            if (failure is not null) return failure;
             // Resolve contracts only for declared operations of this entity. Unknown input keys are rejected
             // before inspection, and every operation still passes through runtime authorization.
             Dictionary<string, PortableValue>? inputs = null;
-            if (body?.Inputs is { } commands)
+            if ((body as ServiceTransitionInspection<TInput>)?.Inputs is { } commands)
             {
                 inputs = [];
                 foreach (var (id, command) in commands)
