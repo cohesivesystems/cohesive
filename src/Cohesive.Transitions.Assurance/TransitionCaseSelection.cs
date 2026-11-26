@@ -38,7 +38,7 @@ public sealed record CaseCoverageGoal(CaseCoverageFact First, CaseCoverageFact? 
 public sealed record SelectedTransitionCase<TEntity, TInput>(TEntity State, TInput Input, ImmutableArray<CaseCoverageGoal> CoveredGoals);
 /// <summary>Deterministic suite and observed goals left uncovered within the suite budget.</summary>
 public sealed record SelectedTransitionCases<TEntity, TInput>(ImmutableArray<SelectedTransitionCase<TEntity, TInput>> Cases,
-    int CandidateCount, ImmutableArray<CaseCoverageGoal> UncoveredGoals)
+    int CandidateCount, ImmutableArray<CaseCoverageGoal> UncoveredGoals) : ICoverageSelection<CaseCoverageGoal>
 {
     /// <summary>First witnesses of distinct single-field decision changes, with zero-based indices into Cases.</summary>
     public ImmutableArray<DecisionIsolationPair> DecisionPairs { get; init; } = [];
@@ -107,29 +107,25 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
         var covered = new HashSet<Contrast>();
         var witnesses = pool.Select(_ => new List<Witness>()).ToArray();
         var chosen = new List<int>();
-        var available = Enumerable.Range(0, pool.Count).ToList();
+
         var pairs = ImmutableArray.CreateBuilder<DecisionIsolationPair>();
         // Equal keys for an axis mean the complete state and command agree outside that field.
         var buckets = axes.ToDictionary(axis => axis, axis => observations.Select((o, i) => (o, i))
             .ToLookup(x => Mask(x.o, axis), x => x.i));
-        while (chosen.Count < budget && available.Count > 0)
-        {
-            var best = available.Select(i =>
+        CoverageSelection.Pick<CaseCoverageGoal, (int, int, long, double)>(pool.Count, budget,
+            i => pool[i].CoveredGoals, remaining, (i, gain) =>
             {
                 var fresh = witnesses[i].Where(w => !covered.Contains(w.Goal)).ToArray();
-                var facts = pool[i].CoveredGoals.Where(remaining.Contains).ToArray();
-                return (Index: i, Contrasts: fresh.Select(w => w.Goal).Distinct().Count(), Gain: facts.Length,
-                    Distance: fresh.Length == 0 ? 0 : fresh.Min(w => w.Distance), Rarity: facts.Sum(g => 1.0 / frequency[g]));
-            }).OrderByDescending(c => c.Contrasts).ThenByDescending(c => c.Gain).ThenBy(c => c.Distance)
-                .ThenByDescending(c => c.Rarity).First().Index;
-            var position = chosen.Count;
+                var rarity = pool[i].CoveredGoals.Where(remaining.Contains).Sum(g => 1.0 / frequency[g]);
+                return (fresh.Select(w => w.Goal).Distinct().Count(), gain,
+                    fresh.Length == 0 ? 0 : -fresh.Min(w => w.Distance), rarity);
+            }, (best, position) =>
+        {
             foreach (var w in witnesses[best])
                 if (covered.Add(w.Goal))
                     pairs.Add(new(w.First, position, w.Axis.Input ? "input" : "state", w.Axis.Path,
                         paths[chosen[w.First]], paths[best]));
             chosen.Add(best);
-            available.Remove(best);
-            remaining.ExceptWith(pool[best].CoveredGoals);
             foreach (var axis in axes)
             {
                 var key = Mask(observations[best], axis);
@@ -144,7 +140,7 @@ public sealed partial class TransitionProbe<TEntity, TInput, TOutcome>
                         witnesses[neighbor].Add(new(position, axis, goal, Distance(observations[best], observations[neighbor], axis)));
                 }
             }
-        }
+        });
         return new([.. chosen.Select(i => pool[i])], pool.Count, [.. frequency.Keys.Where(remaining.Contains)])
             { DecisionPairs = pairs.ToImmutable() };
     }

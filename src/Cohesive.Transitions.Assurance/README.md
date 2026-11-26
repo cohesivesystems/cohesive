@@ -172,3 +172,25 @@ rarer goals and finally generation order. `DecisionPairs` gives zero-based endpo
 and both decision paths. These are observed witnesses, not a proof of independent effects across all paths. If all observed goals are covered, it fills remaining suite slots with distinct candidates in generation order.
 Each pair exposes its covered goals; the suite reports observed goals left uncovered. This is a heuristic
 over a finite generated pool. The consumer supplies an independent behavioral oracle.
+
+### Selecting command sequences
+
+Register a finite command vocabulary against typed transitions, then select paths from an actual seed state.
+Registration order does not affect search order. Required paths are validated against the registered names
+when declared and retain their slot even if their coverage overlaps. For example:
+
+```csharp
+var lifecycle = TransitionAssurance.ForSequences<Order>()
+    .Command("Pack", transitions.Pack)
+    .Commands(transitions.Ship, quantities.Select(q => new ShipQuantity(q)), q => $"Ship:{q.Quantity}")
+    .RequireScenario("Pack", "Ship:1");
+var suite = lifecycle.SelectSequences(order, new() { MaxSequences = 4, MaxStepsPerSequence = 8 });
+foreach (var path in suite.Sequences)
+    foreach (var step in lifecycle.ExecuteSequence(order, path.Commands))
+        Observe(step.IsAccepted, step.State);
+```
+
+The selector scores clean reference decisions, state changes and adjacent decision pairs.
+Each optional path must cover a new observed goal. Inspect `CandidateCount`, `SearchTruncated`
+and `UncoveredGoals` when interpreting coverage. The default exploration ceiling is 4,096
+offline executions and the beam retains up to 32 histories at each depth.
