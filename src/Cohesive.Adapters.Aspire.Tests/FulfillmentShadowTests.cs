@@ -3,6 +3,7 @@ using Cohesive.Adapters.Elastic;
 using Cohesive.Adapters.Marten;
 using Marten;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Cohesive.Adapters.AspNet;
 using Cohesive.Adapters.AspNet.Services;
@@ -361,6 +362,53 @@ public sealed class FulfillmentShadowTests
         }));
 
     sealed record OrderKey(string Id);
+
+    sealed class StartupRead(Func<Task> read) : IHostedService
+    {
+        public Task StartAsync(CancellationToken token) => read();
+        public Task StopAsync(CancellationToken token) => Task.CompletedTask;
+    }
+
+    [RowsFact]
+    public Task Root_only_worker_backfills_and_publishes_a_new_root() =>
+        InDatabase(async (database, connection) =>
+        {
+            var domain = new FulfillmentDomain();
+            var mappings = new FulfillmentPostgresMappings(domain);
+            using var native = database.CreateConnection();
+            var bindings = PostgresPersistenceBindings.Define(new(native.Database), storage =>
+            {
+                storage.Schema(PostgresSchemaInitialization.CreateIfMissing, _ => { });
+                storage.Entity(domain.Orders, mappings.Orders);
+            });
+            await bindings.PrepareSchemaAsync(database);
+            var query = RelationQuery.Expression();
+            var orders = query.Source(domain.Orders);
+            var ids = query.RowsByRoot<OrderKey>().From(orders).Key(orders, o => o.Id, row => row.Id)
+                .BuildRows(new("test/ids"));
+            var target = bindings.Bind(database, "ids").MaterializeAsyncRows(ids, "order_ids",
+                new(new("tenant/local"), FulfillmentDomain.PartitionField, "local"));
+            async Task Insert(string id)
+            {
+                await using var insert = database.CreateCommand("INSERT INTO cohesive_orders(order_id,partition_key,status,observation_version) VALUES ($1,'local','Draft',0)");
+                insert.Parameters.AddWithValue(id);
+                await insert.ExecuteNonQueryAsync();
+            }
+            await Insert("before");
+            var builder = Microsoft.Extensions.Hosting.Host.CreateApplicationBuilder();
+            // Even an earlier registered service must see the published baseline in StartAsync.
+            builder.Services.AddSingleton<IHostedService>(new StartupRead(async () =>
+                Assert.Equal(new OrderKey("before"), Assert.Single(await target.ReadAsync("before")))));
+            builder.Services.AddPostgresRowsWorker(target, () => new LogicalReplicationConnection(connection), new byte[32]);
+            using var host = builder.Build();
+            await host.StartAsync();
+            await Insert("after");
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            while ((await target.ReadAsync("after", deadline.Token)).Length == 0)
+                await Task.Delay(50, deadline.Token);
+            await host.StopAsync();
+            Assert.Equal(new OrderKey("after"), Assert.Single(await target.ReadAsync("after")));
+        });
 
     [Fact]
     public async Task Async_rows_derive_routes_from_the_projection_and_reject_an_unrelated_key()
