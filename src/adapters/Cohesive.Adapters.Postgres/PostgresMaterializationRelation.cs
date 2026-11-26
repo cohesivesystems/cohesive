@@ -98,9 +98,13 @@ public sealed class PostgresMaterializationRelation
         if (document.Definition.Relation.CompiledPlanFingerprint !=
             RelationQueryCompiledPlanReferenceFingerprinter.Compute(RelationQueryCompiledPlanReference.From(Plan)))
             throw new ArgumentException("The materialization belongs to another relation.", nameof(document));
-        var hydrationReaders = Hydration.Placement.SourceInstances.Select(source =>
+        // Supplied roots arrive with the hydration request. Only a source with an
+        // acquired binding needs a reader (a root-only graph can have none).
+        var hydrationReaders = Hydration.Placement.Bindings
+            .Where(binding => binding.Acquisition != RelationQuerySourceAcquisitionKind.Supplied)
+            .Select(binding => binding.Source).Distinct().Select(source =>
             (IRelationQuerySourceReader)new PostgresRelationQuerySourceReader(Plan, Hydration,
-                source.Id, HydrationStorage, database, native, policy)).ToArray();
+                source, HydrationStorage, database, native, policy)).ToArray();
         var readers = Reads.Impact.Placement.SourceInstances.Select(source =>
             new PostgresRelationQuerySourceReader(Plan, Reads.Impact,
                 source.Id, ReadStorage, database, native, policy)).ToDictionary(reader => reader.Descriptor.Source);
